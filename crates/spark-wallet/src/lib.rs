@@ -50,7 +50,8 @@ pub use spark::{
         ReservationPurpose as TokenReservationPurpose, ReservationTarget, SelectionStrategy,
         TokenMetadata, TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,
         TokenOutputWithPrevOut, TokenOutputs, TokenOutputsPerStatus, TokenOutputsReservation,
-        TokenOutputsReservationId, TokensConfig, select_token_outputs_from,
+        TokenOutputsReservationId, TokensConfig, bech32m_decode_token_id,
+        select_token_outputs_from,
     },
     tree::{
         AutoOptimizationEvent, DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT,

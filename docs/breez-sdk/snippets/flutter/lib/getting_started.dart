@@ -167,6 +167,11 @@ class BreezSdkSpark {
           // The unilateral exit state changed, so a previously exported
           // one is now out of date. Export it again.
           break;
+        case SdkEvent_StableBalanceConversionFailed(:final retryInSecs):
+          // A stable balance conversion failed. When retryInSecs is set,
+          // the SDK retries after it.
+          final _ = retryInSecs;
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {

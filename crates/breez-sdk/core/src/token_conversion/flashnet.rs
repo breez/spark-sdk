@@ -9,12 +9,12 @@ use flashnet::{
 };
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
     AmountAdjustmentReason, EventEmitter, Network, Payment, PaymentDetails, PaymentMetadata,
-    RefundPendingConversionsResponse, Storage, SwapDegradation,
-    persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
+    RefundPendingConversionsResponse, SdkError, Storage, SwapDegradation,
+    persist::{ObjectCacheRepository, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::{
         payments::{
@@ -117,6 +117,41 @@ fn split_legs(info: &ConversionInfo, input_is_btc: bool) -> (ConversionInfo, Con
     }
 
     (sent, received)
+}
+
+/// Nests a sent leg under the refund that returned its input and marks the
+/// refund as a refunded conversion, so the round trip lists as one row that
+/// says what it is. Written without the cache fallback, which would replace
+/// the conversion info cached for the send.
+async fn link_to_refund(
+    storage: &Arc<dyn Storage>,
+    sent_payment_id: &str,
+    refund_payment_id: &str,
+) {
+    let writes = [
+        (
+            sent_payment_id,
+            PaymentMetadata {
+                parent_payment_id: Some(refund_payment_id.to_string()),
+                ..Default::default()
+            },
+        ),
+        (
+            refund_payment_id,
+            PaymentMetadata {
+                conversion_status: Some(ConversionStatus::Refunded),
+                ..Default::default()
+            },
+        ),
+    ];
+    for (payment_id, metadata) in writes {
+        if let Err(e) = storage
+            .insert_payment_metadata(payment_id.to_string(), metadata)
+            .await
+        {
+            warn!("Could not link {sent_payment_id} to its refund {refund_payment_id}: {e}");
+        }
+    }
 }
 
 /// Builds the resolved metadata for a conversion. Carries the prior AMM fields
@@ -343,6 +378,7 @@ fn check_simulated_output(
 ///
 /// This implementation handles the mechanics of executing conversions via Flashnet,
 /// including pool selection, swap execution, and refund handling.
+#[derive(Clone)]
 pub(crate) struct FlashnetTokenConverter {
     flashnet_client: Arc<FlashnetClient>,
     storage: Arc<dyn Storage>,
@@ -584,6 +620,38 @@ impl FlashnetTokenConverter {
         }
     }
 
+    /// Claws a stranded swap input back in the background. The refunder
+    /// selects on payment rows, which sync creates, so it cannot see a transfer
+    /// made moments ago. A failure leaves the row marked `RefundNeeded` for the
+    /// periodic pass.
+    fn spawn_refund(
+        &self,
+        clawback_id: String,
+        pool_id: PublicKey,
+        payment_id: Option<String>,
+        prior_info: Option<ConversionInfo>,
+    ) {
+        let converter = self.clone();
+        platform_utils::tokio::spawn(
+            async move {
+                match converter
+                    .clawback_and_record_refunded(&clawback_id, pool_id, payment_id, prior_info)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let _ = converter.refund_trigger.send(());
+                    }
+                    Err(e) => {
+                        warn!("Immediate clawback for {clawback_id} failed: {e}");
+                        let _ = converter.refund_trigger.send(());
+                    }
+                }
+            }
+            .instrument(tracing::Span::current()),
+        );
+    }
+
     async fn clawback_and_record_refunded(
         &self,
         clawback_id: &str,
@@ -591,7 +659,7 @@ impl FlashnetTokenConverter {
         payment_id: Option<String>,
         prior_info: Option<ConversionInfo>,
     ) -> Result<bool, ConversionError> {
-        match self
+        let refund_identifier = match self
             .flashnet_client
             .clawback(ClawbackRequest {
                 pool_id,
@@ -604,6 +672,7 @@ impl FlashnetTokenConverter {
                     "Clawback accepted for {clawback_id}: tracking_id={}",
                     r.spark_status_tracking_id
                 );
+                r.spark_status_tracking_id
             }
             Ok(r) => {
                 warn!(
@@ -616,7 +685,7 @@ impl FlashnetTokenConverter {
                 error!("Clawback for {clawback_id} failed: {e}");
                 return Err(e.into());
             }
-        }
+        };
 
         // Resolve the storage row id once. The local path passes it directly;
         // reconcile resolves it from clawback_id, which for tokens is a bare
@@ -627,6 +696,7 @@ impl FlashnetTokenConverter {
                 .await
                 .ok(),
         };
+        let sent_payment_id = resolved_id.clone();
 
         // Preserve the prior ConversionInfo::Amm fields. Prefer the
         // caller-supplied info (local path, definitely present); otherwise read
@@ -644,6 +714,7 @@ impl FlashnetTokenConverter {
                 None => None,
             },
         };
+        let refund_info = prev.clone();
         let metadata = PaymentMetadata {
             conversion_info: Some(resolved_info_from_prior(
                 prev,
@@ -681,7 +752,81 @@ impl FlashnetTokenConverter {
                 .map_err(ConversionError::Sdk)?;
             }
         }
+        if !refund_identifier.is_empty()
+            && let Some(refund_payment_id) = self
+                .mark_returned_transfer(&refund_identifier, &pool_id, refund_info)
+                .await
+            && let Some(sent_payment_id) = &sent_payment_id
+        {
+            link_to_refund(&self.storage, sent_payment_id, &refund_payment_id).await;
+        }
+
         Ok(true)
+    }
+
+    /// Records the transfer a clawback returns as the conversion's refund leg,
+    /// and returns its payment id when it resolves to one.
+    ///
+    /// The clawback response's tracking id names that transfer: a Spark
+    /// transfer id for sats, a token transaction hash for tokens. Left
+    /// unmarked, the returned funds reach the wallet as an ordinary receive and
+    /// queue a fresh conversion of the same sats.
+    async fn mark_returned_transfer(
+        &self,
+        refund_identifier: &str,
+        pool_id: &PublicKey,
+        prior: Option<ConversionInfo>,
+    ) -> Option<String> {
+        let metadata = PaymentMetadata {
+            conversion_info: Some(resolved_info_from_prior(
+                prior,
+                pool_id,
+                ConversionStatus::Refunded,
+            )),
+            ..Default::default()
+        };
+        self.stamp_refund_leg(refund_identifier, metadata)
+            .await
+            .inspect_err(|e| {
+                warn!("Could not mark {refund_identifier} as a conversion refund: {e}");
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Stamps metadata onto the transfer that returned a conversion's input.
+    /// Returns the refund's payment id when the identifier resolves to one,
+    /// which it can before sync has stored the row.
+    async fn stamp_refund_leg(
+        &self,
+        identifier: &str,
+        metadata: PaymentMetadata,
+    ) -> Result<Option<String>, ConversionError> {
+        match resolve_payment_id(identifier, &self.spark_wallet, &self.storage, false).await {
+            Ok(payment_id) => {
+                insert_payment_metadata_with_cache_fallback(
+                    &self.storage,
+                    payment_id.clone(),
+                    identifier,
+                    metadata,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
+                Ok(Some(payment_id))
+            }
+            Err(e) => {
+                debug!("Could not resolve refund {identifier}: {e}, caching its metadata");
+                ObjectCacheRepository::new(Arc::clone(&self.storage))
+                    .save_payment_metadata(identifier, &metadata)
+                    .await
+                    .map_err(|e| {
+                        ConversionError::Sdk(SdkError::Generic(format!(
+                            "Failed to cache payment metadata: {e}"
+                        )))
+                    })?;
+                Ok(None)
+            }
+        }
     }
 
     /// Gets the best conversion pool for the given conversion options and amount.
@@ -981,6 +1126,33 @@ impl FlashnetTokenConverter {
         })
     }
 
+    /// Stamps the conversion onto the input a declined swap returned, and
+    /// returns its payment id when it resolves to one.
+    async fn record_refund_leg(
+        &self,
+        refund_identifier: Option<&String>,
+        pool_id: &str,
+        conversion_id: &str,
+        status: &ConversionStatus,
+    ) -> Result<Option<String>, ConversionError> {
+        let Some(identifier) = refund_identifier else {
+            return Ok(None);
+        };
+        let metadata = PaymentMetadata {
+            conversion_info: Some(ConversionInfo::Amm {
+                pool_id: pool_id.to_string(),
+                conversion_id: conversion_id.to_string(),
+                status: status.clone(),
+                degradation: None,
+                fee: None,
+                purpose: None,
+                amount_adjustment: None,
+            }),
+            ..Default::default()
+        };
+        self.stamp_refund_leg(identifier, metadata).await
+    }
+
     /// Updates the payment with the conversion info.
     ///
     /// Arguments:
@@ -996,6 +1168,7 @@ impl FlashnetTokenConverter {
     /// Returns:
     /// * The sent payment id of the conversion.
     /// * The received payment id of the conversion.
+    /// * The conversion info written on the sent leg.
     #[allow(clippy::too_many_arguments)]
     async fn update_payment_conversion_info(
         &self,
@@ -1008,7 +1181,7 @@ impl FlashnetTokenConverter {
         purpose: &ConversionPurpose,
         amount_adjustment: Option<AmountAdjustmentReason>,
         degradation: Option<SwapDegradation>,
-    ) -> Result<(String, Option<String>), ConversionError> {
+    ) -> Result<(String, Option<String>, ConversionInfo), ConversionError> {
         let (sent_fee, received_fee) = match &fee_split {
             Some(FeeSplit::Sent(fee)) => (Some(*fee), None),
             Some(FeeSplit::Received(fee)) => (None, Some(*fee)),
@@ -1032,21 +1205,22 @@ impl FlashnetTokenConverter {
         // operator round-trip; inbound/refund stay on the string-identifier
         // helper because the SDK never holds those transfers in hand
         // (they're produced by the pool, not by us).
+        let sent_info = ConversionInfo::Amm {
+            pool_id: pool_id_str.clone(),
+            conversion_id: conversion_id.clone(),
+            status: status.clone(),
+            fee: sent_fee,
+            purpose: Some(purpose.clone()),
+            amount_adjustment: amount_adjustment.clone(),
+            // On the sent leg, which exists even when the response named no
+            // delivery.
+            degradation,
+        };
         let sent_fut = async {
             crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
                 outbound_asset_transfer,
                 PaymentMetadata {
-                    conversion_info: Some(ConversionInfo::Amm {
-                        pool_id: pool_id_str.clone(),
-                        conversion_id: conversion_id.clone(),
-                        status: status.clone(),
-                        fee: sent_fee,
-                        purpose: Some(purpose.clone()),
-                        amount_adjustment: amount_adjustment.clone(),
-                        // On the sent leg, which exists even when the response
-                        // named no delivery.
-                        degradation,
-                    }),
+                    conversion_info: Some(sent_info.clone()),
                     ..Default::default()
                 },
                 &self.spark_wallet,
@@ -1088,37 +1262,23 @@ impl FlashnetTokenConverter {
             }
         };
 
-        let refund_fut = async {
-            if let Some(identifier) = &refund_identifier {
-                let metadata = PaymentMetadata {
-                    conversion_info: Some(ConversionInfo::Amm {
-                        pool_id: pool_id_str.clone(),
-                        conversion_id: conversion_id.clone(),
-                        status: status.clone(),
-                        degradation: None,
-                        fee: None,
-                        purpose: None,
-                        amount_adjustment: None,
-                    }),
-                    ..Default::default()
-                };
-                crate::utils::payments::resolve_and_insert_payment_metadata(
-                    identifier,
-                    metadata,
-                    &self.spark_wallet,
-                    &self.storage,
-                    false,
-                )
-                .await
-                .map_err(ConversionError::Sdk)?;
-            }
-            Ok::<_, ConversionError>(())
-        };
+        let refund_fut = self.record_refund_leg(
+            refund_identifier.as_ref(),
+            &pool_id_str,
+            &conversion_id,
+            &status,
+        );
 
-        let (sent_payment_id, received_payment_id, ()) =
+        let (sent_payment_id, received_payment_id, refund_payment_id) =
             tokio::try_join!(sent_fut, received_fut, refund_fut)?;
 
-        Ok((sent_payment_id, received_payment_id))
+        if let Some(refund_payment_id) = refund_payment_id
+            && received_payment_id.is_none()
+        {
+            link_to_refund(&self.storage, &sent_payment_id, &refund_payment_id).await;
+        }
+
+        Ok((sent_payment_id, received_payment_id, sent_info))
     }
 
     /// For `ToBitcoin` conversions, ensures `amount_in` meets the min conversion limit
@@ -1463,12 +1623,16 @@ impl TokenConverter for FlashnetTokenConverter {
                     }
                 });
 
-                let (sent_payment_id, received_payment_id) =
+                // An empty identifier names no transfer.
+                let refund_transfer_id = flashnet_response
+                    .refund_transfer_id
+                    .filter(|id| !id.is_empty());
+                let (sent_payment_id, received_payment_id, sent_info) =
                     Box::pin(self.update_payment_conversion_info(
                         &pool_id,
                         &outbound_asset_transfer,
                         flashnet_response.outbound_transfer_id,
-                        flashnet_response.refund_transfer_id,
+                        refund_transfer_id.clone(),
                         outcome.is_executed(),
                         fee_split,
                         purpose,
@@ -1500,6 +1664,16 @@ impl TokenConverter for FlashnetTokenConverter {
                     let error_message = flashnet_response
                         .error
                         .unwrap_or("Conversion not accepted".to_string());
+                    // A declined swap leaves the input at the pool, exactly as
+                    // a transport failure does.
+                    if refund_transfer_id.is_none() {
+                        self.spawn_refund(
+                            outbound_asset_transfer.id(),
+                            pool_id,
+                            Some(sent_payment_id),
+                            Some(sent_info),
+                        );
+                    }
                     Err(ConversionError::ConversionFailed(format!(
                         "Convert token failed, refund in progress: {error_message}",
                     )))
@@ -1537,19 +1711,24 @@ impl TokenConverter for FlashnetTokenConverter {
                     ),
                 )
                 .await;
-                if let Err(err) = update_res {
-                    warn!("Could not record the outcome for {}: {err}", transfer.id());
-                }
+                let recorded = update_res
+                    .inspect_err(|err| {
+                        warn!("Could not record the outcome for {}: {err}", transfer.id());
+                    })
+                    .ok();
 
                 if let Some(swap) = executed {
-                    return Err(ConversionError::ConversionFailed(format!(
+                    return Err(ConversionError::FailedAfterSwap(format!(
                         "Convert token failed after the swap ran, delivering {} via {}: {}",
                         swap.amount_out,
                         swap.outbound_transfer_id,
                         *source.clone()
                     )));
                 }
-                let _ = self.refund_trigger.send(());
+                let (sent_payment_id, sent_info) = recorded
+                    .map(|(sent_payment_id, _, sent_info)| (sent_payment_id, sent_info))
+                    .unzip();
+                self.spawn_refund(transfer.id(), pool_id, sent_payment_id, sent_info);
                 Err(ConversionError::ConversionFailed(format!(
                     "Convert token failed, refund pending: {}",
                     *source.clone()
@@ -1848,6 +2027,120 @@ mod tests {
         let t = transfer("id-4", Some("2025-09-22T19:09:36.661269+00:00"));
         assert!(transfer_is_older_than(&t, SAMPLE_UNIX_SECS + 1));
         assert!(!transfer_is_older_than(&t, SAMPLE_UNIX_SECS - 1));
+    }
+
+    /// The metadata a clawback stamps on the returned transfer has to make the
+    /// refund a conversion leg. Otherwise the sats read as new income and queue
+    /// another conversion of the same funds.
+    #[test]
+    fn a_clawback_refund_is_marked_as_a_conversion_leg() {
+        let payment = Payment {
+            id: "refund".to_string(),
+            payment_type: crate::PaymentType::Receive,
+            status: crate::PaymentStatus::Completed,
+            amount: 1000,
+            fees: 0,
+            timestamp: 0,
+            method: crate::PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: Some(resolved_info_from_prior(
+                    None,
+                    &sample_pool_key(),
+                    ConversionStatus::Refunded,
+                )),
+            }),
+            conversion_details: None,
+        };
+
+        assert!(
+            payment.is_conversion_child(),
+            "a refund carrying AMM conversion info must not look like fresh income"
+        );
+    }
+
+    /// A refunded round trip lists as one row that says what it was: the send
+    /// nests under the refund, which carries the conversion.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_linked_refund_lists_as_one_refunded_conversion() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-test-refund-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(crate::SqliteStorage::new(&dir).unwrap());
+
+        let info = ConversionInfo::Amm {
+            pool_id: sample_pool_key().to_string(),
+            conversion_id: "conversion".to_string(),
+            status: ConversionStatus::Refunded,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+            degradation: None,
+        };
+        for (id, payment_type) in [
+            ("sent", crate::PaymentType::Send),
+            ("refund", crate::PaymentType::Receive),
+        ] {
+            storage
+                .apply_payment_update(Payment {
+                    id: id.to_string(),
+                    payment_type,
+                    status: crate::PaymentStatus::Completed,
+                    amount: 2000,
+                    fees: 0,
+                    timestamp: 1,
+                    method: crate::PaymentMethod::Spark,
+                    details: Some(PaymentDetails::Spark {
+                        invoice_details: None,
+                        htlc_details: None,
+                        conversion_info: None,
+                    }),
+                    conversion_details: None,
+                })
+                .await
+                .unwrap();
+            storage
+                .insert_payment_metadata(
+                    id.to_string(),
+                    PaymentMetadata {
+                        conversion_info: Some(info.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        link_to_refund(&storage, "sent", "refund").await;
+
+        let listed: Vec<String> = storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(
+            listed,
+            vec!["refund".to_string()],
+            "the send nests under its refund"
+        );
+
+        let refund = crate::utils::payments::get_payment_with_conversion_details(
+            "refund".to_string(),
+            Arc::clone(&storage),
+        )
+        .await
+        .unwrap();
+        let details = refund
+            .conversion_details
+            .expect("the refund row describes its conversion");
+        assert_eq!(details.status, ConversionStatus::Refunded);
+        assert_eq!(details.conversions.len(), 1);
+        assert_eq!(details.conversions[0].status, ConversionStatus::Refunded);
+        assert_eq!(details.conversions[0].from.amount, 2000);
     }
 
     fn sample_pool_key() -> PublicKey {

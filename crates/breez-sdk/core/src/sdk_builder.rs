@@ -1692,7 +1692,7 @@ mod tests {
         config.stable_balance_config = Some(StableBalanceConfig {
             tokens: vec![StableBalanceToken {
                 label: "USDB".to_string(),
-                token_identifier: "btkn1test".to_string(),
+                token_identifier: REGTEST_TOKEN.to_string(),
             }],
             default_active_label: None,
             threshold_sats: None,
@@ -2110,7 +2110,7 @@ mod tests {
         config.stable_balance_config = Some(StableBalanceConfig {
             tokens: vec![StableBalanceToken {
                 label: "USDB".to_string(),
-                token_identifier: "btkn1test".to_string(),
+                token_identifier: REGTEST_TOKEN.to_string(),
             }],
             default_active_label: None,
             threshold_sats: None,
@@ -2183,6 +2183,55 @@ mod tests {
         )))
     }
 
+    const REGTEST_TOKEN: &str = "btknrt14w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w4sh59f4v";
+
+    fn stable_balance_with(token_identifier: &str) -> crate::StableBalanceConfig {
+        crate::StableBalanceConfig {
+            tokens: vec![crate::StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: token_identifier.to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        }
+    }
+
+    fn assert_rejects_token(config: &crate::Config) {
+        match config.validate() {
+            Err(SdkError::InvalidInput(m)) => assert!(
+                m.contains("bech32m"),
+                "expected a token identifier rejection, got: {m}"
+            ),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_bech32m_stable_balance_token() {
+        let mut config = crate::default_config(Network::Regtest);
+        config.stable_balance_config = Some(stable_balance_with(REGTEST_TOKEN));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_hex_stable_balance_token() {
+        let mut config = crate::default_config(Network::Mainnet);
+        config.stable_balance_config = Some(stable_balance_with(
+            "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca",
+        ));
+        assert_rejects_token(&config);
+    }
+
+    #[test]
+    fn validate_rejects_a_stable_balance_token_for_another_network() {
+        let mut config = crate::default_config(Network::Regtest);
+        config.stable_balance_config = Some(stable_balance_with(
+            "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87",
+        ));
+        assert_rejects_token(&config);
+    }
+
     // ---- validate_server_mode ----
 
     #[test]
@@ -2192,7 +2241,7 @@ mod tests {
         config.stable_balance_config = Some(StableBalanceConfig {
             tokens: vec![StableBalanceToken {
                 label: "USDB".to_string(),
-                token_identifier: "btkn1test".to_string(),
+                token_identifier: REGTEST_TOKEN.to_string(),
             }],
             default_active_label: None,
             threshold_sats: None,
@@ -2219,7 +2268,7 @@ mod tests {
         config.stable_balance_config = Some(StableBalanceConfig {
             tokens: vec![StableBalanceToken {
                 label: "USDB".to_string(),
-                token_identifier: "btkn1test".to_string(),
+                token_identifier: REGTEST_TOKEN.to_string(),
             }],
             default_active_label: None,
             threshold_sats: None,

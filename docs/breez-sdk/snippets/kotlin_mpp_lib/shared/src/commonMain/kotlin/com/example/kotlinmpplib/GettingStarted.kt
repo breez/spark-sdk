@@ -112,6 +112,12 @@ class GettingStarted {
                     // The unilateral exit state changed, so a previously exported
                     // one is now out of date. Export it again.
                 }
+                is SdkEvent.StableBalanceConversionFailed -> {
+                    // A stable balance conversion failed. When retryInSecs is set,
+                    // the SDK retries after it.
+                    val conversion = e.conversion
+                    val retryInSecs = e.retryInSecs
+                }
                 else -> {
                     // Handle any future event types
                 }

@@ -9,6 +9,9 @@ pub enum ConversionError {
     NoPoolsAvailable,
     #[error("Conversion failed: {0}")]
     ConversionFailed(String),
+    /// The swap ran and delivered, but the conversion failed afterwards.
+    #[error("Conversion failed: {0}")]
+    FailedAfterSwap(String),
     #[error("Duplicate transfer: conversion already handled")]
     DuplicateTransfer,
     #[error("Validation failed: {0}")]
