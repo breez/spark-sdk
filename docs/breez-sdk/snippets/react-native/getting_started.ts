@@ -103,6 +103,11 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       } else if (event.tag === SdkEvent_Tags.UnilateralExitStateChanged) {
         // The unilateral exit state changed, so a previously exported
         // one is now out of date. Export it again.
+      } else if (event.tag === SdkEvent_Tags.StableBalanceConversionFailed) {
+        // A stable balance conversion failed. When retryInSecs is set,
+        // the SDK retries after it.
+        const conversion = event.inner.conversion
+        const retryInSecs = event.inner.retryInSecs
       } else {
         // Handle any future event types
       }

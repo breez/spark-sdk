@@ -96,6 +96,11 @@ class SdkEventListener: EventListener {
             // The unilateral exit state changed, so a previously exported
             // one is now out of date. Export it again.
             break
+        case .stableBalanceConversionFailed(let conversion, _, let retryInSecs):
+            // A stable balance conversion failed. When retryInSecs is set,
+            // the SDK retries after it.
+            let _ = conversion
+            let _ = retryInSecs
         default:
             // Handle any future event types
             break

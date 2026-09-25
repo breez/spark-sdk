@@ -1,3 +1,4 @@
+# pylint: disable=too-many-branches
 import logging
 from breez_sdk_spark import (
     BreezSdk,
@@ -116,6 +117,11 @@ class SdkListener(EventListener):
             # The unilateral exit state changed, so a previously exported
             # one is now out of date. Export it again.
             pass
+        elif isinstance(event, SdkEvent.STABLE_BALANCE_CONVERSION_FAILED):
+            # A stable balance conversion failed. When retry_in_secs is set,
+            # the SDK retries after it.
+            conversion = event.conversion
+            retry_in_secs = event.retry_in_secs
         else:
             # Handle any future event types
             pass

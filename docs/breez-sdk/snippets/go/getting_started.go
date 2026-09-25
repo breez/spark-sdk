@@ -129,6 +129,13 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	case breez_sdk_spark.SdkEventUnilateralExitStateChanged:
 		// The unilateral exit state changed, so a previously exported
 		// one is now out of date. Export it again.
+	case breez_sdk_spark.SdkEventStableBalanceConversionFailed:
+		// A stable balance conversion failed. When retryInSecs is set,
+		// the SDK retries after it.
+		conversion := event.Conversion
+		retryInSecs := event.RetryInSecs
+		_ = conversion
+		_ = retryInSecs
 	default:
 		// Handle any future event types
 	}

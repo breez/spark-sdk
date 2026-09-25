@@ -123,6 +123,13 @@ namespace BreezSdkSnippets
                         // one is now out of date. Export it again.
                         break;
 
+                    case SdkEvent.StableBalanceConversionFailed stableBalanceConversionFailedEvent:
+                        // A stable balance conversion failed. When retryInSecs is set,
+                        // the SDK retries after it.
+                        var conversion = stableBalanceConversionFailedEvent.conversion;
+                        var retryInSecs = stableBalanceConversionFailedEvent.retryInSecs;
+                        break;
+
                     default:
                         // Handle any future event types
                         break;

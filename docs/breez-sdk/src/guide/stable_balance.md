@@ -15,10 +15,10 @@ Your balance remains stable in value, denominated in USD.
 
 To enable stable balance, configure the [stable balance config](./config.md#stable-balance-configuration) when initializing the SDK:
 
-- **Tokens** — The stablecoin to use. Specify its token identifier and a display label.
-- **Default Active Label** — Optional label to activate by default. If unset, Stable Balance starts deactivated and can be activated at runtime via [user settings](./user_settings.md).
-- **Threshold Sats** — Optional minimum sats balance to trigger automatic conversion. We recommend omitting this to use the conversion limit minimum.
-- **Maximum Slippage** — Optional maximum slippage in basis points. We recommend omitting this to use the default of 10 bps (0.1%).
+- **Tokens**: The stablecoin to use. Specify its bech32m token identifier for the network (`btkn1…` on mainnet) and a display label. Any other form is rejected when the SDK starts.
+- **Default Active Label**: Optional label to activate by default. If unset, Stable Balance starts deactivated and can be activated at runtime via [user settings](./user_settings.md). A choice made through user settings, including turning Stable Balance off, is remembered and takes precedence over this default.
+- **Threshold Sats**: Optional minimum sats balance to trigger automatic conversion. We recommend omitting this to use the conversion limit minimum.
+- **Maximum Slippage**: Optional maximum slippage in basis points. We recommend omitting this to use the default of 10 bps (0.1%).
 
 {{#tabs config:stable-balance-config}}
 
@@ -47,7 +47,7 @@ To deactivate Stable Balance, unset the active label:
 
 {{#tabs user_settings:deactivate-stable-balance}}
 
-When deactivated, the SDK converts any remaining token balance back to Bitcoin.
+When deactivated, the SDK converts any remaining token balance back to Bitcoin. If the app closes before this finishes, it resumes the next time the SDK starts.
 
 ### Checking the current mode
 
@@ -94,6 +94,12 @@ The same approach works with {{#name prepare_lnurl_pay}} for [LNURL payments](./
 The actual sats received from conversion may differ slightly from the estimate due to price movement. The SDK handles this by querying the actual balance after conversion completes and sending the full available amount.
 
 </div>
+
+## When a conversion fails
+
+If a conversion fails, the SDK emits {{#enum SdkEvent::StableBalanceConversionFailed}} and tries again after a growing delay, starting at 30 seconds and doubling up to an hour, rather than on every sync. The delay carries over a restart. A conversion that succeeds, or switching the active token, resets it.
+
+If the funds were already sent when the conversion failed, the SDK returns them automatically. The refund appears in the payment list as a receive whose {{#name conversion_details}} status is {{#enum ConversionStatus::Refunded}}, with the original send nested under it.
 
 ## Conversion details
 
