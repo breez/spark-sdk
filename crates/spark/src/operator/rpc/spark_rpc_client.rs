@@ -288,6 +288,20 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn recover_watchtower_exited_leaf(
+        &self,
+        req: RecoverWatchtowerExitedLeafRequest,
+    ) -> Result<RecoverWatchtowerExitedLeafResponse> {
+        debug!("Calling recover_watchtower_exited_leaf with request: {req:?}");
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.recover_watchtower_exited_leaf(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
         self.call_with_auth_retry(|interceptor| {

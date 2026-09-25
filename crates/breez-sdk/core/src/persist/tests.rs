@@ -610,6 +610,21 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
+    // Test 10b: Watchtower exit recovery payment
+    let watchtower_exit_recovery_payment = Payment {
+        id: "watchtower-exit-recovery:leaf789".to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Pending,
+        amount: 9_500,
+        fees: 500,
+        timestamp: Utc::now().timestamp().try_into().unwrap(),
+        method: PaymentMethod::WatchtowerExitRecovery,
+        details: Some(PaymentDetails::WatchtowerExitRecovery {
+            tx_id: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        }),
+        conversion_details: None,
+    };
+
     // Test 11: Deposit payment
     let deposit_payment = Payment {
         id: "deposit_pmt678".to_string(),
@@ -786,6 +801,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         lightning_minimal_payment.clone(),
         lightning_lnurl_receive_payment.clone(),
         withdraw_payment.clone(),
+        watchtower_exit_recovery_payment.clone(),
         deposit_payment.clone(),
         no_details_payment.clone(),
         successful_sent_conversion_payment.clone(),
@@ -861,9 +877,9 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         })
         .await
         .unwrap();
-    // 18 total payments minus 2 child payments
+    // 19 total payments minus 2 child payments
     // (successful_sent_conversion_payment and successful_received_conversion_payment has parent_payment_id)
-    assert_eq!(payments.len(), 16);
+    assert_eq!(payments.len(), 17);
 
     // Test each payment type individually
     for (i, expected_payment) in test_payments.iter().enumerate() {
@@ -1026,6 +1042,10 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             (
                 Some(PaymentDetails::Withdraw { tx_id: r_tx_id }),
                 Some(PaymentDetails::Withdraw { tx_id: e_tx_id }),
+            )
+            | (
+                Some(PaymentDetails::WatchtowerExitRecovery { tx_id: r_tx_id }),
+                Some(PaymentDetails::WatchtowerExitRecovery { tx_id: e_tx_id }),
             ) => {
                 assert_eq!(r_tx_id, e_tx_id);
             }
@@ -1058,9 +1078,9 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         .iter()
         .filter(|p| p.payment_type == PaymentType::Receive)
         .count();
-    // Send: 9 - 1 child (successful_sent_conversion_payment) = 8
+    // Send: 10 - 1 child (successful_sent_conversion_payment) = 9
     // Receive: 9 - 1 child (successful_received_conversion_payment) = 8
-    assert_eq!(send_payments, 8); // spark, token_burn, lightning_lnurl_pay, withdraw, no_details, after_conversion, failed_with_refund, failed_no_refund
+    assert_eq!(send_payments, 9); // spark, token_burn, lightning_lnurl_pay, withdraw, watchtower_exit_recovery, no_details, after_conversion, failed_with_refund, failed_no_refund
     assert_eq!(receive_payments, 8); // spark_htlc, token_transfer, token_mint, lightning_lnurl_withdraw, lightning_hodl, lightning_minimal, lightning_lnurl_receive, deposit
 
     // Test filtering by status
@@ -1079,7 +1099,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     // 14 completed payments minus 2 child payments = 12
     // (successful_sent_conversion_payment and successful_received_conversion_payment both have parent_payment_id)
     assert_eq!(completed_payments, 12); // spark, spark_htlc, token_mint, token_burn, lightning_lnurl_pay, lightning_lnurl_withdraw, lightning_lnurl_receive, withdraw, deposit, after_conversion, failed_with_refund, failed_no_refund
-    assert_eq!(pending_payments, 3); // token, lightning_hodl, no_details
+    assert_eq!(pending_payments, 4); // token, lightning_hodl, watchtower_exit_recovery, no_details
     assert_eq!(failed_payments, 1); // lightning_minimal
 
     // Test filtering by method

@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::error;
 
-use crate::{EventEmitter, GetInfoRequest, GetInfoResponse, Storage, error::SdkError};
+use crate::{
+    EventEmitter, GetInfoRequest, GetInfoResponse, RecoverableFunds, Storage, error::SdkError,
+};
 
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{BreezSdk, SyncType};
@@ -59,6 +61,7 @@ impl RuntimeProfile for ServerRuntime {
             sdk.spark_wallet.get_balance(),
             sdk.spark_wallet.get_token_balances(),
         )?;
+        let watchtower_exited_sats = sdk.watchtower_exited_sats().await?;
 
         let token_balances = token_balances
             .into_iter()
@@ -69,6 +72,9 @@ impl RuntimeProfile for ServerRuntime {
             identity_pubkey: sdk.spark_wallet.get_identity_public_key().to_string(),
             balance_sats,
             token_balances,
+            recoverable_funds: RecoverableFunds {
+                watchtower_exited_sats,
+            },
         })
     }
 

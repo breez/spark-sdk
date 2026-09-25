@@ -15,8 +15,10 @@ use super::external_spark_types::{
     ExternalPrepareTransferRequest, ExternalPreparedClaim, ExternalPreparedLightningReceive,
     ExternalPreparedStaticDeposit, ExternalPreparedStaticDepositClaim,
     ExternalPreparedTokenTransaction, ExternalPreparedTransfer, ExternalSignSparkInvoiceRequest,
-    ExternalSignStaticDepositRefundRequest, ExternalSignedSparkInvoice,
-    ExternalStartStaticDepositRefundRequest, ExternalStartedStaticDepositRefund,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedSparkInvoice, ExternalStartStaticDepositRefundRequest,
+    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
+    ExternalStartedWatchtowerExitRecovery,
 };
 use super::external_types::{
     EcdsaSignatureBytes, ExternalFrostSignature, ExternalTreeNodeId, PublicKeyBytes,
@@ -111,6 +113,16 @@ pub trait ExternalSparkSigner: Send + Sync {
     async fn sign_static_deposit_refund(
         &self,
         request: ExternalSignStaticDepositRefundRequest,
+    ) -> Result<ExternalFrostSignature, SignerError>;
+
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, SignerError>;
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
     ) -> Result<ExternalFrostSignature, SignerError>;
 
     /// Schnorr-sign a Spark invoice (sats or tokens) with the identity key.

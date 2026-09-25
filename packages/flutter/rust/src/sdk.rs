@@ -297,6 +297,22 @@ impl BreezSdk {
         self.inner.list_unclaimed_deposits(request).await
     }
 
+    pub async fn prepare_recover_watchtower_exited_funds(
+        &self,
+        request: PrepareRecoverWatchtowerExitedFundsRequest,
+    ) -> Result<PrepareRecoverWatchtowerExitedFundsResponse, SdkError> {
+        self.inner
+            .prepare_recover_watchtower_exited_funds(request)
+            .await
+    }
+
+    pub async fn recover_watchtower_exited_funds(
+        &self,
+        request: RecoverWatchtowerExitedFundsRequest,
+    ) -> Result<RecoverWatchtowerExitedFundsResponse, SdkError> {
+        self.inner.recover_watchtower_exited_funds(request).await
+    }
+
     pub async fn check_lightning_address_available(
         &self,
         request: CheckLightningAddressRequest,

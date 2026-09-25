@@ -5,6 +5,7 @@ mod model;
 mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
+mod watchtower_exit;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
@@ -38,10 +39,12 @@ pub use spark::{
         PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
         PreparedTokenTransaction, PreparedTransfer, SecretShare, SecretSource, SecretToSplit,
         SignFrostRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-        SignedSparkInvoice, Signer, SignerError, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-        StartStaticDepositRefundRequest, StartedStaticDepositRefund, TokenTransactionKind,
-        TransferLeafInput, VerifiableSecretShare, account_master_key, default_account_number,
-        identity_master_key, identity_public_key,
+        SignWatchtowerExitRecoveryRequest, SignedSparkInvoice, Signer, SignerError,
+        SparkInvoiceKind, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
+        StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund,
+        StartedWatchtowerExitRecovery, TokenTransactionKind, TransferLeafInput,
+        VerifiableSecretShare, account_master_key, default_account_number, identity_master_key,
+        identity_public_key,
     },
     ssp::*,
     token::{
@@ -70,6 +73,9 @@ pub use spark::{
 pub use unilateral_exit::*;
 pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
+pub use watchtower_exit::{
+    UnsignedWatchtowerExitRecovery, WatchtowerExitedOutput, build_watchtower_exit_recovery,
+};
 
 #[cfg(feature = "test-utils")]
 pub use spark::session_store::tests as session_store_tests;

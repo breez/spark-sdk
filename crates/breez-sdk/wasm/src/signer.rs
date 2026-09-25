@@ -885,6 +885,36 @@ pub struct ExternalSignStaticDepositRefundRequest {
 }
 
 #[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalStartWatchtowerExitRecoveryRequest
+)]
+pub struct ExternalStartWatchtowerExitRecoveryRequest {
+    pub leaf_id: ExternalTreeNodeId,
+    pub user_statement: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalStartedWatchtowerExitRecovery
+)]
+pub struct ExternalStartedWatchtowerExitRecovery {
+    pub signing_public_key: Vec<u8>,
+    pub nonce_commitment: ExternalFrostCommitments,
+    pub user_signature: EcdsaSignatureBytes,
+}
+
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSignWatchtowerExitRecoveryRequest
+)]
+pub struct ExternalSignWatchtowerExitRecoveryRequest {
+    pub leaf_id: ExternalTreeNodeId,
+    pub sighash: Vec<u8>,
+    pub verifying_key: Vec<u8>,
+    pub nonce_commitment: ExternalFrostCommitments,
+    pub statechain_commitments: Vec<IdentifierCommitmentPair>,
+    pub statechain_signatures: Vec<IdentifierSignaturePair>,
+    pub statechain_public_keys: Vec<IdentifierPublicKeyPair>,
+}
+
+#[macros::extern_wasm_bindgen(
     breez_sdk_spark::signer::external_spark_types::ExternalSparkInvoiceKind
 )]
 pub enum ExternalSparkInvoiceKind {
@@ -1147,6 +1177,36 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         Ok(v.into())
     }
 
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: core_spark::ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<core_spark::ExternalStartedWatchtowerExitRecovery, SignerError> {
+        let req: ExternalStartWatchtowerExitRecoveryRequest = request.into();
+        let promise = self
+            .inner
+            .start_watchtower_exit_recovery(req)
+            .map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: ExternalStartedWatchtowerExitRecovery =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into())
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: core_spark::ExternalSignWatchtowerExitRecoveryRequest,
+    ) -> Result<core_types::ExternalFrostSignature, SignerError> {
+        let req: ExternalSignWatchtowerExitRecoveryRequest = request.into();
+        let promise = self
+            .inner
+            .sign_watchtower_exit_recovery(req)
+            .map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: ExternalFrostSignature =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into())
+    }
+
     async fn sign_spark_invoice(
         &self,
         request: core_spark::ExternalSignSparkInvoiceRequest,
@@ -1284,6 +1344,18 @@ extern "C" {
     pub fn sign_static_deposit_refund(
         this: &JsExternalSparkSigner,
         request: ExternalSignStaticDepositRefundRequest,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "startWatchtowerExitRecovery", catch)]
+    pub fn start_watchtower_exit_recovery(
+        this: &JsExternalSparkSigner,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signWatchtowerExitRecovery", catch)]
+    pub fn sign_watchtower_exit_recovery(
+        this: &JsExternalSparkSigner,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signSparkInvoice", catch)]
@@ -1479,6 +1551,30 @@ impl ExternalSparkSignerHandle {
     ) -> Result<ExternalFrostSignature, JsValue> {
         self.inner
             .sign_static_deposit_refund(request.into())
+            .await
+            .map(Into::into)
+            .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "startWatchtowerExitRecovery")]
+    pub async fn start_watchtower_exit_recovery(
+        &self,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, JsValue> {
+        self.inner
+            .start_watchtower_exit_recovery(request.into())
+            .await
+            .map(Into::into)
+            .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "signWatchtowerExitRecovery")]
+    pub async fn sign_watchtower_exit_recovery(
+        &self,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalFrostSignature, JsValue> {
+        self.inner
+            .sign_watchtower_exit_recovery(request.into())
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)

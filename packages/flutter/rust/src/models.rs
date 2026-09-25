@@ -486,6 +486,12 @@ pub struct _GetInfoResponse {
     pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
+    pub recoverable_funds: RecoverableFunds,
+}
+
+#[frb(mirror(RecoverableFunds))]
+pub struct _RecoverableFunds {
+    pub watchtower_exited_sats: u64,
 }
 
 #[frb(mirror(TokenBalance))]
@@ -675,6 +681,79 @@ pub enum _AssetFilter {
 #[frb(mirror(ListPaymentsResponse))]
 pub struct _ListPaymentsResponse {
     pub payments: Vec<Payment>,
+}
+
+#[frb(mirror(WatchtowerExitedFundsInfo))]
+pub struct _WatchtowerExitedFundsInfo {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+}
+
+#[frb(mirror(WatchtowerExitRecoveryInfo))]
+pub struct _WatchtowerExitRecoveryInfo {
+    pub tx_id: String,
+    pub tx_hex: String,
+    pub state: WatchtowerExitRecoveryState,
+}
+
+#[frb(mirror(WatchtowerExitRecoveryState))]
+pub enum _WatchtowerExitRecoveryState {
+    BroadcastPending { last_error: Option<String> },
+    Broadcast,
+}
+
+#[frb(mirror(PrepareRecoverWatchtowerExitedFundsRequest))]
+pub struct _PrepareRecoverWatchtowerExitedFundsRequest {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+}
+
+#[frb(mirror(PrepareRecoverWatchtowerExitedFundsResponse))]
+pub struct _PrepareRecoverWatchtowerExitedFundsResponse {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub quotes: Vec<WatchtowerExitRecoveryQuote>,
+    pub total_amount_sat: u64,
+    pub total_fee_sat: u64,
+}
+
+#[frb(mirror(WatchtowerExitRecoveryQuote))]
+pub struct _WatchtowerExitRecoveryQuote {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+    pub fee_sat: u64,
+    pub pending_recovery: Option<WatchtowerExitRecoveryInfo>,
+}
+
+#[frb(mirror(RecoverWatchtowerExitedFundsRequest))]
+pub struct _RecoverWatchtowerExitedFundsRequest {
+    pub prepare_response: PrepareRecoverWatchtowerExitedFundsResponse,
+}
+
+#[frb(mirror(RecoverWatchtowerExitedFundsResponse))]
+pub struct _RecoverWatchtowerExitedFundsResponse {
+    pub recovered: Vec<WatchtowerExitRecoverySuccess>,
+    pub failed: Vec<WatchtowerExitRecoveryFailure>,
+}
+
+#[frb(mirror(WatchtowerExitRecoverySuccess))]
+pub struct _WatchtowerExitRecoverySuccess {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub recovery: WatchtowerExitRecoveryInfo,
+}
+
+#[frb(mirror(WatchtowerExitRecoveryFailure))]
+pub struct _WatchtowerExitRecoveryFailure {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub error: WatchtowerExitRecoveryError,
 }
 
 #[frb(mirror(ListUnclaimedDepositsRequest))]
@@ -1407,6 +1486,9 @@ pub enum _PaymentDetails {
         tx_id: String,
         vout: u32,
     },
+    WatchtowerExitRecovery {
+        tx_id: String,
+    },
 }
 
 #[frb(mirror(TokenTransactionType))]
@@ -1452,6 +1534,7 @@ pub enum _PaymentMethod {
     Token,
     Deposit,
     Withdraw,
+    WatchtowerExitRecovery,
     Unknown,
 }
 

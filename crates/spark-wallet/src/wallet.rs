@@ -51,6 +51,7 @@ use spark::{
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        WatchtowerRecoveryService,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -79,6 +80,9 @@ use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
+use crate::watchtower_exit::{
+    WatchtowerExitedOutput, direct_split_node_output, is_watchtower_exited,
+};
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest,
     MasterIdentityPublicKeyUpdate, PreimageRequest, QuerySparkInvoiceResult, TokenBalance,
@@ -383,6 +387,7 @@ pub struct SparkWallet {
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
     transfer_service: Arc<TransferService>,
+    watchtower_recovery_service: Arc<WatchtowerRecoveryService>,
     swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
@@ -480,6 +485,12 @@ impl SparkWallet {
             config.split_secret_threshold,
             operator_pool.clone(),
             transfer_observer.clone(),
+        ));
+
+        let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
+            Arc::clone(&spark_signer),
+            config.network,
+            operator_pool.clone(),
         ));
 
         let lightning_service = Arc::new(LightningService::new(
@@ -599,6 +610,7 @@ impl SparkWallet {
             token_output_service,
             coop_exit_service,
             transfer_service,
+            watchtower_recovery_service,
             swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
@@ -974,6 +986,47 @@ impl SparkWallet {
         };
 
         Ok(refund_tx)
+    }
+
+    pub async fn list_watchtower_exited_leaves(&self) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let leaves = self.tree_service.list_leaves().await?;
+        Ok(leaves
+            .not_available
+            .into_iter()
+            .filter(|leaf| is_watchtower_exited(leaf.status))
+            .collect())
+    }
+
+    pub async fn resolve_watchtower_exited_outputs(
+        &self,
+        leaves: &[TreeNode],
+    ) -> Result<Vec<WatchtowerExitedOutput>, SparkWalletError> {
+        if leaves.is_empty() {
+            return Ok(Vec::new());
+        }
+        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
+        let nodes: HashMap<TreeNodeId, TreeNode> = self
+            .tree_service
+            .fetch_nodes(&leaf_ids, true)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect();
+        Ok(leaves
+            .iter()
+            .filter_map(|leaf| direct_split_node_output(leaf, &nodes))
+            .collect())
+    }
+
+    pub async fn cosign_watchtower_exit_recovery(
+        &self,
+        output: &WatchtowerExitedOutput,
+        recovery_tx: Transaction,
+    ) -> Result<Transaction, SparkWalletError> {
+        Ok(self
+            .watchtower_recovery_service
+            .cosign_recovery_tx(&output.leaf_id, recovery_tx, &output.tx_out)
+            .await?)
     }
 
     pub async fn generate_deposit_address(
@@ -1634,6 +1687,7 @@ impl SparkWallet {
                     .into_iter()
                     .chain(leaves.not_available)
                     .chain(leaves.available_missing_from_operators)
+                    .filter(|l| !is_watchtower_exited(l.status))
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
@@ -1641,6 +1695,17 @@ impl SparkWallet {
                 Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
             }
             ExitLeafSelection::Specific(mut leaf_ids) => {
+                // Only a spend the operators co-sign reaches a watchtower-exited leaf.
+                let watchtower_exited = self.list_watchtower_exited_leaves().await?;
+                if let Some(leaf) = watchtower_exited
+                    .iter()
+                    .find(|leaf| leaf_ids.contains(&leaf.id))
+                {
+                    return Err(SparkWalletError::ValidationError(format!(
+                        "Leaf {} was exited by the watchtower and cannot be exited unilaterally",
+                        leaf.id
+                    )));
+                }
                 // Dedup so a leaf listed twice is exited once, mirroring Auto. A
                 // duplicate would otherwise be re-selected with its refund uncovered
                 // and corrupt the plan (an empty-funded branch, or a sweep spending
@@ -4444,5 +4509,46 @@ mod tests {
             &output_key,
         )
         .expect("the sweep signs with the key the refund pays to");
+    }
+
+    async fn wallet_holding(leaves: &[TreeNode]) -> SparkWallet {
+        let store = Arc::new(InMemoryTreeStore::new());
+        store.add_leaves(leaves).await.unwrap();
+        wallet_over(store as Arc<dyn TreeStore>).await
+    }
+
+    #[macros::async_test_all]
+    async fn an_auto_exit_leaves_watchtower_exited_leaves_out() {
+        let available = create_test_node_with_parent("available", None, TreeNodeStatus::Available);
+        let wallet = wallet_holding(&[
+            available.clone(),
+            create_test_node_with_parent("exited", None, TreeNodeStatus::WatchtowerExited),
+            create_test_node_with_parent(
+                "recovered",
+                None,
+                TreeNodeStatus::WatchtowerExitRecovered,
+            ),
+        ])
+        .await;
+
+        let (leaf_ids, _) = wallet
+            .resolve_leaf_selection(ExitLeafSelection::Auto)
+            .await
+            .unwrap();
+
+        assert_eq!(leaf_ids, vec![available.id]);
+    }
+
+    #[macros::async_test_all]
+    async fn a_named_exit_of_a_watchtower_exited_leaf_is_rejected() {
+        let available = create_test_node_with_parent("available", None, TreeNodeStatus::Available);
+        let exited = create_test_node_with_parent("exited", None, TreeNodeStatus::WatchtowerExited);
+        let wallet = wallet_holding(&[available.clone(), exited.clone()]).await;
+
+        let result = wallet
+            .resolve_leaf_selection(ExitLeafSelection::Specific(vec![available.id, exited.id]))
+            .await;
+
+        assert!(matches!(result, Err(SparkWalletError::ValidationError(_))));
     }
 }

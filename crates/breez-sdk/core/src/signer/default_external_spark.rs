@@ -19,8 +19,10 @@ use crate::signer::external_spark_types::{
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignedSparkInvoice, ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund, ExternalTokenTransactionKind, ExternalTransferLeafInput,
+    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice,
+    ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
+    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
+    ExternalStartedWatchtowerExitRecovery, ExternalTokenTransactionKind, ExternalTransferLeafInput,
 };
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
@@ -31,9 +33,9 @@ use spark_wallet::{
     ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-    SigningKeyshare, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-    StartStaticDepositRefundRequest, TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId,
-    TreeNodeStatus,
+    SignWatchtowerExitRecoveryRequest, SigningKeyshare, SparkInvoiceKind, SparkSigner,
+    SparkSignerAdapter, StartStaticDepositRefundRequest, StartWatchtowerExitRecoveryRequest,
+    TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId, TreeNodeStatus,
 };
 
 /// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
@@ -392,6 +394,81 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
             .sign_static_deposit_refund(SignStaticDepositRefundRequest {
                 index: request.index,
                 sighash: hash_32(&request.sighash, "refund sighash")?,
+                verifying_key: public_key(&request.verifying_key)?,
+                nonce_commitment: request
+                    .nonce_commitment
+                    .to_frost_commitments()
+                    .map_err(err)?,
+                statechain_commitments,
+                statechain_signatures,
+                statechain_public_keys,
+            })
+            .await
+            .map_err(err)?;
+        ExternalFrostSignature::from_frost_signature(&signature).map_err(err)
+    }
+
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, SignerError> {
+        let started = self
+            .inner
+            .start_watchtower_exit_recovery(StartWatchtowerExitRecoveryRequest {
+                leaf_id: request.leaf_id.to_tree_node_id().map_err(err)?,
+                user_statement: request.user_statement,
+            })
+            .await
+            .map_err(err)?;
+        Ok(ExternalStartedWatchtowerExitRecovery {
+            signing_public_key: started.signing_public_key.serialize().to_vec(),
+            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
+                &started.nonce_commitment,
+            )
+            .map_err(err)?,
+            user_signature: EcdsaSignatureBytes::from_signature(&started.user_signature),
+        })
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalFrostSignature, SignerError> {
+        let statechain_commitments = request
+            .statechain_commitments
+            .iter()
+            .map(|p| {
+                Ok((
+                    p.identifier.to_identifier().map_err(err)?,
+                    p.commitment.to_signing_commitments().map_err(err)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
+        let statechain_signatures = request
+            .statechain_signatures
+            .iter()
+            .map(|p| {
+                Ok((
+                    p.identifier.to_identifier().map_err(err)?,
+                    p.signature.to_signature_share().map_err(err)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
+        let statechain_public_keys = request
+            .statechain_public_keys
+            .iter()
+            .map(|p| {
+                Ok((
+                    p.identifier.to_identifier().map_err(err)?,
+                    public_key(&p.public_key)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, SignerError>>()?;
+        let signature = self
+            .inner
+            .sign_watchtower_exit_recovery(SignWatchtowerExitRecoveryRequest {
+                leaf_id: request.leaf_id.to_tree_node_id().map_err(err)?,
+                sighash: hash_32(&request.sighash, "recovery sighash")?,
                 verifying_key: public_key(&request.verifying_key)?,
                 nonce_commitment: request
                     .nonce_commitment

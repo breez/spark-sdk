@@ -31,9 +31,13 @@ use breez_sdk_itest::{
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
     CheckUnilateralExitRequest, CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState,
-    ExitTransactionStatus, ImportUnilateralExitStateRequest, PrepareUnilateralExitRequest,
-    PrepareUnilateralExitResponse, SdkError, UnilateralExitRequest, UnilateralExitResponse,
-    UnilateralExitTransaction, UnilateralExitTxKind, UnilateralExitVerdict,
+    ExitTransactionStatus, GetInfoRequest, GetPaymentRequest, ImportUnilateralExitStateRequest,
+    PaymentDetails, PaymentMethod, PaymentStatus, PrepareRecoverWatchtowerExitedFundsRequest,
+    PrepareRecoverWatchtowerExitedFundsResponse, PrepareUnilateralExitRequest,
+    PrepareUnilateralExitResponse, RecoverWatchtowerExitedFundsRequest, SdkError,
+    SyncWalletRequest, UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
+    UnilateralExitTxKind, UnilateralExitVerdict, WatchtowerExitRecoveryError,
+    WatchtowerExitRecoveryInfo, WatchtowerExitRecoveryState,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -41,7 +45,7 @@ use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::helpers::{
     FundedUtxo, deposit_with_amount, fund_p2tr_utxo, fund_p2tr_utxo_unmined,
     fund_p2tr_utxo_with_key, fund_p2wpkh_utxo, fund_p2wpkh_utxo_with_key, sign_cpfp_psbt_p2tr,
-    submit_package_with_csv_retry,
+    submit_package_with_csv_retry, wait_for_event,
 };
 use spark_wallet::is_ephemeral_anchor_output;
 
@@ -3477,3 +3481,289 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     assert_resumed_all_mined(&sdk, &second, &destination).await?;
     Ok(())
 }
+
+/// The watchtower broadcasts a renewal's direct split node tx once the owner's
+/// exit stalls past its 50-block timelock, taking the leaf's funds on-chain.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_watchtower_exited_funds_are_recovered(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let destination = cpfp.address.clone();
+
+    // Twice: the watchtower leaves the first split node alone, at the top of the
+    // tree it has no parent to time it against. The second hangs off the first.
+    let partner = build_local_sdk(Arc::clone(&sdk.fixtures), backend).await?;
+    transfer_until_renewed(&sdk, &partner).await?;
+    transfer_until_renewed(&sdk, &partner).await?;
+    let leaf_id = single_leaf_id(&sdk).await?;
+    let leaf_value = sdk.spark_wallet.get_balance().await?;
+
+    // Start the exit and stop after its first transaction: that confirmation is
+    // what starts the watchtower's clock on the split node below it.
+    let (_, started, _) = quote_then_build_single(&sdk, CPFP_SATS, FEE_RATE).await?;
+    let first_node = started
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::Node))
+        .expect("the exit broadcasts at least one node");
+    if let Some(fan_out) = started
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+    {
+        let tx = decode_tx(&fan_out.tx_hex)?;
+        sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+        sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    }
+    broadcast_and_mine(&sdk, first_node).await?;
+
+    // Past the 50-block timelock, with room for the operators to see the blocks.
+    sdk.fixtures.bitcoind.generate_blocks(60).await?;
+
+    let prepared = wait_for_watchtower_exited_funds(&sdk, &destination).await?;
+    let [quote] = prepared.quotes.as_slice() else {
+        anyhow::bail!("expected one quote, got {}", prepared.quotes.len());
+    };
+    let quote = quote.clone();
+    assert_eq!(quote.leaf_id, leaf_id.to_string());
+    assert!(quote.pending_recovery.is_none());
+    assert!(
+        quote.amount_sat < leaf_value,
+        "the watchtower's transaction paid its fee out of the leaf"
+    );
+    assert_eq!(prepared.total_amount_sat, quote.amount_sat);
+    assert_eq!(prepared.total_fee_sat, quote.fee_sat);
+    let info = sdk
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: None,
+        })
+        .await?;
+    assert_eq!(
+        info.recoverable_funds.watchtower_exited_sats,
+        quote.amount_sat
+    );
+    assert_eq!(info.balance_sats, 0, "the funds left the spendable balance");
+
+    let recovery = recover_single(&sdk, prepared).await?;
+    assert_eq!(recovery.state, WatchtowerExitRecoveryState::Broadcast);
+    let recovery_tx = decode_tx(&recovery.tx_hex)?;
+    assert_eq!(
+        recovery_tx.input[0].previous_output.txid.to_string(),
+        quote.txid
+    );
+    assert_eq!(
+        recovery_tx.output[0].script_pubkey,
+        destination.script_pubkey()
+    );
+    assert_eq!(
+        recovery_tx.output[0].value.to_sat(),
+        quote.amount_sat - quote.fee_sat,
+        "the recovery pays the quoted fee"
+    );
+
+    let payment_id = format!("watchtower-exit-recovery:{leaf_id}");
+    let payment = sdk
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: payment_id.clone(),
+        })
+        .await?
+        .payment;
+    assert_eq!(payment.status, PaymentStatus::Pending);
+    assert_eq!(payment.method, PaymentMethod::WatchtowerExitRecovery);
+    assert_eq!(
+        payment.amount,
+        u128::from(recovery_tx.output[0].value.to_sat())
+    );
+    assert_eq!(
+        payment.amount + payment.fees,
+        u128::from(leaf_value),
+        "the payment accounts for the whole leaf"
+    );
+    let info = sdk
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: None,
+        })
+        .await?;
+    assert_eq!(
+        info.recoverable_funds.watchtower_exited_sats, 0,
+        "a signed recovery is represented by its payment"
+    );
+
+    let again = prepare_recovery(&sdk, &destination, FEE_RATE).await?;
+    let [requote] = again.quotes.as_slice() else {
+        anyhow::bail!("expected the pending recovery to be quoted again");
+    };
+    assert_eq!(
+        requote.pending_recovery.as_ref().map(|r| &r.tx_id),
+        Some(&recovery.tx_id)
+    );
+    let response = sdk
+        .sdk
+        .recover_watchtower_exited_funds(RecoverWatchtowerExitedFundsRequest {
+            prepare_response: again,
+        })
+        .await?;
+    let [failure] = response.failed.as_slice() else {
+        anyhow::bail!("expected the same fee to be refused: {response:?}");
+    };
+    let WatchtowerExitRecoveryError::ReplacementFeeTooLow {
+        required_fee_rate_sat_per_vbyte,
+        ..
+    } = failure.error
+    else {
+        anyhow::bail!("expected ReplacementFeeTooLow, got {:?}", failure.error);
+    };
+    let bumped = prepare_recovery(&sdk, &destination, required_fee_rate_sat_per_vbyte).await?;
+    let replacement = recover_single(&sdk, bumped).await?;
+    assert_ne!(replacement.tx_id, recovery.tx_id);
+    assert_eq!(replacement.state, WatchtowerExitRecoveryState::Broadcast);
+    let payment = sdk
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: payment_id.clone(),
+        })
+        .await?
+        .payment;
+    assert!(
+        matches!(
+            payment.details,
+            Some(PaymentDetails::WatchtowerExitRecovery { ref tx_id }) if *tx_id == replacement.tx_id
+        ),
+        "the replacement takes over the payment"
+    );
+
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let payment = sdk
+        .sdk
+        .get_payment(GetPaymentRequest { payment_id })
+        .await?
+        .payment;
+    assert_eq!(payment.status, PaymentStatus::Completed);
+    let prepared = prepare_recovery(&sdk, &destination, FEE_RATE).await?;
+    assert!(
+        prepared.quotes.is_empty(),
+        "a final recovery is no longer quoted"
+    );
+    Ok(())
+}
+
+async fn prepare_recovery(
+    sdk: &LocalSdk,
+    destination: &Address,
+    fee_rate_sat_per_vbyte: u64,
+) -> Result<PrepareRecoverWatchtowerExitedFundsResponse> {
+    Ok(sdk
+        .sdk
+        .prepare_recover_watchtower_exited_funds(PrepareRecoverWatchtowerExitedFundsRequest {
+            destination: destination.to_string(),
+            fee_rate_sat_per_vbyte,
+        })
+        .await?)
+}
+
+async fn recover_single(
+    sdk: &LocalSdk,
+    prepare_response: PrepareRecoverWatchtowerExitedFundsResponse,
+) -> Result<WatchtowerExitRecoveryInfo> {
+    let response = sdk
+        .sdk
+        .recover_watchtower_exited_funds(RecoverWatchtowerExitedFundsRequest { prepare_response })
+        .await?;
+    match (response.recovered.as_slice(), response.failed.as_slice()) {
+        ([recovered], []) => Ok(recovered.recovery.clone()),
+        _ => anyhow::bail!("expected one recovery: {response:?}"),
+    }
+}
+
+async fn wait_for_watchtower_exited_funds(
+    sdk: &LocalSdk,
+    destination: &Address,
+) -> Result<PrepareRecoverWatchtowerExitedFundsResponse> {
+    for _ in 0..30 {
+        sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        let prepared = prepare_recovery(sdk, destination, FEE_RATE).await?;
+        if !prepared.quotes.is_empty() {
+            return Ok(prepared);
+        }
+        sdk.fixtures.bitcoind.generate_blocks(1).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    anyhow::bail!("no watchtower-exited funds were reported")
+}
+
+/// Each transfer takes one interval off the refund timelock, and the wallet
+/// renews the leaf once that reaches its threshold.
+async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()> {
+    let before = chain_len(sdk).await?;
+    for hop in 0..MAX_TRANSFERS_PER_RENEWAL {
+        let (from, to) = if hop % 2 == 0 {
+            (sdk, partner)
+        } else {
+            (partner, sdk)
+        };
+        let address = to.spark_wallet.get_spark_address()?;
+        let mut events = to.spark_wallet.subscribe_events();
+        let balance = from.spark_wallet.get_balance().await?;
+        from.spark_wallet.transfer(balance, &address, None).await?;
+        wait_for_event(&mut events, 30, "TransferClaimed", |event| match &event {
+            spark_wallet::WalletEvent::TransferClaimed(_) => Ok(Some(event)),
+            _ => Ok(None),
+        })
+        .await?;
+
+        // An even number of hops leaves the leaf where the test expects it.
+        if hop % 2 == 1 && chain_len(sdk).await? > before {
+            return Ok(());
+        }
+    }
+
+    // A renewed leaf's new ancestor is fetched in the background.
+    if renewed(sdk, before).await? {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "no renewal after {MAX_TRANSFERS_PER_RENEWAL} transfers; the leaf's refund timelock is {:?}",
+        refund_sequence(sdk).await?
+    )
+}
+
+async fn renewed(sdk: &LocalSdk, before: usize) -> Result<bool> {
+    for _ in 0..20 {
+        if chain_len(sdk).await? > before {
+            return Ok(true);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    Ok(false)
+}
+
+async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u64>> {
+    let exported = sdk.sdk.export_unilateral_exit_state().await?;
+    let envelope: serde_json::Value = serde_json::from_str(&exported.exit_state)?;
+    Ok(envelope["pedigrees"][0]["leaf"]["refund_tx"]["input"][0]["sequence"].as_u64())
+}
+
+async fn chain_len(sdk: &LocalSdk) -> Result<usize> {
+    let exported = sdk.sdk.export_unilateral_exit_state().await?;
+    let chains = exit_state_chains(&exported.exit_state)?;
+    match chains.values().next() {
+        Some(chain) if chains.len() == 1 => Ok(chain.len()),
+        other => anyhow::bail!("expected one exported chain, got {:?}", other.map(Vec::len)),
+    }
+}
+
+async fn single_leaf_id(sdk: &LocalSdk) -> Result<spark_wallet::TreeNodeId> {
+    let leaves = sdk.spark_wallet.list_leaves().await?;
+    match leaves.available.as_slice() {
+        [leaf] => Ok(leaf.id.clone()),
+        other => anyhow::bail!("expected one available leaf, got {}", other.len()),
+    }
+}
+
+const MAX_TRANSFERS_PER_RENEWAL: usize = 60;

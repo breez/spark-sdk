@@ -198,6 +198,12 @@ impl BreezSdk {
                 self.lightning_sender.resume_pending_sends().await;
             }
 
+            // Runs before the wallet state is written so a recovery's payment
+            // lands in the same pass.
+            if wallet_synced && let Err(e) = self.sync_watchtower_exited_funds().await {
+                error!("sync_wallet_internal: Failed to sync watchtower-exited funds: {e:?}");
+            }
+
             let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();

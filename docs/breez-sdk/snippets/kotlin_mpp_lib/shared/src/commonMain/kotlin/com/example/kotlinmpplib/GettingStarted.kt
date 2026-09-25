@@ -112,6 +112,11 @@ class GettingStarted {
                     // The unilateral exit state changed, so a previously exported
                     // one is now out of date. Export it again.
                 }
+                is SdkEvent.NewWatchtowerExitedFunds -> {
+                    // The watchtower moved funds on-chain, out of the balance. Recover
+                    // them to an address with recoverWatchtowerExitedFunds.
+                    val newWatchtowerExitedFunds = e.newWatchtowerExitedFunds
+                }
                 else -> {
                     // Handle any future event types
                 }

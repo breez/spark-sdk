@@ -55,6 +55,7 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.watchtower_exit_recovery_tx_id,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -507,10 +508,14 @@ class MysqlStorage {
     const withdrawTxId =
       payment.details?.type === "withdraw" ? payment.details.txId : null;
     const spark = payment.details?.type === "spark" ? 1 : null;
+    const watchtowerExitRecoveryTxId =
+      payment.details?.type === "watchtowerExitRecovery"
+        ? payment.details.txId
+        : null;
 
     await conn.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark, watchtower_exit_recovery_tx_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          payment_type=VALUES(payment_type),
          status=VALUES(status),
@@ -519,7 +524,8 @@ class MysqlStorage {
          timestamp=VALUES(timestamp),
          method=VALUES(method),
          withdraw_tx_id=VALUES(withdraw_tx_id),
-         spark=VALUES(spark)`,
+         spark=VALUES(spark),
+         watchtower_exit_recovery_tx_id=VALUES(watchtower_exit_recovery_tx_id)`,
       [
         this.identity,
         payment.id,
@@ -531,6 +537,7 @@ class MysqlStorage {
         payment.method ? JSON.stringify(payment.method) : null,
         withdrawTxId,
         spark,
+        watchtowerExitRecoveryTxId,
       ]
     );
 
@@ -1023,6 +1030,11 @@ class MysqlStorage {
       details = {
         type: "withdraw",
         txId: row.withdraw_tx_id,
+      };
+    } else if (row.watchtower_exit_recovery_tx_id) {
+      details = {
+        type: "watchtowerExitRecovery",
+        txId: row.watchtower_exit_recovery_tx_id,
       };
     } else if (row.deposit_tx_id) {
       details = {

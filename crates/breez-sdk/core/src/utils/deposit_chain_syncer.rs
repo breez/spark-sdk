@@ -585,7 +585,7 @@ fn refund_action_from_status(
 /// Whether the broadcast was refused because the network already has the
 /// transaction, which makes the rebroadcast a success. Bitcoin Core answers a
 /// resend this way rather than accepting it again.
-fn already_on_network(error: &str) -> bool {
+pub(crate) fn already_on_network(error: &str) -> bool {
     let error = error.to_lowercase();
     error.contains("already in mempool")
         || error.contains("already in block chain")

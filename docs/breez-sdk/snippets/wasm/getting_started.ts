@@ -137,6 +137,12 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           // one is now out of date. Export it again.
           break
         }
+        case 'newWatchtowerExitedFunds': {
+          // The watchtower moved funds on-chain, out of the balance. Recover
+          // them to an address with recoverWatchtowerExitedFunds.
+          const newWatchtowerExitedFunds = event.newWatchtowerExitedFunds
+          break
+        }
         default: {
           // Handle any future event types
           break

@@ -505,6 +505,11 @@ impl PostgresStorage {
             // JSON-encoded MaxFee, overriding the configured one. NULL when the
             // configured one applies.
             vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSONB".to_string()],
+            // Migration 25: The transaction that recovered watchtower-exited funds.
+            vec![
+                "ALTER TABLE brz_payments ADD COLUMN watchtower_exit_recovery_tx_id TEXT"
+                    .to_string(),
+            ],
         ]
     }
 }
@@ -693,11 +698,15 @@ impl PostgresStorage {
             Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
             _ => (None, None),
         };
+        let watchtower_exit_recovery_tx_id = match &payment.details {
+            Some(PaymentDetails::WatchtowerExitRecovery { tx_id }) => Some(tx_id.as_str()),
+            _ => None,
+        };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark, watchtower_exit_recovery_tx_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT(user_id, id) DO UPDATE SET
                     payment_type = EXCLUDED.payment_type,
                     status = EXCLUDED.status,
@@ -706,7 +715,8 @@ impl PostgresStorage {
                     timestamp = EXCLUDED.timestamp,
                     method = EXCLUDED.method,
                     withdraw_tx_id = EXCLUDED.withdraw_tx_id,
-                    spark = EXCLUDED.spark",
+                    spark = EXCLUDED.spark,
+                    watchtower_exit_recovery_tx_id = EXCLUDED.watchtower_exit_recovery_tx_id",
             &[
                 &identity,
                 &payment.id,
@@ -718,6 +728,7 @@ impl PostgresStorage {
                 &Some(payment.method.to_string()),
                 &withdraw_tx_id,
                 &spark,
+                &watchtower_exit_recovery_tx_id,
             ],
         )
         .await
@@ -807,7 +818,10 @@ impl PostgresStorage {
                 .map_err(map_db_error)?;
             }
             // Withdraw detail columns are already set in the main INSERT
-            Some(PaymentDetails::Withdraw { .. }) | None => {}
+            Some(
+                PaymentDetails::Withdraw { .. } | PaymentDetails::WatchtowerExitRecovery { .. },
+            )
+            | None => {}
         }
 
         Ok(())
@@ -2019,7 +2033,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-31 and 33 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -2053,7 +2067,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.watchtower_exit_recovery_tx_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
@@ -2069,6 +2084,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let spark: Option<bool> = row.get(10);
     let lightning_invoice: Option<String> = row.get(11);
     let token_metadata: Option<serde_json::Value> = row.get(21);
+    let watchtower_exit_recovery_tx_id: Option<String> = row.get(33);
 
     let details = match (
         lightning_invoice,
@@ -2076,8 +2092,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         deposit_tx_id,
         spark,
         token_metadata,
+        watchtower_exit_recovery_tx_id,
     ) {
-        (Some(invoice), _, _, _, _) => {
+        (Some(invoice), _, _, _, _, _) => {
             let payment_hash: String = row.get(12);
             let destination_pubkey: String = row.get(13);
             let description: Option<String> = row.get(14);
@@ -2133,8 +2150,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 conversion_info,
             })
         }
-        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => {
+        (_, Some(tx_id), _, _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _, _) => {
             let vout: i64 = row.get::<_, Option<i64>>(9).ok_or_else(|| {
                 StorageError::Serialization("deposit row missing deposit_vout".to_string())
             })?;
@@ -2145,7 +2162,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 })?,
             })
         }
-        (_, _, _, Some(_), _) => {
+        (_, _, _, Some(_), _, _) => {
             let invoice_details_json: Option<serde_json::Value> = row.get(25);
             let invoice_details = from_json_opt(invoice_details_json)?;
             let htlc_details_json: Option<serde_json::Value> = row.get(26);
@@ -2158,7 +2175,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 conversion_info,
             })
         }
-        (_, _, _, _, Some(metadata)) => {
+        (_, _, _, _, Some(metadata), _) => {
             let tx_type_str: String = row.get(23);
             let tx_type = tx_type_str
                 .parse()
@@ -2176,6 +2193,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 conversion_info,
             })
         }
+        (_, _, _, _, _, Some(tx_id)) => Some(PaymentDetails::WatchtowerExitRecovery { tx_id }),
         _ => None,
     };
 
@@ -3347,7 +3365,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration version must advance to 24");
+        assert_eq!(version, 25, "migration version must advance to 25");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3643,7 +3661,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration must advance to 24");
+        assert_eq!(version, 25, "migration must advance to 25");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

@@ -123,6 +123,13 @@ namespace BreezSdkSnippets
                         // one is now out of date. Export it again.
                         break;
 
+                    case SdkEvent.NewWatchtowerExitedFunds newWatchtowerExitedFundsEvent:
+                        // The watchtower moved funds on-chain, out of the balance. Recover
+                        // them to an address with RecoverWatchtowerExitedFunds.
+                        var newWatchtowerExitedFunds =
+                            newWatchtowerExitedFundsEvent.newWatchtowerExitedFunds;
+                        break;
+
                     default:
                         // Handle any future event types
                         break;

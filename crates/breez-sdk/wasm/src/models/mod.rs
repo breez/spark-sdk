@@ -90,6 +90,9 @@ pub enum SdkEvent {
         new_deposits: Vec<DepositInfo>,
     },
     UnilateralExitStateChanged,
+    NewWatchtowerExitedFunds {
+        new_watchtower_exited_funds: Vec<WatchtowerExitedFundsInfo>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::AutoOptimizationEvent)]
@@ -217,6 +220,93 @@ pub struct RefundDepositRequest {
 pub struct RefundDepositResponse {
     pub tx_id: String,
     pub tx_hex: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitedFundsInfo)]
+pub struct WatchtowerExitedFundsInfo {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoveryInfo)]
+pub struct WatchtowerExitRecoveryInfo {
+    pub tx_id: String,
+    pub tx_hex: String,
+    pub state: WatchtowerExitRecoveryState,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoveryState)]
+pub enum WatchtowerExitRecoveryState {
+    BroadcastPending { last_error: Option<String> },
+    Broadcast,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareRecoverWatchtowerExitedFundsRequest)]
+pub struct PrepareRecoverWatchtowerExitedFundsRequest {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareRecoverWatchtowerExitedFundsResponse)]
+pub struct PrepareRecoverWatchtowerExitedFundsResponse {
+    pub destination: String,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub quotes: Vec<WatchtowerExitRecoveryQuote>,
+    pub total_amount_sat: u64,
+    pub total_fee_sat: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoveryQuote)]
+pub struct WatchtowerExitRecoveryQuote {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sat: u64,
+    pub fee_sat: u64,
+    pub pending_recovery: Option<WatchtowerExitRecoveryInfo>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverWatchtowerExitedFundsRequest)]
+pub struct RecoverWatchtowerExitedFundsRequest {
+    pub prepare_response: PrepareRecoverWatchtowerExitedFundsResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverWatchtowerExitedFundsResponse)]
+pub struct RecoverWatchtowerExitedFundsResponse {
+    pub recovered: Vec<WatchtowerExitRecoverySuccess>,
+    pub failed: Vec<WatchtowerExitRecoveryFailure>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoverySuccess)]
+pub struct WatchtowerExitRecoverySuccess {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub recovery: WatchtowerExitRecoveryInfo,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoveryFailure)]
+pub struct WatchtowerExitRecoveryFailure {
+    pub leaf_id: String,
+    pub txid: String,
+    pub vout: u32,
+    pub error: WatchtowerExitRecoveryError,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecoveryError)]
+pub enum WatchtowerExitRecoveryError {
+    ReplacementFeeTooLow {
+        required_fee_sat: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+    OperatorsUnavailable {
+        message: String,
+    },
+    Generic {
+        message: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedDepositsRequest)]
@@ -612,6 +702,9 @@ pub enum PaymentDetails {
         tx_id: String,
         vout: u32,
     },
+    WatchtowerExitRecovery {
+        tx_id: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenTransactionType)]
@@ -649,6 +742,7 @@ pub enum PaymentMethod {
     Token,
     Deposit,
     Withdraw,
+    WatchtowerExitRecovery,
     Unknown,
 }
 
@@ -1067,6 +1161,12 @@ pub struct GetInfoResponse {
     pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
+    pub recoverable_funds: RecoverableFunds,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverableFunds)]
+pub struct RecoverableFunds {
+    pub watchtower_exited_sats: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]

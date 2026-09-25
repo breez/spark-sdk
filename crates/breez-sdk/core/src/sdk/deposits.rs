@@ -1064,9 +1064,9 @@ fn select_instant_claim_plan(
 /// The refund a replacement has to displace. Its size matters as well as its
 /// fee: the replacement has to beat its feerate, not just its total.
 #[derive(Clone, Copy)]
-struct PendingRefund {
-    fee_sats: u64,
-    vsize: u64,
+pub(super) struct PendingRefund {
+    pub(super) fee_sats: u64,
+    pub(super) vsize: u64,
 }
 
 /// Rejects a refund that cannot displace one already on the network. A
@@ -1098,14 +1098,14 @@ fn check_replacement_fee(
 
 /// Fee a refund pays, from the deposit output it spends. `None` if the refund
 /// pays out more than the deposit holds.
-fn refund_fee_sats(refund_tx: &Transaction, deposit_value_sats: u64) -> Option<u64> {
+pub(super) fn refund_fee_sats(refund_tx: &Transaction, deposit_value_sats: u64) -> Option<u64> {
     let out_sats: u64 = refund_tx.output.iter().map(|o| o.value.to_sat()).sum();
     deposit_value_sats.checked_sub(out_sats)
 }
 
 /// Minimum fee a replacement must pay to displace a refund already on the
 /// network: more than that refund pays, plus the relay cost of its own size.
-fn replacement_min_fee_sats(pending: &PendingRefund, replacement_vsize: u64) -> u64 {
+pub(super) fn replacement_min_fee_sats(pending: &PendingRefund, replacement_vsize: u64) -> u64 {
     // Cover the pending fee plus the replacement's own relay bandwidth.
     let bandwidth = pending
         .fee_sats

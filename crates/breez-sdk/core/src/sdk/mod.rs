@@ -13,6 +13,7 @@ mod sync;
 mod sync_coordinator;
 mod unilateral_exit;
 mod unilateral_exit_backup;
+mod watchtower_exit;
 
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
@@ -101,6 +102,8 @@ pub struct BreezSdk {
     /// Serialises claim attempts on the same deposit across the sync cascade
     /// and explicit `claim_deposit` calls.
     pub(crate) claim_guards: deposits::ClaimGuards,
+    /// Held while the stored watchtower exit recoveries are rewritten.
+    pub(crate) watchtower_exit_lock: Arc<Mutex<()>>,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
     /// and LNURL lookups honour the proxy and ride the redirect-validating
