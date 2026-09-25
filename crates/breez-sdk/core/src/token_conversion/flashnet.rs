@@ -976,33 +976,39 @@ impl FlashnetTokenConverter {
         ))
     }
 
-    /// Looks for a swap the pool ran against `inbound_transfer_id`, the input
-    /// transfer we sent.
-    ///
-    /// The listing has no transfer-id filter, so this scans the newest page.
-    /// `pool_id` narrows the request and is held against the result; pass `None`
-    /// where the pool is not known to be the one that ran the swap, since
-    /// filtering on a guess hides the very entry being looked for.
+    /// [`Self::list_executed_swap`], reading a listing failure as no swap.
     async fn find_executed_swap(
         &self,
         pool_id: Option<PublicKey>,
         inbound_transfer_id: &str,
     ) -> Option<Swap> {
+        self.list_executed_swap(pool_id, inbound_transfer_id)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Could not list swaps to reconcile {inbound_transfer_id}: {e}");
+                None
+            })
+    }
+
+    /// Looks for a swap the pool ran against `inbound_transfer_id`, the input
+    /// transfer we sent. Errors when the pool's swaps could not be listed.
+    ///
+    /// The listing has no transfer-id filter, so this scans the newest page.
+    /// `pool_id` narrows the request and is held against the result; pass `None`
+    /// where the pool is not known to be the one that ran the swap, since
+    /// filtering on a guess hides the very entry being looked for.
+    async fn list_executed_swap(
+        &self,
+        pool_id: Option<PublicKey>,
+        inbound_transfer_id: &str,
+    ) -> Result<Option<Swap>, FlashnetError> {
         let request = ListUserSwapsRequest {
             pool_lp_pubkey: pool_id,
             sort: Some(SwapSortOrder::TimestampDesc),
             limit: Some(RECONCILE_LISTING_LIMIT),
             ..Default::default()
         };
-        let swaps = match self.flashnet_client.list_user_swaps(request).await {
-            Ok(response) => response.swaps,
-            Err(e) => {
-                // A listing failure means no swap: fall through to the refund
-                // path.
-                warn!("Could not list swaps to reconcile {inbound_transfer_id}: {e}");
-                return None;
-            }
-        };
+        let swaps = self.flashnet_client.list_user_swaps(request).await?.swaps;
         let found = swap_for_transfer(&swaps, inbound_transfer_id, pool_id).cloned();
         // The matched entry only, not the page it came from: enough to see
         // what a reconcile decided on, without a page per receive.
@@ -1010,7 +1016,23 @@ impl FlashnetTokenConverter {
             "Reconciled {inbound_transfer_id} against {} swaps: {found:?}",
             swaps.len()
         );
-        found
+        Ok(found)
+    }
+
+    /// Records the legs of a swap that already ran for `sent_identifier` as a
+    /// completed conversion.
+    async fn record_executed_conversion(
+        &self,
+        sent_identifier: &str,
+        swap: &Swap,
+        purpose: &ConversionPurpose,
+    ) -> Result<TokenConversionResponse, ConversionError> {
+        info!(
+            "Conversion for transfer {sent_identifier} already ran on pool {}, delivering {} via {}",
+            swap.pool_lp_public_key, swap.amount_out, swap.outbound_transfer_id
+        );
+        self.record_completed_legs(sent_identifier, swap, purpose)
+            .await
     }
 
     /// Records a conversion whose swap turns out to have run, and links the
@@ -1560,12 +1582,8 @@ impl TokenConverter for FlashnetTokenConverter {
             // on live reserves, so the pool chosen now may not be the one that
             // ran the earlier swap.
             if let Some(swap) = self.find_executed_swap(None, &sent_identifier).await {
-                info!(
-                    "Conversion for transfer {sent_identifier} already ran on pool {}, delivering {} via {}",
-                    swap.pool_lp_public_key, swap.amount_out, swap.outbound_transfer_id
-                );
                 return self
-                    .record_completed_legs(&sent_identifier, &swap, purpose)
+                    .record_executed_conversion(&sent_identifier, &swap, purpose)
                     .await;
             }
         }
@@ -1718,12 +1736,21 @@ impl TokenConverter for FlashnetTokenConverter {
                     .ok();
 
                 if let Some(swap) = executed {
-                    return Err(ConversionError::FailedAfterSwap(format!(
-                        "Convert token failed after the swap ran, delivering {} via {}: {}",
-                        swap.amount_out,
-                        swap.outbound_transfer_id,
-                        *source.clone()
-                    )));
+                    let (sent_payment_id, received_payment_id) = recorded
+                        .map(|(sent_payment_id, received_payment_id, _)| {
+                            (Some(sent_payment_id), received_payment_id)
+                        })
+                        .unwrap_or_default();
+                    return Err(ConversionError::FailedAfterSwap {
+                        message: format!(
+                            "Convert token failed after the swap ran, delivering {} via {}: {}",
+                            swap.amount_out,
+                            swap.outbound_transfer_id,
+                            *source.clone()
+                        ),
+                        sent_payment_id,
+                        received_payment_id,
+                    });
                 }
                 let (sent_payment_id, sent_info) = recorded
                     .map(|(sent_payment_id, _, sent_info)| (sent_payment_id, sent_info))
@@ -1735,6 +1762,21 @@ impl TokenConverter for FlashnetTokenConverter {
                 )))
             }
         }
+    }
+
+    async fn find_completed_conversion(
+        &self,
+        transfer_id: &TransferId,
+        purpose: &ConversionPurpose,
+    ) -> Result<Option<TokenConversionResponse>, ConversionError> {
+        let sent_identifier = transfer_id.to_string();
+        // Unfiltered by pool: which pool ran the swap is not known.
+        let Some(swap) = self.list_executed_swap(None, &sent_identifier).await? else {
+            return Ok(None);
+        };
+        self.record_executed_conversion(&sent_identifier, &swap, purpose)
+            .await
+            .map(Some)
     }
 
     async fn validate(
