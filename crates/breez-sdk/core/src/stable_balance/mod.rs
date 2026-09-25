@@ -21,13 +21,16 @@
 //! ┌─────────────────────────────────────────────────────────────────────┐
 //! │                          EVENT MIDDLEWARE                           │
 //! │                                                                     │
-//! │  PaymentSucceeded ──┬─► Matches deferred transfer_id? ──► Resolve   │
+//! │  PaymentSucceeded ──┬─► Sent leg of a deferred task? ──► Wake       │
 //! │                     │                                               │
 //! │                     ├─► Sats receive ≥ min, no delay? ─► PerReceive │
 //! │                     │                                               │
 //! │                     └─► Otherwise ──────────────────► AutoConvert   │
 //! │                                                                     │
-//! │  Synced ──────────────► Expire deferred tasks older than 120s       │
+//! │  Synced ──────────────► Hand tasks deferred over 120s back to       │
+//! │                         the worker to settle                        │
+//! │                                                                     │
+//! │  PaymentMetadataUpdated ► Sent leg of a deferred task? ► Wake       │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!                                   │
 //!                                   ▼
@@ -45,11 +48,13 @@
 //! │  • Deactivation overrides pending AutoConvert                       │
 //! │  • AutoConvert/Deactivation only runs when no PerReceive pending    │
 //! │    (including deferred: they may still need those sats)             │
-//! │  • Deferred tasks are skipped until resolved or timed out           │
+//! │  • Deferred tasks are skipped until woken by their sent leg or      │
+//! │    timed out                                                        │
 //! │  • After a failed conversion no task is handed out until the        │
 //! │    retry delay elapses: 30s, doubling to a cap of 1h. Any           │
 //! │    conversion that succeeds, including one a user's own payment     │
-//! │    drove, resets it, as does a change of active token               │
+//! │    drove, resets it, as does a change of active token. A woken      │
+//! │    PerReceive still runs: it settles without converting             │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!                                  │
 //!                                  ▼
@@ -61,9 +66,15 @@
 //! │    │  • Check active token, payment lock, min amount         │      │
 //! │    │  • Deterministic transfer_id for idempotency            │      │
 //! │    │  • BTC → Token conversion (amount = payment amount)     │      │
-//! │    │  • On failure: defer (wait for other instance or        │      │
-//! │    │    timeout after 120s), delay the next task             │      │
-//! │    │  • On success: mark Completed, emit completion event    │      │
+//! │    │  • A stored sent leg settles it from its record,        │      │
+//! │    │    or the pool's listing when that record is silent     │      │
+//! │    │  • On failure: settle from the sent leg's record, else  │      │
+//! │    │    defer until the sent leg is seen or 120s pass        │      │
+//! │    │  • Deferred over 120s: settles from the record or the   │      │
+//! │    │    pool, else Failed. A pool that can't be asked is     │      │
+//! │    │    retried for up to 1h                                 │      │
+//! │    │  • Settles Completed or Failed, and on its own swap     │      │
+//! │    │    also emits the completion event                      │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! │    ┌─────────────────────────────────────────────────────────┐      │
@@ -157,9 +168,9 @@ use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
 use crate::models::{
     ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
 };
-use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
+use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage, StorageError};
 use crate::sdk::RuntimeEvent;
-use crate::utils::payments::insert_payment_metadata_and_emit;
+use crate::utils::payments::emit_payment_metadata_updated;
 use crate::{
     SdkError,
     models::StableBalanceConfig,
@@ -177,6 +188,19 @@ pub(super) const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
 /// Used for idempotency across instances.
 pub(super) fn per_receive_transfer_id(payment_id: &str) -> TransferId {
     TransferId::from_name(&format!("receive_conversion:{payment_id}"))
+}
+
+/// The conversion status stored on a payment, if any.
+async fn stored_conversion_status(
+    storage: &Arc<dyn Storage>,
+    payment_id: &str,
+) -> Option<ConversionStatus> {
+    storage
+        .get_payment_by_id(payment_id.to_string())
+        .await
+        .ok()?
+        .conversion_details
+        .map(|details| details.status)
 }
 
 /// Cached effective threshold and min conversion limit for auto-conversion.
@@ -230,6 +254,10 @@ pub(crate) struct StableBalanceCore {
 
     /// Notify to signal first sync completion (startup gate for the conversion worker).
     pub(super) synced_notify: Notify,
+
+    /// Held across each guarded status write, so one writer's check and write
+    /// cannot interleave with another's.
+    pub(super) status_lock: Mutex<()>,
 }
 
 /// Event middleware that feeds the conversion queue from payment and sync
@@ -305,6 +333,7 @@ impl StableBalance {
             effective_values: ExpiringCell::new(),
             queue: ConversionQueue::load(storage).await,
             synced_notify: Notify::new(),
+            status_lock: Mutex::new(()),
         });
 
         event_emitter
@@ -369,6 +398,57 @@ impl StableBalance {
 }
 
 impl StableBalanceCore {
+    /// Writes `status` onto a payment unless the stored status outranks it.
+    /// `Completed` records that the swap ran, so it replaces any other status
+    /// and is never replaced by this device. Any other status replaces only
+    /// `Pending`, and `Pending` is written only where no status is stored.
+    /// Returns whether it wrote.
+    pub(super) async fn finalize_conversion_status(
+        &self,
+        payment_id: &str,
+        status: ConversionStatus,
+    ) -> Result<bool, StorageError> {
+        let _guard = self.status_lock.lock().await;
+        let stored = stored_conversion_status(&self.storage, payment_id).await;
+        let writable = match (stored, &status) {
+            (Some(ConversionStatus::Completed), _) => false,
+            (None, _) | (Some(_), ConversionStatus::Completed) => true,
+            (Some(ConversionStatus::Pending), _) => status != ConversionStatus::Pending,
+            (Some(_), _) => false,
+        };
+        if !writable {
+            debug!("Keeping the stored status on {payment_id} instead of {status:?}");
+            return Ok(false);
+        }
+        self.storage
+            .insert_payment_metadata(
+                payment_id.to_string(),
+                PaymentMetadata {
+                    conversion_status: Some(status.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .inspect_err(|e| {
+                warn!("Failed to persist {status:?} status for {payment_id}: {e:?}");
+            })?;
+        Ok(true)
+    }
+
+    /// Finalises a status and emits `PaymentMetadataUpdated` when it was
+    /// written.
+    pub(super) async fn finalize_and_emit(
+        &self,
+        event_emitter: &EventEmitter,
+        payment_id: &str,
+        status: ConversionStatus,
+    ) -> Result<(), StorageError> {
+        if self.finalize_conversion_status(payment_id, status).await? {
+            emit_payment_metadata_updated(&self.storage, event_emitter, payment_id).await;
+        }
+        Ok(())
+    }
+
     /// Returns the `token_identifier` of the currently active token, or `None` if inactive.
     pub(super) async fn get_active_token_identifier(&self) -> Option<String> {
         self.active_token
@@ -426,19 +506,9 @@ impl StableBalanceCore {
             );
         }
         for payment_id in &cleared_payment_ids {
-            if let Err(e) = insert_payment_metadata_and_emit(
-                &self.storage,
-                event_emitter,
-                payment_id.clone(),
-                PaymentMetadata {
-                    conversion_status: Some(ConversionStatus::Failed),
-                    ..Default::default()
-                },
-            )
-            .await
-            {
-                warn!("Failed to persist Failed status for cleared conversion {payment_id}: {e:?}");
-            }
+            let _ = self
+                .finalize_and_emit(event_emitter, payment_id, ConversionStatus::Failed)
+                .await;
         }
 
         // Held across the queue push and the label write. The worker's
@@ -684,30 +754,30 @@ impl StableBalance {
     }
 }
 
+impl StableBalanceMiddleware {
+    /// Wakes the deferred task whose sent leg `payment_id` is. Returns whether one
+    /// was woken. The worker settles it: this middleware holds no emitter.
+    async fn wake_deferred(&self, payment_id: &str) -> bool {
+        let Some(parent_id) = self.core.queue.wake_by_sent_leg(payment_id).await else {
+            return false;
+        };
+        info!("Sent leg {payment_id} woke the deferred conversion for {parent_id}");
+        true
+    }
+}
+
 #[macros::async_trait]
 impl EventMiddleware for StableBalanceMiddleware {
     async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
         match event {
-            // Sync completed → wake the startup gate, sweep timed-out deferred tasks
+            // Sync completed → wake the startup gate, hand timed-out tasks back
             SdkEvent::Synced => {
-                // Clean up deferred tasks that have exceeded the timeout
-                let expired_payment_ids = self.core.queue.clear_expired_tasks().await;
-                for expired_payment_id in expired_payment_ids {
-                    warn!("Per-receive conversion timed out for {expired_payment_id}");
-                    if let Err(e) = self
-                        .core
-                        .storage
-                        .insert_payment_metadata(
-                            expired_payment_id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Failed),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        warn!("Failed to persist Failed status for {expired_payment_id}: {e:?}");
-                    }
+                // The worker settles deferred tasks past the timeout
+                let timed_out = self.core.queue.wake_expired_tasks().await;
+                if !timed_out.is_empty() {
+                    debug!(
+                        "Handing timed out per-receive conversions to the worker: {timed_out:?}"
+                    );
                 }
 
                 self.core.synced_notify.notify_one();
@@ -718,25 +788,26 @@ impl EventMiddleware for StableBalanceMiddleware {
                 Some(SdkEvent::Synced)
             }
 
-            // Payment succeeded → check if it resolves a deferred conversion,
-            // then queue per-receive or auto-convert as needed
+            // Metadata synced in from another device may say how a deferred
+            // task's swap ended.
+            SdkEvent::PaymentMetadataUpdated { payment } => {
+                self.wake_deferred(&payment.id).await;
+                Some(SdkEvent::PaymentMetadataUpdated { payment })
+            }
+
+            // Payment succeeded → wake a deferred conversion whose sent leg this
+            // is, or queue per-receive or auto-convert as needed
             SdkEvent::PaymentSucceeded { mut payment } => {
-                // Check if this payment is a conversion result from another instance
-                // that resolves a deferred per-receive task
-                if let Some(parent_id) = self
-                    .core
-                    .queue
-                    .resolve_by_conversion_payment(&payment.id)
-                    .await
-                {
-                    info!(
-                        "Conversion payment {} resolved deferred task for {parent_id}",
-                        payment.id
-                    );
+                if self.wake_deferred(&payment.id).await {
                     return Some(SdkEvent::PaymentSucceeded { payment });
                 }
 
-                if self.core.should_trigger_per_receive(&payment).await {
+                // A payment another device already settled is left alone.
+                let per_receive = self.core.should_trigger_per_receive(&payment).await
+                    && !stored_conversion_status(&self.core.storage, &payment.id)
+                        .await
+                        .is_some_and(|status| status != ConversionStatus::Pending);
+                if per_receive {
                     debug!("Queueing per-receive conversion for payment {}", payment.id);
 
                     // Set conversion_details with Pending status so clients know conversion is coming
@@ -746,23 +817,10 @@ impl EventMiddleware for StableBalanceMiddleware {
                     });
 
                     // Persist the pending status so it survives restarts
-                    if let Err(e) = self
+                    let _ = self
                         .core
-                        .storage
-                        .insert_payment_metadata(
-                            payment.id.clone(),
-                            PaymentMetadata {
-                                conversion_status: Some(ConversionStatus::Pending),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        warn!(
-                            "Failed to persist conversion_status for payment {}: {e:?}",
-                            payment.id
-                        );
-                    }
+                        .finalize_conversion_status(&payment.id, ConversionStatus::Pending)
+                        .await;
 
                     self.core.queue.push_per_receive(payment.id.clone()).await;
                 } else {
@@ -788,10 +846,16 @@ mod tests {
     };
     use spark_wallet::TransferId;
 
-    struct UnusedConverter;
+    /// Never converts. Reports the legs in `completed_legs` as a swap that
+    /// already ran, when set, and fails every lookup when `lookup_fails`.
+    #[derive(Default)]
+    struct StubConverter {
+        completed_legs: Option<(&'static str, &'static str)>,
+        lookup_fails: bool,
+    }
 
     #[macros::async_trait]
-    impl TokenConverter for UnusedConverter {
+    impl TokenConverter for StubConverter {
         async fn convert(
             &self,
             _: Arc<EventEmitter>,
@@ -802,6 +866,24 @@ mod tests {
             _: Option<TransferId>,
         ) -> Result<TokenConversionResponse, ConversionError> {
             unreachable!("the rejected path must not convert")
+        }
+
+        async fn find_completed_conversion(
+            &self,
+            _: &TransferId,
+            _: &ConversionPurpose,
+        ) -> Result<Option<TokenConversionResponse>, ConversionError> {
+            if self.lookup_fails {
+                return Err(ConversionError::ConversionFailed(
+                    "swaps could not be listed".to_string(),
+                ));
+            }
+            Ok(self
+                .completed_legs
+                .map(|(sent, received)| TokenConversionResponse {
+                    sent_payment_id: sent.to_string(),
+                    received_payment_id: received.to_string(),
+                }))
         }
 
         async fn validate(
@@ -891,11 +973,12 @@ mod tests {
         let core = StableBalanceCore {
             config: usd_config(Some("USD")),
             active_token: RwLock::new(Some(usd)),
-            token_converter: Arc::new(UnusedConverter),
+            token_converter: Arc::new(StubConverter::default()),
             storage: Arc::clone(&storage),
             effective_values: ExpiringCell::new(),
             queue: ConversionQueue::new(storage),
             synced_notify: Notify::new(),
+            status_lock: Mutex::new(()),
         };
         let payment = Payment {
             id: "received".to_string(),
@@ -935,11 +1018,12 @@ mod tests {
                 max_slippage_bps: None,
             },
             active_token: RwLock::new(None),
-            token_converter: Arc::new(UnusedConverter),
+            token_converter: Arc::new(StubConverter::default()),
             storage: Arc::clone(&storage),
             effective_values: ExpiringCell::new(),
             queue: ConversionQueue::new(storage),
             synced_notify: Notify::new(),
+            status_lock: Mutex::new(()),
         };
 
         core.queue.push_per_receive("payment-1".to_string()).await;
@@ -952,6 +1036,384 @@ mod tests {
         assert!(
             core.queue.next_task().await.is_some(),
             "a rejected change must not drain the queue"
+        );
+    }
+
+    /// A core with USD active, and the queue the storage holds.
+    async fn active_core(storage: Arc<dyn Storage>) -> Arc<StableBalanceCore> {
+        core_with(storage, StubConverter::default()).await
+    }
+
+    async fn core_with(
+        storage: Arc<dyn Storage>,
+        converter: StubConverter,
+    ) -> Arc<StableBalanceCore> {
+        Arc::new(StableBalanceCore {
+            config: usd_config(Some("USD")),
+            active_token: RwLock::new(Some(StableBalanceToken {
+                label: "USD".to_string(),
+                token_identifier: "token-usd".to_string(),
+            })),
+            token_converter: Arc::new(converter),
+            storage: Arc::clone(&storage),
+            effective_values: ExpiringCell::new(),
+            queue: ConversionQueue::load(storage).await,
+            synced_notify: Notify::new(),
+            status_lock: Mutex::new(()),
+        })
+    }
+
+    fn payment(id: &str, payment_type: PaymentType) -> Payment {
+        Payment {
+            id: id.to_string(),
+            payment_type,
+            status: crate::PaymentStatus::Completed,
+            amount: 5_000,
+            fees: 0,
+            timestamp: 1,
+            method: PaymentMethod::Spark,
+            details: None,
+            conversion_details: None,
+        }
+    }
+
+    async fn store(storages: &[&Arc<dyn Storage>], ids: &[&str]) {
+        for storage in storages {
+            for id in ids {
+                storage
+                    .apply_payment_update(payment(id, PaymentType::Receive))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    /// The sent leg of a deferred task hands it back to the worker, which is the
+    /// only side able to announce the status it settles on.
+    #[tokio::test]
+    async fn the_middleware_wakes_a_deferred_task_without_settling_it() {
+        let storage = label_storage("middleware-wake");
+        let core = active_core(Arc::clone(&storage)).await;
+        let middleware = StableBalanceMiddleware {
+            core: Arc::clone(&core),
+        };
+        store(&[&storage], &["received"]).await;
+        core.finalize_conversion_status("received", ConversionStatus::Pending)
+            .await
+            .unwrap();
+        core.queue.push_per_receive("received".to_string()).await;
+        let sent_leg = per_receive_transfer_id("received").to_string();
+
+        for event in [
+            SdkEvent::PaymentSucceeded {
+                payment: payment(&sent_leg, PaymentType::Send),
+            },
+            SdkEvent::PaymentMetadataUpdated {
+                payment: payment(&sent_leg, PaymentType::Send),
+            },
+        ] {
+            core.queue.defer_task("received").await;
+            assert!(middleware.process(event).await.is_some());
+            assert_eq!(
+                core.queue.next_task().await,
+                Some(queue::ConversionTask::PerReceive("received".to_string()))
+            );
+            assert_eq!(
+                stored_conversion_status(&storage, "received").await,
+                Some(ConversionStatus::Pending)
+            );
+        }
+    }
+
+    /// An arrival is marked `Pending` and queued. One whose status is already
+    /// settled, for example by another device over sync, keeps that status and
+    /// is not queued again.
+    #[tokio::test]
+    async fn an_arrival_is_marked_pending_and_a_settled_one_is_left_alone() {
+        let storage = label_storage("pending-arrival");
+        let core = active_core(Arc::clone(&storage)).await;
+        let middleware = StableBalanceMiddleware {
+            core: Arc::clone(&core),
+        };
+        store(&[&storage], &["fresh", "settled"]).await;
+        core.finalize_conversion_status("settled", ConversionStatus::Completed)
+            .await
+            .unwrap();
+
+        let Some(SdkEvent::PaymentSucceeded { payment: fresh }) = middleware
+            .process(SdkEvent::PaymentSucceeded {
+                payment: payment("fresh", PaymentType::Receive),
+            })
+            .await
+        else {
+            panic!("the event must pass through");
+        };
+        assert_eq!(
+            fresh.conversion_details.map(|d| d.status),
+            Some(ConversionStatus::Pending)
+        );
+        assert_eq!(
+            stored_conversion_status(&storage, "fresh").await,
+            Some(ConversionStatus::Pending)
+        );
+
+        let Some(SdkEvent::PaymentSucceeded { payment: settled }) = middleware
+            .process(SdkEvent::PaymentSucceeded {
+                payment: payment("settled", PaymentType::Receive),
+            })
+            .await
+        else {
+            panic!("the event must pass through");
+        };
+        assert!(settled.conversion_details.is_none());
+        assert_eq!(
+            stored_conversion_status(&storage, "settled").await,
+            Some(ConversionStatus::Completed)
+        );
+
+        let fresh = queue::ConversionTask::PerReceive("fresh".to_string());
+        assert_eq!(core.queue.next_task().await, Some(fresh.clone()));
+        core.queue.complete_task(&fresh).await;
+        assert!(
+            !core.queue.has_per_receive().await,
+            "the settled payment is not queued"
+        );
+    }
+
+    /// `Completed` records that the swap ran, so it replaces a status written
+    /// without that knowledge and is never replaced. Other statuses replace
+    /// only `Pending`.
+    #[tokio::test]
+    async fn completed_outranks_every_other_status() {
+        let storage = label_storage("finalize-guard");
+        store(&[&storage], &["received"]).await;
+        let core = active_core(Arc::clone(&storage)).await;
+        let finalize = |status| core.finalize_conversion_status("received", status);
+
+        assert!(finalize(ConversionStatus::Pending).await.unwrap());
+        assert!(!finalize(ConversionStatus::Pending).await.unwrap());
+        assert!(finalize(ConversionStatus::Failed).await.unwrap());
+        assert!(!finalize(ConversionStatus::Pending).await.unwrap());
+        assert!(finalize(ConversionStatus::Completed).await.unwrap());
+        assert!(!finalize(ConversionStatus::Failed).await.unwrap());
+        assert!(!finalize(ConversionStatus::Completed).await.unwrap());
+        assert_eq!(
+            stored_conversion_status(&storage, "received").await,
+            Some(ConversionStatus::Completed)
+        );
+    }
+
+    /// Stores each parent with a pending conversion, its sent leg when a status
+    /// is given, and a deferred task for it queued `age_secs` ago.
+    async fn seed_timed_out(
+        storage: &Arc<dyn Storage>,
+        tasks: &[(&str, Option<ConversionStatus>)],
+        age_secs: u64,
+    ) {
+        let expired_at = crate::utils::time::now_secs().saturating_sub(age_secs);
+        let mut per_receive = Vec::new();
+        for (parent, sent_leg_status) in tasks {
+            store(&[storage], &[parent]).await;
+            storage
+                .insert_payment_metadata(
+                    parent.to_string(),
+                    PaymentMetadata {
+                        conversion_status: Some(ConversionStatus::Pending),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            if let Some(status) = sent_leg_status {
+                let sent_leg_id = per_receive_transfer_id(parent).to_string();
+                storage
+                    .apply_payment_update(Payment {
+                        details: Some(crate::PaymentDetails::Spark {
+                            invoice_details: None,
+                            htlc_details: None,
+                            conversion_info: None,
+                        }),
+                        ..payment(&sent_leg_id, PaymentType::Send)
+                    })
+                    .await
+                    .unwrap();
+                storage
+                    .insert_payment_metadata(
+                        sent_leg_id,
+                        PaymentMetadata {
+                            conversion_info: Some(crate::ConversionInfo::Amm {
+                                pool_id: "pool".to_string(),
+                                conversion_id: "conversion".to_string(),
+                                status: status.clone(),
+                                fee: None,
+                                purpose: None,
+                                amount_adjustment: None,
+                                degradation: None,
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            per_receive.push(serde_json::json!({
+                "payment_id": parent,
+                "state": "Deferred",
+                "created_at": expired_at,
+            }));
+        }
+        let queue: PendingQueue = serde_json::from_value(serde_json::json!({
+            "per_receive": per_receive,
+            "deactivations": [],
+        }))
+        .unwrap();
+        ObjectCacheRepository::new(Arc::clone(storage))
+            .save_pending_conversions(&queue)
+            .await
+            .unwrap();
+    }
+
+    /// The sweep only hands a task past the timeout back. The worker settles
+    /// it from its sent leg's record, and asks the pool when that record is
+    /// silent or no sent leg is stored.
+    #[tokio::test]
+    async fn a_timed_out_task_settles_from_what_is_known_of_its_swap() {
+        let storage = label_storage("timed-out-settle");
+        seed_timed_out(
+            &storage,
+            &[
+                ("converted", Some(ConversionStatus::Completed)),
+                ("refunding", Some(ConversionStatus::RefundNeeded)),
+                ("unrecorded", None),
+            ],
+            1_000,
+        )
+        .await;
+        let core = core_with(
+            Arc::clone(&storage),
+            StubConverter {
+                completed_legs: Some(("sent-leg", "received-leg")),
+                ..Default::default()
+            },
+        )
+        .await;
+        let middleware = StableBalanceMiddleware {
+            core: Arc::clone(&core),
+        };
+
+        middleware.process(SdkEvent::Synced).await;
+        for parent in ["converted", "refunding", "unrecorded"] {
+            assert!(core.queue.is_timed_out(parent).await, "{parent}");
+            assert_eq!(
+                stored_conversion_status(&storage, parent).await,
+                Some(ConversionStatus::Pending),
+                "the sweep itself settles nothing"
+            );
+            assert!(
+                core.settle_timed_out(&EventEmitter::new(false), parent)
+                    .await
+            );
+            assert_eq!(
+                stored_conversion_status(&storage, parent).await,
+                Some(ConversionStatus::Completed),
+                "{parent}"
+            );
+        }
+    }
+
+    /// When neither the sent leg's record nor the pool says the swap ran, a task
+    /// past the timeout settles Failed.
+    #[tokio::test]
+    async fn a_timed_out_task_the_pool_does_not_report_settles_failed() {
+        let storage = label_storage("timed-out-unreported");
+        seed_timed_out(
+            &storage,
+            &[
+                ("refunding", Some(ConversionStatus::RefundNeeded)),
+                ("unsent", None),
+            ],
+            1_000,
+        )
+        .await;
+        let core = active_core(Arc::clone(&storage)).await;
+
+        for parent in ["refunding", "unsent"] {
+            assert!(
+                core.settle_timed_out(&EventEmitter::new(false), parent)
+                    .await
+            );
+            assert_eq!(
+                stored_conversion_status(&storage, parent).await,
+                Some(ConversionStatus::Failed),
+                "{parent}"
+            );
+        }
+    }
+
+    /// When the pool cannot be asked, a task past the timeout is left pending
+    /// to be tried again, rather than settled on a guess.
+    #[tokio::test]
+    async fn a_timed_out_task_waits_when_the_pool_cannot_be_asked() {
+        let storage = label_storage("timed-out-lookup-fails");
+        seed_timed_out(
+            &storage,
+            &[
+                ("refunding", Some(ConversionStatus::RefundNeeded)),
+                ("unsent", None),
+            ],
+            1_000,
+        )
+        .await;
+        let core = core_with(
+            Arc::clone(&storage),
+            StubConverter {
+                lookup_fails: true,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        for parent in ["refunding", "unsent"] {
+            assert!(
+                !core
+                    .settle_timed_out(&EventEmitter::new(false), parent)
+                    .await
+            );
+            assert_eq!(
+                stored_conversion_status(&storage, parent).await,
+                Some(ConversionStatus::Pending),
+                "{parent}"
+            );
+        }
+    }
+
+    /// Once the lookup deadline has passed, a task whose pool lookup keeps
+    /// failing settles Failed rather than staying pending.
+    #[tokio::test]
+    async fn a_timed_out_task_settles_failed_once_the_lookup_deadline_passes() {
+        let storage = label_storage("timed-out-lookup-deadline");
+        seed_timed_out(
+            &storage,
+            &[("refunding", Some(ConversionStatus::RefundNeeded))],
+            2 * 3_600,
+        )
+        .await;
+        let core = core_with(
+            Arc::clone(&storage),
+            StubConverter {
+                lookup_fails: true,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            core.settle_timed_out(&EventEmitter::new(false), "refunding")
+                .await
+        );
+        assert_eq!(
+            stored_conversion_status(&storage, "refunding").await,
+            Some(ConversionStatus::Failed)
         );
     }
 }
