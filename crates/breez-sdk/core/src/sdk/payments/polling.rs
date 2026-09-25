@@ -43,9 +43,9 @@ pub(super) async fn wait_for_incoming_payment(
             })
             .await?
         }
-        WaitForPaymentIdentifier::LightningReceive { ssp_id, .. } => {
+        WaitForPaymentIdentifier::LightningReceive { ssp_id, invoice } => {
             poll_until(schedule, shutdown, || {
-                poll_then_process_lightning_receive(sdk, &ssp_id)
+                poll_lightning_receive(sdk, &ssp_id, &invoice)
             })
             .await?
         }
@@ -69,6 +69,29 @@ pub(super) async fn finalize_payment(sdk: &BreezSdk, mut payment: Payment) -> bo
         payment,
     )
     .await
+}
+
+/// Polls for a Bolt11 receive settling over either rail.
+///
+/// A payer that takes the invoice's Spark destination settles it with a transfer
+/// the SSP never sees, leaving the receive request at `InvoiceCreated` for good,
+/// so the SSP poll alone would wait out the whole timeout. Background sync
+/// ingests that transfer and records it against the Bolt11, so storage is where
+/// the Spark-settled payment shows up.
+async fn poll_lightning_receive(
+    sdk: &BreezSdk,
+    ssp_id: &str,
+    invoice: &str,
+) -> Result<Option<Payment>, SdkError> {
+    if let Some(payment) = sdk
+        .storage
+        .get_payment_by_invoice(invoice.to_string())
+        .await?
+        && payment.status == PaymentStatus::Completed
+    {
+        return Ok(Some(payment));
+    }
+    poll_then_process_lightning_receive(sdk, ssp_id).await
 }
 
 /// Polls an inbound Lightning payment by SSP id. The receive object

@@ -372,9 +372,10 @@ async fn finalize_lnurl_pay(
             *lnurl_pay_info = Some(lnurl_info.clone());
             description.clone_from(&lnurl_description);
         }
-        // When the LNURL server includes a Spark routing hint, the payment
-        // is routed via Spark transfer. The Spark variant doesn't carry
-        // lnurl fields, so we just persist the metadata separately below.
+        // A send settled over Spark normally reports as the Bolt11 it paid and
+        // takes the arm above. This one is left for when that link could not be
+        // recorded: the Spark variant carries no lnurl fields, so the metadata
+        // persisted below is all there is.
         Some(crate::PaymentDetails::Spark { .. }) => {}
         _ => {
             return Err(SdkError::Generic(

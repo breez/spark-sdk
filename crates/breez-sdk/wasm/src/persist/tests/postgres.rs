@@ -162,6 +162,37 @@ async fn test_lightning_htlc_details_and_status_filtering() {
 }
 
 #[wasm_bindgen_test]
+async fn test_spark_settled_bolt11_joins_at_read() {
+    let storage = create_test_storage("pg_settled_bolt11_join").await;
+
+    breez_sdk_spark::storage_tests::test_spark_settled_bolt11_joins_at_read(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_get_payment_by_invoice() {
+    let storage = create_test_storage("pg_get_payment_by_invoice").await;
+
+    breez_sdk_spark::storage_tests::test_get_payment_by_invoice(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_lightning_payment_settled_over_spark() {
+    let storage = create_test_storage("pg_settled_over_spark").await;
+
+    breez_sdk_spark::storage_tests::test_lightning_payment_settled_over_spark(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_spark_settled_bolt11_upsert_and_prune() {
+    let storage = create_test_storage("pg_spark_settled_bolt11_crud").await;
+
+    breez_sdk_spark::storage_tests::test_spark_settled_bolt11_upsert_and_prune(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_conversion_filtering() {
     let storage = create_test_storage("pg_conversion_refund_needed_filtering").await;
     breez_sdk_spark::storage_tests::test_conversion_filtering(Box::new(storage)).await;

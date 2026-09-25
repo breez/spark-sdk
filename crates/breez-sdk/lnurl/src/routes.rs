@@ -686,6 +686,11 @@ where
 
         let pubkey = parse_pubkey(&user.pubkey)?;
         let wallet = state.invoice_wallet(&domain).await;
+        let fallback = if state.include_spark_address {
+            spark_wallet::LightningReceiveFallback::Address
+        } else {
+            spark_wallet::LightningReceiveFallback::None
+        };
         let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -694,7 +699,7 @@ where
                 )),
                 Some(pubkey),
                 params.expiry,
-                state.include_spark_address,
+                fallback,
             )
             .await
             .map_err(|e| {

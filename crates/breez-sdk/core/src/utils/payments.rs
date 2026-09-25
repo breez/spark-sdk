@@ -10,16 +10,92 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentMetadata, PaymentStatus,
-    PaymentType, Storage, StorageError,
+    PaymentType, SparkSettledBolt11Receive, SparkSettledBolt11Send, Storage, StorageError,
     error::SdkError,
     events::SdkEvent,
-    persist::{CachedAccountInfo, ObjectCacheRepository},
+    persist::{
+        CachedAccountInfo, ObjectCacheRepository, spark_invoice_digest, spark_invoice_expiry_secs,
+    },
     sync::SparkSyncService,
     utils::conversions::{
         build_amm_conversion, build_crosschain_conversion, extract_conversion_info,
     },
     utils::token::token_transaction_to_payments,
 };
+
+/// The Bolt11's description and payee, for the row that will report a transfer
+/// as that invoice. Empty when the Bolt11 does not parse, which leaves the row
+/// usable: it still names the invoice.
+fn bolt11_summary(bolt11: &str) -> (Option<String>, String) {
+    breez_sdk_common::input::parse_invoice(bolt11).map_or_else(
+        || {
+            error!("Bolt11 to record against a Spark transfer does not parse");
+            (None, String::new())
+        },
+        |details| (details.description, details.payee_pubkey),
+    )
+}
+
+/// Records that the transfer `payment_id` was sent to settle `bolt11`.
+///
+/// The transfer itself does not name the Bolt11, so this row is the only thing
+/// tying the two together when the payment is read.
+pub(crate) async fn record_spark_settled_bolt11_send(
+    storage: &Arc<dyn Storage>,
+    payment_id: &str,
+    bolt11: &str,
+) {
+    let (description, destination_pubkey) = bolt11_summary(bolt11);
+    let send = SparkSettledBolt11Send {
+        payment_id: payment_id.to_string(),
+        bolt11: bolt11.to_string(),
+        description,
+        destination_pubkey,
+    };
+    if let Err(e) = storage.set_spark_settled_bolt11_send(send).await {
+        // The payment still sends and still lists; it just reports as a plain
+        // Spark send rather than as the invoice it paid.
+        error!("Failed to record the Spark-settled Bolt11 send: {e:?}");
+    }
+}
+
+/// Records that `bolt11` embeds `spark_invoice`, so a transfer that settles
+/// the invoice can be reported as the Bolt11 being paid.
+pub(crate) async fn record_spark_settled_bolt11_receive(
+    storage: &Arc<dyn Storage>,
+    spark_invoice: &str,
+    bolt11: &str,
+) -> Result<(), StorageError> {
+    let (description, destination_pubkey) = bolt11_summary(bolt11);
+    let receive = SparkSettledBolt11Receive {
+        id: spark_invoice_digest(spark_invoice),
+        spark_invoice: spark_invoice.to_string(),
+        bolt11: bolt11.to_string(),
+        expires_at: spark_invoice_expiry_secs(spark_invoice),
+        description,
+        destination_pubkey,
+    };
+    storage.set_spark_settled_bolt11_receive(receive).await
+}
+
+/// How long past its expiry a [`SparkSettledBolt11Receive`] is kept, for a
+/// transfer that settled the invoice just before it expired and is only synced
+/// later.
+const SPARK_SETTLED_BOLT11_RECEIVE_GRACE_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Drops the [`SparkSettledBolt11Receive`] rows of invoices that expired long
+/// enough before `now_secs` that nothing is still going to settle them. A row
+/// a payment did settle stays: the payment reports itself by it.
+pub(crate) async fn prune_expired_spark_settled_bolt11_receives(
+    storage: &Arc<dyn Storage>,
+    now_secs: u64,
+) -> Result<(), StorageError> {
+    storage
+        .delete_expired_spark_settled_bolt11_receives(
+            now_secs.saturating_sub(SPARK_SETTLED_BOLT11_RECEIVE_GRACE_SECS),
+        )
+        .await
+}
 
 /// Insert a payment through the storage status guard and emit when requested
 /// and when the persisted status advances.
@@ -695,7 +771,7 @@ mod tests {
                 description: None,
                 invoice: "lnbc1000n1p".to_string(),
                 destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
+                htlc_details: Some(test_htlc_details()),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
@@ -721,7 +797,7 @@ mod tests {
                 description: None,
                 invoice: "lnbc1000n1p".to_string(),
                 destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
+                htlc_details: Some(test_htlc_details()),
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
