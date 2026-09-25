@@ -45,6 +45,16 @@ pub(crate) trait TokenConverter: Send + Sync {
         transfer_id: Option<TransferId>,
     ) -> Result<TokenConversionResponse, ConversionError>;
 
+    /// The legs of the conversion whose sent leg is the transfer
+    /// `transfer_id`, recorded as completed, when the pool reports its swap
+    /// ran. Sends nothing. Errors when the pool's swaps could not be listed,
+    /// which is distinct from a swap that did not run.
+    async fn find_completed_conversion(
+        &self,
+        transfer_id: &TransferId,
+        purpose: &ConversionPurpose,
+    ) -> Result<Option<TokenConversionResponse>, ConversionError>;
+
     /// Validate a conversion and return the estimated conversion.
     ///
     /// Called during `prepare_send_payment` to calculate the conversion fee,

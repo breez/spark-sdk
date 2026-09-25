@@ -213,7 +213,7 @@ impl From<crate::token_conversion::ConversionError> for SdkError {
                 SdkError::Generic("No conversion pools available".to_string())
             }
             ConversionError::ConversionFailed(msg)
-            | ConversionError::FailedAfterSwap(msg)
+            | ConversionError::FailedAfterSwap { message: msg, .. }
             | ConversionError::ValidationFailed(msg)
             | ConversionError::RefundFailed(msg) => SdkError::Generic(msg),
             ConversionError::DuplicateTransfer => {
