@@ -677,6 +677,7 @@ mod tests {
     }
 
     // The web `SystemTime` cannot represent a time before the epoch.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     #[macros::test_not_wasm]
     fn a_timestamp_before_the_epoch_is_invalid() {
         let identity = pk(1);
