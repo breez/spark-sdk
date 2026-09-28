@@ -19,9 +19,19 @@ use crate::SparkWalletError;
 pub enum ExitLeafSelection {
     /// Exit every available leaf whose value exceeds its marginal exit cost.
     Auto,
+    /// Exit the leaves in one of the [`EXITING_STATUSES`] whose value exceeds
+    /// their marginal exit cost.
+    Exiting,
     /// Exit exactly these leaves, regardless of profitability.
     Specific(Vec<TreeNodeId>),
 }
+
+/// The statuses of a leaf whose exit started on-chain.
+pub const EXITING_STATUSES: [TreeNodeStatus; 3] = [
+    TreeNodeStatus::OnChain,
+    TreeNodeStatus::Exited,
+    TreeNodeStatus::ParentExited,
+];
 
 /// Everything needed to unilaterally exit the wallet's leaves with the
 /// operators unreachable: each leaf paired with its ancestor chain.
