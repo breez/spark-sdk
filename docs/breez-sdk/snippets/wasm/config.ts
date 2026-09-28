@@ -149,7 +149,6 @@ const exampleConfigureLocalEnvironment = async () => {
   config.lnurlDomain = 'http://127.0.0.1:8080'
 
   // Its data-sync service keeps this wallet's instances in step, over gRPC-Web
-  // in a browser
   config.realTimeSyncServerUrl = 'http://127.0.0.1:8082'
   // ANCHOR_END: local-spark-config
   console.log('Config:', config)

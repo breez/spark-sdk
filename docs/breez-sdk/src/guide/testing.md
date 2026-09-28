@@ -70,20 +70,20 @@ Docker writes the environment's Spark configuration to `regtest/local/data/spark
 | Spark service provider (SSP) | `http://127.0.0.1:59049` | `SSP_PORT` |
 | LNURL server | `http://127.0.0.1:8080` | `LNURL_PORT` |
 | Data-sync service | `http://127.0.0.1:8081` | `DATA_SYNC_PORT` |
-| Data-sync service, for browsers | `http://127.0.0.1:8082` | `DATA_SYNC_WEB_PORT` |
+| Data-sync service, for JavaScript | `http://127.0.0.1:8082` | `DATA_SYNC_WEB_PORT` |
 | Bitcoin Core RPC (`rpcuser` / `rpcpassword`) | `http://127.0.0.1:18443` | `BITCOIND_RPC_PORT` |
 
 Every port is an environment variable, so an address already in use can be moved: `BITCOIND_RPC_PORT=18500 docker compose -f regtest/local/docker-compose.yml up`. The ports, what the environment mines and what the SSP keeps are listed in the environment's [README](https://github.com/breez/spark-sdk/blob/main/regtest/local/README.md).
 
 ### Connecting the SDK
 
-Start from the default config for {{#enum Network::Regtest}} and change five things:
+Every service a wallet uses is served over plain HTTP and answers cross-origin requests, so a wallet connects the same way in a browser. Start from the default config for {{#enum Network::Regtest}} and change five things:
 
-- **Spark environment**: {{#name parse_spark_config}} reads the configuration file the environment writes, which carries its operators, its SSP and the certificate authority their TLS certificates are issued by. Set the result on {{#name spark_config}}. The fields are those of the [Spark environment configuration](./config.md#spark-environment-configuration).
+- **Spark environment**: {{#name parse_spark_config}} reads the configuration file the environment writes, which carries its operators and its SSP. Set the result on {{#name spark_config}}. The fields are those of the [Spark environment configuration](./config.md#spark-environment-configuration).
 - **Chain service**: use a [REST chain service](./customizing.md#with-rest-chain-service) at `http://127.0.0.1:8090/api`, of type {{#enum ChainApiType::MempoolSpace}}.
 - **Deposit claim fee**: the environment's SSP can quote more to claim a deposit than the default {{#name max_deposit_claim_fee}} of 1 sat/vbyte allows. Deposits it quotes above the ceiling wait to be [claimed manually](./onchain_claims.md#manually-claiming-deposits), unless the ceiling is raised.
 - **Lightning address domain**: set {{#name lnurl_domain}} to the environment's LNURL server, `http://127.0.0.1:8080`, which [registering an address](./receive_lnurl_pay.md) then goes to.
-- **Sync server**: set {{#name real_time_sync_server_url}} to the environment's data-sync service, `http://127.0.0.1:8081`, which keeps [a wallet's instances in step](./config.md#real-time-sync-server-url). In a browser, use its gRPC-Web address, `http://127.0.0.1:8082`.
+- **Sync server**: set {{#name real_time_sync_server_url}} to the environment's data-sync service, `http://127.0.0.1:8081`, which keeps [a wallet's instances in step](./config.md#real-time-sync-server-url). The JavaScript SDK reaches it over gRPC-Web, at `http://127.0.0.1:8082`.
 
 {{#tabs config:local-spark-config}}
 
@@ -100,7 +100,10 @@ The environment mines a block every 5 seconds. To send a wallet funds from the e
 
 ### Testing from another device
 
-By default every service accepts connections only from the machine the environment runs on, and the operators' certificates cover `localhost`, `127.0.0.1` and `10.0.2.2`, the address under which the Android emulator reaches its host. To test from a phone on your network, start a stopped environment with `BIND_ADDRESS=0.0.0.0` and `PUBLIC_HOST` set to your machine's address on that network, for example `BIND_ADDRESS=0.0.0.0 PUBLIC_HOST=192.168.1.10 make local-env-up`. The Spark configuration file then points wallets at `PUBLIC_HOST`, and the operators' certificates cover it.
+By default every service accepts connections only from the machine the environment runs on, and the Spark configuration file points wallets at `127.0.0.1`. `PUBLIC_HOST` points them at another address, and takes effect when a stopped environment starts. The configuration file and the endpoints the environment prints then use that address.
+
+- **Android emulator**: set `PUBLIC_HOST=10.0.2.2`, the address under which the emulator reaches its host.
+- **A phone on your network**: set `PUBLIC_HOST` to your machine's address on that network, and `BIND_ADDRESS=0.0.0.0` so the services accept connections from other machines, for example `BIND_ADDRESS=0.0.0.0 PUBLIC_HOST=192.168.1.10 make local-env-up`.
 
 ## Mainnet testing
 
