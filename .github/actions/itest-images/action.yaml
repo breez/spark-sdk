@@ -1,0 +1,102 @@
+name: 'Itest images'
+description: >
+  Loads the images a local cluster runs from the cache, keyed by what each one is
+  built from. With build set, whatever the cache did not hold is built and cached
+  for the jobs that follow. Needs a Rust toolchain: the tags come from the itest
+  harness, so the images cached are the ones the fixtures then run.
+inputs:
+  build:
+    description: 'Build and cache the images the cache did not hold'
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    # Written with underscores: an expression reads a dash in an output's name as
+    # a subtraction.
+    - name: Work out which images this tree needs
+      id: tags
+      shell: bash
+      run: |
+        mkdir -p /tmp/itest-images
+        cargo run --quiet -p spark-itest --bin itest-image-tags > /tmp/itest-images/tags
+        tr '-' '_' < /tmp/itest-images/tags >> "$GITHUB_OUTPUT"
+
+    - name: Restore the operator image
+      id: spark-so
+      uses: actions/cache/restore@v4
+      with:
+        path: /tmp/itest-images/spark-so.tar
+        key: itest-image-spark-so-${{ runner.os }}-${{ steps.tags.outputs.spark_so }}
+
+    - name: Restore the migrations image
+      id: spark-migrations
+      uses: actions/cache/restore@v4
+      with:
+        path: /tmp/itest-images/spark-migrations.tar
+        key: itest-image-spark-migrations-${{ runner.os }}-${{ steps.tags.outputs.spark_migrations }}
+
+    - name: Restore the lightning node image
+      id: ldk-server
+      uses: actions/cache/restore@v4
+      with:
+        path: /tmp/itest-images/ldk-server.tar
+        key: itest-image-ldk-server-${{ runner.os }}-${{ steps.tags.outputs.ldk_server }}
+
+    - name: Restore the daemon image
+      id: sspd
+      uses: actions/cache/restore@v4
+      with:
+        path: /tmp/itest-images/sspd.tar
+        key: itest-image-sspd-${{ runner.os }}-${{ steps.tags.outputs.sspd }}
+
+    - name: Load the restored images
+      shell: bash
+      run: |
+        for tarball in /tmp/itest-images/*.tar; do
+          if [ -e "$tarball" ]; then
+            docker load -i "$tarball"
+          fi
+        done
+
+    # Builds only what the loads above left missing, and saves those for the jobs
+    # this one hands the images to.
+    - name: Build what the cache did not hold
+      if: inputs.build == 'true'
+      shell: bash
+      run: |
+        make itest-images
+        while IFS='=' read -r image tag; do
+          tarball="/tmp/itest-images/$image.tar"
+          if [ ! -e "$tarball" ]; then
+            docker save "$image:$tag" -o "$tarball"
+          fi
+        done < /tmp/itest-images/tags
+
+    - name: Cache the operator image
+      if: inputs.build == 'true' && steps.spark-so.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/itest-images/spark-so.tar
+        key: itest-image-spark-so-${{ runner.os }}-${{ steps.tags.outputs.spark_so }}
+
+    - name: Cache the migrations image
+      if: inputs.build == 'true' && steps.spark-migrations.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/itest-images/spark-migrations.tar
+        key: itest-image-spark-migrations-${{ runner.os }}-${{ steps.tags.outputs.spark_migrations }}
+
+    - name: Cache the lightning node image
+      if: inputs.build == 'true' && steps.ldk-server.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/itest-images/ldk-server.tar
+        key: itest-image-ldk-server-${{ runner.os }}-${{ steps.tags.outputs.ldk_server }}
+
+    - name: Cache the daemon image
+      if: inputs.build == 'true' && steps.sspd.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/itest-images/sspd.tar
+        key: itest-image-sspd-${{ runner.os }}-${{ steps.tags.outputs.sspd }}
