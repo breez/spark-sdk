@@ -67,7 +67,7 @@
     - [Treasury configuration](guide/treasury.md)
   - [Client signing](guide/client_signing.md)
   - [Using Turnkey](guide/turnkey.md)
-  - [Unilateral exit](guide/unilateral_exit.md)
+  - [Recovering funds](guide/recover_funds.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

@@ -172,6 +172,11 @@ class BreezSdkSpark {
           // the SDK retries after it.
           final _ = retryInSecs;
           break;
+        case SdkEvent_RecoverableFunds(:final recoverableFundsSats):
+          // Funds left the balance and wait to be recovered on-chain.
+          // Quote their recovery with prepareRecoverFunds.
+          final _ = recoverableFundsSats;
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {

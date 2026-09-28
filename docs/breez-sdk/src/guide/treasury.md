@@ -22,10 +22,10 @@ The [periodic sync](./config.md#synchronization-interval) defaults to 60 seconds
 
 ## Schedule the unilateral exit data collection
 
-By default the SDK collects the data a [unilateral exit](unilateral_exit.md) needs in the background whenever the wallet gains leaves. On a treasury that pays often and holds many leaves, that is a round trip to the operators behind almost every operation.
+By default the SDK collects the data a [unilateral exit](recover_funds.md) needs in the background whenever the wallet gains leaves. On a treasury that pays often and holds many leaves, that is a round trip to the operators behind almost every operation.
 
 Set {{#name exit_chain_auto_fetch_enabled}} to `false` to disable the automatic collection. {{#name sync_wallet}} collects the missing data regardless of the flag and returns once it is done, so call it on a schedule of your own:
 
-{{#tabs unilateral_exit:sync-exit-data}}
+{{#tabs recover_funds:sync-exit-data}}
 
 Funds received between two syncs cannot be exited without the operators until the next one. Pick a schedule with a gap you can accept, and keep the default if the automatic collection is not a measurable cost.

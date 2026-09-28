@@ -5,6 +5,7 @@ Once connected, you can retrieve the current state of the SDK at any time using 
 - **Spark identity public key** - The wallet's unique identity on the Spark network as a hex string
 - **Bitcoin balance** - The balance in satoshis
 - **Token balances** - Balances of any tokens held in the wallet
+- **Recoverable funds** - Funds that left the balance and wait to be recovered on-chain, see [Recovering funds](recover_funds.md)
 
 {{#tabs getting_started:fetch-balance}}
 
