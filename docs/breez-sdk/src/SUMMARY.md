@@ -35,6 +35,7 @@
     - [Lightning Address payment notifications](guide/lnurl_webhooks.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [Using LNURL-Auth](guide/lnurl_auth.md)
+- [Custom Lightning address domain](guide/custom_domain.md)
 - [Passkey login](guide/passkey.md)
   - [Setup](guide/passkey_setup.md)
   - [Onboarding](guide/passkey_onboarding.md)

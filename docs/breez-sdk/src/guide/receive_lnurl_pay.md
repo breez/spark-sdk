@@ -6,34 +6,7 @@ A Lightning address is a human-readable identifier formatted like an email addre
 
 ## Configuring a custom domain
 
-To use Lightning addresses with the Breez SDK, you need a domain served by an LNURL server. You can either [use the LNURL server hosted by Breez](#using-the-breez-lnurl-server) or [run your own LNURL server](#running-your-own-lnurl-server).
-
-### Using the Breez LNURL server
-
-#### Step 1: Point your domain to the Breez LNURL server
-
-Add a CNAME record in your domain's DNS settings. You can use your root domain or a subdomain:
-
-| | Root domain | Subdomain |
-|---|---|---|
-| **Example address** | `user@yourdomain.com` | `user@pay.yourdomain.com` |
-| **Host/Name** | `@` | `pay` (or another prefix like `tip` or `donate`) |
-| **Type** | CNAME (or ALIAS if available) | CNAME |
-| **Value/Target** | `breez.tips` | `breez.tips` |
-
-Some DNS providers do not support CNAME or ALIAS records on the root domain. If yours doesn't, either use a subdomain or configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).
-
-> **Note:** If you're using Cloudflare, make sure the CNAME record is set to 'DNS only' (not 'Proxied').
-
-#### Step 2: Register your domain with Breez
-
-[Send us](mailto:contact@breez.technology) your domain name (e.g., yourdomain.com or pay.yourdomain.com), together with the Breez API key you want the LNURL payments on that domain to be associated with.
-
-We will verify and add it to our list of allowed domains.
-
-### Running your own LNURL server
-
-Alternatively, you can run the [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) yourself. In that case, point your domain to your own server and add it to the server's allowed domains. The steps above do not apply, and there is no need to contact Breez. See the server's README for how to build, configure and run it.
+To use Lightning addresses with the Breez SDK, you need a domain served by an LNURL server. See [Custom Lightning address domain](./custom_domain.md) for how to set one up.
 
 ## Configuring Lightning addresses for users
 
