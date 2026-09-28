@@ -168,7 +168,7 @@ services:
       - postgres:/var/lib/postgresql/data
       - ./config/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: [CMD, pg_isready, -U, postgres]
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres]
       interval: 2s
       retries: 30
 
