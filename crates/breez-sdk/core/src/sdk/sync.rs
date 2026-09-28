@@ -8,7 +8,7 @@ use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
     deposits::{
         InstantClaimOutcome, claim_already_made, is_already_claimed_error, larger_ceiling,
-        needs_own_ceiling_resolution,
+        mature_quote_error, needs_own_ceiling_resolution,
     },
 };
 use crate::utils::time::now_secs;
@@ -734,7 +734,8 @@ impl BreezSdk {
         let quote = self
             .spark_wallet
             .fetch_static_deposit_claim_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
-            .await?;
+            .await
+            .map_err(|e| mature_quote_error(e, detailed_utxo))?;
 
         // The quote is bound to this outpoint, so its credit is priced against the
         // value read from the funding output. A credit above that value is not a

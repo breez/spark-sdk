@@ -16,6 +16,11 @@ pub enum ServiceProviderError {
     #[error("graphql error: {0}")]
     GraphQL(String),
 
+    /// The provider refused a static deposit whose credit after fees would be
+    /// below its dust limit.
+    #[error("graphql error: {0}")]
+    DepositBelowDustLimit(String),
+
     /// Error that occurs during network requests
     #[error("network error: {reason} (code: {code:?})")]
     Network { reason: String, code: Option<u16> },
@@ -40,6 +45,7 @@ impl From<GraphQLError> for ServiceProviderError {
         match err {
             GraphQLError::Authentication(reason) => Self::Authentication(reason),
             GraphQLError::GraphQL(reason) => Self::GraphQL(reason),
+            GraphQLError::DepositBelowDustLimit(reason) => Self::DepositBelowDustLimit(reason),
             GraphQLError::Network { reason, code } => Self::Network { reason, code },
             GraphQLError::Signer(reason) => Self::Signer(reason),
             GraphQLError::Serialization(reason) => Self::Serialization(reason),

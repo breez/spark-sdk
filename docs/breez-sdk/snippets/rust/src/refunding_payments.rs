@@ -27,6 +27,9 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
                 DepositClaimError::MissingUtxo { .. } => {
                     info!("UTXO not found when claiming deposit");
                 }
+                DepositClaimError::DepositTooSmall { .. } => {
+                    info!("Deposit too small to claim");
+                }
                 DepositClaimError::Generic { message } => {
                     info!("Claim failed: {}", message);
                 }

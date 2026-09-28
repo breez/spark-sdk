@@ -38,6 +38,8 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
         )
       } else if (deposit.claimError?.tag === DepositClaimError_Tags.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
+      } else if (deposit.claimError?.tag === DepositClaimError_Tags.DepositTooSmall) {
+        console.log('Deposit too small to claim')
       } else if (deposit.claimError?.tag === DepositClaimError_Tags.Generic) {
         console.log(`Claim failed: ${deposit.claimError.inner.message}`)
       }

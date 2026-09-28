@@ -29,6 +29,9 @@ class RefundingPayments {
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")
                         }
+                        is DepositClaimError.DepositTooSmall -> {
+                            // Log.v("Breez", "Deposit too small to claim")
+                        }
                         is DepositClaimError.Generic -> {
                             // Log.v("Breez", "Claim failed: ${claimError.message}")
                         }

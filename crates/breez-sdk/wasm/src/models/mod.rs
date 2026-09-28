@@ -240,6 +240,10 @@ pub enum DepositClaimError {
         tx: String,
         vout: u32,
     },
+    DepositTooSmall {
+        tx: String,
+        vout: u32,
+    },
     Generic {
         message: String,
     },

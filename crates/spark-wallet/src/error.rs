@@ -57,6 +57,21 @@ pub enum SparkWalletError {
     Generic(String),
 }
 
+impl SparkWalletError {
+    /// Whether the service provider refused a static deposit because its credit
+    /// after fees would be below the dust limit.
+    pub fn is_deposit_below_dust_limit(&self) -> bool {
+        use spark::{services::ServiceError, ssp::ServiceProviderError};
+        matches!(
+            self,
+            Self::SspError(ServiceProviderError::DepositBelowDustLimit(_))
+                | Self::ServiceError(ServiceError::ServiceProviderError(
+                    ServiceProviderError::DepositBelowDustLimit(_)
+                ))
+        )
+    }
+}
+
 impl From<spark::operator::rpc::OperatorRpcError> for SparkWalletError {
     fn from(error: spark::operator::rpc::OperatorRpcError) -> Self {
         SparkWalletError::OperatorRpcError(Box::new(error))

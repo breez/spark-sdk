@@ -39,6 +39,10 @@ namespace BreezSdkSnippets
                     {
                         Console.WriteLine("Claim failed: UTXO not found");
                     }
+                    else if (deposit.claimError is DepositClaimError.DepositTooSmall)
+                    {
+                        Console.WriteLine("Claim failed: deposit too small to claim");
+                    }
                     else if (deposit.claimError is DepositClaimError.Generic generic)
                     {
                         Console.WriteLine($"Claim failed: {generic.message}");

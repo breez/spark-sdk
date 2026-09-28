@@ -13,7 +13,7 @@ use bitcoin::{
 use platform_utils::tokio;
 use spark_wallet::{
     InstantStaticDepositPlan, InstantStaticDepositQuoteResult, ListTransfersRequest,
-    MIN_RELAY_FEE_SAT_PER_VBYTE, TransferId, WalletTransfer,
+    MIN_RELAY_FEE_SAT_PER_VBYTE, SparkWalletError, TransferId, WalletTransfer,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -129,6 +129,9 @@ impl BreezSdk {
     ///
     /// The early quote is requested from the provider on each call rather than read
     /// from cache, so call this when a user is deciding, not on a timer.
+    ///
+    /// Fails with `DepositTooSmall` for a deposit worth too little to claim at the
+    /// current fees.
     pub async fn fetch_claim_deposit_quote(
         &self,
         request: FetchClaimDepositQuoteRequest,
@@ -600,7 +603,7 @@ impl BreezSdk {
 
     /// Quotes claiming `detailed_utxo` at maturity. The provider may decline to
     /// quote a deposit that has not matured, so this falls back to an estimate
-    /// from current on-chain fees.
+    /// from current on-chain fees, unless it refused the deposit as too small.
     async fn fetch_mature_claim_quote(
         &self,
         detailed_utxo: &DetailedUtxo,
@@ -616,6 +619,13 @@ impl BreezSdk {
                 quote.credit_amount_sats,
                 false,
             )),
+            Err(e) if e.is_deposit_below_dust_limit() => {
+                info!(
+                    "Deposit {}:{} is too small to claim: {e}",
+                    detailed_utxo.txid, detailed_utxo.vout
+                );
+                Err(mature_quote_error(e, detailed_utxo))
+            }
             Err(e) => {
                 info!(
                     "No mature quote for {}:{}, estimating: {e}",
@@ -762,10 +772,23 @@ impl BreezSdk {
         // and unlike none it stays retryable once one is configured.
         let max_fee_sats = resolved_max_fee.as_ref().map_or(0, |(_, sats)| *sats);
 
-        let quote_result = self
+        let quote_result = match self
             .spark_wallet
             .fetch_instant_static_deposit_quote(detailed_utxo.tx.clone(), Some(detailed_utxo.vout))
-            .await?;
+            .await
+        {
+            Ok(quote_result) => quote_result,
+            // Too small to claim early says nothing about claiming at maturity,
+            // which costs less.
+            Err(e) if e.is_deposit_below_dust_limit() => {
+                return Ok(InstantClaimOutcome::Declined {
+                    error: e.into(),
+                    max_fee_sats: None,
+                    reason: ClaimDeferredReason::NoEarlyClaimAvailable,
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
         info!(
             "Instant quote for {}:{} ({} sats, ceiling {} sats)",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value, max_fee_sats
@@ -956,6 +979,17 @@ pub(super) fn instant_claim_response(outcome: &InstantClaimOutcome) -> ClaimDepo
         },
     };
     ClaimDepositResponse { outcome }
+}
+
+/// The error for a failed quote to claim `detailed_utxo` at maturity.
+pub(super) fn mature_quote_error(e: SparkWalletError, detailed_utxo: &DetailedUtxo) -> SdkError {
+    if e.is_deposit_below_dust_limit() {
+        return SdkError::DepositTooSmall {
+            tx: detailed_utxo.txid.to_string(),
+            vout: detailed_utxo.vout,
+        };
+    }
+    e.into()
 }
 
 /// Whether a claim has already taken this deposit, still settling or credited.
