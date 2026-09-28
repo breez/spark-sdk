@@ -34,6 +34,13 @@ channel_usable() {
     | length > 0' >/dev/null
 }
 
+# Usable or not: a channel is listed while its funding confirms, and after a
+# restart until its nodes reconnect.
+channel_opened() {
+  alice list-channels | jq -e --arg ssp "$ssp_node_id" \
+    'any(.channels[]; (.counterpartyNodeId // .counterparty_node_id) == $ssp)' >/dev/null
+}
+
 # Spendable, not total: a channel is funded from confirmed coins.
 onchain_sats() {
   alice get-balances | jq -r '.spendableOnchainBalanceSats // .spendable_onchain_balance_sats'
@@ -46,7 +53,7 @@ until alice get-node-info >/dev/null 2>&1 && ssp get-node-info >/dev/null 2>&1; 
 done
 ssp_node_id=$(ssp get-node-info | jq -r '.nodeId // .node_id')
 
-if ! channel_usable; then
+if ! channel_opened; then
   # The channel's own value, plus what an anchor channel keeps back on chain.
   funding_sats=$((CHANNEL_SATS + 100000000))
   if [ "$(onchain_sats)" -lt "$funding_sats" ]; then
