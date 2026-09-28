@@ -23,7 +23,7 @@ pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
 pub use local_sdk::{
-    LocalIdentity, LocalSdk, LocalStack, build_local_sdk, build_local_sdk_with_config,
+    BlockHold, LocalIdentity, LocalSdk, LocalStack, build_local_sdk, build_local_sdk_with_config,
     rebuild_on_empty_storage,
 };
 pub use rand;

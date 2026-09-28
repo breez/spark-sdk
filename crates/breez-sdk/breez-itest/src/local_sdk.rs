@@ -332,6 +332,13 @@ pub struct LocalStack {
     _ldk: spark_itest::fixtures::ldk_server::LdkServerFixture,
     /// Mines until the stack is dropped.
     driver: tokio::task::JoinHandle<()>,
+    /// Locked by the driver while it mines a block.
+    mining: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// Keeps a local stack's driver from mining until it is dropped.
+pub struct BlockHold {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl Drop for LocalStack {
@@ -356,6 +363,14 @@ impl LocalStack {
     /// The containers this stack runs, for a test that drives them directly.
     pub fn fixtures(&self) -> &Arc<TestFixtures> {
         &self.fixtures
+    }
+
+    /// Stops the background mining until the hold is dropped, once a block being
+    /// mined is done. Blocks a test mines itself still land.
+    pub async fn hold_blocks(&self) -> BlockHold {
+        BlockHold {
+            _guard: Arc::clone(&self.mining).lock_owned().await,
+        }
     }
 
     /// Starts operators, an sspd and a bitcoind, and stocks the SSP's pool.
@@ -389,7 +404,8 @@ impl LocalStack {
             .await?;
         let ssp_base_url = sspd.base_url.clone();
 
-        let driver = spawn_local_driver(Arc::clone(&fixtures));
+        let mining = Arc::new(tokio::sync::Mutex::new(()));
+        let driver = spawn_local_driver(Arc::clone(&fixtures), Arc::clone(&mining));
 
         sspd.wait_for_pool(
             &fixtures.bitcoind,
@@ -403,6 +419,7 @@ impl LocalStack {
             ssp_base_url,
             _ldk: ssp_ldk,
             driver,
+            mining,
         })
     }
 
@@ -412,6 +429,27 @@ impl LocalStack {
         &self,
         identity: LocalIdentity,
         server_mode: bool,
+        configure: impl FnOnce(&mut Config) + Send,
+    ) -> Result<SdkInstance> {
+        self.build_wallet(identity, server_mode, false, configure)
+            .await
+    }
+
+    /// [`Self::create_wallet`] for a wallet whose chain service also reports the
+    /// mempool.
+    pub async fn create_wallet_seeing_mempool(
+        &self,
+        identity: LocalIdentity,
+        configure: impl FnOnce(&mut Config) + Send,
+    ) -> Result<SdkInstance> {
+        self.build_wallet(identity, false, true, configure).await
+    }
+
+    async fn build_wallet(
+        &self,
+        identity: LocalIdentity,
+        server_mode: bool,
+        sees_mempool: bool,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
         let stack = self;
@@ -431,8 +469,11 @@ impl LocalStack {
 
         let storage_dir = tempfile::tempdir()?;
         let storage_path = storage_dir.path().to_string_lossy().into_owned();
-        let chain_service: Arc<dyn BitcoinChainService> =
-            Arc::new(LocalBitcoindChainService::new(&stack.fixtures.bitcoind));
+        let chain_service: Arc<dyn BitcoinChainService> = Arc::new(if sees_mempool {
+            LocalBitcoindChainService::seeing_mempool(&stack.fixtures.bitcoind)
+        } else {
+            LocalBitcoindChainService::new(&stack.fixtures.bitcoind)
+        });
 
         let sdk = match identity {
             LocalIdentity::Seed(seed) => {
@@ -498,11 +539,17 @@ const POOL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Mines in the background: test bodies written for the live regtest never mine,
 /// because it mines on its own.
-fn spawn_local_driver(fixtures: Arc<TestFixtures>) -> tokio::task::JoinHandle<()> {
+fn spawn_local_driver(
+    fixtures: Arc<TestFixtures>,
+    mining: Arc<tokio::sync::Mutex<()>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            if let Err(e) = fixtures.bitcoind.generate_blocks(1).await {
-                debug!("local driver: mining a block failed: {e}");
+            {
+                let _mining = mining.lock().await;
+                if let Err(e) = fixtures.bitcoind.generate_blocks(1).await {
+                    debug!("local driver: mining a block failed: {e}");
+                }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }

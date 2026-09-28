@@ -5,7 +5,7 @@
 //! `TestFixtures` here would keep a finished test's operator containers running
 //! — leaking clusters across the run and starving the runner.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -78,6 +78,7 @@ impl BitcoindRpc {
 
 pub struct LocalBitcoindChainService {
     bitcoind: BitcoindRpc,
+    sees_mempool: bool,
 }
 
 impl LocalBitcoindChainService {
@@ -85,6 +86,17 @@ impl LocalBitcoindChainService {
     pub fn new(bitcoind: &BitcoindFixture) -> Self {
         Self {
             bitcoind: BitcoindRpc::new(bitcoind),
+            sees_mempool: false,
+        }
+    }
+
+    /// Also reports the mempool's outputs, and leaves out those it spends, as an
+    /// Esplora server does.
+    #[must_use]
+    pub fn seeing_mempool(bitcoind: &BitcoindFixture) -> Self {
+        Self {
+            sees_mempool: true,
+            ..Self::new(bitcoind)
         }
     }
 }
@@ -147,9 +159,11 @@ impl BitcoinChainService for LocalBitcoindChainService {
             )
             .await
             .map_err(to_chain_err)?;
-        let Some(unspents) = result.get("unspents").and_then(|v| v.as_array()) else {
-            return Ok(Vec::new());
-        };
+        let unspents = result
+            .get("unspents")
+            .and_then(|v| v.as_array())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut utxos = Vec::with_capacity(unspents.len());
         for entry in unspents {
             let txid = entry
@@ -178,6 +192,15 @@ impl BitcoinChainService for LocalBitcoindChainService {
                     block_time: None,
                 },
             });
+        }
+
+        // The UTXO set `scantxoutset` reads holds confirmed outputs only.
+        if self.sees_mempool {
+            let mempool = mempool_view(&self.bitcoind, &checked.script_pubkey().to_hex_string())
+                .await
+                .map_err(to_chain_err)?;
+            utxos.extend(mempool.outputs);
+            utxos.retain(|utxo| !mempool.spent.contains(&(utxo.txid.clone(), utxo.vout)));
         }
         Ok(utxos)
     }
@@ -296,6 +319,66 @@ async fn confirmed_txos_for_script(bitcoind: &BitcoindRpc, script_hex: &str) -> 
         }
     }
     Ok(txos)
+}
+
+/// The mempool's outputs paying `script_hex`, and every outpoint it spends.
+struct MempoolView {
+    outputs: Vec<Utxo>,
+    spent: HashSet<(String, u32)>,
+}
+
+async fn mempool_view(bitcoind: &BitcoindRpc, script_hex: &str) -> Result<MempoolView> {
+    let mut view = MempoolView {
+        outputs: Vec::new(),
+        spent: HashSet::new(),
+    };
+    let mempool: Vec<String> = bitcoind.rpc("getrawmempool", &[]).await?;
+    for entry in mempool {
+        let tx: Value = bitcoind
+            .rpc("getrawtransaction", &[json!(entry), json!(true)])
+            .await?;
+        for input in tx
+            .get("vin")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(txid), Some(vout)) = (
+                input.get("txid").and_then(|v| v.as_str()),
+                input.get("vout").and_then(|v| v.as_u64()),
+            ) {
+                view.spent.insert((txid.to_string(), u32::try_from(vout)?));
+            }
+        }
+        for out in tx
+            .get("vout")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let matches = out
+                .get("scriptPubKey")
+                .and_then(|s| s.get("hex"))
+                .and_then(|h| h.as_str())
+                .is_some_and(|h| h == script_hex);
+            if !matches {
+                continue;
+            }
+            let n = out.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
+            let value_btc = out.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            view.outputs.push(Utxo {
+                txid: entry.clone(),
+                vout: u32::try_from(n)?,
+                value: (value_btc * 100_000_000.0).round() as u64,
+                status: TxStatus {
+                    confirmed: false,
+                    block_height: None,
+                    block_time: None,
+                },
+            });
+        }
+    }
+    Ok(view)
 }
 
 async fn find_spender_in_mempool(

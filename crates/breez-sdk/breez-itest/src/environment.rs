@@ -20,7 +20,7 @@ use crate::fixtures::{lnurl::LnurlFixture, random_mnemonic, stable_balance_confi
 use crate::helpers::regtest::{
     build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
 };
-use crate::local_sdk::{LocalIdentity, LocalStack};
+use crate::local_sdk::{BlockHold, LocalIdentity, LocalStack};
 
 /// The environment this build's tests run against.
 #[fixture]
@@ -57,6 +57,15 @@ impl Environment {
             Environment::Deployed => {
                 panic!("this test needs a local stack; it runs under the local-itest feature")
             }
+        }
+    }
+
+    /// Stops a local stack's background mining until the hold is dropped. The
+    /// deployed regtest mines on its own, so there it returns `None`.
+    pub async fn hold_blocks(&self) -> Option<BlockHold> {
+        match self {
+            Environment::Deployed => None,
+            Environment::Local(stack) => Some(stack.hold_blocks().await),
         }
     }
 
@@ -157,6 +166,25 @@ impl Environment {
                         false,
                         |_cfg| {},
                     )
+                    .await
+            }
+        }
+    }
+
+    /// [`Self::create_wallet_with`] for a wallet that sees a deposit while it is
+    /// unconfirmed, as every wallet on the deployed regtest does. Other local
+    /// wallets do not: the local SSP's early-claim spread fits under their fee
+    /// ceiling, so they would claim a deposit early where a deployed wallet waits
+    /// for it to mature.
+    pub async fn create_wallet_seeing_mempool(
+        &self,
+        configure: impl FnOnce(&mut Config) + Send,
+    ) -> Result<SdkInstance> {
+        match self {
+            Environment::Deployed => self.create_wallet_with(configure).await,
+            Environment::Local(stack) => {
+                stack
+                    .create_wallet_seeing_mempool(LocalIdentity::Seed(rand::random()), configure)
                     .await
             }
         }
