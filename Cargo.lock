@@ -7942,6 +7942,8 @@ dependencies = [
  "toml 0.8.23",
  "tonic",
  "tonic-build",
+ "tower 0.5.3",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "utils",

@@ -12,10 +12,12 @@ use async_graphql::{Context, EmptySubscription, Error, Schema};
 use async_graphql_axum::GraphQLResponse;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get, routing::post};
 use bitcoin::secp256k1::PublicKey;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::auth::AuthService;
 use crate::coop_exit::CoopExitService;
@@ -164,6 +166,13 @@ pub fn router(schema: SspSchema, auth: Arc<AuthService>) -> Router {
         .route("/graphql/{path}", post(graphql_handler))
         .route("/graphql/{path1}/{path2}", post(graphql_handler))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST])
+                // A wildcard would not cover Authorization.
+                .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
+        )
         .with_state(AppState { schema, auth })
 }
 
@@ -173,9 +182,42 @@ async fn health() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use async_graphql::{EmptySubscription, Request, Schema};
+    use std::sync::Arc;
 
-    use super::{MAX_QUERY_COMPLEXITY, MAX_QUERY_DEPTH, MutationRoot, QueryRoot};
+    use async_graphql::{EmptySubscription, Request, Schema};
+    use axum::body::Body;
+    use axum::http::header;
+    use tower::ServiceExt;
+
+    use super::{MAX_QUERY_COMPLEXITY, MAX_QUERY_DEPTH, MutationRoot, QueryRoot, router};
+    use crate::auth::AuthService;
+
+    #[tokio::test]
+    async fn a_browser_may_call_the_api_with_its_session_token() {
+        let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription).finish();
+        let preflight = axum::http::Request::options("/graphql/spark/rc")
+            .header(header::ORIGIN, "http://localhost:5173")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization,content-type",
+            )
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router(schema, Arc::new(AuthService::from_seed(&[0; 32])))
+            .oneshot(preflight)
+            .await
+            .unwrap();
+
+        assert!(response.status().is_success(), "{}", response.status());
+        let headers = response.headers();
+        assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        let allowed = headers[header::ACCESS_CONTROL_ALLOW_HEADERS]
+            .to_str()
+            .unwrap();
+        assert!(allowed.contains("authorization"), "{allowed}");
+    }
 
     #[tokio::test]
     async fn sdk_operations_fit_the_query_limits() {
