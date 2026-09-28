@@ -168,6 +168,7 @@ The LNURL server provides the following endpoints:
 - `/.well-known/lnurlp/{username}` - LNURL-pay endpoint for Lightning Address handling
 - `/lnurlp/{username}` - Alternative LNURL-pay endpoint 
 - `/lnurlp/{username}/invoice` - Invoice generation endpoint for LNURL-pay
+- `/lnurlp/verify/{payment_hash}` - LUD-21 payment verification for an invoice the server created
 
 ### Authenticated Endpoints (require API key)
 
