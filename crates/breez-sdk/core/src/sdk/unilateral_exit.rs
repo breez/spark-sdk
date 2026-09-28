@@ -15,11 +15,12 @@ use spark_wallet::{
     ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
     ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
     ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, SpendInfo,
-    TreeNode, TreeNodeId, UnilateralExitBuild, build_unilateral_exit, check_exit_chain,
-    is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain, scan_funding,
+    TreeNode, TreeNodeId, TreeNodeStatus, UnilateralExitBuild, build_unilateral_exit,
+    check_exit_chain, is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain,
+    scan_funding,
 };
 
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     chain::{BitcoinChainService, Outspend},
@@ -29,14 +30,39 @@ use crate::{
         CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitChainState as ModelExitChainState,
         ExitLeafSelection, ExitNodeConfirmation, ExitRefund, ExitRefundState,
         ExitTransactionStatus, PerBranchFunding, PrepareUnilateralExitRequest,
-        PrepareUnilateralExitResponse, UnilateralExitLeaf, UnilateralExitRedoReason,
+        PrepareUnilateralExitResponse, RecoverFundsLeaf, RecoveryFunding, RecoveryMethod,
+        RecoveryTransaction, RecoveryTxKind, UnilateralExitLeaf, UnilateralExitRedoReason,
         UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
         UnilateralExitTxKind, UnilateralExitVerdict,
     },
+    persist::{CachedExitingLeaf, ObjectCacheRepository, SeenAt},
     signer::CpfpSigner,
 };
 
-use super::BreezSdk;
+use super::{BreezSdk, recover_funds::run_checks};
+
+#[derive(Default)]
+pub(super) struct UnilateralQuote {
+    pub(super) leaves: Vec<RecoverFundsLeaf>,
+    pub(super) recoverable_value_sat: u64,
+    pub(super) total_fee_sat: u64,
+    pub(super) cpfp_fee_sat: u64,
+    pub(super) fanout_fee_sat: u64,
+    pub(super) sweep_fee_sat: u64,
+    pub(super) funding: Option<RecoveryFunding>,
+    pub(super) exit_chain_state: ModelExitChainState,
+}
+
+#[derive(Default)]
+pub(super) struct UnilateralBuild {
+    pub(super) leaves: Vec<RecoverFundsLeaf>,
+    pub(super) recoverable_value_sat: u64,
+    pub(super) total_fee_sat: u64,
+    pub(super) cpfp_fee_sat: u64,
+    pub(super) fanout_fee_sat: u64,
+    pub(super) sweep_fee_sat: u64,
+    pub(super) transactions: Vec<RecoveryTransaction>,
+}
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -62,89 +88,33 @@ impl BreezSdk {
             .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
             .require_network(btc_network)
             .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
-        let dest_script_len = destination.script_pubkey().len();
 
         let selection = wallet_selection(request.selection)?;
-
-        let (input_weight, output_script) = funding_kind_params(&request.funding_kind)?;
-        let mut context = self.spark_wallet.load_exit_context(selection).await?;
-
-        // Ask the chain what these leaves have already done before pricing them,
-        // so a leaf part-way out is quoted on the work it has left rather than on
-        // a fresh exit, and is not dropped as unprofitable over work already
-        // paid for. Every lookup the tree needs happens here.
-        let refund_addresses = leaf_refund_addresses(
-            &context.tree_nodes,
-            &context.leaf_ids,
-            self.config.network.into(),
-        );
-        let exit_chain_state = resolve_exit_chain_state(
-            self.chain_service.as_ref(),
-            &context.tree_nodes,
-            &context.leaf_ids,
-            &refund_addresses,
-        )
-        .await?;
-        // A leaf whose exit already finished is not exited again, whether named or
-        // not; `exit_chain_state` still reports it as swept or stopped.
-        context.drop_finished_leaves(&exit_chain_state);
-
-        let quote = self.spark_wallet.quote_unilateral_exit(
-            &context,
-            sat_per_kw_from_vbyte(request.fee_rate_sat_per_vbyte),
-            input_weight,
-            output_script.len(),
-            output_script.minimal_non_dust().to_sat(),
-            dest_script_len,
-            &exit_chain_state,
-        )?;
-        // No selected leaves is not an error: return an empty quote.
-        let recoverable_value_sat = quote
-            .selected_leaves
-            .iter()
-            .map(|l| l.value)
-            .fold(0u64, u64::saturating_add);
-        let leaves = quote
-            .selected_leaves
-            .iter()
-            .map(|l| UnilateralExitLeaf {
-                leaf_id: l.id.to_string(),
-                value: l.value,
-            })
-            .collect();
-        let per_branch_funding: Vec<PerBranchFunding> = quote
-            .per_branch_funding
-            .into_iter()
-            .map(|(id, funding_sat)| PerBranchFunding {
-                leaf_id: id.to_string(),
-                funding_sat,
-            })
-            .collect();
-
-        debug!(
-            selected_leaves = quote.selected_leaves.len(),
-            recoverable_value_sat,
-            total_fee_sat = quote.total_fee_sat,
-            cpfp_fee_sat = quote.cpfp_fee_sat,
-            fanout_fee_sat = quote.fanout_fee_sat,
-            sweep_fee_sat = quote.sweep_fee_sat,
-            single_utxo_funding_sat = quote.single_utxo_funding_sat,
-            branches = per_branch_funding.len(),
-            "prepare_unilateral_exit: quote ready"
-        );
+        let quote = self
+            .quote_unilateral_exit(
+                &destination,
+                request.fee_rate_sat_per_vbyte,
+                Some(&request.funding_kind),
+                selection,
+                &HashSet::new(),
+            )
+            .await?;
+        let (single_utxo_funding_sat, per_branch_funding) = quote
+            .funding
+            .map_or((0, Vec::new()), |f| (f.single_utxo_sats, f.per_branch));
 
         Ok(PrepareUnilateralExitResponse {
-            leaves,
-            recoverable_value_sat,
+            leaves: quote.leaves.into_iter().map(unilateral_exit_leaf).collect(),
+            recoverable_value_sat: quote.recoverable_value_sat,
             total_fee_sat: quote.total_fee_sat,
             cpfp_fee_sat: quote.cpfp_fee_sat,
             fanout_fee_sat: quote.fanout_fee_sat,
             sweep_fee_sat: quote.sweep_fee_sat,
-            single_utxo_funding_sat: quote.single_utxo_funding_sat,
+            single_utxo_funding_sat,
             per_branch_funding,
             fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
             destination: request.destination,
-            exit_chain_state: exit_chain_state_model(exit_chain_state),
+            exit_chain_state: quote.exit_chain_state,
         })
     }
 
@@ -164,26 +134,23 @@ impl BreezSdk {
             "check_unilateral_exit: reading back"
         );
 
-        let inputs = exit
+        let mut transactions: Vec<RecoveryTransaction> = exit
             .transactions
-            .iter()
-            .map(exit_check_input)
-            .collect::<Result<Vec<_>, SdkError>>()?;
-        let check = resolve_exit_check(self.chain_service.as_ref(), &inputs).await?;
-
-        for tx in &mut exit.transactions {
-            let txid = Txid::from_str(&tx.txid)
-                .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
-            tx.status = status_after_check(tx.status, &check, &txid);
-        }
-
-        resolve_statuses(self.chain_service.as_ref(), &mut exit.transactions).await?;
+            .into_iter()
+            .map(recovery_transaction)
+            .collect();
+        let diverged =
+            check_recovery_transactions(self.chain_service.as_ref(), &mut transactions).await?;
+        exit.transactions = transactions
+            .into_iter()
+            .map(unilateral_exit_transaction)
+            .collect::<Result<_, _>>()?;
 
         let all_confirmed = exit
             .transactions
             .iter()
             .all(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }));
-        let verdict = if check.diverged {
+        let verdict = if diverged {
             UnilateralExitVerdict::Redo {
                 reason: UnilateralExitRedoReason::OnChainStateDiverged,
             }
@@ -206,7 +173,6 @@ impl BreezSdk {
     /// is not rebuilt, and a leaf refund already on-chain (recognized by the
     /// leaf's refund address, so any refund variant counts) is swept directly.
     /// Re-running after partial progress therefore resumes rather than restarts.
-    #[allow(clippy::too_many_lines)]
     pub async fn unilateral_exit(
         &self,
         request: UnilateralExitRequest,
@@ -224,7 +190,6 @@ impl BreezSdk {
             "unilateral_exit: building"
         );
         let btc_network: bitcoin::Network = self.config.network.into();
-        let chain = self.chain_service.as_ref();
 
         let destination = prepared
             .destination
@@ -232,7 +197,6 @@ impl BreezSdk {
             .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
             .require_network(btc_network)
             .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
-        let dest_script_len = destination.script_pubkey().len();
 
         // The build never re-selects: the quote's leaves are an explicit set.
         let leaf_ids = prepared
@@ -250,29 +214,192 @@ impl BreezSdk {
             return Ok(empty_exit_response());
         }
 
-        let funding_inputs = funding_inputs
+        let build = self
+            .build_unilateral_exit(
+                &destination,
+                leaf_ids,
+                prepared.fee_rate_sat_per_vbyte,
+                funding_inputs,
+                prepared.single_utxo_funding_sat,
+                &prepared.exit_chain_state,
+                Some(signer.as_ref()),
+            )
+            .await?;
+        Ok(UnilateralExitResponse {
+            recoverable_value_sat: build.recoverable_value_sat,
+            total_fee_sat: build.total_fee_sat,
+            cpfp_fee_sat: build.cpfp_fee_sat,
+            fanout_fee_sat: build.fanout_fee_sat,
+            sweep_fee_sat: build.sweep_fee_sat,
+            leaves: build.leaves.into_iter().map(unilateral_exit_leaf).collect(),
+            transactions: build
+                .transactions
+                .into_iter()
+                .map(unilateral_exit_transaction)
+                .collect::<Result<_, _>>()?,
+            funding_inputs: supplied_funding,
+        })
+    }
+}
+
+impl BreezSdk {
+    /// Quotes a unilateral exit of the selected leaves: which would exit, the
+    /// exact fee for the funding kind, and how much to fund. A leaf whose exit
+    /// already finished is left out, and recorded as finished.
+    pub(super) async fn quote_unilateral_exit(
+        &self,
+        destination: &Address,
+        fee_rate_sat_per_vbyte: u64,
+        funding_kind: Option<&CpfpFundingKind>,
+        selection: spark_wallet::ExitLeafSelection,
+        cooperative: &HashSet<String>,
+    ) -> Result<UnilateralQuote, SdkError> {
+        let dest_script_len = destination.script_pubkey().len();
+        // Without a funding kind no CPFP child is quoted, so these are not used.
+        let (input_weight, output_script) = match funding_kind {
+            Some(kind) => funding_kind_params(kind)?,
+            None => (0, ScriptBuf::new()),
+        };
+        let mut context = self
+            .spark_wallet
+            .load_selected_exit_context(selection)
+            .await?;
+        // The chain walk below drops them as well, but only while the chain can
+        // be read.
+        context
+            .leaf_ids
+            .retain(|leaf_id| !cooperative.contains(&leaf_id.to_string()));
+
+        // Ask the chain what these leaves have already done before pricing them,
+        // so a leaf part-way out is quoted on the work it has left rather than on
+        // a fresh exit, and is not dropped as unprofitable over work already
+        // paid for. Every lookup the tree needs happens here.
+        let refund_addresses = leaf_refund_addresses(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            self.config.network.into(),
+        );
+        let exit_chain_state = resolve_exit_chain_state(
+            self.chain_service.as_ref(),
+            &context.tree_nodes,
+            &context.leaf_ids,
+            &refund_addresses,
+        )
+        .await?;
+        self.mark_exits_swept(swept_leaves(&exit_chain_state, &context.leaf_ids))
+            .await;
+        // A leaf whose exit already finished is not exited again, whether named or
+        // not; `exit_chain_state` still reports it as swept or stopped.
+        context.drop_finished_leaves(&exit_chain_state);
+
+        let quote = self.spark_wallet.quote_unilateral_exit(
+            &context,
+            sat_per_kw_from_vbyte(fee_rate_sat_per_vbyte),
+            input_weight,
+            output_script.len(),
+            output_script.minimal_non_dust().to_sat(),
+            dest_script_len,
+            &exit_chain_state,
+        )?;
+        // No selected leaves is not an error: return an empty quote.
+        let recoverable_value_sat = quote
+            .selected_leaves
+            .iter()
+            .map(|l| l.value)
+            .fold(0u64, u64::saturating_add);
+        let leaves = quote
+            .selected_leaves
+            .iter()
+            .map(|l| RecoverFundsLeaf {
+                leaf_id: l.id.to_string(),
+                value_sats: l.value,
+                method: RecoveryMethod::Unilateral,
+            })
+            .collect();
+        let per_branch: Vec<PerBranchFunding> = quote
+            .per_branch_funding
+            .into_iter()
+            .map(|(id, funding_sats)| PerBranchFunding {
+                leaf_id: id.to_string(),
+                funding_sats,
+            })
+            .collect();
+        if funding_kind.is_none() && !per_branch.is_empty() {
+            return Err(SdkError::InvalidInput(
+                "A funding kind is needed: the selection holds a unilateral exit with steps \
+                 left to broadcast"
+                    .to_string(),
+            ));
+        }
+
+        debug!(
+            selected_leaves = quote.selected_leaves.len(),
+            recoverable_value_sat,
+            total_fee_sat = quote.total_fee_sat,
+            cpfp_fee_sat = quote.cpfp_fee_sat,
+            fanout_fee_sat = quote.fanout_fee_sat,
+            sweep_fee_sat = quote.sweep_fee_sat,
+            single_utxo_funding_sat = quote.single_utxo_funding_sat,
+            branches = per_branch.len(),
+            "quote_unilateral_exit: quote ready"
+        );
+
+        Ok(UnilateralQuote {
+            leaves,
+            recoverable_value_sat,
+            total_fee_sat: quote.total_fee_sat,
+            cpfp_fee_sat: quote.cpfp_fee_sat,
+            fanout_fee_sat: quote.fanout_fee_sat,
+            sweep_fee_sat: quote.sweep_fee_sat,
+            funding: (!per_branch.is_empty()).then_some(RecoveryFunding {
+                single_utxo_sats: quote.single_utxo_funding_sat,
+                per_branch,
+            }),
+            exit_chain_state: exit_chain_state_model(exit_chain_state),
+        })
+    }
+
+    /// Builds and signs a unilateral exit of exactly `leaf_ids` from the actual
+    /// funding UTXOs, in topological broadcast order, without broadcasting.
+    ///
+    /// It reads on-chain state first: an already-confirmed fan-out or CPFP node
+    /// is not rebuilt, and a leaf refund already on-chain (recognized by the
+    /// leaf's refund address, so any refund variant counts) is swept directly.
+    /// Re-running after partial progress therefore resumes rather than restarts.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub(super) async fn build_unilateral_exit(
+        &self,
+        destination: &Address,
+        leaf_ids: Vec<TreeNodeId>,
+        fee_rate_sat_per_vbyte: u64,
+        funding_inputs: Vec<ModelCpfpInput>,
+        single_utxo_funding_sats: u64,
+        exit_chain_state: &ModelExitChainState,
+        signer: Option<&dyn CpfpSigner>,
+    ) -> Result<UnilateralBuild, SdkError> {
+        let btc_network: bitcoin::Network = self.config.network.into();
+        let chain = self.chain_service.as_ref();
+        let dest_script_len = destination.script_pubkey().len();
+
+        let supplied = funding_inputs
             .into_iter()
             .map(|i| i.into_funding_input(btc_network))
             .collect::<Result<Vec<_>, SdkError>>()?;
-        if funding_inputs.is_empty() {
-            return Err(SdkError::InvalidInput(
-                "At least one funding input is required".to_string(),
-            ));
-        }
+        let supplied_any = !supplied.is_empty();
 
         // A prior run spends the funding it was given, so what the caller hands
         // back may name outputs that are gone. Follow them to what they became
         // before planning, so the plan is made over what can actually be spent.
-        let funding_inputs = resolve_funding(chain, funding_inputs).await?;
+        let funding_inputs = resolve_funding(chain, supplied).await?;
         // Followed to nothing: a previous run spent all of it. That is a
         // shortfall, not a malformed request.
-        if funding_inputs.is_empty() {
+        if supplied_any && funding_inputs.is_empty() {
             return Err(SdkError::InsufficientCpfpFunds {
-                required_sat: prepared.single_utxo_funding_sat,
+                required_sats: single_utxo_funding_sats,
             });
         }
-        let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(prepared.fee_rate_sat_per_vbyte);
-        let chain_state = exit_chain_state_from_model(&prepared.exit_chain_state)?;
+        let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(fee_rate_sat_per_vbyte);
+        let chain_state = exit_chain_state_from_model(exit_chain_state)?;
         let context = self
             .spark_wallet
             .load_exit_context(spark_wallet::ExitLeafSelection::Specific(leaf_ids))
@@ -285,22 +412,23 @@ impl BreezSdk {
             &chain_state,
         )?;
         if prepared_exit.selected_leaves.is_empty() {
-            debug!("unilateral_exit: plan selected no leaves, returning empty result");
-            return Ok(empty_exit_response());
+            debug!("build_unilateral_exit: plan selected no leaves, returning empty result");
+            return Ok(UnilateralBuild::default());
         }
         trace!(
             selected_leaves = prepared_exit.selected_leaves.len(),
             tree_nodes = prepared_exit.tree_nodes.len(),
             has_fan_out = prepared_exit.fan_out_psbt.is_some(),
-            "unilateral_exit: plan prepared"
+            "build_unilateral_exit: plan prepared"
         );
 
-        let leaves: Vec<UnilateralExitLeaf> = prepared_exit
+        let leaves: Vec<RecoverFundsLeaf> = prepared_exit
             .selected_leaves
             .iter()
-            .map(|l| UnilateralExitLeaf {
+            .map(|l| RecoverFundsLeaf {
                 leaf_id: l.id.to_string(),
-                value: l.value,
+                value_sats: l.value,
+                method: RecoveryMethod::Unilateral,
             })
             .collect();
 
@@ -319,24 +447,24 @@ impl BreezSdk {
             recoverable_value_sat,
             cpfp_fee_sat,
             fanout_fee_sat,
-            "unilateral_exit: build assembled, signing"
+            "build_unilateral_exit: build assembled, signing"
         );
 
-        let mut transactions: Vec<UnilateralExitTransaction> = Vec::new();
+        let mut transactions: Vec<RecoveryTransaction> = Vec::new();
 
         if let Some(fan_out) = build.fan_out {
             trace!(
                 txid = %fan_out.txid,
                 status = ?fan_out.status,
                 needs_signing = fan_out.to_sign.is_some(),
-                "unilateral_exit: fan-out"
+                "build_unilateral_exit: fan-out"
             );
             let tx_hex = match fan_out.to_sign {
-                Some(psbt) => sign_psbt_via(psbt, signer.as_ref()).await?,
+                Some(psbt) => sign_psbt_via(psbt, signer).await?,
                 None => serialize_hex(&fan_out.base_tx),
             };
-            transactions.push(UnilateralExitTransaction {
-                kind: UnilateralExitTxKind::FanOut,
+            transactions.push(RecoveryTransaction {
+                kind: RecoveryTxKind::FanOut,
                 node_id: None,
                 txid: fan_out.txid.to_string(),
                 tx_hex,
@@ -348,11 +476,11 @@ impl BreezSdk {
         }
 
         for branch in build.branches {
-            trace!(leaf_id = %branch.leaf_id, txs = branch.txs.len(), "unilateral_exit: branch");
+            trace!(leaf_id = %branch.leaf_id, txs = branch.txs.len(), "build_unilateral_exit: branch");
             for tx in branch.txs {
                 let kind = match tx.kind {
-                    ExitTxKind::Node => UnilateralExitTxKind::Node,
-                    ExitTxKind::Refund => UnilateralExitTxKind::Refund,
+                    ExitTxKind::Node => RecoveryTxKind::Node,
+                    ExitTxKind::Refund => RecoveryTxKind::Refund,
                     // The fan-out is emitted above, never inside a branch.
                     ExitTxKind::FanOut => continue,
                 };
@@ -364,13 +492,13 @@ impl BreezSdk {
                     needs_cpfp_child = tx.to_sign.is_some(),
                     csv_timelock_blocks = ?tx.csv_timelock_blocks,
                     depends_on = tx.depends_on.len(),
-                    "unilateral_exit: exit tx"
+                    "build_unilateral_exit: exit tx"
                 );
                 let cpfp_tx_hex = match tx.to_sign {
-                    Some(child) => Some(sign_psbt_via(child, signer.as_ref()).await?),
+                    Some(child) => Some(sign_psbt_via(child, signer).await?),
                     None => None,
                 };
-                transactions.push(UnilateralExitTransaction {
+                transactions.push(RecoveryTransaction {
                     kind,
                     node_id: tx.node_id.map(|id| id.to_string()),
                     txid: tx.txid.to_string(),
@@ -387,16 +515,15 @@ impl BreezSdk {
         // is on-chain yet. A later run sweeps any refund that surfaces.
         if build.refund_outputs.is_empty() {
             resolve_statuses(chain, &mut transactions).await?;
-            debug!("unilateral_exit: no refund outputs to sweep, omitting the sweep");
-            return Ok(UnilateralExitResponse {
+            debug!("build_unilateral_exit: no refund outputs to sweep, omitting the sweep");
+            return Ok(UnilateralBuild {
+                leaves,
                 recoverable_value_sat,
                 total_fee_sat: build_fee_sat,
                 cpfp_fee_sat,
                 fanout_fee_sat,
                 sweep_fee_sat: 0,
-                leaves,
                 transactions,
-                funding_inputs: supplied_funding,
             });
         }
 
@@ -410,7 +537,7 @@ impl BreezSdk {
             .create_refund_sweep_transaction(
                 build.refund_outputs,
                 build.cpfp_change_inputs,
-                destination,
+                destination.clone(),
                 fee_rate_sat_per_kw,
             )
             .await?;
@@ -421,11 +548,11 @@ impl BreezSdk {
             txid = %sweep_txid,
             status = ?sweep_status,
             refund_inputs = refund_txids.len(),
-            "unilateral_exit: sweep"
+            "build_unilateral_exit: sweep"
         );
-        let sweep_tx_hex = finalize_sweep(sweep_psbt, signer.as_ref()).await?;
-        transactions.push(UnilateralExitTransaction {
-            kind: UnilateralExitTxKind::Sweep,
+        let sweep_tx_hex = finalize_sweep(sweep_psbt, signer).await?;
+        transactions.push(RecoveryTransaction {
+            kind: RecoveryTxKind::Sweep,
             node_id: None,
             txid: sweep_txid.to_string(),
             tx_hex: sweep_tx_hex,
@@ -438,19 +565,269 @@ impl BreezSdk {
         resolve_statuses(chain, &mut transactions).await?;
         debug!(
             transactions = transactions.len(),
-            recoverable_value_sat, total_fee_sat, sweep_fee_sat, "unilateral_exit: complete"
+            recoverable_value_sat, total_fee_sat, sweep_fee_sat, "build_unilateral_exit: complete"
         );
-        Ok(UnilateralExitResponse {
+        Ok(UnilateralBuild {
+            leaves,
             recoverable_value_sat,
             total_fee_sat,
             cpfp_fee_sat,
             fanout_fee_sat,
             sweep_fee_sat,
-            leaves,
             transactions,
-            funding_inputs: supplied_funding,
         })
     }
+
+    /// Adds up the exiting leaves not swept yet. Returns that value and how many
+    /// of the leaves are new.
+    ///
+    /// A leaf gets its record the first time a sync sees it. The operators
+    /// report an exited leaf the same whether or not its refund was swept, so
+    /// the chain is asked about that leaf first, and it stays out of the value
+    /// until the chain answered.
+    pub(super) async fn sync_exiting_leaves(&self, leaves: &[TreeNode]) -> (u64, usize) {
+        let repository = ObjectCacheRepository::new(self.storage.clone());
+        let mut sats: u64 = 0;
+        let mut found: usize = 0;
+        let mut unchecked: Vec<TreeNode> = Vec::new();
+        for leaf in leaves {
+            let leaf_id = leaf.id.to_string();
+            let recorded = match repository.fetch_exiting_leaf(&leaf_id).await {
+                Ok(record) => record,
+                Err(e) => {
+                    error!("Failed to read the exit record of leaf {leaf_id}: {e}");
+                    continue;
+                }
+            };
+            match recorded {
+                Some(record) if record.swept.is_some() => {}
+                Some(_) => sats = sats.saturating_add(leaf.value),
+                None if leaf.status == TreeNodeStatus::Exited => unchecked.push(leaf.clone()),
+                None => {
+                    if let Err(e) = self.record_exit(&leaf_id, false, None).await {
+                        error!("Failed to record the exit of leaf {leaf_id}: {e}");
+                        continue;
+                    }
+                    sats = sats.saturating_add(leaf.value);
+                    found = found.saturating_add(1);
+                }
+            }
+        }
+        for (leaf, swept) in self.check_exited_leaves(unchecked).await {
+            if !swept {
+                sats = sats.saturating_add(leaf.value);
+                found = found.saturating_add(1);
+            }
+        }
+        (sats, found)
+    }
+
+    /// Asks the chain whether the refund of each of `leaves` was swept, and
+    /// records the leaves it got an answer for. The others stay without a
+    /// record, so the next sync asks again.
+    async fn check_exited_leaves(&self, leaves: Vec<TreeNode>) -> Vec<(TreeNode, bool)> {
+        if leaves.is_empty() {
+            return Vec::new();
+        }
+        let Some(tip) = self.tip_for_checks().await else {
+            return Vec::new();
+        };
+        let checks = leaves
+            .into_iter()
+            .map(|leaf| {
+                let sdk = self.clone();
+                async move {
+                    let swept = sdk.exit_swept(&leaf.id).await?;
+                    match sdk
+                        .record_exit(&leaf.id.to_string(), swept, Some(tip))
+                        .await
+                    {
+                        Ok(()) => Some((leaf, swept)),
+                        Err(e) => {
+                            error!("Failed to record the exit of leaf {}: {e}", leaf.id);
+                            None
+                        }
+                    }
+                }
+            })
+            .collect();
+        run_checks(checks).await
+    }
+
+    /// Records that the refund of each of these leaves was swept. Failures are
+    /// only logged.
+    pub(super) async fn record_swept(&self, leaf_ids: &[&str], tip: Option<u32>) {
+        for leaf_id in leaf_ids {
+            if let Err(e) = self.record_exit(leaf_id, true, tip).await {
+                error!("Failed to record the swept exit of leaf {leaf_id}: {e}");
+            }
+        }
+    }
+
+    /// `None` when the stored chain or a lookup is missing.
+    async fn exit_swept(&self, leaf_id: &TreeNodeId) -> Option<bool> {
+        let context = match self
+            .spark_wallet
+            .load_stored_exit_context(vec![leaf_id.clone()])
+            .await
+        {
+            Ok(context) if context.tree_nodes.contains_key(leaf_id) => context,
+            Ok(_) => return None,
+            Err(e) => {
+                warn!("Failed to load the exit chain of leaf {leaf_id}: {e}");
+                return None;
+            }
+        };
+        let refund_addresses = leaf_refund_addresses(
+            &context.tree_nodes,
+            &context.leaf_ids,
+            self.config.network.into(),
+        );
+        let state = match resolve_exit_chain_state(
+            self.chain_service.as_ref(),
+            &context.tree_nodes,
+            &context.leaf_ids,
+            &refund_addresses,
+        )
+        .await
+        {
+            Ok(state) => state,
+            Err(e) => {
+                warn!("Failed to read the exit of leaf {leaf_id} from the chain: {e}");
+                return None;
+            }
+        };
+        if !state.unverified_nodes.is_empty() || !state.unverifiable_confirmed_nodes.is_empty() {
+            return None;
+        }
+        Some(is_swept(&state, leaf_id))
+    }
+
+    async fn record_exit(
+        &self,
+        leaf_id: &str,
+        swept: bool,
+        tip: Option<u32>,
+    ) -> Result<(), SdkError> {
+        let _lock = self.recovery_state_lock.lock().await;
+        let repository = ObjectCacheRepository::new(self.storage.clone());
+        let stored = repository.fetch_exiting_leaf(leaf_id).await?;
+        let recorded = stored.as_ref().and_then(|record| record.swept);
+        let record = CachedExitingLeaf {
+            leaf_id: leaf_id.to_string(),
+            swept: swept_record(recorded, swept, tip),
+        };
+        if stored.as_ref() != Some(&record) {
+            repository.save_exiting_leaf(&record).await?;
+        }
+        Ok(())
+    }
+
+    /// Failures are only logged: sync finds the swept exits itself.
+    async fn mark_exits_swept(&self, leaf_ids: Vec<TreeNodeId>) {
+        let tip = self.chain_service.tip_height().await.ok();
+        for leaf_id in leaf_ids {
+            if let Err(e) = self.record_exit(&leaf_id.to_string(), true, tip).await {
+                error!("Failed to record the swept exit of leaf {leaf_id}: {e}");
+            }
+        }
+    }
+}
+
+/// Updates the statuses of `transactions` from the chain. Returns whether a
+/// transaction outside them spent an outpoint they still need.
+pub(super) async fn check_recovery_transactions(
+    chain: &dyn BitcoinChainService,
+    transactions: &mut [RecoveryTransaction],
+) -> Result<bool, SdkError> {
+    let inputs = transactions
+        .iter()
+        .map(exit_check_input)
+        .collect::<Result<Vec<_>, SdkError>>()?;
+    let check = resolve_exit_check(chain, &inputs).await?;
+
+    for tx in transactions.iter_mut() {
+        let txid = Txid::from_str(&tx.txid)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid txid {}: {e}", tx.txid)))?;
+        tx.status = status_after_check(tx.status, &check, &txid);
+    }
+
+    resolve_statuses(chain, transactions).await?;
+    Ok(check.diverged)
+}
+
+fn swept_record(recorded: Option<SeenAt>, swept: bool, tip: Option<u32>) -> Option<SeenAt> {
+    match recorded {
+        Some(seen) if seen.settled(tip) => Some(seen),
+        _ => swept.then(|| SeenAt {
+            tip: recorded.and_then(|seen| seen.tip).or(tip),
+        }),
+    }
+}
+
+fn is_swept(state: &WalletExitChainState, leaf_id: &TreeNodeId) -> bool {
+    state.refunds.iter().any(|refund| {
+        refund.leaf_id == *leaf_id && matches!(refund.state, WalletExitRefundState::Swept)
+    })
+}
+
+fn swept_leaves(state: &WalletExitChainState, leaf_ids: &[TreeNodeId]) -> Vec<TreeNodeId> {
+    leaf_ids
+        .iter()
+        .filter(|leaf_id| is_swept(state, leaf_id))
+        .cloned()
+        .collect()
+}
+
+fn unilateral_exit_leaf(leaf: RecoverFundsLeaf) -> UnilateralExitLeaf {
+    UnilateralExitLeaf {
+        leaf_id: leaf.leaf_id,
+        value: leaf.value_sats,
+    }
+}
+
+fn recovery_transaction(tx: UnilateralExitTransaction) -> RecoveryTransaction {
+    RecoveryTransaction {
+        kind: match tx.kind {
+            UnilateralExitTxKind::FanOut => RecoveryTxKind::FanOut,
+            UnilateralExitTxKind::Node => RecoveryTxKind::Node,
+            UnilateralExitTxKind::Refund => RecoveryTxKind::Refund,
+            UnilateralExitTxKind::Sweep => RecoveryTxKind::Sweep,
+        },
+        node_id: tx.node_id,
+        txid: tx.txid,
+        tx_hex: tx.tx_hex,
+        cpfp_tx_hex: tx.cpfp_tx_hex,
+        csv_timelock_blocks: tx.csv_timelock_blocks,
+        depends_on: tx.depends_on,
+        status: tx.status,
+    }
+}
+
+fn unilateral_exit_transaction(
+    tx: RecoveryTransaction,
+) -> Result<UnilateralExitTransaction, SdkError> {
+    let kind = match tx.kind {
+        RecoveryTxKind::Cooperative => {
+            return Err(SdkError::Generic(
+                "A cooperative recovery is not part of a unilateral exit".to_string(),
+            ));
+        }
+        RecoveryTxKind::FanOut => UnilateralExitTxKind::FanOut,
+        RecoveryTxKind::Node => UnilateralExitTxKind::Node,
+        RecoveryTxKind::Refund => UnilateralExitTxKind::Refund,
+        RecoveryTxKind::Sweep => UnilateralExitTxKind::Sweep,
+    };
+    Ok(UnilateralExitTransaction {
+        kind,
+        node_id: tx.node_id,
+        txid: tx.txid,
+        tx_hex: tx.tx_hex,
+        cpfp_tx_hex: tx.cpfp_tx_hex,
+        csv_timelock_blocks: tx.csv_timelock_blocks,
+        depends_on: tx.depends_on,
+        status: tx.status,
+    })
 }
 
 /// The sweep's fee: total input value minus output value.
@@ -530,7 +907,7 @@ impl ModelCpfpInput {
             ModelCpfpInput::P2wpkh {
                 txid,
                 vout,
-                value,
+                value_sats: value,
                 pubkey,
             } => {
                 let pk = PublicKey::from_str(&pubkey)
@@ -552,7 +929,7 @@ impl ModelCpfpInput {
             ModelCpfpInput::P2tr {
                 txid,
                 vout,
-                value,
+                value_sats: value,
                 pubkey,
             } => {
                 let xonly = parse_xonly(&pubkey)?;
@@ -573,7 +950,7 @@ impl ModelCpfpInput {
             ModelCpfpInput::Custom {
                 txid,
                 vout,
-                value,
+                value_sats: value,
                 script_pubkey_hex,
                 signed_input_weight,
             } => {
@@ -647,20 +1024,16 @@ async fn resolve_exit_chain_state(
 
 /// Leaf auto-resolution lives in the wallet, so a selection only has to be
 /// restated in its terms.
-fn wallet_selection(
+pub(super) fn wallet_selection(
     selection: ExitLeafSelection,
 ) -> Result<spark_wallet::ExitLeafSelection, SdkError> {
-    match selection {
-        ExitLeafSelection::Auto => Ok(spark_wallet::ExitLeafSelection::Auto),
+    Ok(match selection {
+        ExitLeafSelection::All => spark_wallet::ExitLeafSelection::Auto,
+        ExitLeafSelection::RecoverableOnly => spark_wallet::ExitLeafSelection::Exiting,
         ExitLeafSelection::Specific { leaf_ids } => {
-            if leaf_ids.is_empty() {
-                return Err(SdkError::InvalidInput("No leaves to exit".to_string()));
-            }
-            Ok(spark_wallet::ExitLeafSelection::Specific(node_ids(
-                &leaf_ids,
-            )?))
+            spark_wallet::ExitLeafSelection::Specific(node_ids(&leaf_ids)?)
         }
-    }
+    })
 }
 
 /// Reads back the state a caller carried over from `prepare_unilateral_exit`.
@@ -690,7 +1063,7 @@ fn exit_chain_state_from_model(
                     ExitRefundState::OnChain {
                         tx_hex,
                         vout,
-                        value_sat,
+                        value_sats,
                         block_height,
                     } => WalletExitRefundState::OnChain {
                         block_height: *block_height,
@@ -698,7 +1071,7 @@ fn exit_chain_state_from_model(
                             SdkError::InvalidInput(format!("Invalid refund transaction: {e}"))
                         })?,
                         vout: *vout,
-                        value: *value_sat,
+                        value: *value_sats,
                     },
                     ExitRefundState::Swept => WalletExitRefundState::Swept,
                 };
@@ -718,7 +1091,7 @@ fn node_id(id: &str) -> Result<TreeNodeId, SdkError> {
     TreeNodeId::from_str(id).map_err(|e| SdkError::InvalidInput(format!("Invalid id {id}: {e}")))
 }
 
-fn node_ids(ids: &[String]) -> Result<Vec<TreeNodeId>, SdkError> {
+pub(super) fn node_ids(ids: &[String]) -> Result<Vec<TreeNodeId>, SdkError> {
     ids.iter().map(|id| node_id(id)).collect()
 }
 
@@ -753,7 +1126,7 @@ fn exit_chain_state_model(state: WalletExitChainState) -> ModelExitChainState {
                     } => ExitRefundState::OnChain {
                         tx_hex: serialize_hex(&tx),
                         vout,
-                        value_sat: value,
+                        value_sats: value,
                         block_height,
                     },
                     WalletExitRefundState::Swept => ExitRefundState::Swept,
@@ -780,9 +1153,9 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
 /// fetched again per transaction. A height that cannot be read leaves the
 /// transaction waiting rather than ready, the direction that never sends a
 /// transaction the mempool would reject.
-async fn resolve_statuses(
+pub(super) async fn resolve_statuses(
     chain: &dyn BitcoinChainService,
-    transactions: &mut [UnilateralExitTransaction],
+    transactions: &mut [RecoveryTransaction],
 ) -> Result<(), SdkError> {
     let confirmed: HashSet<&str> = transactions
         .iter()
@@ -925,7 +1298,7 @@ async fn spendable_at_height(
 }
 
 /// Decodes one kept transaction into what the check reads.
-fn exit_check_input(tx: &UnilateralExitTransaction) -> Result<ExitCheckInput, SdkError> {
+fn exit_check_input(tx: &RecoveryTransaction) -> Result<ExitCheckInput, SdkError> {
     let decode = |hex: &str| {
         deserialize_hex::<Transaction>(hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))
@@ -994,7 +1367,10 @@ async fn resolve_funding(
 /// wallet's `bitcoin`-only [`ChainResult`]. A failed lookup becomes
 /// [`ChainResult::Unavailable`] so the wallet flags the affected tx as unverified
 /// rather than treating it as confirmed or absent.
-async fn execute_chain_query(chain: &dyn BitcoinChainService, query: &ChainQuery) -> ChainResult {
+pub(super) async fn execute_chain_query(
+    chain: &dyn BitcoinChainService,
+    query: &ChainQuery,
+) -> ChainResult {
     match query {
         ChainQuery::TxConfirmed(txid) => match chain.get_transaction_status(txid.to_string()).await
         {
@@ -1135,8 +1511,9 @@ fn empty_exit_response() -> UnilateralExitResponse {
 /// Ephemeral anchor inputs are finalized here (`OP_TRUE`, no signature).
 async fn sign_psbt_via(
     mut psbt: bitcoin::Psbt,
-    signer: &dyn CpfpSigner,
+    signer: Option<&dyn CpfpSigner>,
 ) -> Result<String, SdkError> {
+    let signer = signer.ok_or_else(no_signer)?;
     for input in &mut psbt.inputs {
         if let Some(txo) = &input.witness_utxo
             && is_ephemeral_anchor_output(txo)
@@ -1156,13 +1533,17 @@ async fn sign_psbt_via(
 
 /// Finalizes the sweep. Refund inputs are already signed by spark-wallet, so the
 /// external signer is only invoked when CPFP-change inputs still need it.
-async fn finalize_sweep(psbt: bitcoin::Psbt, signer: &dyn CpfpSigner) -> Result<String, SdkError> {
+async fn finalize_sweep(
+    psbt: bitcoin::Psbt,
+    signer: Option<&dyn CpfpSigner>,
+) -> Result<String, SdkError> {
     let needs_signer = psbt
         .inputs
         .iter()
         .any(|input| input.final_script_witness.is_none());
     let psbt = if needs_signer {
         let out_bytes = signer
+            .ok_or_else(no_signer)?
             .sign_psbt(psbt.serialize())
             .await
             .map_err(|e| SdkError::Signer(format!("Sweep signer error: {e}")))?;
@@ -1174,6 +1555,10 @@ async fn finalize_sweep(psbt: bitcoin::Psbt, signer: &dyn CpfpSigner) -> Result<
     };
     ensure_all_inputs_finalized(&psbt)?;
     Ok(serialize_hex(&psbt.extract_tx_unchecked_fee_rate()))
+}
+
+fn no_signer() -> SdkError {
+    SdkError::InvalidInput("A signer is needed to sign the funding inputs".to_string())
 }
 
 /// Rejects a PSBT with any input the signer left unfinalized (neither a witness
@@ -1194,7 +1579,7 @@ fn ensure_all_inputs_finalized(psbt: &bitcoin::Psbt) -> Result<(), SdkError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::SignerError;
+    use crate::{chain::stub::ChainStub, error::SignerError};
     use bitcoin::hashes::Hash;
     use spark_wallet::{ExitBranch, ExitTx};
 
@@ -1321,78 +1706,28 @@ mod tests {
 
     #[macros::async_test_all]
     async fn sign_psbt_via_errors_when_an_input_is_left_unsigned() {
-        let result = sign_psbt_via(unsigned_two_input_psbt(), &PartialSigner { finalize: 1 }).await;
+        let result = sign_psbt_via(
+            unsigned_two_input_psbt(),
+            Some(&PartialSigner { finalize: 1 }),
+        )
+        .await;
         assert!(matches!(result, Err(SdkError::Signer(_))));
     }
 
     #[macros::async_test_all]
+    async fn signing_without_a_signer_asks_for_one() {
+        let result = sign_psbt_via(unsigned_two_input_psbt(), None).await;
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[macros::async_test_all]
     async fn sign_psbt_via_succeeds_when_every_input_is_signed() {
-        let result = sign_psbt_via(unsigned_two_input_psbt(), &PartialSigner { finalize: 2 }).await;
+        let result = sign_psbt_via(
+            unsigned_two_input_psbt(),
+            Some(&PartialSigner { finalize: 2 }),
+        )
+        .await;
         assert!(result.is_ok());
-    }
-
-    /// A chain that knows one transaction's height and one tip, and refuses
-    /// everything else, so a test says exactly what the resolver was told.
-    struct StubChain {
-        tip: Option<u32>,
-        heights: HashMap<String, u32>,
-    }
-
-    #[macros::async_trait]
-    impl BitcoinChainService for StubChain {
-        async fn get_address_utxos(
-            &self,
-            _address: String,
-        ) -> Result<Vec<crate::chain::Utxo>, crate::chain::ChainServiceError> {
-            unreachable!()
-        }
-        async fn get_address_txos(
-            &self,
-            _address: String,
-        ) -> Result<Vec<crate::chain::Utxo>, crate::chain::ChainServiceError> {
-            unreachable!()
-        }
-        async fn get_transaction_status(
-            &self,
-            txid: String,
-        ) -> Result<crate::chain::TxStatus, crate::chain::ChainServiceError> {
-            match self.heights.get(&txid) {
-                Some(height) => Ok(crate::chain::TxStatus {
-                    confirmed: true,
-                    block_height: Some(*height),
-                    block_time: None,
-                }),
-                None => Err(crate::chain::ChainServiceError::Generic("unknown".into())),
-            }
-        }
-        async fn tip_height(&self) -> Result<u32, crate::chain::ChainServiceError> {
-            self.tip
-                .ok_or_else(|| crate::chain::ChainServiceError::Generic("no tip".into()))
-        }
-        async fn get_transaction_hex(
-            &self,
-            _txid: String,
-        ) -> Result<String, crate::chain::ChainServiceError> {
-            unreachable!()
-        }
-        async fn get_outspend(
-            &self,
-            _txid: String,
-            _vout: u32,
-        ) -> Result<Outspend, crate::chain::ChainServiceError> {
-            unreachable!()
-        }
-        async fn broadcast_transaction(
-            &self,
-            _tx: String,
-        ) -> Result<(), crate::chain::ChainServiceError> {
-            unreachable!()
-        }
-        async fn recommended_fees(
-            &self,
-        ) -> Result<crate::chain::RecommendedFees, crate::chain::ChainServiceError> {
-            unreachable!()
-        }
     }
 
     /// A transaction spending `parent` under a relative timelock of `csv` blocks.
@@ -1420,9 +1755,9 @@ mod tests {
         csv: Option<u32>,
         depends_on: Vec<String>,
         status: ExitTransactionStatus,
-    ) -> UnilateralExitTransaction {
-        UnilateralExitTransaction {
-            kind: UnilateralExitTxKind::Node,
+    ) -> RecoveryTransaction {
+        RecoveryTransaction {
+            kind: RecoveryTxKind::Node,
             node_id: None,
             txid: tx.compute_txid().to_string(),
             tx_hex: serialize_hex(tx),
@@ -1431,6 +1766,49 @@ mod tests {
             depends_on,
             status,
         }
+    }
+
+    #[test]
+    fn a_sweep_is_undone_until_it_is_settled() {
+        let seen = swept_record(None, true, Some(100));
+        assert_eq!(seen, Some(SeenAt { tip: Some(100) }));
+        assert_eq!(swept_record(seen, true, Some(102)), seen);
+        assert_eq!(swept_record(seen, false, Some(104)), None);
+        assert_eq!(swept_record(seen, false, Some(105)), seen);
+    }
+
+    #[test]
+    fn only_a_swept_refund_ends_an_exit() {
+        let id = |id: &str| TreeNodeId::from_str(id).unwrap();
+        let refund = |leaf_id: &str, state| WalletExitRefund {
+            leaf_id: id(leaf_id),
+            state,
+        };
+        let state = WalletExitChainState {
+            nodes: Vec::new(),
+            refunds: vec![
+                refund("swept", WalletExitRefundState::Swept),
+                refund(
+                    "on-chain",
+                    WalletExitRefundState::OnChain {
+                        tx: timelocked_tx(Txid::from_byte_array([1; 32]), 0),
+                        vout: 0,
+                        value: 1_000,
+                        block_height: None,
+                    },
+                ),
+            ],
+            stopped_leaves: vec![id("stopped"), id("on-chain")],
+            unverified_nodes: Vec::new(),
+            unverifiable_confirmed_nodes: Vec::new(),
+        };
+        let leaves = [id("swept"), id("on-chain"), id("stopped"), id("open")];
+
+        assert_eq!(
+            swept_leaves(&state, &leaves),
+            vec![id("swept")],
+            "a stopped leaf stays recoverable"
+        );
     }
 
     fn check_of(
@@ -1561,9 +1939,10 @@ mod tests {
             vec![parent.txid.clone()],
             ExitTransactionStatus::WaitingForDependencies,
         );
-        let chain = StubChain {
+        let chain = ChainStub {
             tip: Some(105),
             heights: HashMap::new(),
+            ..Default::default()
         };
 
         let mut txs = vec![parent, child];
@@ -1589,9 +1968,10 @@ mod tests {
             vec![parent.txid.clone()],
             ExitTransactionStatus::WaitingForDependencies,
         );
-        let chain = StubChain {
+        let chain = ChainStub {
             tip: Some(104),
             heights: HashMap::new(),
+            ..Default::default()
         };
 
         let mut txs = vec![parent, child];
@@ -1622,9 +2002,10 @@ mod tests {
             vec![parent.txid.clone()],
             ExitTransactionStatus::WaitingForDependencies,
         );
-        let chain = StubChain {
+        let chain = ChainStub {
             tip: Some(999),
             heights: HashMap::new(),
+            ..Default::default()
         };
 
         let mut txs = vec![parent, child];
@@ -1640,9 +2021,10 @@ mod tests {
     async fn a_height_outside_the_list_is_read_from_the_chain() {
         let ancestor = Txid::from_byte_array([7; 32]);
         let tx = timelocked_tx(ancestor, 10);
-        let chain = StubChain {
+        let chain = ChainStub {
             tip: Some(1_000),
             heights: HashMap::from([(ancestor.to_string(), 500)]),
+            ..Default::default()
         };
 
         let mut txs = vec![model_tx(
@@ -1661,9 +2043,10 @@ mod tests {
     #[macros::async_test_all]
     async fn an_unreadable_height_leaves_the_timelock_unknown() {
         let tx = timelocked_tx(Txid::from_byte_array([7; 32]), 10);
-        let chain = StubChain {
+        let chain = ChainStub {
             tip: Some(1_000),
             heights: HashMap::new(),
+            ..Default::default()
         };
 
         let mut txs = vec![model_tx(

@@ -63,8 +63,8 @@ def _parse_cpfp_input(s, funding_kind_str):
     vout = int(vout)
     value = int(value)
     if funding_kind_str == "p2wpkh":
-        return CpfpInput.P2WPKH(txid=txid, vout=vout, value=value, pubkey=pubkey)
-    return CpfpInput.P2TR(txid=txid, vout=vout, value=value, pubkey=pubkey)
+        return CpfpInput.P2WPKH(txid=txid, vout=vout, value_sats=value, pubkey=pubkey)
+    return CpfpInput.P2TR(txid=txid, vout=vout, value_sats=value, pubkey=pubkey)
 
 
 def _print_exit_transactions(response):
@@ -189,7 +189,7 @@ async def _handle_unilateral_exit(sdk, session, args):
     if leaf_ids:
         selection = ExitLeafSelection.SPECIFIC(leaf_ids=leaf_ids)
     else:
-        selection = ExitLeafSelection.AUTO()
+        selection = ExitLeafSelection.ALL()
 
     prepared = await sdk.prepare_unilateral_exit(
         request=PrepareUnilateralExitRequest(

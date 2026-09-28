@@ -75,7 +75,7 @@ private func handleUnilateralExit(_ sdk: BreezSdk, _ args: [String]) async throw
     }
 
     let leafIds = collectRepeatedFlag(args, flag: "--leaf")
-    let selection: ExitLeafSelection = leafIds.isEmpty ? .auto : .specific(leafIds: leafIds)
+    let selection: ExitLeafSelection = leafIds.isEmpty ? .all : .specific(leafIds: leafIds)
     let outputFile = fp.get("output-file")
 
     let prepared = try await sdk.prepareUnilateralExit(
@@ -301,7 +301,7 @@ private func deserializeCpfpInputFromJson(_ d: [String: Any]) throws -> CpfpInpu
     guard let type = d["type"] as? String,
           let txid = d["txid"] as? String,
           let vout = jsonUInt32(d["vout"]),
-          let value = jsonUInt64(d["value"])
+          let valueSats = jsonUInt64(d["valueSats"])
     else {
         throw exitFileError("invalid funding input")
     }
@@ -310,12 +310,12 @@ private func deserializeCpfpInputFromJson(_ d: [String: Any]) throws -> CpfpInpu
         guard let pubkey = d["pubkey"] as? String else {
             throw exitFileError("p2wpkh missing pubkey")
         }
-        return .p2wpkh(txid: txid, vout: vout, value: value, pubkey: pubkey)
+        return .p2wpkh(txid: txid, vout: vout, valueSats: valueSats, pubkey: pubkey)
     case "p2tr":
         guard let pubkey = d["pubkey"] as? String else {
             throw exitFileError("p2tr missing pubkey")
         }
-        return .p2tr(txid: txid, vout: vout, value: value, pubkey: pubkey)
+        return .p2tr(txid: txid, vout: vout, valueSats: valueSats, pubkey: pubkey)
     case "custom":
         guard let scriptPubkeyHex = d["script_pubkey_hex"] as? String,
               let signedInputWeight = jsonUInt64(d["signed_input_weight"])
@@ -323,7 +323,7 @@ private func deserializeCpfpInputFromJson(_ d: [String: Any]) throws -> CpfpInpu
             throw exitFileError("custom input missing fields")
         }
         return .custom(
-            txid: txid, vout: vout, value: value,
+            txid: txid, vout: vout, valueSats: valueSats,
             scriptPubkeyHex: scriptPubkeyHex,
             signedInputWeight: signedInputWeight
         )
@@ -378,9 +378,9 @@ private func parseCpfpInput(_ s: String, _ kind: CpfpFundingKind) -> CpfpInput? 
     let pubkey = parts[3]
     switch kind {
     case .p2wpkh:
-        return .p2wpkh(txid: txid, vout: vout, value: value, pubkey: pubkey)
+        return .p2wpkh(txid: txid, vout: vout, valueSats: value, pubkey: pubkey)
     case .p2tr:
-        return .p2tr(txid: txid, vout: vout, value: value, pubkey: pubkey)
+        return .p2tr(txid: txid, vout: vout, valueSats: value, pubkey: pubkey)
     case .custom:
         return nil
     }

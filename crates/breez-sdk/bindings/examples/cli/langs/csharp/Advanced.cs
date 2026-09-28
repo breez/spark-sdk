@@ -159,7 +159,7 @@ public static class AdvancedCommands
         };
 
         ExitLeafSelection selection = leafIds.Length == 0
-            ? new ExitLeafSelection.Auto()
+            ? new ExitLeafSelection.All()
             : new ExitLeafSelection.Specific(leafIds: leafIds);
 
         var prepared = await sdk.PrepareUnilateralExit(
@@ -259,9 +259,9 @@ public static class AdvancedCommands
         return kind switch
         {
             "p2wpkh" => new CpfpInput.P2wpkh(
-                txid: txid, vout: vout, value: value, pubkey: pubkey),
+                txid: txid, vout: vout, valueSats: value, pubkey: pubkey),
             "p2tr" => new CpfpInput.P2tr(
-                txid: txid, vout: vout, value: value, pubkey: pubkey),
+                txid: txid, vout: vout, valueSats: value, pubkey: pubkey),
             _ => throw new ArgumentException($"Invalid funding kind: {kind}")
         };
     }

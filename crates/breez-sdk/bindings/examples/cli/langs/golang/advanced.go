@@ -182,7 +182,7 @@ func handleUnilateralExit(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, 
 
 	var selection breez_sdk_spark.ExitLeafSelection
 	if len(leafIDs) == 0 {
-		selection = breez_sdk_spark.ExitLeafSelectionAuto{}
+		selection = breez_sdk_spark.ExitLeafSelectionAll{}
 	} else {
 		selection = breez_sdk_spark.ExitLeafSelectionSpecific{LeafIds: leafIDs}
 	}
@@ -402,25 +402,25 @@ func cpfpInputFromMap(m map[string]interface{}) breez_sdk_spark.CpfpInput {
 	switch mapStr(m, "type") {
 	case "P2wpkh":
 		return breez_sdk_spark.CpfpInputP2wpkh{
-			Txid:   mapStr(m, "txid"),
-			Vout:   uint32(mapUint64(m, "vout")),
-			Value:  mapUint64(m, "value"),
-			Pubkey: mapStr(m, "pubkey"),
+			Txid:      mapStr(m, "txid"),
+			Vout:      uint32(mapUint64(m, "vout")),
+			ValueSats: mapUint64(m, "value_sats"),
+			Pubkey:    mapStr(m, "pubkey"),
 		}
 	case "Custom":
 		return breez_sdk_spark.CpfpInputCustom{
 			Txid:              mapStr(m, "txid"),
 			Vout:              uint32(mapUint64(m, "vout")),
-			Value:             mapUint64(m, "value"),
+			ValueSats:         mapUint64(m, "value_sats"),
 			ScriptPubkeyHex:   mapStr(m, "script_pubkey_hex"),
 			SignedInputWeight: mapUint64(m, "signed_input_weight"),
 		}
 	default:
 		return breez_sdk_spark.CpfpInputP2tr{
-			Txid:   mapStr(m, "txid"),
-			Vout:   uint32(mapUint64(m, "vout")),
-			Value:  mapUint64(m, "value"),
-			Pubkey: mapStr(m, "pubkey"),
+			Txid:      mapStr(m, "txid"),
+			Vout:      uint32(mapUint64(m, "vout")),
+			ValueSats: mapUint64(m, "value_sats"),
+			Pubkey:    mapStr(m, "pubkey"),
 		}
 	}
 }
@@ -512,17 +512,17 @@ func parseCpfpInput(s string, kindStr string) (breez_sdk_spark.CpfpInput, error)
 	switch strings.ToLower(kindStr) {
 	case "p2wpkh":
 		return breez_sdk_spark.CpfpInputP2wpkh{
-			Txid:   txid,
-			Vout:   uint32(vout),
-			Value:  value,
-			Pubkey: pubkey,
+			Txid:      txid,
+			Vout:      uint32(vout),
+			ValueSats: value,
+			Pubkey:    pubkey,
 		}, nil
 	default:
 		return breez_sdk_spark.CpfpInputP2tr{
-			Txid:   txid,
-			Vout:   uint32(vout),
-			Value:  value,
-			Pubkey: pubkey,
+			Txid:      txid,
+			Vout:      uint32(vout),
+			ValueSats: value,
+			Pubkey:    pubkey,
 		}, nil
 	}
 }
