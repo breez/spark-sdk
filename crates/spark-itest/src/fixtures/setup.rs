@@ -71,19 +71,12 @@ const SSPD_ONCHAIN_UTXO_COUNT: usize =
 
 impl TestFixtures {
     pub async fn new() -> Result<Self> {
+        state_snapshot::check()?;
         let fixture_id = FixtureId::new();
 
-        let snapshot = state_snapshot::is_current();
-        let bitcoind = if snapshot {
-            let mut bitcoind =
-                BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir()).await?;
-            bitcoind.adopt_restored_wallet().await?;
-            bitcoind
-        } else {
-            let mut bitcoind = BitcoindFixture::new(&fixture_id).await?;
-            bitcoind.initialize().await?;
-            bitcoind
-        };
+        let mut bitcoind =
+            BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir()).await?;
+        bitcoind.adopt_restored_wallet().await?;
 
         // Create the SparkSoFixture with the docker_ref and bitcoind connection
         let mut spark_so = SparkSoFixture::new(&fixture_id, &bitcoind).await?;
