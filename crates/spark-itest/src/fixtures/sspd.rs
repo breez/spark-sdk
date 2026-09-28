@@ -17,7 +17,7 @@ use tonic::transport::Channel;
 use tracing::info;
 
 use crate::fixtures::bitcoind::BitcoindFixture;
-use crate::fixtures::log::TracingConsumer;
+use crate::fixtures::log::{RecentLines, TracingConsumer};
 use crate::fixtures::setup::FixtureId;
 use crate::fixtures::spark_so::OperatorFixture;
 use crate::fixtures::state_snapshot;
@@ -71,6 +71,19 @@ pub struct SspdFixture {
     pub internal_url: String,
     pub wallet_seed_hex: String,
     pub identity_public_key: PublicKey,
+    recent_log: RecentLines,
+}
+
+impl Drop for SspdFixture {
+    // A failing test shows the daemon's latest stdout, which is only logged as it
+    // runs with SPARK_ITEST_VERBOSE.
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            for line in self.recent_log.take() {
+                info!("{line}");
+            }
+        }
+    }
 }
 
 impl SspdFixture {
@@ -137,12 +150,13 @@ impl SspdFixture {
         let config_path = config_dir.join("sspd.toml");
         fs::write(&config_path, &config)?;
 
+        let recent_log = RecentLines::default();
         let mut image = crate::images::image(crate::images::SSPD)?
             .with_exposed_port(ContainerPort::Tcp(GRAPHQL_PORT))
             .with_exposed_port(ContainerPort::Tcp(INTERNAL_PORT))
             .with_network(fixture_id.to_network())
             .with_container_name(&container_name)
-            .with_log_consumer(TracingConsumer::new("sspd".to_string()))
+            .with_log_consumer(TracingConsumer::new("sspd".to_string()).keeping(recent_log.clone()))
             .with_mount(Mount::bind_mount(
                 config_path.display().to_string(),
                 "/config/sspd.toml",
@@ -217,6 +231,7 @@ impl SspdFixture {
             internal_url,
             wallet_seed_hex: wallet_seed_hex.to_string(),
             identity_public_key,
+            recent_log,
         })
     }
 

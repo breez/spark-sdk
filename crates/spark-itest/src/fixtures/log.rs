@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use futures::{FutureExt, future::BoxFuture};
 
@@ -10,6 +12,7 @@ use testcontainers::core::logs::{LogFrame, consumer::LogConsumer};
 #[derive(Debug)]
 pub struct TracingConsumer {
     prefix: String,
+    recent: Option<RecentLines>,
 }
 
 impl TracingConsumer {
@@ -17,6 +20,16 @@ impl TracingConsumer {
     pub fn new(prefix: impl Into<String>) -> Self {
         Self {
             prefix: prefix.into(),
+            recent: None,
+        }
+    }
+
+    /// Keeps the standard out lines it does not log in `recent`.
+    #[must_use]
+    pub fn keeping(self, recent: RecentLines) -> Self {
+        Self {
+            recent: Some(recent),
+            ..self
         }
     }
 
@@ -39,9 +52,13 @@ impl LogConsumer for TracingConsumer {
         async move {
             match record {
                 LogFrame::StdOut(bytes) => {
+                    let text = String::from_utf8_lossy(bytes);
+                    let message = self.format_message(&text);
                     // Only log stdout if SPARK_ITEST_VERBOSE is set
                     if std::env::var("SPARK_ITEST_VERBOSE").is_ok() {
-                        tracing::info!("{}", self.format_message(&String::from_utf8_lossy(bytes)));
+                        tracing::info!("{message}");
+                    } else if let Some(recent) = &self.recent {
+                        recent.push(message.into_owned());
                     }
                 }
                 LogFrame::StdErr(bytes) => {
@@ -51,5 +68,46 @@ impl LogConsumer for TracingConsumer {
             }
         }
         .boxed()
+    }
+}
+
+/// The latest lines a container wrote, for a failing test to print.
+#[derive(Clone, Debug, Default)]
+pub struct RecentLines(Arc<Mutex<VecDeque<String>>>);
+
+impl RecentLines {
+    const LIMIT: usize = 2_000;
+
+    fn push(&self, line: String) {
+        let mut lines = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if lines.len() == Self::LIMIT {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+
+    pub fn take(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_lines_keep_the_latest() {
+        let recent = RecentLines::default();
+        for n in 0..=RecentLines::LIMIT {
+            recent.push(n.to_string());
+        }
+        let lines = recent.take();
+        assert_eq!(lines.len(), RecentLines::LIMIT);
+        assert_eq!(lines.first().map(String::as_str), Some("1"));
+        assert!(recent.take().is_empty());
     }
 }
