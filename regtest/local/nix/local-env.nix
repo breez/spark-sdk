@@ -19,6 +19,9 @@ let
     OPERATOR_0_PORT = 8535;
     OPERATOR_1_PORT = 8536;
     OPERATOR_2_PORT = 8537;
+    OPERATOR_0_TLS_PORT = 18535;
+    OPERATOR_1_TLS_PORT = 18536;
+    OPERATOR_2_TLS_PORT = 18537;
     SSP_PORT = 59049;
     SSP_INTERNAL_PORT = 59050;
     LNURL_PORT = 8080;
@@ -91,7 +94,7 @@ let
       "SO_CONFIG=${soConfig}"
       "SPARK_OPERATOR_INDEX=${toString index}"
       "SPARK_OPERATOR_KEY=${lib.concatStrings (lib.replicate 32 "0${toString (index + 1)}")}"
-      ''OPERATOR_PORT="$OPERATOR_${toString index}_PORT"''
+      ''OPERATOR_PORT="$OPERATOR_${toString index}_TLS_PORT"''
       "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
       "DKG_BATCH_SIZE=${toString dkgBatchSize}"
       "${./operator.sh}"
@@ -102,7 +105,7 @@ let
       "POSTGRES_USER=postgres"
       "POSTGRES_PASSWORD=postgres"
       "SPARK_OPERATOR_INDEX=${toString index}"
-      ''OPERATOR_ADDRESS="127.0.0.1:$OPERATOR_${toString index}_PORT"''
+      ''OPERATOR_ADDRESS="127.0.0.1:$OPERATOR_${toString index}_TLS_PORT"''
       "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
       "${scripts}/operator-ready.sh"
     ]);
@@ -146,6 +149,49 @@ let
     }
   '';
 
+  # The operators serve TLS only. Wallets reach them here over plain HTTP,
+  # native gRPC and gRPC-Web on the same port, and nginx carries on to the
+  # operator over TLS.
+  operatorProxyConfig = pkgs.writeText "operator-proxy-nginx.conf" ''
+    daemon off;
+    pid nginx.pid;
+    error_log stderr;
+    events {}
+    http {
+      access_log off;
+      client_body_temp_path tmp/body;
+      proxy_temp_path tmp/proxy;
+      fastcgi_temp_path tmp/fastcgi;
+      uwsgi_temp_path tmp/uwsgi;
+      scgi_temp_path tmp/scgi;
+      map $server_port $operator {
+        @OPERATOR_0_PORT@ 127.0.0.1:@OPERATOR_0_TLS_PORT@;
+        @OPERATOR_1_PORT@ 127.0.0.1:@OPERATOR_1_TLS_PORT@;
+        @OPERATOR_2_PORT@ 127.0.0.1:@OPERATOR_2_TLS_PORT@;
+      }
+      server {
+        listen @BIND_ADDRESS@:@OPERATOR_0_PORT@;
+        listen @BIND_ADDRESS@:@OPERATOR_1_PORT@;
+        listen @BIND_ADDRESS@:@OPERATOR_2_PORT@;
+        http2 on;
+        client_max_body_size 0;
+        # A wallet's event stream stays open for as long as the wallet runs.
+        grpc_read_timeout 1d;
+        grpc_send_timeout 1d;
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+        location / {
+          if ($content_type ~* "^application/grpc($|[+;])") {
+            grpc_pass grpcs://$operator;
+          }
+          proxy_pass https://$operator;
+          proxy_http_version 1.1;
+          proxy_buffering off;
+        }
+      }
+    }
+  '';
+
   # mempool-config.sh fills these in, unquoting the ports.
   mempoolConfig = {
     MEMPOOL = {
@@ -176,7 +222,7 @@ let
         # The operators parse a peer's address as a URL, which an IP with a port
         # fails.
         command = words [
-          ''OPERATOR_ADDRESSES="localhost:$OPERATOR_0_PORT localhost:$OPERATOR_1_PORT localhost:$OPERATOR_2_PORT"''
+          ''OPERATOR_ADDRESSES="localhost:$OPERATOR_0_TLS_PORT localhost:$OPERATOR_1_TLS_PORT localhost:$OPERATOR_2_TLS_PORT"''
           ''OPERATOR_PUBLIC_PORTS="$OPERATOR_0_PORT $OPERATOR_1_PORT $OPERATOR_2_PORT"''
           ''SSP_PUBLIC_PORT="$SSP_PORT"''
           ''SSP_ADDRESS="127.0.0.1:$SSP_PORT"''
@@ -247,6 +293,25 @@ let
       spark-so-0 = operator 0;
       spark-so-1 = operator 1;
       spark-so-2 = operator 2;
+
+      # Serves the operators to wallets over plain HTTP.
+      operator-proxy = process {
+        command = ''
+          dir="$SPARK_LOCAL_DIR/operator-proxy"
+          mkdir -p "$dir/tmp"
+          ${words [
+            ''sed -e "s|@BIND_ADDRESS@|$BIND_ADDRESS|g"''
+            ''-e "s|@OPERATOR_0_PORT@|$OPERATOR_0_PORT|g"''
+            ''-e "s|@OPERATOR_1_PORT@|$OPERATOR_1_PORT|g"''
+            ''-e "s|@OPERATOR_2_PORT@|$OPERATOR_2_PORT|g"''
+            ''-e "s|@OPERATOR_0_TLS_PORT@|$OPERATOR_0_TLS_PORT|"''
+            ''-e "s|@OPERATOR_1_TLS_PORT@|$OPERATOR_1_TLS_PORT|"''
+            ''-e "s|@OPERATOR_2_TLS_PORT@|$OPERATOR_2_TLS_PORT|"''
+            ''${operatorProxyConfig} >"$dir/nginx.conf"''
+          ]}
+          exec nginx -e stderr -p "$dir" -c "$dir/nginx.conf"
+        '';
+      };
 
       ldk-server = process {
         command = ''exec ldk-server "$LOCAL_DIR/ldk-ssp.toml"'';
@@ -373,6 +438,7 @@ let
       ready = oneShot (process {
         command = words [
           ''SPARK_CONFIG_PATH="$LOCAL_DIR/spark-config.json"''
+          ''OPERATOR_URLS="http://127.0.0.1:$OPERATOR_0_PORT http://127.0.0.1:$OPERATOR_1_PORT http://127.0.0.1:$OPERATOR_2_PORT"''
           ''OPERATOR_PUBLIC_PORTS="$OPERATOR_0_PORT $OPERATOR_1_PORT $OPERATOR_2_PORT"''
           "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
           "POSTGRES_HOST=127.0.0.1 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres"

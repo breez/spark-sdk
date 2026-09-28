@@ -65,13 +65,17 @@ progress() {
     message="the data-sync service is starting"
     return
   fi
+  if ! operators_serving; then
+    message="the proxy to the operators is starting"
+    return
+  fi
   message="the SSP is finishing its pool"
 }
 
 deadline=$(($(date +%s) + READY_TIMEOUT_SECONDS))
 reported=""
 while [ ! -f "$LOCAL_DIR/ready" ] || [ ! -f "$LOCAL_DIR/lightning-ready" ] ||
-  ! lnurl_serving || ! data_sync_serving; do
+  ! lnurl_serving || ! data_sync_serving || ! operators_serving; do
   progress
   if [ "$(date +%s)" -ge "$deadline" ]; then
     log "still not ready after $((READY_TIMEOUT_SECONDS / 60)) minutes: $message"

@@ -13,7 +13,7 @@ set -eu
 
 operators=""
 for port in $OPERATOR_PUBLIC_PORTS; do
-  operators="${operators:+$operators }https://$PUBLIC_HOST:$port"
+  operators="${operators:+$operators }http://$PUBLIC_HOST:$port"
 done
 
 cat <<EOF

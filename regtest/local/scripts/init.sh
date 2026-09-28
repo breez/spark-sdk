@@ -1,14 +1,12 @@
 #!/bin/sh
 # Writes the certificates and configuration the services start from, into
-# LOCAL_DIR. Safe to run again: the CA is kept, so a wallet configured against
-# it stays valid, and the server certificate is only reissued when the host
-# names it covers change.
+# LOCAL_DIR. Safe to run again: the CA is kept, and the server certificate is
+# only reissued when the host names it covers change.
 #
 # OPERATOR_ADDRESSES: host:port per operator, as operators and the SSP reach it.
 # OPERATOR_PUBLIC_PORTS: the port per operator on PUBLIC_HOST, for wallets.
 # SSP_ADDRESS: host:port the SSP's API is reached at from inside the
 # environment, PUBLIC_HOST and SSP_PUBLIC_PORT by default.
-# TLS_EXTRA_HOSTS: more names or IPs a wallet may reach the operators by.
 # OUT_DIR: where the wallet-facing config is written, LOCAL_DIR by default.
 # LDK_SSP_SEED_DIR, LDK_ALICE_SEED_DIR: when set, the two Lightning nodes'
 # storage, seeded with their keys, and their configs are written too.
@@ -18,7 +16,7 @@ set -eu
 
 : "${LOCAL_DIR:?}" "${OPERATOR_ADDRESSES:?}" "${OPERATOR_PUBLIC_PORTS:?}"
 : "${OPERATOR_IDENTITY_PUBLIC_KEYS:?}" "${SSP_IDENTITY_PUBLIC_KEY:?}"
-: "${PUBLIC_HOST:=127.0.0.1}" "${SSP_PUBLIC_PORT:=59049}" "${TLS_EXTRA_HOSTS:=}"
+: "${PUBLIC_HOST:=127.0.0.1}" "${SSP_PUBLIC_PORT:=59049}"
 : "${SSP_ADDRESS:=$PUBLIC_HOST:$SSP_PUBLIC_PORT}"
 
 certs="$LOCAL_DIR/certs"
@@ -44,8 +42,8 @@ EOF
   rm -f "$certs/server.crt"
 fi
 
-# Wallets on an Android emulator reach the host as 10.0.2.2.
-hosts="localhost 127.0.0.1 10.0.2.2 $PUBLIC_HOST $TLS_EXTRA_HOSTS"
+# Wallets reach the operators through a proxy, over plain HTTP.
+hosts="localhost 127.0.0.1"
 for address in $OPERATOR_ADDRESSES; do
   hosts="$hosts ${address%:*}"
 done
@@ -103,10 +101,9 @@ for public_port in $OPERATOR_PUBLIC_PORTS; do
 "
   sdk_operators=$(printf '%s\n' "$sdk_operators" | jq -c \
     --argjson id "$index" --arg identifier "$identifier" \
-    --arg address "https://$PUBLIC_HOST:$public_port" --arg key "$key" \
-    --arg ca "$ca_pem" \
+    --arg address "http://$PUBLIC_HOST:$public_port" --arg key "$key" \
     '. + [{id: $id, identifier: $identifier, address: $address,
-           identity_public_key: $key, ca_cert_pem: $ca}]')
+           identity_public_key: $key}]')
   internal_operators=$(printf '%s\n' "$internal_operators" | jq -c \
     --argjson id "$index" --arg identifier "$identifier" \
     --arg address "https://$address" --arg key "$key" \

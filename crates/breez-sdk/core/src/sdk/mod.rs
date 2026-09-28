@@ -540,9 +540,8 @@ mod tests {
             {
               "id": 0,
               "identifier": "01",
-              "address": "https://127.0.0.1:8535",
-              "identity_public_key": "02aa",
-              "ca_cert_pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+              "address": "http://127.0.0.1:8535",
+              "identity_public_key": "02aa"
             }
           ],
           "ssp_config": {
@@ -558,14 +557,10 @@ mod tests {
 
         assert_eq!(config.threshold, 2);
         assert_eq!(config.signing_operators.len(), 1);
-        assert!(
-            config.signing_operators[0]
-                .ca_cert_pem
-                .as_ref()
-                .is_some_and(|pem| pem.starts_with("-----BEGIN CERTIFICATE-----"))
-        );
+        assert_eq!(config.signing_operators[0].address, "http://127.0.0.1:8535");
         assert_eq!(config.ssp_config.base_url, "http://127.0.0.1:59049");
         // Absent from the file, and not required of it.
+        assert!(config.signing_operators[0].ca_cert_pem.is_none());
         assert!(config.max_token_transaction_inputs.is_none());
     }
 

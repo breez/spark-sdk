@@ -75,6 +75,13 @@ data_sync_serving() {
   curl -sf -o /dev/null "${DATA_SYNC_WEB_URL:?}/"
 }
 
+# Answers once every operator can be reached through the proxy wallets use.
+operators_serving() {
+  for _url in ${OPERATOR_URLS:?}; do
+    curl -sf -o /dev/null "$_url/-/ready" || return 1
+  done
+}
+
 wait_for_ssp() {
   until ssp_cli get-info >/dev/null 2>&1; do
     sleep 1

@@ -28,7 +28,7 @@ Every setting is an environment variable read when the environment starts:
 |---|---|---|
 | `BITCOIND_RPC_PORT` | `18443` | Bitcoin Core's RPC port |
 | `BITCOIND_P2P_PORT` | `18444` | Bitcoin Core's P2P port |
-| `OPERATOR_0_PORT` to `OPERATOR_2_PORT` | `8535` to `8537` | The operators' ports |
+| `OPERATOR_0_PORT` to `OPERATOR_2_PORT` | `8535` to `8537` | The ports wallets reach the operators at, over plain HTTP |
 | `SSP_PORT` | `59049` | The SSP's GraphQL port |
 | `SSP_INTERNAL_PORT` | `59050` | The SSP's internal API, on loopback whatever `BIND_ADDRESS` says |
 | `LDK_P2P_PORT` | `9735` | The SSP's Lightning node |
@@ -39,7 +39,6 @@ Every setting is an environment variable read when the environment starts:
 | `MEMPOOL_PORT` | `8090` | The explorer, and the chain API under `/api` |
 | `BIND_ADDRESS` | `127.0.0.1` | The address the published ports listen on |
 | `PUBLIC_HOST` | `127.0.0.1` | The host wallets reach the environment by, in its Spark config |
-| `TLS_EXTRA_HOSTS` | unset | More names or addresses the operators' certificate covers |
 | `BLOCK_INTERVAL_SECONDS` | `5` | Seconds between mined blocks. `0` mines the first 200 and no more |
 | `CHANNEL_SATS` | `5000000000` | The channel Alice opens with the SSP's node, half of it pushed |
 | `LEAVES_PER_DENOMINATION` | `8` | Leaves the SSP keeps of each denomination |
@@ -49,9 +48,10 @@ Every setting is an environment variable read when the environment starts:
 | `SPARK_LOCAL_DIR` | `./.spark-local` | Where Nix keeps the environment's state |
 
 Nix reads a few more, for the ports its services hold to one host:
-`POSTGRES_PORT`, `ELECTRS_PORT`, `ELECTRS_ELECTRUM_PORT`,
-`ELECTRS_MONITORING_PORT`, `MEMPOOL_API_PORT`, `LDK_GRPC_PORT`,
-`LDK_ALICE_GRPC_PORT` and `BITCOIND_ZMQ_PORT`. Their defaults are in
+`OPERATOR_0_TLS_PORT` to `OPERATOR_2_TLS_PORT`, `POSTGRES_PORT`,
+`ELECTRS_PORT`, `ELECTRS_ELECTRUM_PORT`, `ELECTRS_MONITORING_PORT`,
+`MEMPOOL_API_PORT`, `LDK_GRPC_PORT`, `LDK_ALICE_GRPC_PORT` and
+`BITCOIND_ZMQ_PORT`. Their defaults are in
 [nix/local-env.nix](nix/local-env.nix).
 
 The keys the environment runs on are fixed in [.env](.env). They belong to this

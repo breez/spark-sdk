@@ -61,10 +61,6 @@ x-operator: &operator
     # for the default pool.
     DKG_MIN_AVAILABLE_KEYS: ${DKG_MIN_AVAILABLE_KEYS:-12000}
     DKG_BATCH_SIZE: ${DKG_BATCH_SIZE:-2000}
-    # Not read by the operator: a change recreates the container, so it serves
-    # the certificate init reissues for the new host names.
-    PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
-    TLS_EXTRA_HOSTS: ${TLS_EXTRA_HOSTS:-}
 
 x-ldk-node: &ldk-node
   image: spark-local-ldk-server:latest
@@ -97,7 +93,6 @@ services:
       SSP_PUBLIC_PORT: ${SSP_PORT:-59049}
       SSP_ADDRESS: sspd:59049
       PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
-      TLS_EXTRA_HOSTS: ${TLS_EXTRA_HOSTS:-}
       LDK_BITCOIND_RPC_ADDRESS: bitcoind:18443
       LDK_SSP_DIR: /data
       LDK_SSP_SEED_DIR: /ldk-ssp
@@ -191,8 +186,6 @@ services:
       <<: *operator-env
       SPARK_OPERATOR_INDEX: "0"
       SPARK_OPERATOR_KEY: "0101010101010101010101010101010101010101010101010101010101010101"
-    ports:
-      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_0_PORT:-8535}:8535
     depends_on: &operator-depends-on
       init:
         condition: service_completed_successfully
@@ -210,8 +203,6 @@ services:
       <<: *operator-env
       SPARK_OPERATOR_INDEX: "1"
       SPARK_OPERATOR_KEY: "0202020202020202020202020202020202020202020202020202020202020202"
-    ports:
-      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_1_PORT:-8536}:8535
     depends_on: *operator-depends-on
   spark-so-2:
     <<: *operator
@@ -219,9 +210,18 @@ services:
       <<: *operator-env
       SPARK_OPERATOR_INDEX: "2"
       SPARK_OPERATOR_KEY: "0303030303030303030303030303030303030303030303030303030303030303"
-    ports:
-      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_2_PORT:-8537}:8535
     depends_on: *operator-depends-on
+
+  # Serves the operators to wallets over plain HTTP.
+  operator-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./config/operator-proxy-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_0_PORT:-8535}:8535
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_1_PORT:-8536}:8536
+      - ${BIND_ADDRESS:-127.0.0.1}:${OPERATOR_2_PORT:-8537}:8537
 
   ldk-server:
     <<: *ldk-node
@@ -452,6 +452,7 @@ services:
     environment:
       <<: *tools-env
       SPARK_CONFIG_PATH: regtest/local/data/spark-config.json
+      OPERATOR_URLS: http://operator-proxy:8535 http://operator-proxy:8536 http://operator-proxy:8537
       PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1}
       OPERATOR_PUBLIC_PORTS: ${OPERATOR_0_PORT:-8535} ${OPERATOR_1_PORT:-8536} ${OPERATOR_2_PORT:-8537}
       MEMPOOL_PORT: ${MEMPOOL_PORT:-8090}
