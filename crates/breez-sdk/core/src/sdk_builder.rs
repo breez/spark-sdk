@@ -873,7 +873,7 @@ async fn resolve_storage(
 }
 
 /// Per-backend cap on a retrying call when other backends can take over.
-const FALLBACK_BACKEND_TIMEOUT: Duration = Duration::from_secs(15);
+const FALLBACK_BACKEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Resolves the chain service: caller-supplied override → REST backends →
 /// network default (mempool.space with blockstream.info as fallback on mainnet,
@@ -895,7 +895,7 @@ fn resolve_chain_service(
         rest_configs
     };
     let has_fallback = rest_configs.len() > 1;
-    let mut backends: Vec<Arc<dyn BitcoinChainService>> = rest_configs
+    let backends: Vec<Arc<dyn BitcoinChainService>> = rest_configs
         .into_iter()
         .map(|cfg| {
             let mut service = RestClientChainService::new(
@@ -913,14 +913,10 @@ fn resolve_chain_service(
             Arc::new(ValidatingChainService::new(Arc::new(service))) as Arc<dyn BitcoinChainService>
         })
         .collect();
-    match backends.pop() {
-        Some(backend) if backends.is_empty() => Ok(backend),
-        Some(backend) => {
-            backends.push(backend);
-            Ok(Arc::new(FallbackChainService::new(backends)))
-        }
-        None => Err(SdkError::Generic("No chain service configured".to_string())),
+    if let [backend] = backends.as_slice() {
+        return Ok(backend.clone());
     }
+    Ok(Arc::new(FallbackChainService::new(backends)))
 }
 
 fn default_rest_chain_services(network: Network) -> Result<Vec<RestChainServiceConfig>, SdkError> {

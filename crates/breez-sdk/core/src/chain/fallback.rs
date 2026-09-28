@@ -62,6 +62,10 @@ impl FallbackChainService {
         let now = Instant::now();
         for &i in failed {
             let demotion = &mut demotions[i];
+            // Concurrent calls that saw the same failure demote it only once.
+            if demotion.until.is_some_and(|until| until > now) {
+                continue;
+            }
             demotion.until = now.checked_add(demotion_period(demotion.count));
             demotion.count = demotion.count.saturating_add(1);
         }
@@ -356,6 +360,11 @@ mod tests {
         let secondary = TipChainService::new(Ok(2));
         let service = fallback(&[&primary, &secondary]);
         service.record_success(1, &[0]);
+        // A concurrent call reporting the same failure does not escalate it.
+        service.record_success(1, &[0]);
+        assert_eq!(service.demotions.lock().unwrap()[0].count, 1);
+
+        service.demotions.lock().unwrap()[0].until = Some(Instant::now());
         service.record_success(1, &[0]);
         assert_eq!(service.demotions.lock().unwrap()[0].count, 2);
 
