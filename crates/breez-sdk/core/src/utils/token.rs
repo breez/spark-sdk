@@ -676,7 +676,8 @@ mod tests {
         ));
     }
 
-    #[macros::test_all]
+    // The web `SystemTime` cannot represent a time before the epoch.
+    #[macros::test_not_wasm]
     fn a_timestamp_before_the_epoch_is_invalid() {
         let identity = pk(1);
         let mut tx = mint_to(identity);
