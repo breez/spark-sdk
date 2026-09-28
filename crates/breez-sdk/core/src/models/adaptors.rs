@@ -323,13 +323,15 @@ impl TryFrom<WalletTransfer> for Payment {
                 amount_sat = transfer.total_value_sat;
                 None
             }
-            // Mapping details is deterministic, so a retry would fail the same way and
-            // stop sync at this transfer for good. Record the payment without them.
+            // Failing here would stop sync at this transfer on every pass. Recording it as
+            // Pending lets sync move on while reconciliation keeps re-fetching it, so the
+            // details fill in once the operator or SSP serves data that maps again.
             Err(e) => {
                 warn!(
-                    "Recording transfer {} without payment details: {e:?}",
+                    "Recording transfer {} as pending without payment details: {e:?}",
                     transfer.id
                 );
+                status = PaymentStatus::Pending;
                 None
             }
         };
@@ -702,7 +704,7 @@ mod tests {
     }
 
     #[test_all]
-    fn a_lightning_send_whose_details_fail_to_map_keeps_its_amount_and_status() {
+    fn a_lightning_send_whose_details_fail_to_map_is_pending_with_its_amount() {
         let (ours, ssp) = (pk(1), pk(2));
         let request = LightningSendRequest {
             id: "request".to_string(),
@@ -738,14 +740,14 @@ mod tests {
         assert!(payment.details.is_none());
         assert_eq!(payment.method, PaymentMethod::Lightning);
         assert_eq!(payment.payment_type, PaymentType::Send);
-        // Not demoted to Pending, as a transfer still awaiting its user request is.
-        assert_eq!(payment.status, PaymentStatus::Completed);
+        // Pending so reconciliation re-fetches it until its details map.
+        assert_eq!(payment.status, PaymentStatus::Pending);
         assert_eq!(payment.amount, 1_000);
         assert_eq!(payment.fees, 10);
     }
 
     #[test_all]
-    fn a_spark_transfer_with_an_invalid_invoice_is_still_a_payment() {
+    fn a_spark_transfer_with_an_invalid_invoice_is_a_pending_payment() {
         let (ours, other, ssp) = (pk(1), pk(7), pk(2));
         let mut raw = transfer(other, ours, TransferType::Transfer);
         raw.spark_invoice = Some("not an invoice".to_string());
@@ -756,7 +758,7 @@ mod tests {
         assert!(payment.details.is_none());
         assert_eq!(payment.method, PaymentMethod::Spark);
         assert_eq!(payment.payment_type, PaymentType::Receive);
-        assert_eq!(payment.status, PaymentStatus::Completed);
+        assert_eq!(payment.status, PaymentStatus::Pending);
         assert_eq!(payment.amount, 1_010);
     }
 }
