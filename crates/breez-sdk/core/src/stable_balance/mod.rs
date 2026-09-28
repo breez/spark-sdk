@@ -834,6 +834,8 @@ mod tests {
         ) -> Result<crate::RefundPendingConversionsResponse, ConversionError> {
             Ok(crate::RefundPendingConversionsResponse::default())
         }
+
+        async fn settle_stranded_input(&self, _: crate::token_conversion::StrandedInput) {}
     }
 
     fn usd_config(default_active_label: Option<&str>) -> StableBalanceConfig {

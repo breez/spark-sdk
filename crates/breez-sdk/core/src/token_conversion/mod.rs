@@ -10,7 +10,7 @@ pub use models::*;
 
 use std::sync::Arc;
 
-use spark_wallet::TransferId;
+use spark_wallet::{PublicKey, TransferId};
 use tokio::sync::broadcast;
 
 use crate::{EventEmitter, RefundPendingConversionsResponse};
@@ -82,8 +82,33 @@ pub(crate) trait TokenConverter: Send + Sync {
         &self,
     ) -> Result<RefundPendingConversionsResponse, ConversionError>;
 
-    /// Optional signal that wakes the client-mode periodic refunder.
-    fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {
+    /// Records the swap if it ran after all, and otherwise claws the input back.
+    async fn settle_stranded_input(&self, input: StrandedInput);
+
+    /// Optional requests that wake the client-mode periodic refunder.
+    fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<RefundRequest>> {
         None
     }
+}
+
+/// How long the refunder waits before settling a stranded input, so the pool's
+/// swap listing can catch up with a swap that ran despite the failed call.
+pub(crate) const STRANDED_INPUT_SETTLE_SECS: u64 = 10;
+
+/// A swap input a failed conversion left at the pool.
+#[derive(Clone, Debug)]
+pub(crate) struct StrandedInput {
+    pub(crate) clawback_id: String,
+    pub(crate) pool_id: PublicKey,
+    pub(crate) payment_id: Option<String>,
+    pub(crate) prior_info: Option<ConversionInfo>,
+}
+
+/// Work for the client-mode conversion refunder.
+#[derive(Clone, Debug)]
+pub(crate) enum RefundRequest {
+    /// Run a pass over the payments marked `RefundNeeded`.
+    Pass,
+    /// Settle one stranded input, after the settle wait.
+    Settle(Box<StrandedInput>),
 }
