@@ -36,7 +36,7 @@ pub struct LocalSdk {
     pub sdk: BreezSdk,
     /// Same identity as the wallet wrapped by `sdk`; both see the same leaves.
     pub spark_wallet: SparkWallet,
-    pub events: mpsc::Receiver<breez_sdk_spark::SdkEvent>,
+    pub events: mpsc::UnboundedReceiver<breez_sdk_spark::SdkEvent>,
     pub fixtures: Arc<TestFixtures>,
     /// The entropy this wallet's identity derives from, kept so the same wallet
     /// can be rebuilt on an empty store. `None` under Turnkey, whose identity
@@ -223,7 +223,7 @@ async fn build_local_sdk_inner(
         }
     };
 
-    let (tx, events) = mpsc::channel(100);
+    let (tx, events) = mpsc::unbounded_channel();
     sdk.add_event_listener(Box::new(ChannelEventListener { tx }))
         .await;
 
@@ -562,12 +562,12 @@ pub enum LocalIdentity {
 }
 
 struct ChannelEventListener {
-    tx: mpsc::Sender<breez_sdk_spark::SdkEvent>,
+    tx: mpsc::UnboundedSender<breez_sdk_spark::SdkEvent>,
 }
 
 #[macros::async_trait]
 impl breez_sdk_spark::EventListener for ChannelEventListener {
     async fn on_event(&self, event: breez_sdk_spark::SdkEvent) {
-        let _ = self.tx.send(event).await;
+        let _ = self.tx.send(event);
     }
 }
