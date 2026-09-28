@@ -467,7 +467,7 @@ impl SparkSoFixture {
     // keyshare a coordinator can pick to be visible in the other operators' databases, not
     // just each operator having keyshares of its own. The snapshot must also be identical on
     // two consecutive polls, so a DKG batch that is mid-commit cannot slip past the check.
-    async fn wait_for_keyshares(&self) -> Result<()> {
+    pub async fn wait_for_keyshares(&self) -> Result<()> {
         info!("Checking for available signing keyshares in all operators...");
 
         let result = timeout(KEYSHARE_CHECK_TIMEOUT, async {

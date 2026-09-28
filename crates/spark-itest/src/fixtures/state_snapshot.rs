@@ -21,9 +21,10 @@ pub const MOUNT_PATH: &str = "/snapshot";
 
 const POSTGRES_IMAGE: &str = "postgres:11-alpine";
 
-/// Bumped by hand when the daemon changes what it stores without changing its
-/// schema.
-const BOOTSTRAP_EPOCH: u32 = 1;
+/// Bumped by hand when a change the rest of the manifest does not show makes
+/// earlier snapshots wrong: to what the daemon stores, or to how a snapshot is
+/// captured.
+const BOOTSTRAP_EPOCH: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnapshotManifest {

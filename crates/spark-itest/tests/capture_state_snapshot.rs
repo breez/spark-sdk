@@ -90,6 +90,14 @@ async fn capture() -> Result<()> {
         leaves.len()
     );
 
+    // Nothing may change between the dumps. The daemon stops first, so that it
+    // takes no more keyshares. The operators stop once DKG has refilled what the
+    // pool took: DKG commits a batch to each operator's database separately, so
+    // stopping one mid-batch would leave the batch on some databases only.
+    sspd.container.stop().await?;
+    spark_so.wait_for_keyshares().await?;
+    spark_so.stop_operators().await?;
+
     let network = fixture_id.to_network();
     for operator in &spark_so.operators {
         state_snapshot::capture_database(
