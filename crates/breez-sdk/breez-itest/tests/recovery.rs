@@ -211,7 +211,8 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
 #[rstest]
 #[ignore] // Only run manually
 #[test_log::test(tokio::test)]
-async fn test_setup_recovery_wallet() -> Result<()> {
+async fn test_setup_recovery_wallet(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_setup_recovery_wallet ===");
     info!("This test creates a wallet with all payment variants for recovery testing.");
 
@@ -234,7 +235,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     .await?;
 
     // 2. Create Bob (helper wallet) with random seed
-    let mut bob = alice_sdk().await?;
+    let mut bob = env.create_wallet().await?;
 
     // 3. Fund Alice via faucet → Deposit (receive)
     // Note: We only fund Alice - Bob gets funds from Alice's payments

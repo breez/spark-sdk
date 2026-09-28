@@ -5,17 +5,8 @@ pub mod socks5;
 pub mod ssp_fault;
 
 use anyhow::Result;
-use breez_sdk_spark::{
-    LeafOptimizationConfig, MaxFee, Network, StableBalanceConfig, StableBalanceToken,
-    default_config, default_server_config,
-};
+use breez_sdk_spark::{StableBalanceConfig, StableBalanceToken};
 use rand::RngCore;
-use rstest::fixture;
-use tracing::info;
-
-use crate::{
-    SdkInstance, build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
-};
 
 /// Token identifiers for regtest
 pub const BEAN_REGTEST_TOKEN_ID: &str =
@@ -28,186 +19,14 @@ pub const SHELL_REGTEST_TOKEN_ID: &str =
 pub const USDB_MAINNET_TOKEN_ID: &str =
     "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
 
-/// Fixture: Alice's SDK with temporary storage
-#[fixture]
-pub async fn alice_sdk() -> Result<SdkInstance> {
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice")
-        .tempdir()?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Alice
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Alice's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(alice_dir)).await
-}
-
-/// Fixture: Bob's SDK with temporary storage
-#[fixture]
-pub async fn bob_sdk() -> Result<SdkInstance> {
-    let bob_dir = tempfile::Builder::new().prefix("breez-sdk-bob").tempdir()?;
-    let path = bob_dir.path().to_string_lossy().to_string();
-
-    // Generate random seed for Bob
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    info!("Initializing Bob's SDK at: {} with random seed", path);
-    build_sdk_with_dir(path, seed, Some(bob_dir)).await
-}
-
-#[fixture]
-pub async fn bob_no_fee_sdk() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-bob-no-fee")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.max_deposit_claim_fee = None;
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-#[fixture]
-pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-bob-fee")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 0 });
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-/// Fixture: Bob's SDK with a claim-fee ceiling high enough to clear the regtest
-/// early-claim spread, so the background cascade can claim a deposit the mempool
-/// watch discovers rather than the ceiling blocking it.
-#[fixture]
-pub async fn bob_zero_conf_sdk() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-bob-zero-conf")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    // The regtest spread carries a ~3% term, so 3000 clears it at the amounts
-    // this test funds. `bob_strict_fee_sdk`'s 0 would block every claim.
-    cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 });
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-/// Fixture: Alice's SDK with leaf optimization in manual-trigger mode and a
-/// high target multiplicity. Used to drive a deterministic optimization run
-/// (no background optimizer racing the test; enough work that the planner
-/// produces real swaps).
-#[fixture]
-pub async fn alice_sdk_manual_opt() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-manual-opt")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.leaf_optimization_config = LeafOptimizationConfig {
-        auto_enabled: false,
-        multiplicity: 15,
-    };
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-/// Server-mode variant of [`alice_sdk_manual_opt`]. Same manual-trigger
-/// shape, but with `background_tasks_enabled = false` so the test exercises
-/// the manual optimization path on the server runtime.
-#[fixture]
-pub async fn alice_server_sdk_manual_opt() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-server-manual-opt")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_server_config(Network::Regtest);
-    cfg.leaf_optimization_config = LeafOptimizationConfig {
-        auto_enabled: false,
-        multiplicity: 15,
-    };
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-/// Fixture: Alice's SDK with the background leaf optimizer off, so the only
-/// thing changing her leaf set is what the test itself does.
-#[fixture]
-pub async fn alice_sdk_no_auto_opt() -> Result<SdkInstance> {
-    let dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-no-auto-opt")
-        .tempdir()?;
-    let path = dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.leaf_optimization_config.auto_enabled = false;
-    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
-}
-
-/// Fixture: Alice's SDK with external signer
-#[fixture]
-pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-ext-signer")
-        .tempdir()?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-
-    let mnemonic = random_mnemonic()?;
-
-    info!("Initializing Alice's SDK with external signer at: {}", path);
-    build_sdk_with_external_signer(path, mnemonic, Some(alice_dir)).await
-}
-
-/// Fixture: Bob's SDK with external signer
-#[fixture]
-pub async fn bob_external_signer_sdk() -> Result<SdkInstance> {
-    let bob_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-bob-ext-signer")
-        .tempdir()?;
-    let path = bob_dir.path().to_string_lossy().to_string();
-
-    let mnemonic = random_mnemonic()?;
-
-    info!("Initializing Bob's SDK with external signer at: {}", path);
-    build_sdk_with_external_signer(path, mnemonic, Some(bob_dir)).await
-}
-
-fn random_mnemonic() -> Result<String> {
+pub fn random_mnemonic() -> Result<String> {
     let mut entropy = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut entropy);
     Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
 }
 
-/// Fixture: Alice's SDK with stable balance config
-#[fixture]
-pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-stable-balance")
-        .tempdir()?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.stable_balance_config = Some(StableBalanceConfig {
+pub fn stable_balance_config() -> StableBalanceConfig {
+    StableBalanceConfig {
         tokens: vec![
             StableBalanceToken {
                 label: "SHELL".to_string(),
@@ -221,6 +40,5 @@ pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
         default_active_label: Some("SHELL".to_string()),
         threshold_sats: Some(1000),
         max_slippage_bps: Some(500),
-    });
-    build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
+    }
 }

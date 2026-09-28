@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use super::{ChannelEventListener, wait_for_token_balance_increase};
 use crate::SdkInstance;
+use crate::faucet::FaucetConfig;
 
 // ============================================================================
 // Mainnet conversion tests
@@ -103,6 +104,7 @@ pub async fn build_mainnet_sdk_from_mnemonic(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }
@@ -212,6 +214,7 @@ pub async fn build_mainnet_sdk_server_mode_from_mnemonic(
         temp_dir,
         data_sync_fixture: None,
         lnurl_fixture: None,
+        faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
 }

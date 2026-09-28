@@ -16,8 +16,9 @@ make itest
 ```
 
 This command will:
-1. Build all required Docker containers (if not already built)
-2. Start the necessary containers for each test
+1. Build the images a cluster runs, skipping those already built. Each is tagged
+   by what it is built from, so worktrees never run one another's images.
+2. Build or check the state snapshot every test restores
 3. Run the test suite
 
 ## Available Test Fixtures

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
 use platform_utils::{
@@ -10,9 +12,10 @@ use platform_utils::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tempfile::TempDir;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
-    core::{ContainerPort, WaitFor, wait::LogWaitStrategy},
+    core::{ContainerPort, Mount, WaitFor, wait::LogWaitStrategy},
     runners::AsyncRunner,
 };
 use tokio::time::sleep;
@@ -36,8 +39,16 @@ const DEFAULT_MINING_ADDRESS: &str = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaq
 /// well inside the RPC client's timeout.
 const GENERATE_BLOCKS_BATCH: u64 = 100;
 
+/// The image's `BITCOIN_DATA`. Its entrypoint chowns this to the `bitcoin` user
+/// before starting bitcoind, so a host directory can be mounted here without
+/// chowning it first.
+const BITCOIN_DATA: &str = "/home/bitcoin/.bitcoin";
+
 pub struct BitcoindFixture {
     pub container: ContainerAsync<GenericImage>,
+    /// On the host, so a capture can copy the chain state out and a restore can
+    /// copy it in.
+    datadir: TempDir,
     pub rpc_url: String,
     pub zmqpubrawblock_url: String,
     pub internal_rpc_url: String,
@@ -57,6 +68,21 @@ struct RpcResponse<T> {
 
 impl BitcoindFixture {
     pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
+        Self::start(fixture_id, None).await
+    }
+
+    pub async fn restored(fixture_id: &FixtureId, restore_from: &Path) -> anyhow::Result<Self> {
+        Self::start(fixture_id, Some(restore_from)).await
+    }
+
+    async fn start(fixture_id: &FixtureId, restore_from: Option<&Path>) -> anyhow::Result<Self> {
+        let datadir = tempfile::Builder::new().prefix("bitcoind-data").tempdir()?;
+        if let Some(source) = restore_from {
+            copy_dir(source, datadir.path())
+                .with_context(|| format!("restoring bitcoind state from {}", source.display()))?;
+        }
+        let uid = datadir.path().metadata()?.uid();
+
         // Define bitcoind container with command line arguments
         let container_name = format!("bitcoind-{fixture_id}");
         let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
@@ -68,6 +94,14 @@ impl BitcoindFixture {
             .with_network(fixture_id.to_network())
             .with_container_name(&container_name)
             .with_log_consumer(TracingConsumer::new("bitcoind"))
+            .with_mount(Mount::bind_mount(
+                datadir.path().display().to_string(),
+                BITCOIN_DATA,
+            ))
+            // The entrypoint gives its `bitcoin` user this uid before chowning the
+            // data directory, so on Linux the host can still copy it out. Not `GID`:
+            // macOS's group 20 is taken in the image, and the entrypoint exits on it.
+            .with_env_var("UID", uid.to_string())
             .with_cmd([
                 "-regtest",
                 "-server",
@@ -90,10 +124,9 @@ impl BitcoindFixture {
             .await?;
 
         info!("Bitcoind container running");
-        let host_rpc_port = container.get_host_port_ipv4(REGTEST_RPC_PORT).await?;
-        let host_zmq_port = container
-            .get_host_port_ipv4(ZMQPUBRAWBLOCK_RPC_PORT)
-            .await?;
+        let host_rpc_port = crate::fixtures::published_port(&container, REGTEST_RPC_PORT).await?;
+        let host_zmq_port =
+            crate::fixtures::published_port(&container, ZMQPUBRAWBLOCK_RPC_PORT).await?;
         let rpc_url = format!("http://127.0.0.1:{host_rpc_port}/");
         let zmqpubrawblock_url = format!("tcp://127.0.0.1:{host_zmq_port}");
 
@@ -107,6 +140,7 @@ impl BitcoindFixture {
         // Create instance with RPC URL
         let instance = Self {
             container,
+            datadir,
             rpc_url,
             zmqpubrawblock_url,
             internal_rpc_url,
@@ -121,10 +155,24 @@ impl BitcoindFixture {
         info!("Created bitcoind container. Ensure wallet created.");
 
         // Wait for RPC to be available and create wallet using the RPC API
-        instance.ensure_wallet_created().await?;
+        instance.ensure_wallet_available().await?;
 
         info!("Bitcoin wallet is created.");
         Ok(instance)
+    }
+
+    /// Core answers `createwallet` for an existing wallet with an error, not a
+    /// load, so a restored node's wallet is loaded rather than created.
+    async fn ensure_wallet_available(&self) -> Result<()> {
+        if self.get_new_address().await.is_ok() {
+            return Ok(());
+        }
+        // Present but not loaded: Core only auto-loads what its settings list.
+        let loaded: Result<Value> = self.rpc_call("loadwallet", &[json!("default")]).await;
+        if loaded.is_ok() && self.get_new_address().await.is_ok() {
+            return Ok(());
+        }
+        self.ensure_wallet_created().await
     }
 
     async fn ensure_wallet_created(&self) -> Result<()> {
@@ -171,6 +219,18 @@ impl BitcoindFixture {
                 Err(e)
             }
         }
+    }
+
+    /// Points [`Self::generate_blocks`] at the wallet, as [`Self::initialize`]
+    /// does, without mining the blocks a fresh chain needs.
+    pub async fn adopt_restored_wallet(&mut self) -> Result<()> {
+        let address = self.get_new_address().await?;
+        self.mining_address = Address::from_str(&address)?.require_network(Network::Regtest)?;
+        info!(
+            "Restored bitcoind wallet, mining to {}",
+            self.mining_address
+        );
+        Ok(())
     }
 
     pub async fn initialize(&mut self) -> Result<()> {
@@ -341,4 +401,34 @@ impl BitcoindFixture {
             _ => Err(anyhow::anyhow!("Invalid RPC response")),
         }
     }
+}
+
+impl BitcoindFixture {
+    /// Replaces `dest` with the node's chain state, copied once the node has
+    /// stopped: a copy taken from a running node is a crashed one.
+    pub async fn stop_and_archive(&self, dest: &Path) -> Result<()> {
+        self.container
+            .stop()
+            .await
+            .context("stopping bitcoind before archiving its state")?;
+        if dest.exists() {
+            std::fs::remove_dir_all(dest)?;
+        }
+        copy_dir(self.datadir.path(), dest)
+            .with_context(|| format!("archiving bitcoind state to {}", dest.display()))
+    }
+}
+
+fn copy_dir(source: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let target = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }

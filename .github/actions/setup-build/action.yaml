@@ -4,6 +4,14 @@ inputs:
   github-token:
     description: 'github token'
     required: true
+  rust-cache-shared-key:
+    description: 'Another job whose Rust cache to use instead of one of its own'
+    required: false
+    default: ''
+  rust-cache-save:
+    description: 'Whether to save the Rust cache'
+    required: false
+    default: 'true'
 runs:
   using: 'composite'
   steps:
@@ -15,3 +23,6 @@ runs:
 
     - name: Setup rust cache
       uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.rust-cache-shared-key }}
+        save-if: ${{ inputs.rust-cache-save }}

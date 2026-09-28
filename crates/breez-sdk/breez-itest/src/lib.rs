@@ -1,10 +1,9 @@
-#[cfg(feature = "local-itest")]
 pub mod chain_service;
 pub mod concurrent_scenarios;
+pub mod environment;
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
-#[cfg(feature = "local-itest")]
 pub mod local_sdk;
 mod log;
 pub mod session_store_scenarios;
@@ -13,18 +12,20 @@ pub mod turnkey;
 
 use std::sync::Arc;
 
-#[cfg(feature = "local-itest")]
 pub use chain_service::LocalBitcoindChainService;
 pub use concurrent_scenarios::{
     RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
-pub use faucet::RegtestFaucet;
+pub use environment::{Environment, env};
+pub use faucet::{FaucetConfig, RegtestFaucet};
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
-#[cfg(feature = "local-itest")]
-pub use local_sdk::{LocalSdk, build_local_sdk, rebuild_on_empty_storage};
+pub use local_sdk::{
+    LocalIdentity, LocalSdk, LocalStack, build_local_sdk, build_local_sdk_with_config,
+    rebuild_on_empty_storage,
+};
 pub use rand;
 pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;
@@ -48,10 +49,19 @@ pub struct SdkInstance {
     pub data_sync_fixture: Option<Arc<DataSyncFixture>>,
     #[allow(dead_code)]
     pub lnurl_fixture: Option<Arc<LnurlFixture>>,
+    /// The faucet this wallet is funded from: the live one, or a local stack's sspd.
+    pub faucet: FaucetConfig,
     /// Held only for its `Drop`: deletes a per-test Turnkey wallet on teardown.
     /// `None` for seed-backed instances.
     #[allow(dead_code)]
     turnkey_guard: Option<TurnkeyGuard>,
+}
+
+impl SdkInstance {
+    /// A client for the faucet this wallet is funded from.
+    pub fn faucet(&self) -> Result<RegtestFaucet> {
+        RegtestFaucet::with_config(self.faucet.clone())
+    }
 }
 
 /// The per-test Turnkey wallet guard held by [`SdkInstance`]. Without the

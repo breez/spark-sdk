@@ -1,13 +1,12 @@
 use std::fmt::Display;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub struct Shutdown {
     token: CancellationToken,
-    failed: AtomicBool,
+    failure: Mutex<Option<String>>,
 }
 
 impl Shutdown {
@@ -15,7 +14,7 @@ impl Shutdown {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             token: CancellationToken::new(),
-            failed: AtomicBool::new(false),
+            failure: Mutex::new(None),
         })
     }
 
@@ -31,13 +30,21 @@ impl Shutdown {
 
     pub fn fail(&self, subsystem: &str, error: &dyn Display) {
         error!("shutting down: {subsystem} failed: {error}");
-        self.failed.store(true, Ordering::SeqCst);
+        self.failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(|| format!("{subsystem} failed: {error}"));
         self.token.cancel();
     }
 
+    /// The failure that brought the daemon down: the first, since the rest
+    /// usually follow from it.
     #[must_use]
-    pub fn is_failure(&self) -> bool {
-        self.failed.load(Ordering::SeqCst)
+    pub fn failure(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -50,15 +57,19 @@ mod tests {
         let shutdown = Shutdown::new();
         shutdown.stop("shutdown signal");
         assert!(shutdown.child().is_cancelled());
-        assert!(!shutdown.is_failure());
+        assert_eq!(shutdown.failure(), None);
     }
 
     #[test]
     fn a_subsystem_failure_is_carried_to_the_exit_status() {
         let shutdown = Shutdown::new();
         shutdown.fail("chain monitor", &"no route to bitcoind");
+        shutdown.fail("GraphQL API server", &"cancelled");
         assert!(shutdown.child().is_cancelled());
-        assert!(shutdown.is_failure());
+        assert_eq!(
+            shutdown.failure().as_deref(),
+            Some("chain monitor failed: no route to bitcoind")
+        );
     }
 
     #[test]

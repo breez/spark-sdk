@@ -181,6 +181,15 @@ impl LdkServerNode {
             .map_err(|e| LightningNodeError::Node(format!("{method} response decode failed: {e}")))
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub async fn call_for_test<Rq: Message, Rs: Message + Default>(
+        &self,
+        method: &str,
+        request: &Rq,
+    ) -> Result<Rs, LightningNodeError> {
+        self.call(method, request).await
+    }
+
     async fn payment(
         &self,
         payment_id: &str,
