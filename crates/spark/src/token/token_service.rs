@@ -516,11 +516,12 @@ impl TokenService {
             })
             .await?;
 
-        response
+        let records: Vec<_> = response
             .token_transactions_with_status
             .into_iter()
-            .map(|t| (t, self.network).try_into())
-            .collect::<Result<Vec<TokenTransaction>, _>>()
+            .map(|t| (t, self.network))
+            .collect();
+        convert_page(records, "token transaction")
     }
 
     pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, ServiceError> {

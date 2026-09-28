@@ -305,22 +305,34 @@ impl TryFrom<WalletTransfer> for Payment {
             None => (0, transfer.total_value_sat),
         };
 
-        let details = PaymentDetails::from_transfer(&transfer)?;
-        if details.is_none() {
-            // in case we have a completed status without user object we want
-            // to keep syncing this payment
-            if status == PaymentStatus::Completed
-                && [
-                    TransferType::CooperativeExit,
-                    TransferType::PreimageSwap,
-                    TransferType::UtxoSwap,
-                ]
-                .contains(&transfer.transfer_type)
-            {
-                status = PaymentStatus::Pending;
+        let details = match PaymentDetails::from_transfer(&transfer) {
+            Ok(Some(details)) => Some(details),
+            Ok(None) => {
+                // in case we have a completed status without user object we want
+                // to keep syncing this payment
+                if status == PaymentStatus::Completed
+                    && [
+                        TransferType::CooperativeExit,
+                        TransferType::PreimageSwap,
+                        TransferType::UtxoSwap,
+                    ]
+                    .contains(&transfer.transfer_type)
+                {
+                    status = PaymentStatus::Pending;
+                }
+                amount_sat = transfer.total_value_sat;
+                None
             }
-            amount_sat = transfer.total_value_sat;
-        }
+            // Mapping details is deterministic, so a retry would fail the same way and
+            // stop sync at this transfer for good. Record the payment without them.
+            Err(e) => {
+                warn!(
+                    "Recording transfer {} without payment details: {e:?}",
+                    transfer.id
+                );
+                None
+            }
+        };
 
         Ok(Payment {
             id: transfer.id.to_string(),
@@ -625,9 +637,16 @@ impl From<spark_wallet::WebhookEntry> for crate::Webhook {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::SendOnchainFeeQuote;
+    use chrono::Utc;
     use macros::test_all;
-    use spark_wallet::{CoopExitFeeQuote, CoopExitSpeedFeeQuote};
+    use platform_utils::time::SystemTime;
+    use spark_wallet::{
+        BitcoinNetwork, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CurrencyAmount, CurrencyUnit,
+        LightningSendRequest, LightningSendRequestStatus, PublicKey, SspTransfer, Transfer,
+        TransferId,
+    };
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -653,5 +672,91 @@ mod tests {
         assert!(!quote.is_estimate);
         assert_eq!(quote.id, "SparkCoopExitFeeQuote:test");
         assert_eq!(quote.expires_at, 1_787_907_773);
+    }
+
+    fn pk(fill_byte: u8) -> PublicKey {
+        let mut bytes = [fill_byte; 33];
+        bytes[0] = 2;
+        PublicKey::from_slice(&bytes).unwrap()
+    }
+
+    /// A completed transfer created now, sent from `sender` to `receiver`.
+    fn transfer(sender: PublicKey, receiver: PublicKey, transfer_type: TransferType) -> Transfer {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        Transfer {
+            id: TransferId::generate(),
+            sender_identity_public_key: sender,
+            receiver_identity_public_key: receiver,
+            status: TransferStatus::Completed,
+            total_value: 1_010,
+            expiry_time: None,
+            leaves: Vec::new(),
+            created_time: Some(now),
+            updated_time: Some(now),
+            transfer_type,
+            spark_invoice: None,
+        }
+    }
+
+    #[test_all]
+    fn a_lightning_send_whose_details_fail_to_map_keeps_its_amount_and_status() {
+        let (ours, ssp) = (pk(1), pk(2));
+        let request = LightningSendRequest {
+            id: "request".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            network: BitcoinNetwork::Regtest,
+            encoded_invoice: "not an invoice".to_string(),
+            fee: CurrencyAmount {
+                original_value: 10,
+                original_unit: CurrencyUnit::Satoshi,
+                preferred_currency_unit: CurrencyUnit::Satoshi,
+                preferred_currency_value_rounded: 10,
+            },
+            idempotency_key: "key".to_string(),
+            status: LightningSendRequestStatus::LightningPaymentSucceeded,
+            transfer: None,
+            lightning_send_payment_preimage: None,
+        };
+        let wallet_transfer = WalletTransfer::from_transfer(
+            transfer(ours, ssp, TransferType::PreimageSwap),
+            Some(SspTransfer {
+                total_amount: request.fee.clone(),
+                spark_id: None,
+                user_request: Some(SspUserRequest::LightningSendRequest(request)),
+            }),
+            None,
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert!(payment.details.is_none());
+        assert_eq!(payment.method, PaymentMethod::Lightning);
+        assert_eq!(payment.payment_type, PaymentType::Send);
+        // Not demoted to Pending, as a transfer still awaiting its user request is.
+        assert_eq!(payment.status, PaymentStatus::Completed);
+        assert_eq!(payment.amount, 1_000);
+        assert_eq!(payment.fees, 10);
+    }
+
+    #[test_all]
+    fn a_spark_transfer_with_an_invalid_invoice_is_still_a_payment() {
+        let (ours, other, ssp) = (pk(1), pk(7), pk(2));
+        let mut raw = transfer(other, ours, TransferType::Transfer);
+        raw.spark_invoice = Some("not an invoice".to_string());
+        let wallet_transfer = WalletTransfer::from_transfer(raw, None, None, ours, ssp);
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert!(payment.details.is_none());
+        assert_eq!(payment.method, PaymentMethod::Spark);
+        assert_eq!(payment.payment_type, PaymentType::Receive);
+        assert_eq!(payment.status, PaymentStatus::Completed);
+        assert_eq!(payment.amount, 1_010);
     }
 }
