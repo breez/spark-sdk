@@ -193,10 +193,10 @@ fn write_exit(path: &Path, exit: &UnilateralExitResponse) -> Result<(), anyhow::
     Ok(())
 }
 
-/// Auto when no leaves are named, otherwise exactly the given leaves.
+/// All when no leaves are named, otherwise exactly the given leaves.
 fn exit_leaf_selection(leaf_ids: Vec<String>) -> ExitLeafSelection {
     if leaf_ids.is_empty() {
-        ExitLeafSelection::Auto
+        ExitLeafSelection::All
     } else {
         ExitLeafSelection::Specific { leaf_ids }
     }
@@ -218,13 +218,13 @@ fn parse_cpfp_input(s: &str, kind: FundingKindArg) -> Result<CpfpInput, anyhow::
         FundingKindArg::P2wpkh => CpfpInput::P2wpkh {
             txid,
             vout,
-            value,
+            value_sats: value,
             pubkey,
         },
         FundingKindArg::P2tr => CpfpInput::P2tr {
             txid,
             vout,
-            value,
+            value_sats: value,
             pubkey,
         },
     })
@@ -377,19 +377,19 @@ mod tests {
                 CpfpInput::P2tr {
                     txid: "11".to_string(),
                     vout: 0,
-                    value: 5_000,
+                    value_sats: 5_000,
                     pubkey: "02ab".to_string(),
                 },
                 CpfpInput::P2wpkh {
                     txid: "22".to_string(),
                     vout: 3,
-                    value: 7_000,
+                    value_sats: 7_000,
                     pubkey: "03cd".to_string(),
                 },
                 CpfpInput::Custom {
                     txid: "33".to_string(),
                     vout: 1,
-                    value: 9_000,
+                    value_sats: 9_000,
                     script_pubkey_hex: "5120ef".to_string(),
                     signed_input_weight: 230,
                 },

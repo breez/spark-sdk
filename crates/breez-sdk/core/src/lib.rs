@@ -38,7 +38,9 @@ pub use cross_chain::{
     CrossChainReceiveInfo, CrossChainRouteFilter, CrossChainRouteLimits, CrossChainRoutePair,
     DeliveryMethod, SparkAsset,
 };
-pub use error::{DepositClaimError, SdkError, SignerError, TokenAllowanceErrorReason};
+pub use error::{
+    CooperativeRecoveryError, DepositClaimError, SdkError, SignerError, TokenAllowanceErrorReason,
+};
 pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
 };

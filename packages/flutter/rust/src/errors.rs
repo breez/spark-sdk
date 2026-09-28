@@ -1,8 +1,23 @@
 pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
 pub use breez_sdk_spark::{
-    DepositClaimError, Fee, SdkError, StorageError, TokenAllowanceErrorReason,
+    CooperativeRecoveryError, DepositClaimError, Fee, SdkError, StorageError,
+    TokenAllowanceErrorReason,
 };
 use flutter_rust_bridge::frb;
+
+#[frb(mirror(CooperativeRecoveryError))]
+pub enum _CooperativeRecoveryError {
+    ReplacementFeeTooLow {
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+    OperatorsUnavailable {
+        message: String,
+    },
+    Generic {
+        message: String,
+    },
+}
 
 #[frb(mirror(DepositClaimError))]
 pub enum _DepositClaimError {
@@ -74,7 +89,7 @@ pub enum _SdkError {
     Signer(String),
     OptimizationAlreadyRunning,
     OptimizationCancelled,
-    InsufficientCpfpFunds { required_sat: u64 },
+    InsufficientCpfpFunds { required_sats: u64 },
     TokenAllowance {
         reason: TokenAllowanceErrorReason,
         details: String,

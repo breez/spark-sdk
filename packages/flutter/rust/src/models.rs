@@ -280,19 +280,19 @@ pub enum _CpfpInput {
     P2wpkh {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     P2tr {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     Custom {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         script_pubkey_hex: String,
         signed_input_weight: u64,
     },
@@ -310,7 +310,8 @@ pub enum _CpfpFundingKind {
 
 #[frb(mirror(ExitLeafSelection))]
 pub enum _ExitLeafSelection {
-    Auto,
+    All,
+    RecoverableOnly,
     Specific { leaf_ids: Vec<String> },
 }
 
@@ -352,7 +353,7 @@ pub struct _UnilateralExitLeaf {
 #[frb(mirror(PerBranchFunding))]
 pub struct _PerBranchFunding {
     pub leaf_id: String,
-    pub funding_sat: u64,
+    pub funding_sats: u64,
 }
 
 #[frb(mirror(PrepareUnilateralExitRequest))]
@@ -396,7 +397,7 @@ pub enum _ExitRefundState {
     OnChain {
         tx_hex: String,
         vout: u32,
-        value_sat: u64,
+        value_sats: u64,
         block_height: Option<u32>,
     },
     Swept,
@@ -476,6 +477,123 @@ pub struct _ImportUnilateralExitStateResponse {
     pub skipped_chains: u32,
 }
 
+#[frb(mirror(PrepareRecoverFundsRequest))]
+pub struct _PrepareRecoverFundsRequest {
+    pub fee_rate_sat_per_vbyte: u64,
+    pub funding_kind: Option<CpfpFundingKind>,
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+#[frb(mirror(PrepareRecoverFundsResponse))]
+pub struct _PrepareRecoverFundsResponse {
+    pub leaves: Vec<RecoverFundsLeaf>,
+    pub recoverable_value_sats: u64,
+    pub total_fee_sats: u64,
+    pub cooperative_fee_sats: u64,
+    pub cpfp_fee_sats: u64,
+    pub fanout_fee_sats: u64,
+    pub sweep_fee_sats: u64,
+    pub funding: Option<RecoveryFunding>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+    pub exit_chain_state: ExitChainState,
+}
+
+#[frb(mirror(RecoveryFunding))]
+pub struct _RecoveryFunding {
+    pub single_utxo_sats: u64,
+    pub per_branch: Vec<PerBranchFunding>,
+}
+
+#[frb(mirror(RecoverFundsLeaf))]
+pub struct _RecoverFundsLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub method: RecoveryMethod,
+}
+
+#[frb(mirror(RecoveryMethod))]
+pub enum _RecoveryMethod {
+    Cooperative,
+    Unilateral,
+}
+
+#[frb(mirror(RecoverFundsRequest))]
+pub struct _RecoverFundsRequest {
+    pub prepared: PrepareRecoverFundsResponse,
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+#[frb(mirror(RecoverFundsResponse))]
+pub struct _RecoverFundsResponse {
+    pub recoverable_value_sats: u64,
+    pub total_fee_sats: u64,
+    pub cooperative_fee_sats: u64,
+    pub cpfp_fee_sats: u64,
+    pub fanout_fee_sats: u64,
+    pub sweep_fee_sats: u64,
+    pub leaves: Vec<RecoverFundsLeaf>,
+    pub failed: Vec<CooperativeRecoveryFailure>,
+    pub transactions: Vec<RecoveryTransaction>,
+    pub funding_inputs: Vec<CpfpInput>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+#[frb(mirror(CooperativeRecoveryFailure))]
+pub struct _CooperativeRecoveryFailure {
+    pub leaf_id: String,
+    pub output_txid: String,
+    pub output_vout: u32,
+    pub error: CooperativeRecoveryError,
+}
+
+#[frb(mirror(RecoveryTransaction))]
+pub struct _RecoveryTransaction {
+    pub kind: RecoveryTxKind,
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
+    pub csv_timelock_blocks: Option<u32>,
+    pub depends_on: Vec<String>,
+    pub status: ExitTransactionStatus,
+}
+
+#[frb(mirror(RecoveryTxKind))]
+pub enum _RecoveryTxKind {
+    Cooperative,
+    FanOut,
+    Node,
+    Refund,
+    Sweep,
+}
+
+#[frb(mirror(CheckRecoverFundsRequest))]
+pub struct _CheckRecoverFundsRequest {
+    pub recovery: RecoverFundsResponse,
+}
+
+#[frb(mirror(CheckRecoverFundsResponse))]
+pub struct _CheckRecoverFundsResponse {
+    pub recovery: RecoverFundsResponse,
+    pub verdict: RecoveryVerdict,
+}
+
+#[frb(mirror(RecoveryVerdict))]
+pub enum _RecoveryVerdict {
+    Valid,
+    Done,
+    Redo { reason: RecoveryRedoReason },
+}
+
+#[frb(mirror(RecoveryRedoReason))]
+pub enum _RecoveryRedoReason {
+    OnChainStateDiverged,
+    UnreadableRecovery,
+}
+
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
     pub ensure_synced: Option<bool>,
@@ -486,6 +604,7 @@ pub struct _GetInfoResponse {
     pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
+    pub recoverable_funds_sats: u64,
 }
 
 #[frb(mirror(TokenBalance))]

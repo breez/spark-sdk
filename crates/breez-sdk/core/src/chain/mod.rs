@@ -11,6 +11,8 @@ use crate::{
 
 mod fallback;
 pub mod rest_client;
+#[cfg(test)]
+pub(crate) mod stub;
 mod validating;
 
 pub(crate) use fallback::FallbackChainService;

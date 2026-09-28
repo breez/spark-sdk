@@ -128,7 +128,7 @@ Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
   final leafIds = results.multiOption('leaf');
 
   final ExitLeafSelection selection =
-      leafIds.isEmpty ? const ExitLeafSelection.auto() : ExitLeafSelection.specific(leafIds: leafIds);
+      leafIds.isEmpty ? const ExitLeafSelection.all() : ExitLeafSelection.specific(leafIds: leafIds);
 
   final prepared = await sdk.prepareUnilateralExit(
     request: PrepareUnilateralExitRequest(
@@ -340,7 +340,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'P2tr',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
   } else if (input is CpfpInput_P2wpkh) {
@@ -348,7 +348,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'P2wpkh',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
   } else if (input is CpfpInput_Custom) {
@@ -356,7 +356,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'Custom',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'scriptPubkeyHex': input.scriptPubkeyHex,
       'signedInputWeight': input.signedInputWeight.toString(),
     };
@@ -365,27 +365,27 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
 }
 
 CpfpInput _cpfpInputFromJson(Map<String, dynamic> j) {
-  final value = BigInt.parse(j['value'] as String);
+  final valueSats = BigInt.parse(j['valueSats'] as String);
   switch (j['type'] as String) {
     case 'P2tr':
       return CpfpInput.p2Tr(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'P2wpkh':
       return CpfpInput.p2Wpkh(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'Custom':
       return CpfpInput.custom(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         scriptPubkeyHex: j['scriptPubkeyHex'] as String,
         signedInputWeight: BigInt.parse(j['signedInputWeight'] as String),
       );
@@ -410,9 +410,9 @@ CpfpInput? _parseCpfpInput(String s, String kindStr) {
   }
   switch (kindStr.toLowerCase()) {
     case 'p2wpkh':
-      return CpfpInput.p2Wpkh(txid: txid, vout: vout, value: value, pubkey: pubkey);
+      return CpfpInput.p2Wpkh(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     case 'p2tr':
-      return CpfpInput.p2Tr(txid: txid, vout: vout, value: value, pubkey: pubkey);
+      return CpfpInput.p2Tr(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     default:
       print('Invalid funding kind: $kindStr');
       return null;

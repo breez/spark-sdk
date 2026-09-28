@@ -1718,7 +1718,7 @@ impl SparkWallet {
     /// Best-effort refresh so an exit plans against the latest tree state.
     /// Non-fatal: when the operators are unreachable the exit proceeds from
     /// whatever the durable store already holds.
-    async fn refresh_before_exit(&self) {
+    pub async fn refresh_before_exit(&self) {
         if let Err(e) = self.tree_service.refresh_leaves().await {
             warn!("unilateral exit: refresh failed, planning from local state: {e:?}");
         }
@@ -1879,6 +1879,14 @@ impl SparkWallet {
         selection: ExitLeafSelection,
     ) -> Result<ExitContext, SparkWalletError> {
         self.refresh_before_exit().await;
+        self.load_selected_exit_context(selection).await
+    }
+
+    /// [`Self::load_exit_context`] without the refresh.
+    pub async fn load_selected_exit_context(
+        &self,
+        selection: ExitLeafSelection,
+    ) -> Result<ExitContext, SparkWalletError> {
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
         let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         Ok(ExitContext {

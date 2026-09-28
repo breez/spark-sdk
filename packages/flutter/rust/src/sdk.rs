@@ -154,6 +154,66 @@ impl BreezSdk {
         self.inner.import_unilateral_exit_state(request).await
     }
 
+    /// Quotes a recovery of the selected leaves: how each is recovered, the exact
+    /// fees, and how much to fund.
+    pub async fn prepare_recover_funds(
+        &self,
+        request: PrepareRecoverFundsRequest,
+    ) -> Result<PrepareRecoverFundsResponse, SdkError> {
+        self.inner.prepare_recover_funds(request).await
+    }
+
+    /// Builds and signs the recovery from a quote and the actual funding UTXOs,
+    /// signing the CPFP inputs with the built-in single-key signer: pass the
+    /// funding inputs' secret key bytes as `signer_secret_key`, or nothing when
+    /// the request has no funding inputs. To sign with a custom scheme (custom
+    /// scripts, multisig, a hardware wallet, or keeping key material out of the
+    /// SDK), use [`Self::recover_funds_with_signer`].
+    pub async fn recover_funds(
+        &self,
+        request: RecoverFundsRequest,
+        signer_secret_key: Option<Vec<u8>>,
+    ) -> Result<RecoverFundsResponse, SdkError> {
+        let signer: Option<Arc<dyn breez_sdk_spark::signer::CpfpSigner>> = match signer_secret_key {
+            Some(key) => Some(Arc::new(
+                breez_sdk_spark::signer::SingleKeySigner::new(key)
+                    .map_err(|e| SdkError::Generic(format!("Invalid signer key: {e}")))?,
+            )),
+            None => None,
+        };
+        self.inner.recover_funds(request, signer).await
+    }
+
+    /// Builds and signs the recovery with a caller-provided signer. The
+    /// `sign_psbt` callback receives the serialized CPFP PSBT, signs the inputs
+    /// that are not already finalized with any scheme (custom scripts, multisig,
+    /// a hardware wallet), and returns the serialized signed PSBT; a throw
+    /// surfaces as an error. For a single funding key, prefer
+    /// [`Self::recover_funds`].
+    pub async fn recover_funds_with_signer(
+        &self,
+        request: RecoverFundsRequest,
+        sign_psbt: impl Fn(Vec<u8>) -> DartFnFuture<anyhow::Result<Vec<u8>>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<RecoverFundsResponse, SdkError> {
+        let signer = Arc::new(CallbackCpfpSigner {
+            sign_psbt: Arc::new(sign_psbt),
+        });
+        self.inner.recover_funds(request, Some(signer)).await
+    }
+
+    /// Reads a recovery you kept back against the chain: which of its
+    /// transactions are now in a block, and whether it can still be finished as
+    /// it stands.
+    pub async fn check_recover_funds(
+        &self,
+        request: CheckRecoverFundsRequest,
+    ) -> Result<CheckRecoverFundsResponse, SdkError> {
+        self.inner.check_recover_funds(request).await
+    }
+
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,

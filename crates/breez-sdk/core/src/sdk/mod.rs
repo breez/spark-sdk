@@ -8,12 +8,14 @@ mod lightning_address;
 mod lightning_sender;
 mod lnurl;
 mod payments;
+mod recover_funds;
 mod runtime;
 mod sync;
 mod sync_coordinator;
 mod token_allowances;
 mod unilateral_exit;
 mod unilateral_exit_backup;
+mod watchtower_exit;
 
 pub(crate) use helpers::partner_id;
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};
@@ -103,6 +105,10 @@ pub struct BreezSdk {
     /// Serialises claim attempts on the same deposit across the sync cascade
     /// and explicit `claim_deposit` calls.
     pub(crate) claim_guards: deposits::ClaimGuards,
+    /// Held while a stored recovery row is read and rewritten, never across a
+    /// network call.
+    pub(crate) recovery_state_lock: Arc<Mutex<()>>,
+    pub(crate) recovery_checks: Arc<Mutex<recover_funds::RecoveryChecks>>,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
     /// and LNURL lookups honour the proxy and ride the redirect-validating

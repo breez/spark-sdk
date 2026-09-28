@@ -121,7 +121,7 @@ suspend fun handleUnilateralExit(sdk: BreezSdk, reader: LineReader, args: List<S
     }
 
     val selection = if (leafIds.isEmpty()) {
-        ExitLeafSelection.Auto
+        ExitLeafSelection.All
     } else {
         ExitLeafSelection.Specific(leafIds = leafIds)
     }
@@ -194,13 +194,13 @@ fun parseCpfpInput(s: String, kind: CpfpFundingKind): CpfpInput {
         CpfpFundingKind.P2wpkh -> CpfpInput.P2wpkh(
             txid = txid,
             vout = vout,
-            value = value,
+            valueSats = value,
             pubkey = pubkey,
         )
         CpfpFundingKind.P2tr -> CpfpInput.P2tr(
             txid = txid,
             vout = vout,
-            value = value,
+            valueSats = value,
             pubkey = pubkey,
         )
         is CpfpFundingKind.Custom ->
@@ -289,19 +289,19 @@ private fun deserializeFundingInput(obj: JsonObject): CpfpInput {
         "P2wpkh" -> CpfpInput.P2wpkh(
             txid = obj["txid"].asString,
             vout = obj["vout"].asLong.toUInt(),
-            value = obj["value"].asLong.toULong(),
+            valueSats = obj["value_sats"].asLong.toULong(),
             pubkey = obj["pubkey"].asString,
         )
         "P2tr" -> CpfpInput.P2tr(
             txid = obj["txid"].asString,
             vout = obj["vout"].asLong.toUInt(),
-            value = obj["value"].asLong.toULong(),
+            valueSats = obj["value_sats"].asLong.toULong(),
             pubkey = obj["pubkey"].asString,
         )
         "Custom" -> CpfpInput.Custom(
             txid = obj["txid"].asString,
             vout = obj["vout"].asLong.toUInt(),
-            value = obj["value"].asLong.toULong(),
+            valueSats = obj["value_sats"].asLong.toULong(),
             scriptPubkeyHex = obj["script_pubkey_hex"].asString,
             signedInputWeight = obj["signed_input_weight"].asLong.toULong(),
         )
