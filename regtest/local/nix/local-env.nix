@@ -126,6 +126,9 @@ let
       scgi_temp_path tmp/scgi;
       server {
         listen @BIND_ADDRESS@:@MEMPOOL_PORT@;
+        # For wallets in a browser. Set once, over whatever an upstream sends.
+        proxy_hide_header Access-Control-Allow-Origin;
+        add_header Access-Control-Allow-Origin * always;
         location /api/v1/ws {
           proxy_pass http://127.0.0.1:@MEMPOOL_API_PORT@;
           proxy_http_version 1.1;
