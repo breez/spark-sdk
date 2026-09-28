@@ -162,6 +162,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/itest-images
         with:
+          images: spark-so spark-migrations sspd
           build: 'true'
 
       - name: Build the snapshot
@@ -257,8 +258,12 @@ jobs:
           name: itest-state-snapshot
           path: crates/spark-itest/state-snapshot
 
+      # `make compat-itest` builds the daemon's image when it is missing, for
+      # rebuilding a stale snapshot, so it is loaded here rather than built.
       - name: Load the itest images
         uses: ./.github/actions/itest-images
+        with:
+          images: spark-so spark-migrations sspd
 
       - name: Run cross-version signer tests
         run: make compat-itest

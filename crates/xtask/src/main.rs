@@ -177,7 +177,10 @@ enum Commands {
     ItestBootstrapSnapshotKey {},
 
     /// Build the images a local cluster runs, skipping those already present.
-    ItestImages {},
+    ItestImages {
+        /// The images to build; every image when none is named.
+        images: Vec<String>,
+    },
 
     /// Run cross-version signer compatibility tests: flows started by the
     /// previous SDK release (git tag pinned in spark-compat-itest) are
@@ -235,7 +238,7 @@ fn main() -> Result<()> {
         Commands::Itest {} => itest_cmd(),
         Commands::CaptureItestState {} => capture_itest_state_cmd(),
         Commands::ItestBootstrapSnapshotKey {} => itest_bootstrap_snapshot_key_cmd(),
-        Commands::ItestImages {} => prepare_itest_images().map(|_| ()),
+        Commands::ItestImages { images } => itest_images_cmd(&images),
         Commands::CompatItest {} => compat_itest_cmd(),
         Commands::FlutterCheck {} => flutter_check_cmd(),
         Commands::SyncPasskeyCore { check } => sync_passkey_core_cmd(check),
@@ -370,7 +373,7 @@ fn test_cmd(
     // breez-itest runs a local cluster only under `local-itest`, which this
     // command cannot enable.
     if package.as_deref() == Some("spark-itest") {
-        let sh = prepare_itest_images()?;
+        let sh = prepare_itest_images(ITEST_IMAGES)?;
         ensure_itest_state(&sh)?;
     }
 
@@ -1004,7 +1007,7 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 }
 
 fn itest_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+    let sh = prepare_itest_images(ITEST_IMAGES)?;
     ensure_itest_state(&sh)?;
 
     // Two threads, since each local-cluster test stands up a bitcoind and operator
@@ -1067,7 +1070,7 @@ fn itest_bootstrap_snapshot_key_cmd() -> Result<()> {
 }
 
 fn capture_itest_state_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
     capture_itest_state(&sh)
 }
 
@@ -1092,7 +1095,9 @@ fn capture_itest_state(sh: &Shell) -> Result<()> {
 }
 
 fn compat_itest_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+    // The tests start no daemon: its image is for `ensure_itest_state`, which
+    // rebuilds a stale snapshot.
+    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
     ensure_itest_state(&sh)?;
 
     // The compat crate is a standalone workspace (it links the previous SDK
@@ -1105,9 +1110,24 @@ fn compat_itest_cmd() -> Result<()> {
     Ok(())
 }
 
-/// Pulls the base images and builds the images a local cluster runs, skipping
-/// those already present.
-fn prepare_itest_images() -> Result<Shell> {
+/// Every image a local cluster can run.
+const ITEST_IMAGES: &[&str] = &["spark-so", "spark-migrations", "ldk-server", "sspd"];
+
+/// What building the state snapshot runs: the operators and the daemon.
+const SNAPSHOT_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+
+fn itest_images_cmd(images: &[String]) -> Result<()> {
+    let named: Vec<&str> = images.iter().map(String::as_str).collect();
+    let images = if named.is_empty() {
+        ITEST_IMAGES
+    } else {
+        &named
+    };
+    prepare_itest_images(images).map(|_| ())
+}
+
+/// Pulls the base images and builds `images`, skipping those already present.
+fn prepare_itest_images(images: &[&str]) -> Result<Shell> {
     let sh = Shell::new()?;
 
     // Verify Docker is available
@@ -1136,7 +1156,7 @@ fn prepare_itest_images() -> Result<Shell> {
         .ok_or_else(|| anyhow::anyhow!("invalid workspace path"))?
         .to_string();
 
-    for (image, tag) in itest_image_tags(&sh)? {
+    for (image, tag) in itest_image_tags(&sh, images)? {
         let reference = format!("{image}:{tag}");
         if cmd!(sh, "docker image inspect {reference}")
             .ignore_stdout()
@@ -1167,12 +1187,12 @@ fn prepare_itest_images() -> Result<Shell> {
     Ok(sh)
 }
 
-/// The images a local cluster runs and the tags they are built under, from the
-/// itest harness so that what is built is what the fixtures then run.
-fn itest_image_tags(sh: &Shell) -> Result<Vec<(String, String)>> {
+/// The tags `images` are built under, from the itest harness so that what is
+/// built is what the fixtures then run.
+fn itest_image_tags(sh: &Shell, images: &[&str]) -> Result<Vec<(String, String)>> {
     let printed = cmd!(
         sh,
-        "cargo run --quiet -p spark-itest --bin itest-image-tags"
+        "cargo run --quiet -p spark-itest --bin itest-image-tags -- {images...}"
     )
     .read()?;
     printed

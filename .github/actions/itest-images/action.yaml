@@ -5,6 +5,10 @@ description: >
   for the jobs that follow. Needs a Rust toolchain: the tags come from the itest
   harness, so the images cached are the ones the fixtures then run.
 inputs:
+  images:
+    description: 'The images to load, separated by spaces; every image when empty'
+    required: false
+    default: ''
   build:
     description: 'Build and cache the images the cache did not hold'
     required: false
@@ -19,11 +23,12 @@ runs:
       shell: bash
       run: |
         mkdir -p /tmp/itest-images
-        cargo run --quiet -p spark-itest --bin itest-image-tags > /tmp/itest-images/tags
+        cargo run --quiet -p spark-itest --bin itest-image-tags -- ${{ inputs.images }} > /tmp/itest-images/tags
         tr '-' '_' < /tmp/itest-images/tags >> "$GITHUB_OUTPUT"
 
     - name: Restore the operator image
       id: spark-so
+      if: steps.tags.outputs.spark_so != ''
       uses: actions/cache/restore@v4
       with:
         path: /tmp/itest-images/spark-so.tar
@@ -31,6 +36,7 @@ runs:
 
     - name: Restore the migrations image
       id: spark-migrations
+      if: steps.tags.outputs.spark_migrations != ''
       uses: actions/cache/restore@v4
       with:
         path: /tmp/itest-images/spark-migrations.tar
@@ -38,6 +44,7 @@ runs:
 
     - name: Restore the lightning node image
       id: ldk-server
+      if: steps.tags.outputs.ldk_server != ''
       uses: actions/cache/restore@v4
       with:
         path: /tmp/itest-images/ldk-server.tar
@@ -45,6 +52,7 @@ runs:
 
     - name: Restore the daemon image
       id: sspd
+      if: steps.tags.outputs.sspd != ''
       uses: actions/cache/restore@v4
       with:
         path: /tmp/itest-images/sspd.tar
@@ -65,7 +73,7 @@ runs:
       if: inputs.build == 'true'
       shell: bash
       run: |
-        make itest-images
+        cargo xtask itest-images ${{ inputs.images }}
         while IFS='=' read -r image tag; do
           tarball="/tmp/itest-images/$image.tar"
           if [ ! -e "$tarball" ]; then
@@ -74,28 +82,28 @@ runs:
         done < /tmp/itest-images/tags
 
     - name: Cache the operator image
-      if: inputs.build == 'true' && steps.spark-so.outputs.cache-hit != 'true'
+      if: inputs.build == 'true' && steps.tags.outputs.spark_so != '' && steps.spark-so.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: /tmp/itest-images/spark-so.tar
         key: itest-image-spark-so-${{ runner.os }}-${{ steps.tags.outputs.spark_so }}
 
     - name: Cache the migrations image
-      if: inputs.build == 'true' && steps.spark-migrations.outputs.cache-hit != 'true'
+      if: inputs.build == 'true' && steps.tags.outputs.spark_migrations != '' && steps.spark-migrations.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: /tmp/itest-images/spark-migrations.tar
         key: itest-image-spark-migrations-${{ runner.os }}-${{ steps.tags.outputs.spark_migrations }}
 
     - name: Cache the lightning node image
-      if: inputs.build == 'true' && steps.ldk-server.outputs.cache-hit != 'true'
+      if: inputs.build == 'true' && steps.tags.outputs.ldk_server != '' && steps.ldk-server.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: /tmp/itest-images/ldk-server.tar
         key: itest-image-ldk-server-${{ runner.os }}-${{ steps.tags.outputs.ldk_server }}
 
     - name: Cache the daemon image
-      if: inputs.build == 'true' && steps.sspd.outputs.cache-hit != 'true'
+      if: inputs.build == 'true' && steps.tags.outputs.sspd != '' && steps.sspd.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: /tmp/itest-images/sspd.tar
