@@ -88,7 +88,8 @@ use crate::{
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{
-        CpfpChangeInput, ExitLeafSelection, ExitStateExport, ExitStateImport, RefundOutput,
+        CpfpChangeInput, EXITING_STATUSES, ExitLeafSelection, ExitStateExport, ExitStateImport,
+        RefundOutput,
     },
 };
 
@@ -1653,9 +1654,8 @@ impl SparkWallet {
     }
 
     /// Resolves an [`ExitLeafSelection`] into concrete leaf IDs and the
-    /// profitability filter. `Auto` sweeps every available leaf and keeps only
-    /// profitable ones; `Specific` exits exactly the requested leaves regardless
-    /// of profitability.
+    /// profitability filter. `Auto` and `Exiting` keep only profitable leaves;
+    /// `Specific` exits exactly the requested leaves regardless of profitability.
     async fn resolve_leaf_selection(
         &self,
         selection: ExitLeafSelection,
@@ -1675,6 +1675,17 @@ impl SparkWallet {
                     .into_iter()
                     .chain(leaves.not_available)
                     .chain(leaves.available_missing_from_operators)
+                    .map(|l| l.id)
+                    .collect();
+                leaf_ids.sort();
+                leaf_ids.dedup();
+                Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
+            }
+            ExitLeafSelection::Exiting => {
+                let mut leaf_ids: Vec<TreeNodeId> = self
+                    .list_leaves_with_status(&EXITING_STATUSES)
+                    .await?
+                    .into_iter()
                     .map(|l| l.id)
                     .collect();
                 leaf_ids.sort();
@@ -1863,6 +1874,19 @@ impl SparkWallet {
         Ok(ExitContext {
             leaf_ids,
             filter,
+            tree_nodes,
+        })
+    }
+
+    /// The context of exactly `leaf_ids`, without the refresh.
+    pub async fn load_stored_exit_context(
+        &self,
+        leaf_ids: Vec<TreeNodeId>,
+    ) -> Result<ExitContext, SparkWalletError> {
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
+        Ok(ExitContext {
+            leaf_ids,
+            filter: UnilateralExitLeafFilter::All,
             tree_nodes,
         })
     }
@@ -4485,5 +4509,43 @@ mod tests {
             &output_key,
         )
         .expect("the sweep signs with the key the refund pays to");
+    }
+
+    async fn wallet_holding(leaves: &[TreeNode]) -> SparkWallet {
+        let store = Arc::new(InMemoryTreeStore::new());
+        store.add_leaves(leaves).await.unwrap();
+        wallet_over(store as Arc<dyn TreeStore>).await
+    }
+
+    #[macros::async_test_all]
+    async fn an_exiting_selection_takes_only_the_leaves_whose_exit_started() {
+        let reachable: Vec<TreeNode> = [
+            TreeNodeStatus::OnChain,
+            TreeNodeStatus::Exited,
+            TreeNodeStatus::ParentExited,
+        ]
+        .into_iter()
+        .map(|status| create_test_node_with_parent(&format!("{status:?}"), None, status))
+        .collect();
+        let others = [
+            TreeNodeStatus::Available,
+            TreeNodeStatus::RenewLocked,
+            TreeNodeStatus::WatchtowerExited,
+            TreeNodeStatus::WatchtowerExitRecovered,
+        ]
+        .into_iter()
+        .map(|status| create_test_node_with_parent(&format!("{status:?}"), None, status));
+        let wallet =
+            wallet_holding(&reachable.iter().cloned().chain(others).collect::<Vec<_>>()).await;
+
+        let (leaf_ids, filter) = wallet
+            .resolve_leaf_selection(ExitLeafSelection::Exiting)
+            .await
+            .unwrap();
+
+        let mut expected: Vec<TreeNodeId> = reachable.into_iter().map(|l| l.id).collect();
+        expected.sort();
+        assert_eq!(leaf_ids, expected);
+        assert_eq!(filter, UnilateralExitLeafFilter::ProfitableOnly);
     }
 }
