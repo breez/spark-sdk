@@ -19,13 +19,13 @@ mod parsing_inputs;
 mod passkey;
 mod prepare_payment_link;
 mod receive_payment;
+mod recover_funds;
 mod refunding_payments;
 mod sdk_building;
 mod send_payment;
 mod token_allowances;
 mod tokens;
 mod turnkey;
-mod unilateral_exit;
 mod user_settings;
 mod webhooks;
 
