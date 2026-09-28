@@ -24,8 +24,11 @@ use super::repository::{LightningSendRecord, LightningStore, SendPaymentStatus};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Node events and new sends wake the worker.
+/// Node events and new sends wake the worker. After a pass that fails to advance
+/// a send, it tries again after `SEND_RETRY_DELAY`, doubling up to the backup
+/// interval.
 const SEND_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const SEND_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// The relative timelock, in blocks, of the sender's reclaim path on a lightning
 /// HTLC.
@@ -429,28 +432,38 @@ pub struct SendWorkerDeps {
 
 pub async fn run_send_loop(deps: SendWorkerDeps, token: CancellationToken) {
     info!("Starting lightning send loop");
+    let mut retry: Option<Duration> = None;
     loop {
         tokio::select! {
             () = token.cancelled() => {
                 info!("Lightning send loop cancelled");
                 return;
             }
-            () = deps.wakeup.waited() => {}
-            () = tokio::time::sleep(SEND_BACKUP_INTERVAL) => {}
+            () = deps.wakeup.waited() => retry = None,
+            () = tokio::time::sleep(retry.unwrap_or(SEND_BACKUP_INTERVAL)) => {}
         }
-        if let Err(e) = process_pending_sends(&deps).await {
+        let failed = process_pending_sends(&deps).await.unwrap_or_else(|e| {
             error!("Lightning send check failed: {e}");
-        }
+            true
+        });
+        retry = failed.then(|| {
+            retry.map_or(SEND_RETRY_DELAY, |delay| {
+                delay.saturating_mul(2).min(SEND_BACKUP_INTERVAL)
+            })
+        });
     }
 }
 
-pub async fn process_pending_sends(deps: &SendWorkerDeps) -> Result<(), BoxError> {
+/// Returns whether advancing any send failed.
+pub async fn process_pending_sends(deps: &SendWorkerDeps) -> Result<bool, BoxError> {
+    let mut failed = false;
     for record in deps.store.pending_sends().await? {
         if let Err(e) = process_send(deps, &record).await {
             error!(send_id = %record.id, "failed to advance lightning send: {e}");
+            failed = true;
         }
     }
-    Ok(())
+    Ok(failed)
 }
 
 /// Takes the send as far as it can go in one pass.
