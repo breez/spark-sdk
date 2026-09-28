@@ -117,19 +117,27 @@ impl BitcoinChainService for LocalBitcoindChainService {
             )
             .await
             .map_err(to_chain_err)?;
-        let confirmations = result
-            .get("confirmations")
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0);
-        let block_height = result
-            .get("blockheight")
-            .and_then(|c| c.as_u64())
-            .and_then(|h| u32::try_from(h).ok());
-        let block_time = result.get("blocktime").and_then(|c| c.as_u64());
+        // `getrawtransaction` names the block but not its height, which is what
+        // the SDK counts confirmations from.
+        let Some(block_hash) = result.get("blockhash").and_then(Value::as_str) else {
+            return Ok(TxStatus {
+                confirmed: false,
+                block_height: None,
+                block_time: None,
+            });
+        };
+        let header: Value = self
+            .bitcoind
+            .rpc("getblockheader", &[json!(block_hash)])
+            .await
+            .map_err(to_chain_err)?;
         Ok(TxStatus {
-            confirmed: confirmations > 0,
-            block_height,
-            block_time,
+            confirmed: true,
+            block_height: header
+                .get("height")
+                .and_then(Value::as_u64)
+                .and_then(|h| u32::try_from(h).ok()),
+            block_time: result.get("blocktime").and_then(Value::as_u64),
         })
     }
 
