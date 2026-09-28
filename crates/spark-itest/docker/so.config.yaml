@@ -20,6 +20,9 @@ knobs:
     # A rollout percentage (default 0) for BroadcastTokenTransaction, which the
     # SDK's token APIs call and the operator otherwise refuses as unimplemented.
     spark.so.tokens.token_transaction_v3_enabled: 100
+    # Off by default: the token transaction events on the SubscribeToEvents
+    # stream, from which the SDK reports a token payment before its next sync.
+    spark.so.tokens.tx_events_enabled: 1
     # Routes the SSP's counter transfer through the consensus flow, which fences a
     # swap's primary transfer on every operator rather than the coordinator alone.
     spark.so.use_consensus_initiate_counter_transfer: 1

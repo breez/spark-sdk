@@ -947,43 +947,20 @@ async fn test_06_supply_limits(#[future] env: Result<Environment>) -> Result<()>
 }
 
 /// Test 7: Token payments arrive via SO event stream without manual sync
+#[rstest]
 #[test_log::test(tokio::test)]
-async fn test_07_token_payment_realtime_event() -> Result<()> {
+async fn test_07_token_payment_realtime_event(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_07_token_payment_realtime_event ===");
 
     // Build SDKs with sync effectively disabled so any balance/event update
     // we observe must come from the SO real-time notification, not a background sync.
-    let mut cfg = default_config(Network::Regtest);
-    cfg.sync_interval_secs = u32::MAX;
-    cfg.real_time_sync_server_url = None;
-
-    let alice_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-alice-rt")
-        .tempdir()?;
-    let mut alice_seed = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut alice_seed);
-    let mut alice = build_sdk_with_custom_config(
-        alice_dir.path().to_string_lossy().to_string(),
-        alice_seed,
-        cfg.clone(),
-        Some(alice_dir),
-        false,
-    )
-    .await?;
-
-    let bob_dir = tempfile::Builder::new()
-        .prefix("breez-sdk-bob-rt")
-        .tempdir()?;
-    let mut bob_seed = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bob_seed);
-    let mut bob = build_sdk_with_custom_config(
-        bob_dir.path().to_string_lossy().to_string(),
-        bob_seed,
-        cfg,
-        Some(bob_dir),
-        false,
-    )
-    .await?;
+    let mut alice = env
+        .create_wallet_with(|cfg| cfg.sync_interval_secs = u32::MAX)
+        .await?;
+    let mut bob = env
+        .create_wallet_with(|cfg| cfg.sync_interval_secs = u32::MAX)
+        .await?;
 
     // Create and mint test token
     let token_metadata = create_mint_test_token(&alice).await?;
