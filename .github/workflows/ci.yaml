@@ -250,7 +250,6 @@ jobs:
   breez-test:
     name: Breez integration tests
     runs-on: ubuntu-latest
-    needs: state-snapshot
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
@@ -268,12 +267,6 @@ jobs:
       - name: Restore lnurl server image
         id: lnurl-image
         uses: ./.github/actions/lnurl-image-cache
-
-      - name: Download the state snapshot
-        uses: actions/download-artifact@v4
-        with:
-          name: itest-state-snapshot
-          path: crates/spark-itest/state-snapshot
 
       - name: Run Tests
         run: make breez-itest

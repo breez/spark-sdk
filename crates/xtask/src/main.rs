@@ -363,9 +363,9 @@ fn test_cmd(
     doc: bool,
     rest: Vec<String>,
 ) -> Result<()> {
-    // Integration-test packages spin up docker containers from locally-built
-    // images; make sure those exist before the test run.
-    if matches!(package.as_deref(), Some("spark-itest" | "breez-sdk-itest")) {
+    // breez-itest runs a local cluster only under `local-itest`, which this
+    // command cannot enable.
+    if package.as_deref() == Some("spark-itest") {
         let sh = prepare_itest_images()?;
         ensure_itest_state(&sh)?;
     }
