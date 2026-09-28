@@ -32,7 +32,7 @@ How payments are authorized is decided by the Turnkey policy attached to each cr
 
 ### Server-side signing
 
-The server's API credential is allowed to run all Spark signing activities. Every SDK flow then works exactly as documented, starting with [Sending payments](send_payment.md): the server prepares, signs and sends on its own. Use this when the server is trusted to send payments autonomously.
+The server's API credential is allowed to run all Spark signing activities. Every SDK flow then works as documented, with the exception listed under [Availability](#availability), starting with [Sending payments](send_payment.md): the server prepares, signs and sends on its own. Use this when the server is trusted to send payments autonomously.
 
 ### User-approved payments
 
@@ -42,3 +42,4 @@ The policy allows the server's credential to run everything except the transfer 
 
 - Turnkey signers are available on all platforms except Flutter, which does not support external signers (see [Using an External Signer](external_signer.md)).
 - In the Rust crate the integration is behind the `turnkey` cargo feature. The published bindings ship with it enabled.
+- A Turnkey wallet cannot recover funds cooperatively yet: Turnkey does not support the signing round a [cooperative recovery](recover_funds.md) needs, so every {{#enum RecoveryMethod::Cooperative}} leaf comes back in {{#name failed}} with {{#enum CooperativeRecoveryError::Generic}}.

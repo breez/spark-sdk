@@ -136,6 +136,11 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		retryInSecs := event.RetryInSecs
 		_ = conversion
 		_ = retryInSecs
+	case breez_sdk_spark.SdkEventRecoverableFunds:
+		// Funds left the balance and wait to be recovered on-chain.
+		// Quote their recovery with PrepareRecoverFunds.
+		recoverableFundsSats := event.RecoverableFundsSats
+		_ = recoverableFundsSats
 	default:
 		// Handle any future event types
 	}

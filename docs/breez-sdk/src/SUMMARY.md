@@ -68,7 +68,7 @@
   - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)
   - [Managing webhooks](guide/webhooks.md)
-  - [Unilateral exit](guide/unilateral_exit.md)
+  - [Recovering funds](guide/recover_funds.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---
