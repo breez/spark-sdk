@@ -14,9 +14,10 @@ use crate::wakeup::Wakeup;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// A new swap wakes the loop, so the timer only retries swaps that could not be
-/// settled yet.
+/// A new swap wakes the loop. While a swap is left unsettled, it tries again
+/// after `CLAIM_RETRY_DELAY`, doubling up to the backup interval.
 const CLAIM_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const CLAIM_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub struct SwapClaimDeps {
     pub swap_repo: Arc<dyn SwapStore>,
@@ -31,26 +32,34 @@ pub struct SwapClaimDeps {
 pub async fn run_swap_claim_loop(deps: SwapClaimDeps, token: CancellationToken) {
     info!("Starting swap claim loop");
 
+    let mut retry: Option<Duration> = None;
     loop {
         tokio::select! {
             () = token.cancelled() => {
                 info!("Swap claim loop cancelled");
                 return;
             }
-            () = deps.wakeup.waited() => {}
-            () = tokio::time::sleep(CLAIM_BACKUP_INTERVAL) => {}
+            () = deps.wakeup.waited() => retry = None,
+            () = tokio::time::sleep(retry.unwrap_or(CLAIM_BACKUP_INTERVAL)) => {}
         }
 
-        if let Err(e) = claim_pending_swaps(&deps).await {
+        let unsettled = claim_pending_swaps(&deps).await.unwrap_or_else(|e| {
             error!("Swap claim check failed: {e}");
-        }
+            true
+        });
+        retry = unsettled.then(|| {
+            retry.map_or(CLAIM_RETRY_DELAY, |delay| {
+                delay.saturating_mul(2).min(CLAIM_BACKUP_INTERVAL)
+            })
+        });
     }
 }
 
-pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<(), BoxError> {
+/// Returns whether any swap is left unsettled.
+pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<bool, BoxError> {
     let swaps = deps.swap_repo.get_unclaimed_swaps().await?;
     if swaps.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let futures = swaps.into_iter().map(|swap| claim_one_swap(deps, swap));
@@ -59,7 +68,7 @@ pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<(), BoxError> {
             error!("failed to claim swap: {e}");
         }
     }
-    Ok(())
+    Ok(!deps.swap_repo.get_unclaimed_swaps().await?.is_empty())
 }
 
 async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), BoxError> {
