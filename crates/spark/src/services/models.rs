@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::{Transaction, Txid};
-use bitcoin::{consensus::deserialize, secp256k1::PublicKey};
+use bitcoin::{ScriptBuf, Transaction, Txid};
+use bitcoin::{
+    consensus::deserialize,
+    secp256k1::{PublicKey, Secp256k1, VerifyOnly},
+};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{
     Identifier,
@@ -32,6 +35,7 @@ use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
 use crate::utils::frost::sign_frost_batch;
 use crate::utils::time::{prost_timestamp_to_secs, prost_timestamp_to_web_time};
+use crate::utils::transactions::is_ephemeral_anchor_output;
 
 use super::ServiceError;
 
@@ -678,6 +682,31 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
     }
 }
 
+/// Shared context: `Secp256k1::new()` allocates on every call, and leaf
+/// validation runs once per node per operator on every refresh.
+static SECP_VERIFY: LazyLock<Secp256k1<VerifyOnly>> = LazyLock::new(Secp256k1::verification_only);
+
+/// Attempts to find the leaf's value from the node transaction's output.
+/// Returns `None` if we don't understand the node transaction's shape.
+pub(crate) fn leaf_output_value(
+    node_tx: &Transaction,
+    verifying_public_key: &PublicKey,
+) -> Option<u64> {
+    match node_tx.output.len() {
+        1 => {}
+        2 if is_ephemeral_anchor_output(&node_tx.output[1]) => {}
+        _ => return None,
+    }
+
+    let output = &node_tx.output[0];
+    let expected_script = ScriptBuf::new_p2tr(
+        &SECP_VERIFY,
+        verifying_public_key.x_only_public_key().0,
+        None,
+    );
+    (output.script_pubkey == expected_script).then(|| output.value.to_sat())
+}
+
 impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
     type Error = ServiceError;
 
@@ -694,7 +723,7 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
             None => None,
         };
 
-        let node_tx = deserialize(&node.node_tx)
+        let node_tx: Transaction = deserialize(&node.node_tx)
             .map_err(|_| ServiceError::Generic("Invalid node transaction".to_string()))?;
 
         let refund_tx = if node.refund_tx.is_empty() {
@@ -751,6 +780,37 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
             .try_into()?;
 
         let status = TreeNodeStatus::from(node.status.as_str());
+
+        if refund_tx.is_some() {
+            match leaf_output_value(&node_tx, &verifying_public_key) {
+                Some(value) if value != node.value => warn!(
+                    "Node {} reports value {} but its transaction carries {value}",
+                    node.id, node.value
+                ),
+                None => warn!(
+                    "Node {} transaction backs no value for the reported {}",
+                    node.id, node.value
+                ),
+                Some(_) => {}
+            }
+        }
+
+        // `vout` is the index the node's transaction spends in its parent.
+        // Operators predating buildonspark/spark@c8bfcfcf ("Use leaf parent vout
+        // in renew signing") report the index the leaf held under its previous
+        // parent when renewing a timelock, and that fix only rewrites the index
+        // on a leaf's next renewal.
+        if let Some(vout) = node_tx
+            .input
+            .first()
+            .map(|input| input.previous_output.vout)
+            && vout != node.vout
+        {
+            warn!(
+                "Node {} reports vout {} but its transaction spends index {vout}",
+                node.id, node.vout
+            );
+        }
 
         Ok(TreeNode {
             id,
@@ -1616,14 +1676,18 @@ impl From<operator_rpc::spark::PreimageRequestStatus> for PreimageRequestStatus 
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::consensus::serialize;
-    use bitcoin::secp256k1::PublicKey;
-    use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use bitcoin::consensus::{deserialize, serialize};
+    use bitcoin::hashes::Hash;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
+    use bitcoin::{
+        Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, absolute::LockTime,
+        transaction::Version,
+    };
     use frost_secp256k1_tr::Identifier;
     use macros::test_all;
     use std::collections::BTreeMap;
 
-    use super::{ServiceError, build_refund_signing_job, convert_page};
+    use super::{ServiceError, build_refund_signing_job, convert_page, leaf_output_value};
     use crate::Network;
     use crate::operator::rpc as operator_rpc;
     use crate::signer::{FrostDerivation, LeafSigningKey};
@@ -1639,26 +1703,64 @@ mod tests {
         175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
     ];
 
+    const TEST_LEAF_VALUE: u64 = 1000;
+
+    fn test_verifying_script() -> ScriptBuf {
+        let pubkey = PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap();
+        ScriptBuf::new_p2tr(&Secp256k1::new(), pubkey.x_only_public_key().0, None)
+    }
+
+    fn anchor_output() -> TxOut {
+        TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+        }
+    }
+
+    /// A node transaction spending the parent's output `vout`, in the shape the
+    /// operators build: one output plus a trailing ephemeral anchor.
+    fn node_tx_with(vout: u32, outputs: Vec<TxOut>) -> Vec<u8> {
+        serialize(&Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::all_zeros(),
+                    vout,
+                },
+                ..Default::default()
+            }],
+            output: outputs,
+        })
+    }
+
+    fn leaf_node_tx(value: u64, vout: u32) -> Vec<u8> {
+        node_tx_with(
+            vout,
+            vec![
+                TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: test_verifying_script(),
+                },
+                anchor_output(),
+            ],
+        )
+    }
+
     fn create_proto_tree_node_full(
         owner_identity_public_key: Vec<u8>,
         owner_signing_public_key: Vec<u8>,
     ) -> operator_rpc::spark::TreeNode {
-        let dummy_tx = serialize(&Transaction {
-            version: Version::non_standard(3),
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        });
         let identifier = Identifier::try_from(1u16).unwrap();
         let identifier_hex = hex::encode(identifier.serialize());
 
         operator_rpc::spark::TreeNode {
             id: "01020304-0506-0708-090a-0b0c0d0e0f10".to_string(),
             tree_id: "test_tree".to_string(),
-            value: 1000,
+            value: TEST_LEAF_VALUE,
             parent_node_id: None,
-            node_tx: dummy_tx,
-            refund_tx: vec![],
+            node_tx: leaf_node_tx(TEST_LEAF_VALUE, 0),
+            refund_tx: node_tx_with(0, vec![anchor_output()]),
             direct_tx: vec![],
             direct_refund_tx: vec![],
             direct_from_cpfp_refund_tx: vec![],
@@ -1722,6 +1824,81 @@ mod tests {
             job.pending.node_id, node.id,
             "the operator-facing node id must not move with the key"
         );
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_keeps_the_reported_value_and_vout() {
+        let mut proto_node = create_proto_tree_node(TEST_PUBKEY_BYTES.to_vec());
+        // A deflated value is what would let a cooperative exit underpay, and a
+        // stale vout is what an operator reports after renewing a timelock.
+        // Both survive here: the paths that act on them read the transaction.
+        proto_node.value = TEST_LEAF_VALUE - 400;
+        proto_node.vout = 1;
+        let tree_node = TreeNode::try_from(proto_node).unwrap();
+        assert_eq!(tree_node.value, TEST_LEAF_VALUE - 400);
+        assert_eq!(tree_node.vout, 1);
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_keeps_a_value_its_transaction_does_not_back() {
+        let mut proto_node = create_proto_tree_node(TEST_PUBKEY_BYTES.to_vec());
+        proto_node.node_tx = node_tx_with(
+            0,
+            vec![
+                TxOut {
+                    value: Amount::from_sat(TEST_LEAF_VALUE),
+                    script_pubkey: ScriptBuf::from(vec![0x51]),
+                },
+                anchor_output(),
+            ],
+        );
+        let tree_node = TreeNode::try_from(proto_node).unwrap();
+        assert_eq!(tree_node.value, TEST_LEAF_VALUE);
+    }
+
+    #[test_all]
+    fn test_leaf_output_value_reads_the_amount_a_leaf_shape_carries() {
+        let key = PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap();
+        let tx = |outputs| -> Transaction { deserialize(&node_tx_with(0, outputs)).unwrap() };
+        let paying_the_leaf = TxOut {
+            value: Amount::from_sat(TEST_LEAF_VALUE),
+            script_pubkey: test_verifying_script(),
+        };
+
+        // One output, or one plus a trailing anchor, is the shape the operators
+        // build a leaf in.
+        assert_eq!(
+            leaf_output_value(&tx(vec![paying_the_leaf.clone()]), &key),
+            Some(TEST_LEAF_VALUE)
+        );
+        assert_eq!(
+            leaf_output_value(&tx(vec![paying_the_leaf.clone(), anchor_output()]), &key),
+            Some(TEST_LEAF_VALUE)
+        );
+
+        // An amount output 0 does not pay to the leaf is not the leaf's.
+        assert!(
+            leaf_output_value(
+                &tx(vec![TxOut {
+                    script_pubkey: ScriptBuf::from(vec![0x51]),
+                    ..paying_the_leaf.clone()
+                }]),
+                &key
+            )
+            .is_none()
+        );
+
+        // A second value-bearing output leaves it undecidable which one carries
+        // the leaf's value.
+        assert!(
+            leaf_output_value(
+                &tx(vec![paying_the_leaf.clone(), paying_the_leaf.clone()]),
+                &key
+            )
+            .is_none()
+        );
+
+        assert!(leaf_output_value(&tx(Vec::new()), &key).is_none());
     }
 
     #[test_all]

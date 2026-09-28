@@ -14,7 +14,7 @@ use crate::core::{Network, next_sequence};
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
 use crate::services::models::{
-    LeafRefundJobs, build_refund_signing_job, into_user_signed_job_groups,
+    LeafRefundJobs, build_refund_signing_job, into_user_signed_job_groups, leaf_output_value,
     map_signing_nonce_commitments, sign_leaf_refunds, split_signing_commitments_by_variant,
 };
 use crate::services::{ExitSpeed, LeafKeyTweak, Transfer, TransferId, TransferService};
@@ -216,7 +216,7 @@ impl CoopExitService {
             None => TransferId::generate(),
         };
 
-        let leaves_sum: u64 = leaves.iter().map(|l| l.node.value).sum();
+        let leaves_sum = exit_leaves_sum(&leaves)?;
         let expected_payout_amount_sats = if withdraw_all {
             leaves_sum.saturating_sub(fee_sats)
         } else {
@@ -683,6 +683,25 @@ impl CoopExitService {
     }
 }
 
+/// Sums the exiting leaves' values, read from each leaf's node transaction
+/// rather than from the value the operators reported.
+///
+/// Fails when a leaf's node transaction has an unexpected shape: its value is
+/// then unknown, and such a leaf could not be exited unilaterally either.
+fn exit_leaves_sum(leaves: &[LeafKeyTweak]) -> Result<u64, ServiceError> {
+    leaves
+        .iter()
+        .map(|LeafKeyTweak { node: leaf, .. }| {
+            leaf_output_value(&leaf.node_tx, &leaf.verifying_public_key).ok_or_else(|| {
+                ServiceError::ValidationError(format!(
+                    "leaf {} transaction does not back its reported value",
+                    leaf.id
+                ))
+            })
+        })
+        .sum()
+}
+
 fn validate_coop_exit_payout_transaction(
     raw_coop_exit_transaction: &str,
     coop_exit_txid: &str,
@@ -777,6 +796,64 @@ mod tests {
             script_pubkey: addr.script_pubkey(),
         }]);
         (serialize_hex(&tx), tx.compute_txid().to_string())
+    }
+
+    /// A leaf whose node tx pays `sats` to its verifying key, or to an unrelated
+    /// script when `backed` is false.
+    fn exit_leaf(seed: u8, reported: u64, sats: u64, backed: bool) -> LeafKeyTweak {
+        let secp = Secp256k1::new();
+        let verifying_public_key =
+            PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[seed; 32]).unwrap());
+        let script_pubkey = match backed {
+            true => ScriptBuf::new_p2tr(&secp, verifying_public_key.x_only_public_key().0, None),
+            false => ScriptBuf::from(vec![0x51]),
+        };
+        let node = TreeNode {
+            id: TreeNodeId::generate(),
+            tree_id: "tree".to_string(),
+            value: reported,
+            parent_node_id: None,
+            node_tx: exit_tx(vec![TxOut {
+                value: Amount::from_sat(sats),
+                script_pubkey,
+            }]),
+            refund_tx: None,
+            direct_tx: None,
+            direct_refund_tx: None,
+            direct_from_cpfp_refund_tx: None,
+            vout: 0,
+            verifying_public_key,
+            owner_identity_public_key: None,
+            signing_keyshare: crate::tree::SigningKeyshare {
+                owner_identifiers: Vec::new(),
+                threshold: 0,
+                public_key: verifying_public_key,
+            },
+            status: crate::tree::TreeNodeStatus::Available,
+        };
+        LeafKeyTweak {
+            signing_key: LeafSigningKey {
+                derived_from: node.id.clone(),
+            },
+            node,
+        }
+    }
+
+    #[test_all]
+    fn exit_sum_reads_the_amount_the_node_tx_carries() {
+        // The deflation that would let the SSP underpay: the operators report
+        // less than the transaction the exit spends actually carries.
+        let leaves = vec![exit_leaf(1, 600, 1000, true), exit_leaf(2, 500, 500, true)];
+        assert_eq!(exit_leaves_sum(&leaves).unwrap(), 1500);
+    }
+
+    #[test_all]
+    fn exit_sum_refuses_a_leaf_its_node_tx_does_not_back() {
+        let leaves = vec![
+            exit_leaf(1, 1000, 1000, true),
+            exit_leaf(2, 500, 500, false),
+        ];
+        assert!(exit_leaves_sum(&leaves).is_err());
     }
 
     #[test_all]

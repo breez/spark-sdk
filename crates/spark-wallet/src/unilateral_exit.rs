@@ -1084,7 +1084,18 @@ fn walk_branch(
         let live_outpoint = match prev_confirmed_txid {
             Some(txid) => OutPoint {
                 txid,
-                vout: node.vout,
+                // The index the node spends in its parent is the one its own
+                // transaction carries, not the one the operators report:
+                // operators predating buildonspark/spark@c8bfcfcf ("Use leaf
+                // parent vout in renew signing") report the index the leaf held
+                // under its previous parent after a timelock renewal, which
+                // would walk the wrong output. This path has to hold without
+                // the operators, so a stale index cannot wait for a swap.
+                vout: node
+                    .node_tx
+                    .input
+                    .first()
+                    .map_or(node.vout, |input| input.previous_output.vout),
             },
             None => deposit_outpoint,
         };
@@ -3395,6 +3406,41 @@ mod interpret_tests {
             queries
                 .iter()
                 .any(|q| matches!(q, ChainQuery::RefundAddress { .. }))
+        );
+    }
+
+    #[test]
+    fn walk_takes_the_parent_index_from_the_node_tx_not_the_reported_vout() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = tx_spending(deposit, 1);
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+
+        // An operator that renewed a timelock without rewriting the index still
+        // reports the one the leaf held under its previous parent, while its
+        // transaction spends the new parent's output 1.
+        let spent_index = OutPoint {
+            txid: root_txid,
+            vout: 1,
+        };
+        let leaf = treenode("leaf", Some("root"), tx_spending(spent_index, 2), 0);
+        let prepared = prepared_of(root, leaf);
+
+        let scan = scan_of(&prepared, &[spent(deposit, root_txid)]);
+
+        assert!(
+            scan.pending.contains(&ChainQuery::Outspend(spent_index)),
+            "the walk follows the index the transaction spends"
+        );
+        assert!(
+            !scan.pending.contains(&ChainQuery::Outspend(OutPoint {
+                txid: root_txid,
+                vout: 0,
+            })),
+            "the reported index is not followed"
         );
     }
 

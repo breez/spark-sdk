@@ -243,11 +243,10 @@ impl Swap {
                 })?;
             let signing_result_data: SigningResult = refund_signing_result.try_into()?;
 
-            let sighash = sighash_from_tx(
-                &signed_tx.tx,
-                0,
-                &leaf_key_tweak.node.node_tx.output[leaf_key_tweak.node.vout as usize],
-            )?;
+            // The refund transaction spends the node transaction's output 0, so
+            // that is the prevout the sighash commits to.
+            let sighash =
+                sighash_from_tx(&signed_tx.tx, 0, &leaf_key_tweak.node.node_tx.output[0])?;
 
             // Aggregate the user's already-produced FROST share (signed during
             // `prepare_transfer_request`, bound to `self_nonce_commitment`) with

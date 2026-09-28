@@ -423,13 +423,7 @@ impl TreeService for SynchronousTreeService {
             for leaf in &coordinator_leaves {
                 match operator_leaves_by_id.get(&leaf.id).copied() {
                     Some(operator_leaf) => {
-                        // TODO: move this logic to TreeNode method
-                        if operator_leaf.status != leaf.status
-                            || operator_leaf.signing_keyshare.public_key
-                                != leaf.signing_keyshare.public_key
-                            || operator_leaf.node_tx != leaf.node_tx
-                            || operator_leaf.refund_tx != leaf.refund_tx
-                        {
+                        if operators_disagree(leaf, operator_leaf) {
                             warn!(
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
                                 operator_id.0, leaf, operator_leaf
@@ -1225,6 +1219,19 @@ fn query_nodes_request(
     }
 }
 
+/// Whether the coordinator's copy of a leaf and an operator's copy describe
+/// different leaves. Compares every field a spend commits to: `value` is the
+/// amount the wallet pays or exits a leaf for, so a coordinator reporting it
+/// differently from the operators that validated the leaf's transaction is as
+/// disqualifying as a different transaction.
+fn operators_disagree(coordinator: &TreeNode, operator: &TreeNode) -> bool {
+    operator.status != coordinator.status
+        || operator.value != coordinator.value
+        || operator.signing_keyshare.public_key != coordinator.signing_keyshare.public_key
+        || operator.node_tx != coordinator.node_tx
+        || operator.refund_tx != coordinator.refund_tx
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -1291,6 +1298,37 @@ mod tests {
             reserved_for_payment: Vec::new(),
             reserved_for_swap: Vec::new(),
         }
+    }
+
+    #[test_all]
+    fn operators_agree_on_an_identical_leaf() {
+        let leaf = create_test_leaves(&[1000]).remove(0);
+        assert!(!operators_disagree(&leaf, &leaf.clone()));
+    }
+
+    #[test_all]
+    fn a_value_reported_differently_by_an_operator_is_a_disagreement() {
+        // A coordinator deflating or inflating a leaf's value on its own: the
+        // operators that validated the leaf's transaction still hold the amount
+        // it carries.
+        let leaf = create_test_leaves(&[1000]).remove(0);
+        let mut deflated = leaf.clone();
+        deflated.value = 600;
+        assert!(operators_disagree(&deflated, &leaf));
+        let mut inflated = leaf.clone();
+        inflated.value = 1400;
+        assert!(operators_disagree(&inflated, &leaf));
+    }
+
+    #[test_all]
+    fn a_different_transaction_or_status_is_a_disagreement() {
+        let leaf = create_test_leaves(&[1000]).remove(0);
+        let mut other_status = leaf.clone();
+        other_status.status = TreeNodeStatus::TransferLocked;
+        assert!(operators_disagree(&leaf, &other_status));
+        let mut other_tx = leaf.clone();
+        other_tx.node_tx.lock_time = LockTime::from_consensus(1);
+        assert!(operators_disagree(&leaf, &other_tx));
     }
 
     #[test_all]
