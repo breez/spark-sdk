@@ -39,7 +39,7 @@ function parseCpfpInput(s, kind) {
   if (isNaN(vout) || isNaN(value)) {
     throw new Error(`Invalid funding UTXO '${s}': vout and value must be integers`)
   }
-  return { type: kind, txid, vout, value, pubkey }
+  return { type: kind, txid, vout, valueSats: value, pubkey }
 }
 
 /**
@@ -116,7 +116,7 @@ function registerAdvancedCommands(program, getSdk, rl) {
       const leafIds = options.leaf || []
       const selection = leafIds.length > 0
         ? { type: 'specific', leafIds }
-        : { type: 'auto' }
+        : { type: 'all' }
 
       const prepared = await sdk.prepareUnilateralExit({
         feeRateSatPerVbyte: options.feeRate,

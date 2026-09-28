@@ -158,13 +158,13 @@ function parseCpfpInput(s: string, kind: string): InstanceType<typeof CpfpInput.
   if (isNaN(vout)) {
     throw new Error(`Invalid vout in '${s}'`)
   }
-  const value = BigInt(parts[2])
+  const valueSats = BigInt(parts[2])
   const pubkey = parts[3]
 
   if (kind === 'p2wpkh') {
-    return new CpfpInput.P2wpkh({ txid, vout, value, pubkey })
+    return new CpfpInput.P2wpkh({ txid, vout, valueSats, pubkey })
   }
-  return new CpfpInput.P2tr({ txid, vout, value, pubkey })
+  return new CpfpInput.P2tr({ txid, vout, valueSats, pubkey })
 }
 
 function formatExitTransactions(response: any): string[] {
@@ -235,7 +235,7 @@ async function handleUnilateralExit(sdk: BreezSdkInterface, args: string[]): Pro
 
   const selection = leafIds && leafIds.length > 0
     ? new ExitLeafSelection.Specific({ leafIds })
-    : new ExitLeafSelection.Auto()
+    : new ExitLeafSelection.All()
 
   const prepared = await sdk.prepareUnilateralExit({
     feeRateSatPerVbyte: feeRate,

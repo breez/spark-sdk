@@ -59,6 +59,7 @@ impl RuntimeProfile for ServerRuntime {
             sdk.spark_wallet.get_balance(),
             sdk.spark_wallet.get_token_balances(),
         )?;
+        let recoverable_funds_sats = sdk.recoverable_funds_sats().await?;
 
         let token_balances = token_balances
             .into_iter()
@@ -69,6 +70,7 @@ impl RuntimeProfile for ServerRuntime {
             identity_pubkey: sdk.spark_wallet.get_identity_public_key().to_string(),
             balance_sats,
             token_balances,
+            recoverable_funds_sats,
         })
     }
 

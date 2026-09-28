@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -302,6 +303,38 @@ impl BreezSdk {
             .import_unilateral_exit_state(request.into())
             .await?
             .into())
+    }
+
+    #[wasm_bindgen(js_name = "prepareRecoverFunds")]
+    pub async fn prepare_recover_funds(
+        &self,
+        request: PrepareRecoverFundsRequest,
+    ) -> WasmResult<PrepareRecoverFundsResponse> {
+        Ok(self.sdk.prepare_recover_funds(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "recoverFunds")]
+    pub async fn recover_funds(
+        &self,
+        request: RecoverFundsRequest,
+        signer: Option<crate::signer::JsCpfpSigner>,
+    ) -> WasmResult<RecoverFundsResponse> {
+        let signer = signer.map(|signer| {
+            std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer))
+                as std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>
+        });
+        Ok(self.sdk.recover_funds(request.into(), signer).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "checkRecoverFunds")]
+    pub async fn check_recover_funds(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "CheckRecoverFundsRequest")] request: JsValue,
+    ) -> WasmResult<CheckRecoverFundsResponse> {
+        let Ok(request) = CheckRecoverFundsRequest::from_js(request) else {
+            return Ok(CheckRecoverFundsResponse::unreadable());
+        };
+        Ok(self.sdk.check_recover_funds(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "receivePayment")]

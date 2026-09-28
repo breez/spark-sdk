@@ -5,9 +5,10 @@ use tsify_next::Tsify;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use super::{
-    CrossChainAcceptedAsset, CrossChainAddressDetails, CrossChainAddressFamily, CrossChainProvider,
-    CrossChainRouteFilter, CrossChainRouteLimits, CrossChainRoutePair, DeliveryMethod,
-    PaymentRequest, SparkAsset,
+    CheckRecoverFundsRequest, CheckRecoverFundsResponse, CrossChainAcceptedAsset,
+    CrossChainAddressDetails, CrossChainAddressFamily, CrossChainProvider, CrossChainRouteFilter,
+    CrossChainRouteLimits, CrossChainRoutePair, DeliveryMethod, PaymentRequest, RecoverFundsLeaf,
+    RecoverFundsResponse, RecoveryMethod, RecoveryRedoReason, RecoveryVerdict, SparkAsset,
 };
 
 // Values the SDK returns must be accepted back inside an internally tagged
@@ -70,6 +71,68 @@ fn route_filter_accepts_address_details_with_an_amount() {
         panic!("expected a send filter");
     };
     assert_eq!(address_details.amount, Some(5_000_000));
+}
+
+#[wasm_bindgen_test]
+fn a_recovery_an_earlier_version_stored_does_not_parse() {
+    let request = js_sys::JSON::parse(
+        r#"{
+            "recovery": {
+                "recoverableValueSat": 100000,
+                "totalFeeSat": 900,
+                "cpfpFeeSat": 500,
+                "fanoutFeeSat": 0,
+                "sweepFeeSat": 400,
+                "leaves": [{ "leafId": "leaf-1", "value": 100000 }],
+                "transactions": [],
+                "fundingInputs": [
+                    { "type": "p2tr", "txid": "bb", "vout": 0, "value": 5000, "pubkey": "02ab" }
+                ]
+            }
+        }"#,
+    )
+    .unwrap();
+
+    assert!(CheckRecoverFundsRequest::from_js(request).is_err());
+    let response = CheckRecoverFundsResponse::unreadable();
+    assert!(matches!(
+        response.verdict,
+        RecoveryVerdict::Redo {
+            reason: RecoveryRedoReason::UnreadableRecovery
+        }
+    ));
+    assert!(response.recovery.leaves.is_empty());
+}
+
+#[wasm_bindgen_test]
+fn a_recovery_this_version_returned_is_read() {
+    let request = CheckRecoverFundsRequest {
+        recovery: RecoverFundsResponse {
+            recoverable_value_sats: 100_000,
+            total_fee_sats: 900,
+            cooperative_fee_sats: 0,
+            cpfp_fee_sats: 500,
+            fanout_fee_sats: 0,
+            sweep_fee_sats: 400,
+            leaves: vec![RecoverFundsLeaf {
+                leaf_id: "leaf-1".to_string(),
+                value_sats: 100_000,
+                method: RecoveryMethod::Unilateral,
+            }],
+            failed: Vec::new(),
+            transactions: Vec::new(),
+            funding_inputs: Vec::new(),
+            fee_rate_sat_per_vbyte: 2,
+            destination: "bcrt1qdestination".to_string(),
+        },
+    };
+    let js = request.into_js().unwrap();
+
+    let Ok(read) = CheckRecoverFundsRequest::from_js(js) else {
+        panic!("expected the recovery to be read");
+    };
+
+    assert_eq!(read.recovery.leaves.len(), 1);
 }
 
 // Enums the SDK only hands to JS. Nothing reads them back, so they may hold a

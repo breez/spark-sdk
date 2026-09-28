@@ -130,8 +130,8 @@ pub enum SdkError {
     OptimizationCancelled,
 
     /// The provided CPFP funding is too low to cover the exit's on-chain fees.
-    #[error("Insufficient CPFP funding: need at least {required_sat} sats")]
-    InsufficientCpfpFunds { required_sat: u64 },
+    #[error("Insufficient CPFP funding: need at least {required_sats} sats")]
+    InsufficientCpfpFunds { required_sats: u64 },
 
     #[error("Error: {0}")]
     Generic(String),
@@ -291,7 +291,9 @@ impl From<SparkWalletError> for SdkError {
             }
             SparkWalletError::ServiceError(
                 spark_wallet::ServiceError::InsufficientCpfpBudget { required_sat },
-            ) => SdkError::InsufficientCpfpFunds { required_sat },
+            ) => SdkError::InsufficientCpfpFunds {
+                required_sats: required_sat,
+            },
             _ => SdkError::SparkError(e.to_string()),
         }
     }
@@ -405,6 +407,30 @@ impl From<SdkError> for DepositClaimError {
             },
         }
     }
+}
+
+/// Why a cooperative recovery was not produced.
+#[derive(Debug, Clone, Serialize, Deserialize, Error, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CooperativeRecoveryError {
+    /// A recovery of this output is already on the network, and this one pays
+    /// too little to replace it.
+    #[error(
+        "A recovery of this output is already on the network: replacing it takes at least {required_fee_sats} sats or {required_fee_rate_sat_per_vbyte} sats/vbyte"
+    )]
+    ReplacementFeeTooLow {
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+
+    /// The operators could not be reached, or were too busy to answer.
+    #[error("Operators unavailable: {message}")]
+    OperatorsUnavailable { message: String },
+
+    /// Any other reason, such as the operators refusing, or a recovery of the
+    /// output already confirmed.
+    #[error("Generic error: {message}")]
+    Generic { message: String },
 }
 
 /// Error type for signer operations
