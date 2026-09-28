@@ -137,7 +137,7 @@ impl SspdFixture {
         let config_path = config_dir.join("sspd.toml");
         fs::write(&config_path, &config)?;
 
-        let mut image = GenericImage::new("sspd", "latest")
+        let mut image = crate::images::image(crate::images::SSPD)?
             .with_exposed_port(ContainerPort::Tcp(GRAPHQL_PORT))
             .with_exposed_port(ContainerPort::Tcp(INTERNAL_PORT))
             .with_network(fixture_id.to_network())

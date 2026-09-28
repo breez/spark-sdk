@@ -76,7 +76,7 @@ rpc_password = "{}"
         fs::write(&tls_cert_path, &tls_cert_pem)?;
         fs::write(&tls_key_path, &tls_key_pem)?;
 
-        let container = GenericImage::new("ldk-server", "latest")
+        let container = crate::images::image(crate::images::LDK_SERVER)?
             .with_exposed_port(ContainerPort::Tcp(GRPC_PORT))
             .with_exposed_port(ContainerPort::Tcp(LIGHTNING_PORT))
             .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(

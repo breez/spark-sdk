@@ -98,7 +98,7 @@ async fn run_migrations(
     index: usize,
     connection_string: &str,
 ) -> Result<()> {
-    GenericImage::new("spark-migrations", "latest")
+    crate::images::image(crate::images::MIGRATIONS)?
         .with_wait_for(WaitFor::Exit(ExitWaitStrategy::new().with_exit_code(0)))
         .with_cmd(["migrate", "apply", "--url", connection_string])
         .with_network(fixture_id.to_network())
@@ -233,7 +233,7 @@ impl SparkSoFixture {
                 let log_consumer_ref = log_consumer.clone();
 
                 // Create container for this operator using the pre-generated host name
-                let container = GenericImage::new("spark-so", "latest")
+                let container = crate::images::image(crate::images::SPARK_SO)?
                     .with_exposed_port(ContainerPort::Tcp(OPERATOR_PORT))
                     .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
                         "Waiting for updated operators.json file",

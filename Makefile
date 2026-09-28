@@ -83,6 +83,10 @@ spark-itest-pg:
 spark-itest-mysql:
 	USE_MYSQL_BACKEND=true cargo xtask itest
 
+# Build the images a local cluster runs, skipping those already present.
+itest-images:
+	cargo xtask itest-images
+
 # Rebuild the state snapshot local operator clusters restore from
 # (crates/spark-itest/state-snapshot/).
 capture-itest-state:

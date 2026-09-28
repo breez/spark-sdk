@@ -176,6 +176,9 @@ enum Commands {
     /// Print the cache key for the itest bootstrap snapshot.
     ItestBootstrapSnapshotKey {},
 
+    /// Build the images a local cluster runs, skipping those already present.
+    ItestImages {},
+
     /// Run cross-version signer compatibility tests: flows started by the
     /// previous SDK release (git tag pinned in spark-compat-itest) are
     /// finished by the current build, and vice versa.
@@ -232,6 +235,7 @@ fn main() -> Result<()> {
         Commands::Itest {} => itest_cmd(),
         Commands::CaptureItestState {} => capture_itest_state_cmd(),
         Commands::ItestBootstrapSnapshotKey {} => itest_bootstrap_snapshot_key_cmd(),
+        Commands::ItestImages {} => prepare_itest_images().map(|_| ()),
         Commands::CompatItest {} => compat_itest_cmd(),
         Commands::FlutterCheck {} => flutter_check_cmd(),
         Commands::SyncPasskeyCore { check } => sync_passkey_core_cmd(check),
@@ -1101,8 +1105,8 @@ fn compat_itest_cmd() -> Result<()> {
     Ok(())
 }
 
-/// Pulls the base images and builds the bitcoind + operator images the local
-/// integration-test fixtures run on.
+/// Pulls the base images and builds the images a local cluster runs, skipping
+/// those already present.
 fn prepare_itest_images() -> Result<Shell> {
     let sh = Shell::new()?;
 
@@ -1125,50 +1129,62 @@ fn prepare_itest_images() -> Result<Shell> {
         );
     }
 
-    // Build local images from crates/spark-itest/docker
     let workspace_root = std::env::current_dir()?;
     let docker_dir = workspace_root.join("crates/spark-itest/docker");
     let docker_dir_str = docker_dir
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid workspace path"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid workspace path"))?
+        .to_string();
 
-    let migrations_df = docker_dir.join("migrations.dockerfile");
-    let spark_so_df = docker_dir.join("spark-so.dockerfile");
-    let migrations_df_str = migrations_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid migrations.dockerfile path"))?;
-    let spark_so_df_str = spark_so_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid spark-so.dockerfile path"))?;
-    let ldk_server_df = docker_dir.join("ldk-server.dockerfile");
-    let ldk_server_df_str = ldk_server_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid ldk-server.dockerfile path"))?;
-    let sspd_df = docker_dir.join("sspd.dockerfile");
-    let sspd_df_str = sspd_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid sspd.dockerfile path"))?;
+    for (image, tag) in itest_image_tags(&sh)? {
+        let reference = format!("{image}:{tag}");
+        if cmd!(sh, "docker image inspect {reference}")
+            .ignore_stdout()
+            .ignore_stderr()
+            .run()
+            .is_ok()
+        {
+            println!("Image {reference} is already built.");
+            continue;
+        }
 
-    cmd!(
-        sh,
-        "docker build -t spark-migrations -f {migrations_df_str} {docker_dir_str}"
-    )
-    .run()?;
-    cmd!(
-        sh,
-        "docker build -t spark-so -f {spark_so_df_str} {docker_dir_str}"
-    )
-    .run()?;
-    cmd!(
-        sh,
-        "docker build -t ldk-server -f {ldk_server_df_str} {docker_dir_str}"
-    )
-    .run()?;
-    // sspd builds from the working tree, with the repository root as context. It
-    // builds on every run: a tag from an earlier build can hold an older daemon.
-    cmd!(sh, "docker build -t sspd -f {sspd_df_str} .").run()?;
+        // sspd builds from the working tree, with the repository root as context.
+        let (dockerfile, context) = match image.as_str() {
+            "spark-so" => ("spark-so.dockerfile", docker_dir_str.as_str()),
+            "spark-migrations" => ("migrations.dockerfile", docker_dir_str.as_str()),
+            "ldk-server" => ("ldk-server.dockerfile", docker_dir_str.as_str()),
+            "sspd" => ("sspd.dockerfile", "."),
+            other => bail!("no build for itest image {other}"),
+        };
+        let dockerfile = docker_dir
+            .join(dockerfile)
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid dockerfile path"))?
+            .to_string();
+        cmd!(sh, "docker build -t {reference} -f {dockerfile} {context}").run()?;
+    }
 
     Ok(sh)
+}
+
+/// The images a local cluster runs and the tags they are built under, from the
+/// itest harness so that what is built is what the fixtures then run.
+fn itest_image_tags(sh: &Shell) -> Result<Vec<(String, String)>> {
+    let printed = cmd!(
+        sh,
+        "cargo run --quiet -p spark-itest --bin itest-image-tags"
+    )
+    .read()?;
+    printed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (image, tag) = line
+                .split_once('=')
+                .with_context(|| format!("unexpected image tag line: {line}"))?;
+            Ok((image.to_string(), tag.to_string()))
+        })
+        .collect()
 }
 
 fn flutter_check_cmd() -> Result<()> {
