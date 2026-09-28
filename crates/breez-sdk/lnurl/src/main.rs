@@ -550,6 +550,18 @@ where
             "/lnurlp/{identifier}/invoice",
             get(LnurlServer::<DB>::handle_invoice),
         )
+        .route(
+            "/lnurlp/verify/{payment_hash}",
+            get(LnurlServer::<DB>::verify),
+        )
+        // `verify` is also a valid username. As a static path this outranks
+        // `/lnurlp/verify/{payment_hash}`, which would otherwise capture that
+        // user's invoice callback.
+        .route(
+            "/lnurlp/verify/invoice",
+            get(LnurlServer::<DB>::handle_verify_user_invoice),
+        )
+        // Legacy verify path, which verify URLs already handed out still use.
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
         .route("/webhook", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))

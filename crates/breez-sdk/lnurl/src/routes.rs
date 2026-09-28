@@ -785,13 +785,26 @@ where
             return Err(lnurl_error("internal server error"));
         }
 
-        let verify_url = format!("{}://{}/verify/{}", state.scheme, domain, payment_hash);
+        let verify_url = format!(
+            "{}://{}/lnurlp/verify/{}",
+            state.scheme, domain, payment_hash
+        );
 
         Ok(Json(json!({
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
             "verify": verify_url,
         })))
+    }
+
+    /// The invoice callback of the user named `verify`. Its path is static, so
+    /// the name comes from here rather than from the path.
+    pub async fn handle_verify_user_invoice(
+        host: Host,
+        params: Query<LnurlPayCallbackParams>,
+        state: Extension<State<DB>>,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        Self::handle_invoice(host, Path("verify".to_string()), params, state).await
     }
 
     /// LUD-21 verify endpoint
