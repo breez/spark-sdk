@@ -99,6 +99,8 @@ The actual sats received from conversion may differ slightly from the estimate d
 
 If a conversion fails, the SDK emits {{#enum SdkEvent::StableBalanceConversionFailed}} and tries again after a growing delay, starting at 30 seconds and doubling up to an hour, rather than on every sync. The delay carries over a restart. A conversion that succeeds, or switching the active token, resets it.
 
+Sats received while a delay is running are not converted on their own. They are converted together with the rest of your sats balance after the delay, once the balance reaches the configured {{#name threshold_sats}}.
+
 If the funds were already sent when the conversion failed, the SDK returns them automatically. The refund appears in the payment list as a receive whose {{#name conversion_details}} status is {{#enum ConversionStatus::Refunded}}, with the original send nested under it.
 
 ## Conversion details
