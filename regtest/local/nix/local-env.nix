@@ -262,7 +262,7 @@ let
         readiness_probe = probe ''test -f "$SPARK_LOCAL_DIR/ldk-alice/tls.crt"'';
       };
 
-      lightning = oneShot (process {
+      lightning = process {
         command = words [
           ''SSP_NODE_ADDRESS="127.0.0.1:$LDK_P2P_PORT"''
           ''SSP_BASE_URL="127.0.0.1:$LDK_GRPC_PORT"''
@@ -270,7 +270,7 @@ let
           "${scripts}/lightning.sh"
         ];
         depends_on = healthy [ "ldk-server" "ldk-alice" ] // started [ "miner" ];
-      });
+      };
 
       sspd = process {
         command = words [
