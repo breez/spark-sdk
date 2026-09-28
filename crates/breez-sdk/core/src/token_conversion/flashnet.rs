@@ -44,6 +44,10 @@ const RECEIVED_LEG_POLL_TIMEOUT_SECS: u64 = 15;
 /// Min age before reconcile claws a transfer back — guards against racing a
 /// concurrent same-seed instance's in-flight healthy swap.
 const RECONCILE_MIN_AGE_SECS: u64 = 300;
+
+/// How long a stranded swap input waits before it is settled, so the pool's
+/// swap listing can catch up with a swap that ran despite the failed call.
+const STRANDED_INPUT_SETTLE_SECS: u64 = 10;
 /// Headroom above slippage and integrator fee before a simulated output counts
 /// as evidence the input was overstated. Measured overshoot peaks at ~14 bps
 /// across a 1000x range of sizes, far below a mispriced quote.
@@ -620,10 +624,9 @@ impl FlashnetTokenConverter {
         }
     }
 
-    /// Claws a stranded swap input back in the background. The refunder
-    /// selects on payment rows, which sync creates, so it cannot see a transfer
-    /// made moments ago. A failure leaves the row marked `RefundNeeded` for the
-    /// periodic pass.
+    /// Settles a stranded swap input in the background. The refunder selects on
+    /// payment rows, which sync creates, so it cannot see a transfer made
+    /// moments ago.
     fn spawn_refund(
         &self,
         clawback_id: String,
@@ -634,22 +637,74 @@ impl FlashnetTokenConverter {
         let converter = self.clone();
         platform_utils::tokio::spawn(
             async move {
-                match converter
-                    .clawback_and_record_refunded(&clawback_id, pool_id, payment_id, prior_info)
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let _ = converter.refund_trigger.send(());
-                    }
-                    Err(e) => {
-                        warn!("Immediate clawback for {clawback_id} failed: {e}");
-                        let _ = converter.refund_trigger.send(());
-                    }
-                }
+                converter
+                    .settle_stranded_input(&clawback_id, pool_id, payment_id, prior_info)
+                    .await;
             }
             .instrument(tracing::Span::current()),
         );
+    }
+
+    /// Waits for the pool's swap listing to catch up, then settles the input.
+    async fn settle_stranded_input(
+        &self,
+        clawback_id: &str,
+        pool_id: PublicKey,
+        payment_id: Option<String>,
+        prior_info: Option<ConversionInfo>,
+    ) {
+        platform_utils::tokio::time::sleep(Duration::from_secs(STRANDED_INPUT_SETTLE_SECS)).await;
+        self.record_or_claw_back(clawback_id, pool_id, payment_id, prior_info)
+            .await;
+    }
+
+    /// Records the swap if it ran after all, as `refund_payment` does, and
+    /// otherwise claws the input back. A failure leaves the row marked
+    /// `RefundNeeded` for the periodic pass.
+    async fn record_or_claw_back(
+        &self,
+        clawback_id: &str,
+        pool_id: PublicKey,
+        payment_id: Option<String>,
+        prior_info: Option<ConversionInfo>,
+    ) {
+        if let Some(swap) = self.find_executed_swap(Some(pool_id), clawback_id).await {
+            info!(
+                "Conversion input {clawback_id} was executed after all, delivering {} via {}",
+                swap.amount_out, swap.outbound_transfer_id
+            );
+            let payment_id = match payment_id {
+                Some(id) => Some(id),
+                None => resolve_payment_id(clawback_id, &self.spark_wallet, &self.storage, true)
+                    .await
+                    .ok(),
+            };
+            let Some(payment_id) = payment_id else {
+                warn!("Could not record the executed swap for {clawback_id}: no payment id");
+                return;
+            };
+            if let Err(e) = self
+                .record_executed_swap(&payment_id, clawback_id, pool_id, prior_info, &swap)
+                .await
+            {
+                warn!("Could not record the executed swap for {clawback_id}: {e}");
+            }
+            return;
+        }
+
+        match self
+            .clawback_and_record_refunded(clawback_id, pool_id, payment_id, prior_info)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = self.refund_trigger.send(());
+            }
+            Err(e) => {
+                warn!("Immediate clawback for {clawback_id} failed: {e}");
+                let _ = self.refund_trigger.send(());
+            }
+        }
     }
 
     async fn clawback_and_record_refunded(
@@ -2141,6 +2196,246 @@ mod tests {
         assert_eq!(details.conversions.len(), 1);
         assert_eq!(details.conversions[0].status, ConversionStatus::Refunded);
         assert_eq!(details.conversions[0].from.amount, 2000);
+    }
+
+    /// Serves the Flashnet endpoints a stranded-input settle calls, and records
+    /// every request so a test can see whether a clawback went out.
+    #[cfg(feature = "sqlite")]
+    struct FakeFlashnet {
+        executed_swap: Option<Swap>,
+        requests: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[cfg(feature = "sqlite")]
+    impl FakeFlashnet {
+        fn respond(&self, url: &str) -> platform_utils::HttpResponse {
+            self.requests.lock().unwrap().push(url.to_string());
+            let body = if url.contains("/v1/auth/challenge") {
+                serde_json::json!({
+                    "challenge": "challenge",
+                    "challengeString": format!("FLASHNET_AUTH_CHALLENGE_V1:{}", "a".repeat(64)),
+                    "requestId": "request",
+                })
+            } else if url.contains("/v1/auth/verify") {
+                serde_json::json!({ "accessToken": "token" })
+            } else if url.contains("/v1/ping") {
+                serde_json::json!({ "status": "ok" })
+            } else if url.contains("/v1/swaps/user/") {
+                let swaps: Vec<Swap> = self.executed_swap.clone().into_iter().collect();
+                serde_json::json!({ "swaps": swaps, "totalCount": swaps.len() })
+            } else if url.contains("/v1/clawback") {
+                serde_json::json!({
+                    "requestId": "request",
+                    "accepted": true,
+                    "internalRequestId": "internal",
+                    "sparkStatusTrackingId": "01a0d392-7008-7da1-84c2-680f3754b3a8",
+                    "error": null,
+                })
+            } else {
+                panic!("unexpected Flashnet request: {url}");
+            };
+            platform_utils::HttpResponse {
+                status: 200,
+                body: body.to_string(),
+                headers: HashMap::new(),
+            }
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[macros::async_trait]
+    impl platform_utils::HttpClient for FakeFlashnet {
+        async fn get(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Ok(self.respond(&url))
+        }
+
+        async fn post(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Ok(self.respond(&url))
+        }
+
+        async fn delete(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Ok(self.respond(&url))
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    const STRANDED_INPUT: &str = "01a0d391-8623-7511-94a3-a4007ad6b5e6";
+
+    /// A converter over the fake, with the stranded input stored as a
+    /// `RefundNeeded` send so its status can be read back.
+    #[cfg(feature = "sqlite")]
+    async fn stranded_input_converter(
+        executed_swap: Option<Swap>,
+    ) -> (
+        FlashnetTokenConverter,
+        Arc<dyn Storage>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        ConversionInfo,
+    ) {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-test-stranded-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(crate::SqliteStorage::new(&dir).unwrap());
+
+        let signer = Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(
+            spark_wallet::DefaultSigner::new(&[7u8; 32], spark_wallet::Network::Regtest).unwrap(),
+        )));
+        let spark_wallet = Arc::new(
+            SparkWallet::connect(
+                spark_wallet::SparkWalletConfig::default_config(spark_wallet::Network::Regtest),
+                signer,
+            )
+            .await
+            .unwrap(),
+        );
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let converter = FlashnetTokenConverter::new(
+            FlashnetConfig::default_config(Network::Regtest.into(), None),
+            Arc::clone(&storage),
+            spark_wallet,
+            Network::Regtest,
+            Arc::new(FakeFlashnet {
+                executed_swap,
+                requests: Arc::clone(&requests),
+            }),
+        );
+
+        let info = ConversionInfo::Amm {
+            pool_id: sample_pool_key().to_string(),
+            conversion_id: "conversion".to_string(),
+            status: ConversionStatus::RefundNeeded,
+            fee: None,
+            purpose: Some(ConversionPurpose::AutoConversion),
+            amount_adjustment: None,
+            degradation: None,
+        };
+        storage
+            .apply_payment_update(Payment {
+                id: STRANDED_INPUT.to_string(),
+                payment_type: crate::PaymentType::Send,
+                status: crate::PaymentStatus::Completed,
+                amount: 2000,
+                fees: 0,
+                timestamp: 1,
+                method: crate::PaymentMethod::Spark,
+                details: Some(PaymentDetails::Spark {
+                    invoice_details: None,
+                    htlc_details: None,
+                    conversion_info: None,
+                }),
+                conversion_details: None,
+            })
+            .await
+            .unwrap();
+        storage
+            .insert_payment_metadata(
+                STRANDED_INPUT.to_string(),
+                PaymentMetadata {
+                    conversion_info: Some(info.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        (converter, storage, requests, info)
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn stored_status(storage: &Arc<dyn Storage>, id: &str) -> Option<ConversionStatus> {
+        let payment = storage.get_payment_by_id(id.to_string()).await.unwrap();
+        crate::utils::conversions::extract_conversion_info(payment.details)
+            .map(|info| info.status().clone())
+    }
+
+    /// A swap that ran despite the failed call is recorded as completed, not
+    /// clawed back: a clawback could abort it, or is refused on every pass.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_stranded_input_whose_swap_ran_is_recorded_not_clawed_back() {
+        // Delivers sats, so the delivery id resolves locally rather than by
+        // querying the operators for a token transaction.
+        let swap = Swap {
+            id: "swap".to_string(),
+            pool_lp_public_key: sample_pool_key(),
+            amount_in: 1_600_000,
+            amount_out: 2000,
+            asset_in_address: "token".to_string(),
+            asset_out_address: BTC_ASSET_ADDRESS.to_string(),
+            price: None,
+            timestamp: "2026-09-28T00:00:00Z".to_string(),
+            fee_paid: 0,
+            pool_asset_a_address: None,
+            pool_asset_b_address: None,
+            inbound_transfer_id: STRANDED_INPUT.to_string(),
+            outbound_transfer_id: "01a0d391-a3fe-7a52-8e3b-265aa9f46e49".to_string(),
+        };
+        let (converter, storage, requests, info) = stranded_input_converter(Some(swap)).await;
+
+        converter
+            .record_or_claw_back(
+                STRANDED_INPUT,
+                sample_pool_key(),
+                Some(STRANDED_INPUT.to_string()),
+                Some(info),
+            )
+            .await;
+
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url.contains("/v1/clawback")),
+            "no clawback for a swap that ran"
+        );
+        assert_eq!(
+            stored_status(&storage, STRANDED_INPUT).await,
+            Some(ConversionStatus::Completed)
+        );
+    }
+
+    /// With no swap listed for the input, it is clawed back and recorded as
+    /// refunded.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_stranded_input_with_no_swap_is_clawed_back() {
+        let (converter, storage, requests, info) = stranded_input_converter(None).await;
+
+        converter
+            .record_or_claw_back(
+                STRANDED_INPUT,
+                sample_pool_key(),
+                Some(STRANDED_INPUT.to_string()),
+                Some(info),
+            )
+            .await;
+
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url.contains("/v1/clawback")),
+            "the input is clawed back"
+        );
+        assert_eq!(
+            stored_status(&storage, STRANDED_INPUT).await,
+            Some(ConversionStatus::Refunded)
+        );
     }
 
     fn sample_pool_key() -> PublicKey {
