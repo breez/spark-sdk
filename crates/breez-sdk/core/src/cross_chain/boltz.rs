@@ -503,6 +503,7 @@ impl BoltzService {
             fee_amount,
             service_fee_amount,
             service_fee_asset: None,
+            service_fee_asset_decimals: None,
             source_transfer_fee_sats: ln_fee_sats,
             fee_mode,
             expires_at: prepared.expires_at.to_string(),

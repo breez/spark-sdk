@@ -12,7 +12,7 @@ path = "src/lib.rs"
 # TURNKEY_* credentials at runtime and fail without them; leave the feature off
 # to exclude them entirely.
 turnkey = ["breez-sdk-spark/turnkey", "breez-sdk-spark/turnkey-p256"]
-# Compiles the local-operator-cluster tests (unilateral exit) and their harness.
+# Compiles the local-operator-cluster tests and their harness.
 # Each test stands up its own docker operator cluster, so they run only under
 # `make itest` (--test-threads=2); off by default keeps them out of the
 # high-concurrency `make breez-itest` (--test-threads=8), where 8 concurrent
@@ -25,6 +25,9 @@ breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postg
 breez-sdk-common = { workspace = true }
 spark-itest.workspace = true
 spark-wallet.workspace = true
+# The local target reads the SSP's fee arithmetic (base rate, claim fee) so a
+# test asserts against what the daemon charges rather than a copy of it.
+sspd.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 
 # PostgreSQL for database creation utilities
@@ -51,7 +54,7 @@ hex.workspace = true
 # Builds signed kind-9734 zap requests for the LNURL zap tests.
 nostr.workspace = true
 macros.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 testcontainers.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

@@ -9,9 +9,11 @@ use crate::{
     chain::rest_client::{BasicAuth, ChainApiType, RestClientChainService},
 };
 
+mod fallback;
 pub mod rest_client;
 mod validating;
 
+pub(crate) use fallback::FallbackChainService;
 pub(crate) use validating::ValidatingChainService;
 
 #[derive(Debug, Error, Clone)]

@@ -14,13 +14,13 @@ use tracing::info;
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_bolt11_settled_over_spark_is_attributed(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
     const AMOUNT_SATS: u64 = 10;
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 100).await?;
 

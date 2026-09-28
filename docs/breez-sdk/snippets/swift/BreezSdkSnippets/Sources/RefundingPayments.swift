@@ -76,14 +76,14 @@ func fetchClaimDepositQuote(sdk: BreezSdk, deposit: DepositInfo) async throws {
     let request = FetchClaimDepositQuoteRequest(txid: deposit.txid, vout: deposit.vout)
     let quote = try await sdk.fetchClaimDepositQuote(request: request)
 
-    // Claiming once the deposit matures, and how many blocks that is away.
+    // The standard claim, and how many blocks away it is.
     var blocksToWait: UInt32 = 0
     if quote.mature.confirmationsRequired > quote.confirmations {
         blocksToWait = quote.mature.confirmationsRequired - quote.confirmations
     }
     print("Wait \(blocksToWait) blocks and pay \(quote.mature.feeSats) sats")
 
-    // Claiming earlier, when the provider offers it.
+    // An instant or expedited claim, when the provider offers one.
     if let instant = quote.instant {
         var instantBlocks: UInt32 = 0
         if instant.confirmationsRequired > quote.confirmations {

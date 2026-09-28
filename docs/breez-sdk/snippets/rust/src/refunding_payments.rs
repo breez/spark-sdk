@@ -86,7 +86,7 @@ async fn fetch_claim_deposit_quote(sdk: &BreezSdk, deposit: &DepositInfo) -> Res
         })
         .await?;
 
-    // Claiming once the deposit matures, and how many blocks that is away.
+    // The standard claim, and how many blocks away it is.
     let blocks_to_wait = quote
         .mature
         .confirmations_required
@@ -96,7 +96,7 @@ async fn fetch_claim_deposit_quote(sdk: &BreezSdk, deposit: &DepositInfo) -> Res
         blocks_to_wait, quote.mature.fee_sats
     );
 
-    // Claiming earlier, when the provider offers it.
+    // An instant or expedited claim, when the provider offers one.
     if let Some(instant) = &quote.instant {
         let blocks_to_wait = instant
             .confirmations_required

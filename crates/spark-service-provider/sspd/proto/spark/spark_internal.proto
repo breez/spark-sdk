@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package spark_internal;
+
+import "spark/spark.proto";
+
+// A subset of the operators' SparkInternalService: only query_nodes. The
+// operators admit a caller that is not an operator by its network address, not
+// by its session.
+service SparkInternalService {
+    rpc query_nodes(spark.QueryNodesRequest) returns (spark.QueryNodesResponse) {}
+}

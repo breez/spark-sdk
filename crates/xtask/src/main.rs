@@ -44,7 +44,7 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     ("cli", ClippyFeatures::All),
     // `uniffi-cli` and `span-trace`.
     ("breez-sdk-bindings", ClippyFeatures::All),
-    // The Turnkey harness and the local-operator-cluster (unilateral exit) cases.
+    // The Turnkey harness and the local-operator-cluster cases.
     ("breez-sdk-itest", ClippyFeatures::All),
     // `dev`, which adds the flag for including the spark address in invoices.
     ("lnurl", ClippyFeatures::All),
@@ -53,6 +53,9 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
 /// Features no clippy pass builds, as `(package, feature)`. Each is compiled by
 /// another target, so its code still cannot rot unnoticed.
 const UNLINTED_FEATURES: &[(&str, &str)] = &[
+    // `cfg(test)` compiles the same code, so the `--all-targets` and `--tests`
+    // workspace passes already lint it.
+    ("sspd", "test-utils"),
     // `cargo xtask test` runs the spark tests a second time with it on.
     ("spark", "test-arbitrary-precision"),
     // `cargo xtask wasm-test` passes it to wasm-pack.
@@ -167,9 +170,17 @@ enum Commands {
     /// Run integration tests (containers etc.)
     Itest {},
 
-    /// Regenerate the keyshare seed that local operator clusters load, by
-    /// running one cluster that generates its own keyshares via DKG.
-    CaptureItestKeyshares {},
+    /// Rebuild the state snapshot that local operator clusters restore from.
+    CaptureItestState {},
+
+    /// Print the cache key for the itest bootstrap snapshot.
+    ItestBootstrapSnapshotKey {},
+
+    /// Build the images a local cluster runs, skipping those already present.
+    ItestImages {
+        /// The images to build; every image when none is named.
+        images: Vec<String>,
+    },
 
     /// Run cross-version signer compatibility tests: flows started by the
     /// previous SDK release (git tag pinned in spark-compat-itest) are
@@ -225,7 +236,9 @@ fn main() -> Result<()> {
             skip_build,
         } => check_doc_snippets_cmd(package, skip_build),
         Commands::Itest {} => itest_cmd(),
-        Commands::CaptureItestKeyshares {} => capture_itest_keyshares_cmd(),
+        Commands::CaptureItestState {} => capture_itest_state_cmd(),
+        Commands::ItestBootstrapSnapshotKey {} => itest_bootstrap_snapshot_key_cmd(),
+        Commands::ItestImages { images } => itest_images_cmd(&images),
         Commands::CompatItest {} => compat_itest_cmd(),
         Commands::FlutterCheck {} => flutter_check_cmd(),
         Commands::SyncPasskeyCore { check } => sync_passkey_core_cmd(check),
@@ -357,10 +370,11 @@ fn test_cmd(
     doc: bool,
     rest: Vec<String>,
 ) -> Result<()> {
-    // Integration-test packages spin up docker containers from locally-built
-    // images; make sure those exist before the test run.
-    if matches!(package.as_deref(), Some("spark-itest" | "breez-sdk-itest")) {
-        prepare_itest_images()?;
+    // breez-itest runs a local cluster only under `local-itest`, which this
+    // command cannot enable.
+    if package.as_deref() == Some("spark-itest") {
+        let sh = prepare_itest_images(ITEST_IMAGES)?;
+        ensure_itest_state(&sh)?;
     }
 
     let mut c = Command::new("cargo");
@@ -993,39 +1007,98 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 }
 
 fn itest_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+    let sh = prepare_itest_images(ITEST_IMAGES)?;
+    ensure_itest_state(&sh)?;
 
-    // spark-itest's own local-cluster tests.
-    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
-
-    // The unilateral-exit suite is the only local-cluster test in breez-itest, so
-    // scope to that binary: the rest of breez-itest is faucet-based and runs (with
-    // its secrets) in the 8-thread `make breez-itest`; re-running it here would be
-    // redundant and trips tests that need secrets absent from this job. Limited
-    // parallelism because each test starts its own bitcoind + operator cluster.
+    // Two threads, since each local-cluster test stands up a bitcoind and operator
+    // cluster of its own.
     cmd!(
         sh,
-        "cargo test -p breez-sdk-itest --features local-itest --test unilateral_exit --no-fail-fast -- --test-threads=2"
+        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
+    )
+    .run()?;
+
+    // The breez-itest suites that take an `Environment` and pass on a local stack.
+    // Left out: lnurl, whose payment flows need a second Lightning node to pay
+    // from. The rest of breez-itest reaches the deployed regtest and runs in
+    // `make breez-itest`.
+    let local_suites = [
+        "breez_sdk_tests",
+        "coop_exit_local",
+        "deposit_withdraw",
+        "exit_state_events",
+        "external_signer",
+        "idempotency_tests",
+        "lightning_hodl",
+        "lightning_send_server_mode",
+        "message_signing",
+        "optimization",
+        "rtsync",
+        "spark_htlcs",
+        "static_deposit_instant",
+        "tokens",
+        "unilateral_exit",
+    ];
+    let mut args = vec![
+        "test".to_string(),
+        "-p".to_string(),
+        "breez-sdk-itest".to_string(),
+        "--features".to_string(),
+        "local-itest".to_string(),
+    ];
+    for suite in local_suites {
+        args.push("--test".to_string());
+        args.push(suite.to_string());
+    }
+    args.push("--no-fail-fast".to_string());
+    args.push("--".to_string());
+    args.push("--test-threads=2".to_string());
+    cmd!(sh, "cargo {args...}").run()?;
+
+    Ok(())
+}
+
+fn itest_bootstrap_snapshot_key_cmd() -> Result<()> {
+    // Shelled out rather than linked, so xtask does not depend on the itest harness.
+    let sh = Shell::new()?;
+    cmd!(
+        sh,
+        "cargo run --quiet -p spark-itest --bin itest-bootstrap-snapshot-key"
     )
     .run()?;
     Ok(())
 }
 
-fn capture_itest_keyshares_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+fn capture_itest_state_cmd() -> Result<()> {
+    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    capture_itest_state(&sh)
+}
 
+fn ensure_itest_state(sh: &Shell) -> Result<()> {
     cmd!(
         sh,
-        "cargo test -p spark-itest --test capture_keyshares -- --ignored --nocapture"
+        "cargo test -p spark-itest --test capture_state_snapshot ensure_state_snapshot -- --ignored --nocapture"
+    )
+    .run()?;
+    Ok(())
+}
+
+fn capture_itest_state(sh: &Shell) -> Result<()> {
+    cmd!(
+        sh,
+        "cargo test -p spark-itest --test capture_state_snapshot capture_state_snapshot -- --ignored --nocapture"
     )
     .run()?;
 
-    println!("Keyshare seed regenerated. Review and commit crates/spark-itest/keyshares/.");
+    println!("State snapshot written to crates/spark-itest/state-snapshot/.");
     Ok(())
 }
 
 fn compat_itest_cmd() -> Result<()> {
-    let sh = prepare_itest_images()?;
+    // The tests start no daemon: its image is for `ensure_itest_state`, which
+    // rebuilds a stale snapshot.
+    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    ensure_itest_state(&sh)?;
 
     // The compat crate is a standalone workspace (it links the previous SDK
     // release next to the current build), hence the manifest path.
@@ -1037,9 +1110,24 @@ fn compat_itest_cmd() -> Result<()> {
     Ok(())
 }
 
-/// Pulls the base images and builds the bitcoind + operator images the local
-/// integration-test fixtures run on.
-fn prepare_itest_images() -> Result<Shell> {
+/// Every image a local cluster can run.
+const ITEST_IMAGES: &[&str] = &["spark-so", "spark-migrations", "ldk-server", "sspd"];
+
+/// What building the state snapshot runs: the operators and the daemon.
+const SNAPSHOT_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+
+fn itest_images_cmd(images: &[String]) -> Result<()> {
+    let named: Vec<&str> = images.iter().map(String::as_str).collect();
+    let images = if named.is_empty() {
+        ITEST_IMAGES
+    } else {
+        &named
+    };
+    prepare_itest_images(images).map(|_| ())
+}
+
+/// Pulls the base images and builds `images`, skipping those already present.
+fn prepare_itest_images(images: &[&str]) -> Result<Shell> {
     let sh = Shell::new()?;
 
     // Verify Docker is available
@@ -1061,34 +1149,62 @@ fn prepare_itest_images() -> Result<Shell> {
         );
     }
 
-    // Build local images from crates/spark-itest/docker
     let workspace_root = std::env::current_dir()?;
     let docker_dir = workspace_root.join("crates/spark-itest/docker");
     let docker_dir_str = docker_dir
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid workspace path"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid workspace path"))?
+        .to_string();
 
-    let migrations_df = docker_dir.join("migrations.dockerfile");
-    let spark_so_df = docker_dir.join("spark-so.dockerfile");
-    let migrations_df_str = migrations_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid migrations.dockerfile path"))?;
-    let spark_so_df_str = spark_so_df
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("invalid spark-so.dockerfile path"))?;
+    for (image, tag) in itest_image_tags(&sh, images)? {
+        let reference = format!("{image}:{tag}");
+        if cmd!(sh, "docker image inspect {reference}")
+            .ignore_stdout()
+            .ignore_stderr()
+            .run()
+            .is_ok()
+        {
+            println!("Image {reference} is already built.");
+            continue;
+        }
 
-    cmd!(
-        sh,
-        "docker build -t spark-migrations -f {migrations_df_str} {docker_dir_str}"
-    )
-    .run()?;
-    cmd!(
-        sh,
-        "docker build -t spark-so -f {spark_so_df_str} {docker_dir_str}"
-    )
-    .run()?;
+        // sspd builds from the working tree, with the repository root as context.
+        let (dockerfile, context) = match image.as_str() {
+            "spark-so" => ("spark-so.dockerfile", docker_dir_str.as_str()),
+            "spark-migrations" => ("migrations.dockerfile", docker_dir_str.as_str()),
+            "ldk-server" => ("ldk-server.dockerfile", docker_dir_str.as_str()),
+            "sspd" => ("sspd.dockerfile", "."),
+            other => bail!("no build for itest image {other}"),
+        };
+        let dockerfile = docker_dir
+            .join(dockerfile)
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid dockerfile path"))?
+            .to_string();
+        cmd!(sh, "docker build -t {reference} -f {dockerfile} {context}").run()?;
+    }
 
     Ok(sh)
+}
+
+/// The tags `images` are built under, from the itest harness so that what is
+/// built is what the fixtures then run.
+fn itest_image_tags(sh: &Shell, images: &[&str]) -> Result<Vec<(String, String)>> {
+    let printed = cmd!(
+        sh,
+        "cargo run --quiet -p spark-itest --bin itest-image-tags -- {images...}"
+    )
+    .read()?;
+    printed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (image, tag) = line
+                .split_once('=')
+                .with_context(|| format!("unexpected image tag line: {line}"))?;
+            Ok((image.to_string(), tag.to_string()))
+        })
+        .collect()
 }
 
 fn flutter_check_cmd() -> Result<()> {

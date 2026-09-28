@@ -90,14 +90,14 @@ const fetchClaimDepositQuote = async (sdk: BreezSdk, deposit: DepositInfo) => {
     vout: deposit.vout
   })
 
-  // Claiming once the deposit matures, and how many blocks that is away.
+  // The standard claim, and how many blocks away it is.
   const blocksToWait = Math.max(
     0,
     quote.mature.confirmationsRequired - quote.confirmations
   )
   console.log(`Wait ${blocksToWait} blocks and pay ${quote.mature.feeSats} sats`)
 
-  // Claiming earlier, when the provider offers it.
+  // An instant or expedited claim, when the provider offers one.
   if (quote.instant != null) {
     const instantBlocksToWait = Math.max(
       0,

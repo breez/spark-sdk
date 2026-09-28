@@ -223,16 +223,17 @@ impl SparkSyncService {
 
         // Get the payment metadata from storage for this payment
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(metadata) = cache.fetch_payment_metadata(identifier).await? else {
+        if let Some(metadata) = cache.fetch_payment_metadata(identifier).await? {
+            self.storage
+                .insert_payment_metadata(payment.id.clone(), metadata)
+                .await?;
+
+            // Delete the payment metadata since we have applied it
+            cache.delete_payment_metadata(identifier).await?;
             return Ok(());
-        };
+        }
 
-        self.storage
-            .insert_payment_metadata(payment.id.clone(), metadata)
-            .await?;
-
-        // Delete the payment metadata since we have applied it
-        cache.delete_payment_metadata(identifier).await?;
+        crate::cross_chain::attach_receive_metadata_for_payment(&self.storage, payment).await?;
 
         Ok(())
     }

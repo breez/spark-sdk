@@ -790,13 +790,26 @@ where
             return Err(lnurl_error("internal server error"));
         }
 
-        let verify_url = format!("{}://{}/verify/{}", state.scheme, domain, payment_hash);
+        let verify_url = format!(
+            "{}://{}/lnurlp/verify/{}",
+            state.scheme, domain, payment_hash
+        );
 
         Ok(Json(json!({
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
             "verify": verify_url,
         })))
+    }
+
+    /// The invoice callback of the user named `verify`. Its path is static, so
+    /// the name comes from here rather than from the path.
+    pub async fn handle_verify_user_invoice(
+        host: Host,
+        params: Query<LnurlPayCallbackParams>,
+        state: Extension<State<DB>>,
+    ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+        Self::handle_invoice(host, Path("verify".to_string()), params, state).await
     }
 
     /// LUD-21 verify endpoint
@@ -2286,7 +2299,7 @@ mod tests {
             "created_at": "2025-03-09T12:00:00Z",
             "updated_at": "2025-03-09T12:00:05Z",
             "network": "MAINNET",
-            "request_status": "COMPLETED",
+            "request_status": "SUCCEEDED",
             "status": "TRANSFER_COMPLETED",
             "type": event_type,
             "timestamp": "2025-03-09T12:00:06Z",
@@ -2783,7 +2796,7 @@ mod tests {
             "created_at": "2025-03-09T12:00:00Z",
             "updated_at": "2025-03-09T12:00:05Z",
             "network": "MAINNET",
-            "request_status": "COMPLETED",
+            "request_status": "SUCCEEDED",
             "status": "PREIMAGE_PROVIDED",
             "type": "SPARK_LIGHTNING_SEND_FINISHED",
             "timestamp": "2025-03-09T12:00:06Z",
@@ -2816,14 +2829,14 @@ mod tests {
             "created_at": "2025-03-09T12:00:00Z",
             "updated_at": "2025-03-09T12:00:05Z",
             "network": "MAINNET",
-            "request_status": "COMPLETED",
+            "request_status": "SUCCEEDED",
             "status": "SUCCEEDED",
             "type": "SPARK_COOP_EXIT_FINISHED",
             "timestamp": "2025-03-09T12:00:06Z",
             "fee": {"value": 500, "unit": "SATOSHI"},
             "withdrawal_address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
             "l1_broadcast_fee": {"value": 200, "unit": "SATOSHI"},
-            "exit_speed": "NORMAL",
+            "exit_speed": "MEDIUM",
             "coop_exit_txid": "a1b2c3d4...",
             "expires_at": "2025-03-10T12:00:00Z",
             "total_amount": {"value": 49_300, "unit": "SATOSHI"}
@@ -2852,7 +2865,7 @@ mod tests {
             "created_at": "2025-03-09T12:00:00Z",
             "updated_at": "2025-03-09T12:00:05Z",
             "network": "MAINNET",
-            "request_status": "COMPLETED",
+            "request_status": "SUCCEEDED",
             "status": "TRANSFER_COMPLETED",
             "type": "SPARK_STATIC_DEPOSIT_FINISHED",
             "timestamp": "2025-03-09T12:00:06Z",

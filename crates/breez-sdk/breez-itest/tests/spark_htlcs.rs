@@ -132,14 +132,12 @@ async fn send_htlc_alice_to_bob(
 #[rstest]
 #[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
-async fn test_01_htlc_success(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_htlc_success(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_htlc_success ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded (100 sats minimum for small test)
     ensure_funded(&mut alice, 100).await?;
@@ -200,14 +198,12 @@ async fn test_01_htlc_success(
 #[rstest]
 #[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
-async fn test_02_htlc_refund(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_02_htlc_refund(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_htlc_refund ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded (100 sats minimum for small test)
     ensure_funded(&mut alice, 100).await?;
@@ -327,14 +323,12 @@ async fn test_02_htlc_refund(
 #[rstest]
 #[ignore = "direct Spark HTLCs are temporarily disabled"]
 #[test_log::test(tokio::test)]
-async fn test_03_reconcile_stale_pending_payment(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_03_reconcile_stale_pending_payment(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_03_reconcile_stale_pending_payment ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 200).await?;
 

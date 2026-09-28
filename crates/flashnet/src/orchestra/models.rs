@@ -135,7 +135,25 @@ pub struct EstimateResponse {
     pub app_fees: Vec<AppFeeResult>,
     pub fee_asset: String,
     #[serde(default)]
+    pub fee_asset_details: Option<FeeAssetDetails>,
+    #[serde(default)]
     pub route: Vec<String>,
+}
+
+/// Chain and precision of a response's `feeAsset`. Every fee amount is in
+/// this asset's smallest units, which can differ from both route sides.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeeAssetDetails {
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(default)]
+    pub asset: Option<String>,
+    pub decimals: u32,
+    #[serde(default)]
+    pub contract_address: Option<String>,
+    #[serde(default)]
+    pub chain_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +229,12 @@ pub struct QuoteResponse {
     pub amount_in: String,
     pub estimated_out: String,
     pub fee_amount: String,
+    #[serde(default)]
+    pub rounding_fee_amount: Option<String>,
+    #[serde(default)]
+    pub sweep_fee_amount: Option<String>,
+    #[serde(default)]
+    pub network_cost_amount: Option<String>,
     pub total_fee_amount: String,
     #[serde(default)]
     pub app_fee_amount: Option<String>,
@@ -219,6 +243,8 @@ pub struct QuoteResponse {
     #[serde(default)]
     pub app_fees: Vec<AppFeeResult>,
     pub fee_asset: String,
+    #[serde(default)]
+    pub fee_asset_details: Option<FeeAssetDetails>,
     pub fee_bps: u32,
     #[serde(default)]
     pub route: Vec<String>,
@@ -480,5 +506,51 @@ mod submit_response_tests {
         assert!(!rendered.contains("eyJ2"), "token leaked: {rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
         assert!(rendered.contains("ord_1"), "{rendered}");
+    }
+}
+
+#[cfg(test)]
+mod quote_response_tests {
+    use super::*;
+
+    /// `/v1/orchestration/quote` for $50 spark/USDB to bsc/USDC, trimmed of
+    /// display fields. `roundingFeeAmount` arrives in the destination's 18
+    /// decimals rather than `feeAsset` units.
+    const BSC_QUOTE: &str = r#"{
+        "amountIn":"50000000","appFeeAmount":"49950","appFeePlatformCutAmount":"9990",
+        "appFees":[{"affiliateId":"breez_sdk","amount":"49950","feeBps":10,
+            "platformCutAmount":"9990","recipient":"spark1pgss","recipientAmount":"39960"}],
+        "depositAddress":"spark1pgssy4sp","estimatedOut":"49850000000000000000",
+        "expiresAt":"2026-09-23T07:08:28.560Z","feeAmount":"50000","feeAmountUsd":"0.05",
+        "feeAsset":"USDC",
+        "feeAssetDetails":{"asset":"USDC","chain":"solana",
+            "chainId":"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "contractAddress":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","decimals":6},
+        "feeBps":10,"quoteId":"q_01a0cd16","roundingFeeAmount":"5119000000000000",
+        "route":["USDB","USDC"],"totalFeeAmount":"5119000000099950",
+        "totalFeeAmountUsd":"5119000000.09995"
+    }"#;
+
+    #[test]
+    fn deserializes_fee_asset_details_and_rounding() {
+        let quote: QuoteResponse = serde_json::from_str(BSC_QUOTE).expect("live shape parses");
+        let details = quote.fee_asset_details.expect("feeAssetDetails present");
+        assert_eq!(details.chain.as_deref(), Some("solana"));
+        assert_eq!(details.decimals, 6);
+        assert_eq!(
+            quote.rounding_fee_amount.as_deref(),
+            Some("5119000000000000")
+        );
+    }
+
+    #[test]
+    fn fee_asset_details_and_rounding_are_optional() {
+        let mut json: serde_json::Value = serde_json::from_str(BSC_QUOTE).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("feeAssetDetails");
+        obj.remove("roundingFeeAmount");
+        let quote: QuoteResponse = serde_json::from_value(json).expect("parses without them");
+        assert!(quote.fee_asset_details.is_none());
+        assert!(quote.rounding_fee_amount.is_none());
     }
 }

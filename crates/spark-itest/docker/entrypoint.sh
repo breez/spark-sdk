@@ -43,6 +43,16 @@ if [ ! -z "$LRC20_HOST" ]; then
   sed -i "s|host: 127.0.0.1:18530|host: $LRC20_HOST|g" "$CONFIG_FILE.tmp"
 fi
 
+if [ ! -z "$DKG_MIN_AVAILABLE_KEYS" ]; then
+  echo "Updating dkg min_available_keys to $DKG_MIN_AVAILABLE_KEYS"
+  sed -i "s|min_available_keys: 100|min_available_keys: $DKG_MIN_AVAILABLE_KEYS|g" "$CONFIG_FILE.tmp"
+fi
+
+if [ ! -z "$DKG_BATCH_SIZE" ]; then
+  echo "Updating dkg batch_size to $DKG_BATCH_SIZE"
+  sed -i "s|spark.so.dkg.batch_size: 300|spark.so.dkg.batch_size: $DKG_BATCH_SIZE|g" "$CONFIG_FILE.tmp"
+fi
+
 # Replace the original config file with our modified version
 mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 

@@ -1,7 +1,4 @@
-<h1 id="receiving-payments">
-    <a class="header" href="#receiving-payments">Receiving payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
-</h1>
+# Receiving payments
 
 Once the SDK is initialized, you can directly begin receiving payments. The SDK supports receiving via Lightning, Bitcoin, Spark, and USDC/USDT into Spark from a supported external chain.
 
@@ -29,13 +26,13 @@ For on-chain payments you can generate a Bitcoin deposit address to receive paym
 
 On-chain deposits go through the following lifecycle:
 
-1. **Detected** — The SDK detects the deposit and emits a {{#enum SdkEvent::NewDeposits}} event. The deposit may or may not have sufficient confirmations to be claimed yet.
-2. **Sufficient confirmations** — After **3 on-chain confirmations**, the deposit has sufficient confirmations and the SDK automatically attempts to claim it.
-3. **Claimed or unclaimed** — If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
+1. **Detected**: The SDK detects the deposit, often while it is still in the mempool, and emits a {{#enum SdkEvent::NewDeposits}} event.
+2. **Claimed automatically**: After **3 on-chain confirmations** the SDK attempts a standard claim. With a high enough [max claim fee](/guide/config.md#max-deposit-claim-fee) it can credit the deposit sooner, even before it confirms, through an [instant or expedited claim](/guide/onchain_claims.md#instant-expedited-claims).
+3. **Claimed or unclaimed**: If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
 
 {{#tabs receive_payment:receive-payment-onchain}}
 
-To track pending deposits, use {{#name list_unclaimed_deposits}} and filter by the {{#name is_mature}} field:
+To track deposits that have not reached the standard claim depth yet, use {{#name list_unclaimed_deposits}} and filter by the {{#name is_mature}} field:
 
 {{#tabs refunding_payments:list-pending-deposits}}
 
@@ -80,6 +77,8 @@ The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the sou
 
 The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver pays no fee; the sender's deposit covers it.
 
+The provider's fee in {{#name service_fee_amount}} is in its own asset, {{#name service_fee_asset}}, which can differ from both the deposit and the destination asset. Format it with {{#name service_fee_asset_decimals}}, not the route's decimals.
+
 {{#tabs cross_chain:cross-chain-receive}}
 
 ## Event Flows
@@ -101,7 +100,7 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 
 | Event                 | Description                                                                                                                              | UX Suggestion                                                                                               |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **NewDeposits**       | New deposits were detected. Each deposit includes a {{#name is_mature}} field indicating whether it has enough confirmations to be claimed. | Show the deposit to the user. If it does not yet have sufficient confirmations, show it as pending.          |
+| **NewDeposits**       | New deposits were detected. Each deposit includes a {{#name is_mature}} field indicating whether it has reached the standard claim depth. | Show the deposit to the user as pending until it is claimed.          |
 | **ClaimedDeposits**   | The SDK successfully claimed confirmed deposits.                                                                                         |                                                                                                             |
 | **UnclaimedDeposits** | Claiming failed (e.g. fee exceeded the configured maximum or the UTXO could not be found).                                               | Allow the user to manually claim or refund. See [Claiming on-chain deposits](/guide/onchain_claims.md). |
 | **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                        | Show payment as pending.                                                                                    |
@@ -122,4 +121,4 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 | -------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The sender's deposit was detected and the inbound Spark transfer claim is in progress.               | Show payment as pending.                         |
 | **PaymentSucceeded** | The inbound Spark transfer is claimed and the payment is complete.                                   | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
-| **PaymentMetadataUpdated** | The provider confirmed the order and the payment now carries its {{#name conversion_info}}. This can arrive after **PaymentSucceeded**, which may report the payment as a plain Spark transfer. | Refresh the payment in the UI with the details carried by the event. |
+| **PaymentMetadataUpdated** | The provider confirmed the order: the payment's {{#name conversion_info}} now carries the delivered amount and the deposit transaction. The payment is reported with its {{#name conversion_info}} from its first event on, so this only completes it. | Refresh the payment in the UI with the details carried by the event. |

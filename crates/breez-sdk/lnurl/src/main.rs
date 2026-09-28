@@ -121,6 +121,11 @@ struct Args {
     #[arg(long, default_value = "false")]
     pub dev_dont_use_lnurl_include_spark_address: bool,
 
+    /// JSON file with the Spark operators and SSP to use instead of the
+    /// network's, such as a local cluster.
+    #[arg(long)]
+    pub spark_config: Option<PathBuf>,
+
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     /// These are in addition to any domains stored in the database. The configured
     /// domains here will be added to the database on startup.
@@ -318,6 +323,10 @@ where
 
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
+    if let Some(path) = &args.spark_config {
+        spark_config = serde_json::from_slice(&std::fs::read(path)?)
+            .map_err(|e| anyhow!("invalid spark_config {}: {e}", path.display()))?;
+    }
     // One HTTP client (one connection pool) shared by all SSP traffic.
     let ssp_http_client = platform_utils::create_http_client(Some(&default_user_agent()))?;
 
@@ -550,6 +559,18 @@ where
             "/lnurlp/{identifier}/invoice",
             get(LnurlServer::<DB>::handle_invoice),
         )
+        .route(
+            "/lnurlp/verify/{payment_hash}",
+            get(LnurlServer::<DB>::verify),
+        )
+        // `verify` is also a valid username. As a static path this outranks
+        // `/lnurlp/verify/{payment_hash}`, which would otherwise capture that
+        // user's invoice callback.
+        .route(
+            "/lnurlp/verify/invoice",
+            get(LnurlServer::<DB>::handle_verify_user_invoice),
+        )
+        // Legacy verify path, which verify URLs already handed out still use.
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
         .route("/webhook", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))

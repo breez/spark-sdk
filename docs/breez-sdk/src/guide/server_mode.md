@@ -1,7 +1,4 @@
-<h1 id="multi-user-configuration">
-    <a class="header" href="#multi-user-configuration">Multi-user configuration</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.default_server_config.html">API docs</a>
-</h1>
+# Multi-user configuration
 
 This is the configuration for a service that holds **a wallet per user**: one process hosts many wallets and builds a short-lived SDK instance per request. The SDK is used as a library: the host drives sync, claiming and event delivery (typically via webhooks) explicitly, so each per-request SDK stays cheap and returns fresh state.
 

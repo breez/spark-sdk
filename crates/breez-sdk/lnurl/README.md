@@ -127,6 +127,7 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 | `--default-api-key` | Fallback Breez API key for partner attribution (**required on mainnet**) | (none) |
 | `--log-level` | RUST_LOG style format (e.g., `info`, `lnurl=trace,info`, `lnurl=trace,spark_wallet=debug,info`) | `info` |
 | `--network` | Spark network (mainnet, testnet, regtest) | `mainnet` |
+| `--spark-config` | JSON file with the Spark operators and SSP to use instead of the network's | (none) |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
 | `--max-sendable` | Maximum payment amount (millisatoshi) | `4000000000` |
 | `--max-registrations-per-day` | Address registrations one pubkey may perform per domain in a rolling 24h window, refused with `429` past it (`0` disables) | `5` |
@@ -168,6 +169,7 @@ The LNURL server provides the following endpoints:
 - `/.well-known/lnurlp/{username}` - LNURL-pay endpoint for Lightning Address handling
 - `/lnurlp/{username}` - Alternative LNURL-pay endpoint 
 - `/lnurlp/{username}/invoice` - Invoice generation endpoint for LNURL-pay
+- `/lnurlp/verify/{payment_hash}` - LUD-21 payment verification for an invoice the server created
 
 ### Authenticated Endpoints (require API key)
 

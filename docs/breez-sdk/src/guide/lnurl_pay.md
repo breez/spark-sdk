@@ -2,10 +2,7 @@
     <a class="header" href="#lnurl-pay">Sending payments using LNURL-Pay and Lightning address</a>
 </h1>
 
-<h2 id="preparing-lnurl-payments">
-    <a class="header" href="#preparing-lnurl-payments">Preparing LNURL Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_lnurl_pay">API docs</a>
-</h2>
+## Preparing LNURL Payments
 
 During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request,
 and also returns the fees related to the payment so they can be confirmed.
@@ -30,10 +27,7 @@ This is particularly useful when you want to spend your entire balance in a sing
 
 When [stable balance](./stable_balance.md) is active, you can send your entire wallet balance via LNURL. See [Sending entire balance](./stable_balance.md#sending-entire-balance) for details.
 
-<h2 id="lnurl-payments">
-    <a class="header" href="#lnurl-payments">LNURL Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_pay">API docs</a>
-</h2>
+## LNURL Payments
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
 - **Prepare Response** - The response from the [Preparing LNURL Payments](lnurl_pay.md#preparing-lnurl-payments) step.

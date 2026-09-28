@@ -1,0 +1,164 @@
+// Vendored from breez/spark (branch ssp-enabled, commit 42afde75a),
+// protos/spark_ssp_internal.proto, with the common.proto and spark.proto imports
+// changed to resolve against the spark crate's protos.
+syntax = "proto3";
+
+package spark_ssp_internal;
+
+option go_package = "github.com/lightsparkdev/spark/proto/spark_ssp_internal";
+import "spark/common.proto";
+import "spark/spark.proto";
+import "validate/validate.proto";
+
+// The part of the operators' service provider API that Breez's service provider
+// calls, under the names Lightspark's operators serve it by. The upstream
+// definition of this service is not public.
+service SparkSspInternalService {
+    rpc prepare_tree_address(spark.PrepareTreeAddressRequest) returns (spark.PrepareTreeAddressResponse) {}
+    rpc create_tree(spark.CreateTreeRequest) returns (spark.CreateTreeResponse) {}
+    rpc initiate_counter_transfer(CounterTransferRequest) returns (spark.StartTransferResponse) {}
+    rpc return_stuck_transfer(ReturnStuckTransferRequest) returns (ReturnStuckTransferResponse) {}
+    rpc initiate_static_deposit_utxo_swap(InitiateStaticDepositUtxoSwapRequest) returns (InitiateStaticDepositUtxoSwapResponse) {}
+    rpc reserve_instant_static_deposit_utxo_swap(ReserveInstantStaticDepositUtxoSwapRequest) returns (ReserveInstantStaticDepositUtxoSwapResponse) {}
+    rpc claim_instant_static_deposit_utxo_swap(ClaimInstantStaticDepositUtxoSwapRequest) returns (ClaimInstantStaticDepositUtxoSwapResponse) {}
+    rpc sign_static_deposit_sweep_tx(SignStaticDepositSweepTxRequest) returns (SignStaticDepositSweepTxResponse) {}
+}
+
+message InitiateStaticDepositUtxoSwapRequest {
+    spark.UTXO on_chain_utxo = 1;
+    bytes ssp_signature = 2;
+    bytes user_signature = 3;
+    spark.StartTransferRequest transfer = 4;
+    spark.SigningJob spend_tx_signing_job = 5;
+    spark.HashVariant hash_variant = 6;
+    // Unset uses the network's default.
+    optional uint32 confirmation_threshold = 7;
+}
+
+message InitiateStaticDepositUtxoSwapResponse {
+    spark.SigningResult spend_tx_signing_result = 1;
+    spark.Transfer transfer = 2;
+    spark.DepositAddressQueryResult deposit_address = 3;
+}
+
+message CounterTransferRequest {
+    // Counter transfer with refunds and key tweaks signed.
+    spark.StartTransferRequest transfer = 1;
+    // Adaptor public keys to verify the signatures of refunds for the counter
+    // transfer in the swap.
+    spark.AdaptorPublicKeyPackage adaptor_public_keys = 2;
+    // The primary swap transfer this counter transfer settles against.
+    string primary_transfer_id = 3;
+}
+
+message ReturnStuckTransferRequest {
+    string transfer_id = 1;
+}
+
+message ReturnStuckTransferResponse {}
+
+message SweepInput {
+    spark.UTXO on_chain_utxo = 1;
+    // Index of this UTXO in the sweep transaction's input list.
+    uint32 vin = 2;
+    // The SSP's round-1 commitment for this input.
+    common.SigningCommitment user_signing_commitment = 3;
+}
+
+message SignStaticDepositSweepTxRequest {
+    spark.Network network = 1;
+    // The sweep transaction, spending every UTXO in inputs.
+    bytes raw_tx = 2;
+    repeated SweepInput inputs = 3 [(validate.rules).repeated = {min_items: 1, max_items: 200}];
+    // The SSP identity key's signature over the sweep statement, which commits to
+    // the network and the sweep transaction's txid.
+    bytes ssp_signature = 4;
+}
+
+message SweepInputSigningResult {
+    uint32 vin = 1;
+    spark.SigningResult signing_result = 2;
+    // The verifying key of the deposit address this input spends from.
+    bytes verifying_key = 3 [(validate.rules).bytes.len = 33];
+}
+
+message SweptInputs {
+    repeated SweepInputSigningResult results = 1;
+}
+
+enum SweepIneligibleReason {
+    SWEEP_INELIGIBLE_REASON_UNSPECIFIED = 0;
+    SWEEP_INELIGIBLE_REASON_UNKNOWN_UTXO = 1;
+    SWEEP_INELIGIBLE_REASON_NO_SWAP = 2;
+    SWEEP_INELIGIBLE_REASON_SWAP_NOT_COMPLETED = 3;
+    SWEEP_INELIGIBLE_REASON_NOT_OWNED_BY_CALLER = 4;
+    SWEEP_INELIGIBLE_REASON_REFUND_SWAP = 5;
+}
+
+message IneligibleSweepInput {
+    spark.UTXO on_chain_utxo = 1;
+    SweepIneligibleReason reason = 2;
+}
+
+message IneligibleSweepInputs {
+    repeated IneligibleSweepInput inputs = 1;
+}
+
+message SignStaticDepositSweepTxResponse {
+    oneof result {
+        SweptInputs signed = 1;
+        IneligibleSweepInputs ineligible = 2;
+    }
+}
+
+// Phase one of the instant (0-conf) static-deposit swap: the SSP asks the SE to credit the
+// user a Spark transfer against a deposit UTXO that may still be unconfirmed. The reservation
+// stays open until the claim phase sweeps the UTXO once it confirms.
+message ReserveInstantStaticDepositUtxoSwapRequest {
+    spark.UTXO on_chain_utxo = 1;
+    // SSP signature over the message consenting to credit a specific amount for a specific UTXO.
+    bytes ssp_signature = 2;
+    // User signature over the message consenting to exchange the UTXO for the SSP's transfer.
+    bytes user_signature = 3;
+    // Transfer package crediting the user, sent from the SSP.
+    spark.StartTransferRequest transfer = 4;
+    // Static deposit address the UTXO was paid to.
+    string destination_address = 5;
+    // UTXO output value in satoshis.
+    int64 value_sats = 6;
+    // Primary credit amount in satoshis.
+    int64 credit_amount_sats = 7;
+    // Optional secondary credit amount in satoshis (claimed with a secondary transfer).
+    int64 secondary_credit_amount_sats = 8;
+    // 9 was a deprecated expiry_time the SO no longer reads.
+    reserved 9;
+    // Requested secondary transfer id, required iff secondary_credit_amount_sats is set.
+    string requested_secondary_transfer_id = 10;
+}
+
+message ReserveInstantStaticDepositUtxoSwapResponse {
+    // Primary transfer crediting the user, sent at reserve time.
+    spark.Transfer transfer = 1;
+    // Reservation handle the claim phase uses to locate this swap.
+    string utxo_swap_id = 2;
+}
+
+// Phase two of the instant static-deposit swap: the reserved UTXO has confirmed, so the SE
+// co-signs the SSP's spend transaction and sends any secondary transfer, then completes the swap.
+message ClaimInstantStaticDepositUtxoSwapRequest {
+    spark.UTXO on_chain_utxo = 1;
+    // Reservation handle returned by the reserve phase.
+    string utxo_swap_id = 2;
+    // Optional secondary transfer package, present iff the reservation has a secondary credit.
+    spark.StartTransferRequest transfer = 3;
+    // Transaction the SSP built spending the UTXO to an address it owns.
+    spark.SigningJob spend_tx_signing_job = 4;
+}
+
+message ClaimInstantStaticDepositUtxoSwapResponse {
+    // SE co-signature over the SSP's spend transaction.
+    spark.SigningResult spend_tx_signing_result = 1;
+    // Secondary transfer, present iff the reservation carried a secondary credit.
+    spark.Transfer transfer = 2;
+    spark.DepositAddressQueryResult deposit_address = 3;
+}

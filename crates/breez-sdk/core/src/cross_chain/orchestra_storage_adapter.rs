@@ -46,6 +46,12 @@ pub(crate) struct OrchestraSwapData {
     pub read_token: Option<String>,
     /// Wallet's Spark address (the receive destination).
     pub recipient_address: String,
+    /// Amountless Spark invoice the provider fulfils on delivery, which ties
+    /// the inbound payment to this row. Absent on rows written before
+    /// invoice delivery was supported: those link up through the order's
+    /// `sparkTxHash` alone.
+    #[serde(default)]
+    pub spark_invoice: Option<String>,
     pub source_chain: String,
     pub source_asset: String,
     /// Source chain identifier (e.g. EVM `chainId` as a decimal string).
@@ -74,8 +80,16 @@ pub(crate) struct OrchestraSwapData {
     /// Orchestra `estimatedOut` at quote time. The live `Order.amount_out` is
     /// what the receiver actually gets and is read off the poll response.
     pub expected_amount_out: String,
+    /// Quote service fee, in `fee_asset` units.
     #[serde(default)]
     pub fee_amount: Option<String>,
+    /// Quote `feeAsset` ticker as Orchestra reports it (`"BTC"` for sats).
+    /// Unset on rows written before it was stored.
+    #[serde(default)]
+    pub fee_asset: Option<String>,
+    /// Decimals of `fee_asset`. Unset when Orchestra did not report them.
+    #[serde(default)]
+    pub fee_asset_decimals: Option<u32>,
     /// Quote expiry, unix seconds. Not authoritative for the receive
     /// lifecycle: Orchestra may reprice late deposits.
     pub expires_at: u64,
@@ -200,6 +214,7 @@ mod tests {
             order_id: None,
             read_token: None,
             recipient_address: "sp1...".to_string(),
+            spark_invoice: Some("spark1inv...".to_string()),
             source_chain: "base".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("8453".to_string()),
@@ -212,6 +227,8 @@ mod tests {
             amount_in: "100000000".to_string(),
             expected_amount_out: "100000".to_string(),
             fee_amount: Some("500".to_string()),
+            fee_asset: Some("USDC".to_string()),
+            fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
         }
     }
@@ -222,6 +239,7 @@ mod tests {
             order_id: Some("o_usdb".to_string()),
             read_token: Some("rt_usdb".to_string()),
             recipient_address: "sp1...".to_string(),
+            spark_invoice: None,
             source_chain: "arbitrum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("42161".to_string()),
@@ -236,6 +254,8 @@ mod tests {
             amount_in: "1050000".to_string(),
             expected_amount_out: "1000000".to_string(),
             fee_amount: Some("20000".to_string()),
+            fee_asset: None,
+            fee_asset_decimals: None,
             expires_at: 1_700_000_120,
         }
     }
@@ -259,6 +279,19 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
         let decoded: OrchestraSwapData = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, data);
+    }
+
+    /// Rows written before the fee asset was stored still decode, with it
+    /// unset.
+    #[test]
+    fn data_written_without_the_fee_asset_decodes() {
+        let mut json: serde_json::Value = serde_json::to_value(sample_data()).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("feeAsset");
+        obj.remove("feeAssetDecimals");
+        let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.fee_asset, None);
+        assert_eq!(decoded.fee_asset_decimals, None);
     }
 
     /// Forward compatibility: future fields added by the server must not

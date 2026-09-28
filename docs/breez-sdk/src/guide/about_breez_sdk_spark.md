@@ -7,8 +7,10 @@ The Breez SDK provides developers with an end-to-end solution for integrating in
 ## **What is the Breez SDK?**
 
 It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
-- **Send payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address, Spark address, BTKN, USDT/USDC
-- **Receive payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address, Spark address, BTKN
+
+- Send and receive bitcoin via Lightning addresses, Bolt11 invoices, LNURL-Pay, bitcoin addresses, and Spark addresses
+- Send and receive USDC or USDT on Ethereum, Base, Arbitrum, Solana, Tron, and other networks, to and from a bitcoin or USD balance
+- Issue, send, and receive Spark tokens (BTKN)
   
 **Key Features**
 

@@ -1593,6 +1593,9 @@ pub struct PreparePaymentLinkResponse {
     /// Denomination of `service_fee_amount`. `None` means sats: Boltz
     /// denominates its fee in sats, Orchestra in the stablecoin.
     pub service_fee_asset: Option<String>,
+    /// Decimals of `service_fee_asset`, for formatting `service_fee_amount`.
+    /// Unset when the fee is in sats or the provider did not report them.
+    pub service_fee_asset_decimals: Option<u32>,
     /// RFC3339 timestamp after which the quote is no longer valid.
     pub expires_at: String,
 }
@@ -1799,6 +1802,9 @@ pub enum SendPaymentMethod {
         service_fee_amount: u128,
         /// Asset which service fee is denominated in. Unset means BTC sats.
         service_fee_asset: Option<String>,
+        /// Decimals of `service_fee_asset`, for formatting `service_fee_amount`.
+        /// Unset when the fee is in sats or the provider did not report them.
+        service_fee_asset_decimals: Option<u32>,
         /// Sats budget for moving the amount in from the wallet to the provider.
         source_transfer_fee_sats: u64,
         /// Fee mode the prepare ran under; the send stage matches.
@@ -3383,6 +3389,7 @@ mod tests {
             fee_amount: Some(10_000),
             service_fee_amount: None,
             service_fee_asset: None,
+            service_fee_asset_decimals: None,
             asset_decimals: 6,
             asset_contract: None,
         }

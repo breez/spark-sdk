@@ -1,4 +1,4 @@
-# USDC/USDT payments
+# Send and receive USDC/USDT
 
 The SDK can send and receive USDC and USDT between a Spark wallet and several supported external chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The Spark side is either BTC sats or [USDB](./stable_balance.md), the 6-decimal USD-pegged token on Spark. Each payment runs as two legs (a Spark-side transfer and the provider-driven external delivery) reconciled onto a single {{#name Payment}} row.
 
@@ -117,7 +117,7 @@ The cross-chain status walks one of:
 - **{{#enum ConversionStatus::Refunded}}**: the funds have been refunded back to the wallet.
 - **{{#enum ConversionStatus::Failed}}**: terminal failure with no refund pending.
 
-A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment can be reported as a plain Spark transfer first: the conversion info follows in that event once the provider confirms the order.
+A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment carries its {{#name conversion_info}} from its first event. The delivered amount and the deposit transaction follow in that event once the provider confirms the order.
 
 ## Send
 

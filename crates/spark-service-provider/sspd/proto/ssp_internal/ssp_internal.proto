@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+// No authentication: keep it on a loopback address.
+package ssp_internal;
+
+service SspManager {
+    rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+    rpc Stop(StopRequest) returns (StopResponse);
+    // Returns an empty response when no send or receive has the id.
+    rpc GetLightningRequest(GetLightningRequestRequest) returns (GetLightningRequestResponse);
+    // Every send and receive that is not yet complete.
+    rpc ListPendingLightning(ListPendingLightningRequest) returns (ListPendingLightningResponse);
+    // Newest first, in any state.
+    rpc ListCoopExits(ListCoopExitsRequest) returns (ListCoopExitsResponse);
+    // Returns an empty response when the SSP has no claim on the UTXO.
+    rpc GetStaticDepositClaim(GetStaticDepositClaimRequest) returns (GetStaticDepositClaimResponse);
+    // Newest first.
+    rpc ListSwaps(ListSwapsRequest) returns (ListSwapsResponse);
+}
+
+service Pool {
+    // Adds to what the pool stocks on its own until funded or the daemon restarts.
+    // Returns once the ask is taken, not when the leaves exist.
+    rpc RequestRestock(RequestRestockRequest) returns (RequestRestockResponse);
+    rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
+    rpc SubscribePoolEvents(SubscribePoolEventsRequest) returns (stream PoolEvent);
+}
+
+service OnchainWallet {
+    rpc NewAddress(NewAddressRequest) returns (NewAddressResponse);
+    rpc Balance(BalanceRequest) returns (BalanceResponse);
+    rpc Utxos(UtxosRequest) returns (UtxosResponse);
+}
+
+message GetInfoRequest {}
+
+message GetInfoResponse {
+    uint64 block_height = 1;
+    string network = 2;
+}
+
+
+message StopRequest {}
+
+message StopResponse {}
+
+// The lightning messages report whether a preimage is known, never the preimage.
+
+message LightningSend {
+    string id = 1;
+    string user_identity_public_key = 2;  // hex
+    string payment_hash = 3;              // hex
+    uint64 amount_sats = 4;
+    string encoded_invoice = 5;
+    string created_at = 6;                // RFC3339
+    string updated_at = 7;                // RFC3339
+    uint64 fee_sats = 8;
+    string user_transfer_id = 9;
+    optional string ln_payment_id = 10;
+    bool has_preimage = 11;
+    string payment_status = 12;           // pending | succeeded | failed
+    bool leaves_claimed = 13;
+    bool is_complete = 14;
+}
+
+message LightningReceive {
+    string id = 1;
+    string user_identity_public_key = 2;  // hex
+    string payment_hash = 3;              // hex
+    uint64 amount_sats = 4;
+    string encoded_invoice = 5;
+    string created_at = 6;                // RFC3339
+    string updated_at = 7;                // RFC3339
+    optional string transfer_id = 8;
+    bool has_preimage = 9;
+    string invoice_status = 10;           // pending | settled | cancelled | failed
+    string expires_at = 11;               // RFC3339
+    optional string memo = 12;
+    optional uint64 transfer_amount_sats = 13;
+}
+
+message GetLightningRequestRequest {
+    string id = 1;
+}
+
+message GetLightningRequestResponse {
+    optional LightningSend send = 1;
+    optional LightningReceive receive = 2;
+}
+
+message ListPendingLightningRequest {}
+
+message ListPendingLightningResponse {
+    repeated LightningSend sends = 1;
+    repeated LightningReceive receives = 2;
+}
+
+message CoopExit {
+    string id = 1;
+    string user_identity_public_key = 2;  // hex
+    string withdrawal_address = 3;
+    uint64 amount_sats = 4;
+    uint64 fee_sats = 5;
+    // Known from the moment the request is made.
+    string coop_exit_txid = 6;
+    string user_transfer_id = 7;
+    // Set once the user committed their leaves and the request is ready to
+    // broadcast.
+    bool completed = 8;
+    // Set once the coop-exit transaction was broadcast.
+    optional string broadcast_txid = 9;
+    bool leaves_claimed = 10;
+    string created_at = 11;               // RFC3339
+    string updated_at = 12;               // RFC3339
+}
+
+message ListCoopExitsRequest {
+    // Zero means the server's default.
+    uint32 limit = 1;
+}
+
+message ListCoopExitsResponse {
+    repeated CoopExit coop_exits = 1;
+}
+
+message ListSwapsRequest {
+    // Zero means the server's default.
+    uint32 limit = 1;
+}
+
+message SwapLeaf {
+    string leaf_id = 1;
+    uint64 value_sats = 2;
+}
+
+message Swap {
+    string id = 1;
+    string user_transfer_id = 2;
+    uint64 total_amount_sats = 3;
+    uint64 target_amount_sats = 4;
+    uint64 fee_sats = 5;
+    // The leaves the SSP reserved to send the user.
+    repeated SwapLeaf outbound = 6;
+    // The leaves the SSP claimed from the user's transfer, empty until then.
+    repeated SwapLeaf inbound = 7;
+}
+
+message ListSwapsResponse {
+    repeated Swap swaps = 1;
+}
+
+message StaticDepositClaim {
+    string id = 1;
+    string user_identity_public_key = 2;  // hex
+    string txid = 3;                      // the deposit utxo
+    uint32 vout = 4;
+    uint64 credit_amount_sats = 5;
+    bool is_instant = 6;
+    optional string transfer_id = 7;
+    optional string spend_broadcast_txid = 8;
+    string created_at = 9;                // RFC3339
+    string updated_at = 10;               // RFC3339
+    bool spend_confirmed = 11;
+}
+
+message GetStaticDepositClaimRequest {
+    string txid = 1;
+    uint32 vout = 2;
+}
+
+message GetStaticDepositClaimResponse {
+    optional StaticDepositClaim claim = 1;
+}
+
+message NewAddressRequest {}
+
+message NewAddressResponse {
+    string address = 1;
+    uint32 index = 2;
+}
+
+message BalanceRequest {}
+
+message BalanceResponse {
+    uint64 confirmed_sats = 1;
+    uint32 utxo_count = 2;
+}
+
+message Utxo {
+    string txid = 1;
+    uint32 vout = 2;
+    uint64 value = 3;
+    uint64 block_height = 4;
+    string address = 5;
+}
+
+message UtxosRequest {}
+
+message UtxosResponse {
+    repeated Utxo utxos = 1;
+}
+
+message RestockDenomination {
+    // Leaf value in sats: one of the pool's power-of-two denominations.
+    uint64 denomination_sats = 1;
+    // How many more leaves of it to stock.
+    uint32 count = 2;
+}
+
+message RequestRestockRequest {
+    repeated RestockDenomination denominations = 1;
+}
+
+message RequestRestockResponse {
+    // Everything asked for and not yet funded.
+    repeated RestockDenomination pending = 1;
+}
+
+message PoolStatusRequest {}
+
+message PoolLeafCount {
+    uint64 denomination_sats = 1;
+    uint32 count = 2;
+}
+
+message PoolStatusResponse {
+    repeated PoolLeafCount available = 1;
+    uint64 available_sats = 2;
+    repeated RestockDenomination pending_restock = 3;
+}
+
+message SubscribePoolEventsRequest {}
+
+message PoolEvent {
+    oneof event {
+        FundingBroadcast funding_broadcast = 1;
+        LeavesAvailable leaves_available = 2;
+    }
+}
+
+// A transaction funding new leaf trees was broadcast. Their leaves are not yet
+// spendable.
+message FundingBroadcast {
+    string txid = 1;
+    uint64 total_sats = 2;
+    // The denomination of each tree this transaction funds.
+    repeated uint64 denominations = 3;
+}
+
+message LeavesAvailable {
+    string deposit_address = 1;
+    // The value of each leaf added, one entry per leaf.
+    repeated uint64 denominations = 2;
+}

@@ -538,8 +538,11 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
         }
     }
 
-    if case let .crossChainAddress(route, recipientAddress, amountIn, assetAmountIn, estimatedOut, feeAmount, serviceFeeAmount, serviceFeeAsset, sourceTransferFeeSats, _, _, _) = prepareResponse.paymentMethod {
-        let serviceFeeDenom = serviceFeeAsset ?? "sats"
+    if case let .crossChainAddress(route, recipientAddress, amountIn, assetAmountIn, estimatedOut, feeAmount, serviceFeeAmount, serviceFeeAsset, serviceFeeAssetDecimals, sourceTransferFeeSats, _, _, _) = prepareResponse.paymentMethod {
+        let serviceFeeDenom = serviceFeeDenomination(
+            asset: serviceFeeAsset,
+            decimals: serviceFeeAssetDecimals
+        )
         let denomination = tokenIdentifier != nil ? "token base units" : "sats"
         print("Cross-chain send: \(amountIn) \(denomination) (~\(assetAmountIn) \(route.asset)) -> ~\(estimatedOut) \(route.asset) on \(route.chain) to \(recipientAddress)")
         print("Fee (total, in \(route.asset)): \(feeAmount)")
@@ -970,7 +973,11 @@ func handlePreparePaymentLink(_ sdk: BreezSdk, _ args: [String]) async throws {
 
     print("Open this URL in a browser to complete the purchase:")
     print(response.url)
-    print("Deposit ~\(response.amountSats) sats; recipient receives ~\(response.estimatedOut) \(response.asset), service fee \(response.serviceFeeAmount) \(response.serviceFeeAsset ?? "sats"), expires \(response.expiresAt)")
+    let serviceFeeDenom = serviceFeeDenomination(
+        asset: response.serviceFeeAsset,
+        decimals: response.serviceFeeAssetDecimals
+    )
+    print("Deposit ~\(response.amountSats) sats; recipient receives ~\(response.estimatedOut) \(response.asset), service fee \(response.serviceFeeAmount) \(serviceFeeDenom), expires \(response.expiresAt)")
 }
 
 // --- check-lightning-address-available ---
@@ -1234,4 +1241,15 @@ private func maybeTruncateAddress(_ addr: String?) -> String {
         return " (\(prefix)...\(suffix))"
     }
     return " (\(c))"
+}
+
+func serviceFeeDenomination(asset: String?, decimals: UInt32?) -> String {
+    switch (asset, decimals) {
+    case (nil, _):
+        return "sats"
+    case let (asset?, decimals?):
+        return "\(asset) (\(decimals) decimals)"
+    case let (asset?, nil):
+        return asset
+    }
 }

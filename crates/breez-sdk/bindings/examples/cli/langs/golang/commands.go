@@ -563,10 +563,7 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 
 	// Show cross-chain quote details before confirming
 	if ccMethod, ok := prepareResponse.PaymentMethod.(breez_sdk_spark.SendPaymentMethodCrossChainAddress); ok {
-		serviceFeeDenom := "sats"
-		if ccMethod.ServiceFeeAsset != nil {
-			serviceFeeDenom = *ccMethod.ServiceFeeAsset
-		}
+		serviceFeeDenom := serviceFeeDenomination(ccMethod.ServiceFeeAsset, ccMethod.ServiceFeeAssetDecimals)
 		denomination := "sats"
 		if *tokenId != "" {
 			denomination = "token base units"
@@ -1213,10 +1210,7 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(response.Url)
-	serviceFeeAsset := "sats"
-	if response.ServiceFeeAsset != nil {
-		serviceFeeAsset = *response.ServiceFeeAsset
-	}
+	serviceFeeAsset := serviceFeeDenomination(response.ServiceFeeAsset, response.ServiceFeeAssetDecimals)
 	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %s\n",
 		response.AmountSats, response.EstimatedOut, response.Asset,
 		response.ServiceFeeAmount, serviceFeeAsset, response.ExpiresAt)
@@ -1794,4 +1788,14 @@ func parseTokenTransactionType(value string) *breez_sdk_spark.TokenTransactionTy
 		return &t
 	}
 	return nil
+}
+
+func serviceFeeDenomination(asset *string, decimals *uint32) string {
+	if asset == nil {
+		return "sats"
+	}
+	if decimals != nil {
+		return fmt.Sprintf("%s (%d decimals)", *asset, *decimals)
+	}
+	return *asset
 }

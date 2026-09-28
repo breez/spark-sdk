@@ -7,7 +7,7 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info, trace};
+use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
@@ -346,6 +346,7 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                 };
 
                 sdk.sync_single_lnurl_metadata(&mut payment).await;
+                attach_cross_chain_receive_metadata(sdk, &payment).await;
 
                 // Drop this Pending event if sync already saw the transfer Completed.
                 if should_emit {
@@ -380,6 +381,20 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                 .await;
             false
         }
+    }
+}
+
+/// Links a Pending inbound transfer to the cross-chain receive it fulfils, so
+/// the Pending event already carries the conversion. The sync path does the
+/// same for the Completed one.
+async fn attach_cross_chain_receive_metadata(sdk: &BreezSdk, payment: &Payment) {
+    if let Err(e) =
+        crate::cross_chain::attach_receive_metadata_for_payment(&sdk.storage, payment).await
+    {
+        warn!(
+            "Failed to attach cross-chain receive metadata to {}: {e:?}",
+            payment.id
+        );
     }
 }
 

@@ -52,6 +52,7 @@ The {{#name amount}} on {{#name PreparePaymentLinkRequest}} is in the destinatio
 | {{#name asset}} | The delivered stablecoin (e.g. `USDC`). |
 | {{#name service_fee_amount}} | Provider fee for the conversion. |
 | {{#name service_fee_asset}} | Denomination of the fee. Absent means the fee is in sats. |
+| {{#name service_fee_asset_decimals}} | Decimals of {{#name service_fee_asset}}, for formatting the fee. Absent when the fee is in sats or the provider did not report them. |
 | {{#name expires_at}} | Quote expiry. Re-call {{#name prepare_payment_link}} for a fresh quote if it lapses before the user starts paying. |
 
 ## Opening the payment link
@@ -62,4 +63,3 @@ On devices with Cash App installed the URL opens the app directly; otherwise it 
 
 - **Mainnet only.** Cash App and the cross-chain providers operate against live networks. There is no testnet equivalent.
 - **Not tracked.** The purchase is funded outside the wallet, so it produces no {{#name Payment}} row and no event. If you need delivery confirmation, observe the recipient chain directly.
-- **Orchestra routes only.** Payment links quote against Orchestra, whose orders deliver without the SDK online. A route that needs the wallet to stay online to claim before the payer's payment settles cannot back a link, so {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::PaymentLink}} returns only Orchestra routes.

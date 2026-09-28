@@ -120,14 +120,14 @@ func FetchClaimDepositQuote(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spa
 		return err
 	}
 
-	// Claiming once the deposit matures, and how many blocks that is away.
+	// The standard claim, and how many blocks away it is.
 	blocksToWait := uint32(0)
 	if quote.Mature.ConfirmationsRequired > quote.Confirmations {
 		blocksToWait = quote.Mature.ConfirmationsRequired - quote.Confirmations
 	}
 	log.Printf("Wait %v blocks and pay %v sats", blocksToWait, quote.Mature.FeeSats)
 
-	// Claiming earlier, when the provider offers it.
+	// An instant or expedited claim, when the provider offers one.
 	if quote.Instant != nil {
 		instantBlocks := uint32(0)
 		if quote.Instant.ConfirmationsRequired > quote.Confirmations {

@@ -7,10 +7,7 @@ Once the SDK is initialized, you can directly begin sending payments. The send p
 
 For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md).
 
-<h2 id="preparing-payments">
-    <a class="header" href="#preparing-payments">Preparing Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
-</h2>
+## Preparing Payments
 
 During the prepare step, the SDK ensures that the inputs are valid with respect to the payment request type,
 and also returns the fees related to the payment so they can be confirmed.
@@ -89,10 +86,7 @@ When [stable balance](./stable_balance.md) is active, you can send your entire w
 
 {{#tabs send_payment:prepare-send-payment-send-all}}
 
-<h2 id="sending-payments">
-    <a class="header" href="#sending-payments">Sending Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>
-</h2>
+## Sending Payments
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
 
