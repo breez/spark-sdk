@@ -215,21 +215,7 @@ impl SparkSyncService {
     }
 
     pub(crate) async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
-        let identifier = match &payment.details {
-            Some(PaymentDetails::Lightning { invoice, .. }) => invoice,
-            Some(PaymentDetails::Token { tx_hash, .. }) => tx_hash,
-            _ => payment.id.as_str(),
-        };
-
-        // Get the payment metadata from storage for this payment
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        if let Some(metadata) = cache.fetch_payment_metadata(identifier).await? {
-            self.storage
-                .insert_payment_metadata(payment.id.clone(), metadata)
-                .await?;
-
-            // Delete the payment metadata since we have applied it
-            cache.delete_payment_metadata(identifier).await?;
+        if apply_cached_payment_metadata(&self.storage, payment).await? {
             return Ok(());
         }
 
@@ -432,5 +418,139 @@ impl SparkSyncService {
         }
 
         Ok(())
+    }
+}
+
+/// The keys metadata for `payment` may be cached under, in lookup order.
+///
+/// A transfer settling the Spark invoice embedded in a Bolt11 is still a Spark
+/// payment here, so metadata cached for that Bolt11 is also cached under the
+/// Spark invoice.
+fn payment_metadata_keys(payment: &Payment) -> Vec<&str> {
+    match &payment.details {
+        Some(PaymentDetails::Lightning { invoice, .. }) => vec![invoice],
+        Some(PaymentDetails::Token { tx_hash, .. }) => vec![tx_hash],
+        Some(PaymentDetails::Spark {
+            invoice_details: Some(invoice_details),
+            ..
+        }) => vec![&payment.id, &invoice_details.invoice],
+        _ => vec![&payment.id],
+    }
+}
+
+/// Moves the metadata cached for `payment` onto it, returning whether any was
+/// found.
+async fn apply_cached_payment_metadata(
+    storage: &Arc<dyn Storage>,
+    payment: &Payment,
+) -> Result<bool, SdkError> {
+    let cache = ObjectCacheRepository::new(storage.clone());
+    for key in payment_metadata_keys(payment) {
+        if let Some(metadata) = cache.fetch_payment_metadata(key).await? {
+            storage
+                .insert_payment_metadata(payment.id.clone(), metadata)
+                .await?;
+            cache.delete_payment_metadata(key).await?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::*;
+    use crate::{
+        LnurlWithdrawInfo, PaymentMethod, PaymentType, SparkInvoicePaymentDetails,
+        persist::{PaymentMetadata, SparkSettledBolt11Receive, sqlite::SqliteStorage},
+    };
+
+    fn temp_storage() -> Arc<dyn Storage> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("breez-sync-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(SqliteStorage::new(&dir).unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_withdraw_metadata_applies_to_spark_settled_bolt11() {
+        let storage = temp_storage();
+        let spark_invoice = "sparkrt1withdraw";
+        let bolt11 = "lnbc_withdraw";
+        let metadata = PaymentMetadata {
+            lnurl_withdraw_info: Some(LnurlWithdrawInfo {
+                withdraw_url: "https://service.example/withdraw".to_string(),
+            }),
+            lnurl_description: Some("withdraw desc".to_string()),
+            ..Default::default()
+        };
+        let cache = ObjectCacheRepository::new(storage.clone());
+        for key in [bolt11, spark_invoice] {
+            cache.save_payment_metadata(key, &metadata).await.unwrap();
+        }
+        storage
+            .set_spark_settled_bolt11_receive(SparkSettledBolt11Receive {
+                id: crate::persist::spark_invoice_digest(spark_invoice),
+                spark_invoice: spark_invoice.to_string(),
+                bolt11: bolt11.to_string(),
+                expires_at: None,
+                description: None,
+                destination_pubkey: "02receive".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Built from the transfer, as sync and the claim event see it.
+        let payment = Payment {
+            id: "withdraw_transfer".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 1,
+            method: PaymentMethod::Spark,
+            details: Some(PaymentDetails::Spark {
+                invoice_details: Some(SparkInvoicePaymentDetails {
+                    description: None,
+                    invoice: spark_invoice.to_string(),
+                }),
+                htlc_details: None,
+                conversion_info: None,
+            }),
+            conversion_details: None,
+        };
+        assert!(
+            apply_cached_payment_metadata(&storage, &payment)
+                .await
+                .unwrap()
+        );
+        assert!(
+            cache
+                .fetch_payment_metadata(spark_invoice)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage.apply_payment_update(payment).await.unwrap();
+
+        let stored = storage
+            .get_payment_by_id("withdraw_transfer".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Lightning {
+            invoice,
+            description,
+            lnurl_withdraw_info,
+            ..
+        }) = stored.details
+        else {
+            panic!("should report as the Bolt11 it settled");
+        };
+        assert_eq!(invoice, bolt11);
+        assert_eq!(description.as_deref(), Some("withdraw desc"));
+        assert_eq!(
+            lnurl_withdraw_info.map(|i| i.withdraw_url).as_deref(),
+            Some("https://service.example/withdraw")
+        );
     }
 }
