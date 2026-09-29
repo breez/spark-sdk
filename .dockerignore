@@ -17,3 +17,10 @@ examples/
 **/jniLibs/
 **/ffi/
 **/langs/
+
+# The sspd image never builds these integration tests, so editing one should not
+# invalidate it. Not `**/tests/`: macro_test's only target is its tests, and a
+# crate without a target fails to load.
+crates/spark-itest/tests/
+crates/spark-compat-itest/tests/
+crates/breez-sdk/breez-itest/tests/

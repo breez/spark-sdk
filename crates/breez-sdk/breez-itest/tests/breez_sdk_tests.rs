@@ -10,14 +10,12 @@ use tracing::{debug, info};
 /// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_spark_transfer(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_01_spark_transfer(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_01_spark_transfer ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded (100 sats minimum for small test)
     ensure_funded(&mut alice, 100).await?;
@@ -170,10 +168,11 @@ async fn test_01_spark_transfer(
 /// Test 2: Verify deposit claim functionality
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_02_deposit_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_02_deposit_claim ===");
 
-    let mut alice = alice_sdk.await?;
+    let mut alice = env.create_wallet().await?;
 
     // Ensure Alice has some funds to begin with
     ensure_funded(&mut alice, 100).await?;
@@ -243,19 +242,19 @@ fn lightning_payment_cases(
 #[apply(lightning_payment_cases)]
 #[test_log::test(tokio::test)]
 async fn test_03_lightning_invoice_payment(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
     #[case] invoice_amount_sats: Option<u64>,
     #[case] sender_amount: Option<u64>,
     #[case] test_type: &str,
 ) -> Result<()> {
+    let env = env.await?;
     info!(
         "=== Starting test_03_lightning_invoice_payment ({}) ===",
         test_type
     );
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded with enough for invoice + fees
     ensure_funded(&mut alice, 100_000).await?;
@@ -539,11 +538,11 @@ async fn test_03_lightning_invoice_payment(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_04_lightning_invoice_for_external_recipient(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
     let invoice_amount_sats = 2_000u64;
 
     ensure_funded(&mut bob, 50_000).await?;
@@ -617,13 +616,13 @@ async fn test_04_lightning_invoice_for_external_recipient(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_05_lightning_invoice_prefer_spark_fee_path(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_05_lightning_invoice_prefer_spark_fee_path ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded (cover amount + any fees)
     ensure_funded(&mut alice, 50_000).await?;
@@ -725,13 +724,13 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_06_lightning_send_without_completion_wait(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_06_lightning_send_without_completion_wait ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     ensure_funded(&mut alice, 60_000).await?;
 
@@ -801,14 +800,12 @@ async fn test_06_lightning_send_without_completion_wait(
 /// Test 7: Send payment from Alice to Bob using Spark invoice
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_07_spark_invoice(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_07_spark_invoice(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_07_spark_invoice ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded (100 sats minimum for small test)
     ensure_funded(&mut alice, 100).await?;
@@ -956,14 +953,12 @@ async fn test_07_spark_invoice(
 /// Test 8: Lightning invoice with custom expiry_secs
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_08_lightning_invoice_expiry_secs(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_08_lightning_invoice_expiry_secs ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Ensure Alice is funded
     ensure_funded(&mut alice, 50_000).await?;
@@ -1134,13 +1129,13 @@ async fn test_08_lightning_invoice_expiry_secs(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_09_bolt11_send_all_with_fee_overpayment(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_09_bolt11_send_all_with_fee_overpayment ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
 
     // Fund Alice with enough sats to have room for searching fee tiers
     ensure_funded(&mut alice, 50_000).await?;
@@ -1438,13 +1433,13 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_10_lightning_completion_timeout_resolves_to_completed(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+    #[future] env: Result<Environment>,
 ) -> Result<()> {
+    let env = env.await?;
     info!("=== Starting test_10_lightning_completion_timeout_resolves_to_completed ===");
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
     ensure_funded(&mut alice, 60_000).await?;
 
     let invoice_amount_sats = 10_000u64;
