@@ -119,6 +119,7 @@ impl BitcoindFixture {
                 format!("-zmqpubrawtx=tcp://0.0.0.0:{ZMQPUBRAWBLOCK_RPC_PORT}").as_str(),
                 "-rpcbind=0.0.0.0",
                 "-rpcallowip=0.0.0.0/0",
+                "-rpcservertimeout=3600",
             ])
             .start()
             .await?;
