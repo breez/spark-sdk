@@ -64,7 +64,7 @@ let
     mempool.backend
   ];
 
-  bitcoinCli = ''bitcoin-cli -regtest -rpcport="$BITCOIND_RPC_PORT" -rpcuser="$BITCOIND_RPC_USER" -rpcpassword="$BITCOIND_RPC_PASSWORD"'';
+  bitcoinCli = ''${pkgs.bitcoind}/bin/bitcoin-cli -regtest -rpcport="$BITCOIND_RPC_PORT" -rpcuser="$BITCOIND_RPC_USER" -rpcpassword="$BITCOIND_RPC_PASSWORD"'';
   psql = ''psql -h 127.0.0.1 -p "$POSTGRES_PORT" -U postgres'';
 
   # A shell command from its words: process-compose mangles line continuations.
@@ -445,10 +445,11 @@ let
           ''OPERATOR_PUBLIC_PORTS="$OPERATOR_0_PORT $OPERATOR_1_PORT $OPERATOR_2_PORT"''
           "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
           "POSTGRES_HOST=127.0.0.1 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres"
+          # By store path, since only this wrapper has the tools on its PATH.
           ''BITCOIN_CLI="${bitcoinCli}"''
-          ''SSP_CLI="ssp-cli --grpc-uri http://127.0.0.1:$SSP_INTERNAL_PORT"''
-          ''SSP_NODE_CLI="ldk-server-cli --config $LOCAL_DIR/ldk-ssp.toml"''
-          ''ALICE_CLI="ldk-server-cli --config $LOCAL_DIR/ldk-alice.toml"''
+          ''SSP_CLI="${packages.sspd}/bin/ssp-cli --grpc-uri http://127.0.0.1:$SSP_INTERNAL_PORT"''
+          ''SSP_NODE_CLI="${packages.ldk-server}/bin/ldk-server-cli --config $LOCAL_DIR/ldk-ssp.toml"''
+          ''ALICE_CLI="${packages.ldk-server}/bin/ldk-server-cli --config $LOCAL_DIR/ldk-alice.toml"''
           "${scripts}/ready.sh"
         ];
         depends_on = healthy [ "postgres" ];
