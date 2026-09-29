@@ -39,7 +39,7 @@ Every setting is an environment variable read when the environment starts:
 | `MEMPOOL_PORT` | `8090` | The explorer, and the chain API under `/api` |
 | `BIND_ADDRESS` | `127.0.0.1` | The address the published ports listen on |
 | `PUBLIC_HOST` | `127.0.0.1` | The host wallets reach the environment by, in its Spark config |
-| `BLOCK_INTERVAL_SECONDS` | `5` | Seconds between mined blocks. `0` mines the first 200 and no more |
+| `BLOCK_INTERVAL_SECONDS` | `5` | Seconds between mined blocks. `0` mines until the environment is ready, then only on request |
 | `CHANNEL_SATS` | `5000000000` | The channel Alice opens with the SSP's node, half of it pushed |
 | `LEAVES_PER_DENOMINATION` | `8` | Leaves the SSP keeps of each denomination |
 | `MAX_DENOMINATION_POWER` | `16` | Largest denomination the SSP keeps, in powers of two sats |

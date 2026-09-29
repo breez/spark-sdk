@@ -503,8 +503,11 @@ pkgs.writeShellApplication {
       mine)
         exec ${scripts}/mine.sh "$@"
         ;;
+      block-interval)
+        exec ${scripts}/block-interval.sh "$@"
+        ;;
       *)
-        echo "usage: spark-local [up|down|reset|config|fund <address> <sats>|mine <blocks>]" >&2
+        echo "usage: spark-local [up|down|reset|config|fund <address> <sats>|mine <blocks>|block-interval <seconds>]" >&2
         exit 1
         ;;
     esac

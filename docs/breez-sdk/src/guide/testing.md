@@ -91,12 +91,15 @@ Both setups print a command for each service, including `ldk-server-cli` calls t
 
 ### Funding wallets and mining blocks
 
-The environment mines a block every 5 seconds. To send a wallet funds from the environment's Bitcoin node, or to mine blocks at once, for example to pass a timelock:
+The environment mines a block every 5 seconds. To send a wallet funds from the environment's Bitcoin node, to mine blocks at once, for example to pass a timelock, or to change how often the environment mines:
 
 | | Docker | Nix |
 |---|---|---|
 | Fund an address | `make local-env-fund ADDRESS=<address> AMOUNT_SATS=<sats>` | `nix run github:breez/spark-sdk#local-env -- fund <address> <sats>` |
 | Mine blocks | `make local-env-mine BLOCKS=<blocks>` | `nix run github:breez/spark-sdk#local-env -- mine <blocks>` |
+| Mine a block every `<seconds>` | `make local-env-block-interval SECONDS=<seconds>` | `nix run github:breez/spark-sdk#local-env -- block-interval <seconds>` |
+
+At an interval of `0` the environment stops mining once it is ready, and the chain moves only by the blocks you mine, so a test decides when a timelock passes. A new interval lasts until the environment restarts.
 
 ### Testing from another device
 

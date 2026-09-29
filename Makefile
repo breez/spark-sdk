@@ -200,3 +200,8 @@ local-env-fund:
 # make local-env-mine BLOCKS=6
 local-env-mine:
 	$(LOCAL_ENV) exec -T miner /scripts/mine.sh $(BLOCKS)
+
+# make local-env-block-interval SECONDS=0 leaves mining to local-env-mine, until
+# the environment restarts.
+local-env-block-interval:
+	$(LOCAL_ENV) exec -T miner /scripts/block-interval.sh $(SECONDS)
