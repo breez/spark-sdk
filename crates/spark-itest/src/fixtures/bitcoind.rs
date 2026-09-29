@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
 use platform_utils::{
-    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+    ContentType, DefaultHttpClient, HttpClient, HttpError, HttpResponse, add_basic_auth_header,
+    add_content_type_header,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -19,7 +20,7 @@ use testcontainers::{
     runners::AsyncRunner,
 };
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
 
@@ -378,15 +379,15 @@ impl BitcoindFixture {
 
         let body = serde_json::to_string(&request)?;
 
-        let mut headers = HashMap::new();
-        add_basic_auth_header(&mut headers, &self.rpcuser, &self.rpcpassword);
-        add_content_type_header(&mut headers, ContentType::Json);
-
-        let response = self
-            .http_client
-            .post(self.rpc_url.clone(), Some(headers), Some(body))
-            .await
-            .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
+        let response = post_rpc(
+            &self.http_client,
+            &self.rpc_url,
+            &self.rpcuser,
+            &self.rpcpassword,
+            body,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
 
         if !response.is_success() {
             return Err(anyhow::anyhow!(
@@ -401,6 +402,31 @@ impl BitcoindFixture {
             (None, Some(error)) => Err(anyhow::anyhow!("RPC error: {:?}", error)),
             _ => Err(anyhow::anyhow!("Invalid RPC response")),
         }
+    }
+}
+
+/// Posts a JSON-RPC request, sending it again if bitcoind never answered: bitcoind
+/// can close a pooled connection as a request goes out, dropping the request
+/// unread. A timeout is not retried, since bitcoind may still be running the call.
+pub async fn post_rpc(
+    http: &DefaultHttpClient,
+    url: &str,
+    user: &str,
+    password: &str,
+    body: String,
+) -> Result<HttpResponse, HttpError> {
+    let mut headers = HashMap::new();
+    add_basic_auth_header(&mut headers, user, password);
+    add_content_type_header(&mut headers, ContentType::Json);
+    match http
+        .post(url.to_string(), Some(headers.clone()), Some(body.clone()))
+        .await
+    {
+        Err(HttpError::Request(e)) => {
+            warn!("bitcoind sent no answer, sending the request again: {e}");
+            http.post(url.to_string(), Some(headers), Some(body)).await
+        }
+        response => response,
     }
 }
 
