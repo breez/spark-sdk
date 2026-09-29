@@ -21,6 +21,19 @@ function question(rl, prompt) {
 }
 
 /**
+ * Prompt the user for input with a default value.
+ *
+ * @param {import('readline').Interface} rl - The readline interface
+ * @param {string} prompt - The prompt to display
+ * @param {string} defaultVal - The default value if user presses enter
+ * @returns {Promise<string>} The user's input or default value
+ */
+async function questionWithDefault(rl, prompt, defaultVal) {
+  const answer = await question(rl, prompt)
+  return answer.trim() === '' ? defaultVal : answer.trim()
+}
+
+/**
  * Parse a `txid:vout:value:pubkey` funding UTXO string into a CpfpInput
  * of the given kind.
  *
@@ -85,6 +98,80 @@ function printExitTransactions(response) {
       ? `${tx.txHex},${tx.cpfpTxHex}`
       : tx.txHex
     console.log(`      Package: ${pkg}`)
+  }
+}
+
+/**
+ * Print each recovery transaction with a copy-pasteable Package line.
+ *
+ * @param {object} response - The RecoverFundsResponse
+ */
+function printRecovery(response) {
+  console.log(
+    `Recoverable ${response.recoverableValueSats} sats, ` +
+    `total fee ${response.totalFeeSats} sats ` +
+    `(cooperative ${response.cooperativeFeeSats}, cpfp ${response.cpfpFeeSats}, ` +
+    `fanout ${response.fanoutFeeSats}, sweep ${response.sweepFeeSats}), ` +
+    `${response.transactions.length} transaction(s):`
+  )
+  for (let i = 0; i < response.transactions.length; i++) {
+    const tx = response.transactions[i]
+    const after = tx.dependsOn.length > 0
+      ? `, after ${tx.dependsOn.join(',')}`
+      : ''
+    const csv = tx.csvTimelockBlocks != null
+      ? `, csv ${tx.csvTimelockBlocks} blocks`
+      : ''
+    const node = tx.nodeId != null
+      ? ` node=${tx.nodeId}`
+      : ''
+    console.log(`  [${i}] ${tx.kind}${node} status=${JSON.stringify(tx.status)} txid=${tx.txid}${after}${csv}`)
+    if (tx.status.type === 'confirmed') {
+      if (tx.status.blockHeight != null) {
+        console.log(`      (confirmed in block ${tx.status.blockHeight}, nothing to broadcast)`)
+      } else {
+        console.log('      (already confirmed, nothing to broadcast)')
+      }
+      continue
+    }
+    if (tx.status.type === 'waitingForDependencies') {
+      console.log('      (waiting on the transactions it depends on)')
+    }
+    if (tx.status.type === 'waitingForTimelock') {
+      if (tx.status.spendableAtHeight != null) {
+        console.log(`      (waiting for its timelock, until block ${tx.status.spendableAtHeight})`)
+      } else {
+        console.log('      (waiting for its timelock)')
+      }
+    }
+    const pkg = tx.cpfpTxHex != null
+      ? `${tx.txHex},${tx.cpfpTxHex}`
+      : tx.txHex
+    console.log(`      Package: ${pkg}`)
+  }
+  if (response.failed.length > 0) {
+    console.log(`Not recovered, ${response.failed.length} leaf(s):`)
+  }
+  for (const failure of response.failed) {
+    console.log(
+      `  leaf ${failure.leafId} ` +
+      `(output ${failure.outputTxid}:${failure.outputVout}): ` +
+      cooperativeRecoveryErrorMessage(failure.error)
+    )
+  }
+}
+
+function cooperativeRecoveryErrorMessage(error) {
+  switch (error.type) {
+    case 'replacementFeeTooLow':
+      return 'A recovery of this output is already on the network: replacing it takes at least ' +
+        `${error.requiredFeeSats} sats or ${error.requiredFeeRateSatPerVbyte} sats/vbyte`
+    case 'operatorsUnavailable':
+      return `Operators unavailable: ${error.message}`
+    case 'generic':
+      return `Generic error: ${error.message}`
+    default:
+      return JSON.stringify(error)
   }
 }
 
@@ -178,6 +265,41 @@ function registerAdvancedCommands(program, getSdk, rl) {
       writeExit(options.outputFile || options.inputFile, checked.exit)
     })
 
+  // --- recover-funds ---
+  advanced
+    .command('recover-funds')
+    .description('Recover the funds that left the balance, or with --all every leaf. Quotes the recovery (which leaves, how each is recovered, the fees, how much to fund), asks for funding UTXOs and their key when a unilateral exit needs them, and signs it once you confirm. A cooperative recovery needs the operators online')
+    .requiredOption('--fee-rate <rate>', 'Target fee rate in sat/vByte', parseInt)
+    .option('--funding-kind <kind>', 'Funding UTXO kind (p2wpkh or p2tr)', 'p2tr')
+    .requiredOption('--destination <address>', 'Destination address for the recovered funds')
+    .option('--all', 'Recover every leaf worth it, including the ones still in the balance. Only for when the operators are unreachable or refuse to serve the wallet')
+    .option('--leaf <ids...>', 'Leaf id(s) to recover (omit to recover the leaves that left the balance)')
+    .option('--output-file <path>', 'File to write the signed recovery to, for check-recover-funds to read back')
+    .action(async (options) => {
+      const sdk = getSdk()
+      const leafIds = options.leaf || []
+      if (options.all && leafIds.length > 0) {
+        throw new Error('Cannot specify both --all and --leaf')
+      }
+      const request = {
+        feeRateSatPerVbyte: options.feeRate,
+        fundingKind: { type: options.fundingKind },
+        destination: options.destination,
+        selection: recoverySelection(options.all, leafIds)
+      }
+      await recoverFunds(rl, sdk, request, options.fundingKind, options.outputFile)
+    })
+
+  // --- check-recover-funds ---
+  advanced
+    .command('check-recover-funds')
+    .description('Read a recovery written by recover-funds back against the chain: which of its transactions confirmed, which are ready to broadcast now, and whether it can still finish')
+    .requiredOption('--input-file <path>', 'File the recovery was written to')
+    .option('--output-file <path>', 'File to write the updated recovery to (defaults to --input-file)')
+    .action(async (options) => {
+      await checkRecoverFunds(getSdk(), options.inputFile, options.outputFile)
+    })
+
   // --- export-unilateral-exit-state ---
   advanced
     .command('export-unilateral-exit-state')
@@ -215,6 +337,131 @@ function readExit(filePath) {
 function writeExit(filePath, exit) {
   fs.writeFileSync(filePath, JSON.stringify(exit, null, 2))
   console.log(`Wrote the exit to ${filePath}`)
+}
+
+/**
+ * Quote the recovery, ask for funding when a unilateral exit needs it, and
+ * sign it once you confirm. Without funding, only the cooperative leaves are
+ * recovered.
+ */
+async function recoverFunds(rl, sdk, request, fundingKind, outputFile) {
+  let prepared = await sdk.prepareRecoverFunds(request)
+  if (prepared.leaves.length === 0) {
+    console.log(
+      'Nothing to recover: each selected leaf is finished, not worth recovering at this fee ' +
+      'rate, or its funds were not found.'
+    )
+    return
+  }
+  printQuote(prepared)
+  if (!outputFile) {
+    console.log('Without --output-file the recovery is only printed: check-recover-funds cannot read it back.')
+  }
+
+  let fundingInputs = []
+  let signer
+  if (prepared.funding != null) {
+    const utxoLine = await question(
+      rl,
+      `Funding UTXO(s) of at least ${prepared.funding.singleUtxoSats} sats, as txid:vout:value:pubkey ` +
+      '(space-separated; for P2TR the internal key; blank to skip the unilateral exit): '
+    )
+    if (utxoLine.trim() === '') {
+      const cooperative = prepared.leaves
+        .filter((leaf) => leaf.method === 'cooperative')
+        .map((leaf) => leaf.leafId)
+      if (cooperative.length === 0) {
+        console.log('Nothing to recover without funding.')
+        return
+      }
+      console.log('Recovering only the cooperative leaves:')
+      prepared = await sdk.prepareRecoverFunds({
+        ...request,
+        selection: { type: 'specific', leafIds: cooperative }
+      })
+      printQuote(prepared)
+    } else {
+      fundingInputs = utxoLine.trim().split(/\s+/).map(
+        (u) => parseCpfpInput(u, fundingKind)
+      )
+      const keyLine = await question(rl, 'Hex secret key for the funding UTXO(s): ')
+      signer = singleKeyCpfpSigner(Buffer.from(keyLine.trim(), 'hex'))
+    }
+  }
+
+  const answer = await questionWithDefault(rl, 'Sign this recovery? (y/n): ', 'y')
+  if (answer.toLowerCase() !== 'y') {
+    return
+  }
+  const response = await sdk.recoverFunds({ prepared, fundingInputs }, signer)
+  printRecovery(response)
+  if (outputFile) {
+    writeRecovery(outputFile, response)
+    console.log(
+      'Next: broadcast the Ready packages. After new blocks, run check-recover-funds ' +
+      `--input-file ${outputFile} to see what is ready next.`
+    )
+  } else {
+    console.log('Next: broadcast the Ready packages.')
+  }
+}
+
+function printQuote(prepared) {
+  printValue(prepared)
+  const cooperative = prepared.leaves.filter((leaf) => leaf.method === 'cooperative').length
+  console.log(
+    `${prepared.leaves.length} leaf(s), ${cooperative} cooperative and ` +
+    `${prepared.leaves.length - cooperative} unilateral: ` +
+    `recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees`
+  )
+}
+
+async function checkRecoverFunds(sdk, inputFile, outputFile) {
+  const recovery = readRecovery(inputFile)
+  const checked = await sdk.checkRecoverFunds({ recovery })
+  console.log(`Verdict: ${JSON.stringify(checked.verdict)}`)
+  if (checked.verdict.type === 'redo') {
+    console.log(`  (this recovery cannot finish: run ${redoCommand(checked.recovery)})`)
+  }
+  printRecovery(checked.recovery)
+  writeRecovery(outputFile || inputFile, checked.recovery)
+}
+
+function redoCommand(recovery) {
+  let command =
+    `recover-funds --fee-rate ${recovery.feeRateSatPerVbyte} --destination ${recovery.destination}`
+  for (const leaf of recovery.leaves) {
+    command += ` --leaf ${leaf.leafId}`
+  }
+  return command
+}
+
+function readRecovery(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+}
+
+/**
+ * Write through a temporary file, so an interrupted write leaves the previous
+ * recovery intact.
+ */
+function writeRecovery(filePath, recovery) {
+  const temporary = `${filePath}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify(recovery, null, 2))
+  fs.renameSync(temporary, filePath)
+  console.log(`Wrote the recovery to ${filePath}`)
+}
+
+/**
+ * --all, the named leaves, or else the leaves that left the balance.
+ */
+function recoverySelection(all, leafIds) {
+  if (all) {
+    return { type: 'all' }
+  }
+  if (leafIds.length === 0) {
+    return { type: 'recoverableOnly' }
+  }
+  return { type: 'specific', leafIds }
 }
 
 module.exports = { registerAdvancedCommands }

@@ -95,7 +95,7 @@ Once inside the REPL, type `help` for all commands:
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
-**Advanced**: `advanced <subcommand>` (expert-only commands for building raw transactions)
+**Advanced**: `advanced <subcommand>` (expert-only commands for building raw transactions), including `advanced recover-funds` and `advanced check-recover-funds`
 
 **Contacts**: `contacts <subcommand>`
 
