@@ -45,7 +45,8 @@ x-operator: &operator
   healthcheck:
     test: [CMD, /scripts/operator-ready.sh]
     interval: 5s
-    start_period: 15m
+    # Generating keyshares takes minutes, so wait as long as the reporter does.
+    start_period: ${READY_TIMEOUT_SECONDS:-2400}s
   environment: &operator-env
     SPARK_THRESHOLD: "2"
     POSTGRES_HOST: postgres
@@ -466,6 +467,7 @@ services:
       LEAVES_PER_DENOMINATION: ${LEAVES_PER_DENOMINATION:-8}
       MAX_DENOMINATION_POWER: ${MAX_DENOMINATION_POWER:-16}
       DKG_MIN_AVAILABLE_KEYS: ${DKG_MIN_AVAILABLE_KEYS:-12000}
+      READY_TIMEOUT_SECONDS: ${READY_TIMEOUT_SECONDS:-2400}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: postgres
