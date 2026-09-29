@@ -1,7 +1,7 @@
 [book]
 language = "en"
 src = "src"
-title = "Breez SDK - Spark"
+title = "Breez SDK"
 
 [output.html]
 theme = "theme"
