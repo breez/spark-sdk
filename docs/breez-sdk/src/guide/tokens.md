@@ -1,6 +1,6 @@
 # Handling tokens
 
-How to send, receive and manage issued tokens using the Breez SDK - Spark:
+How to send, receive and manage issued tokens using the Breez SDK:
 
 - **[Token payments]** - Send and receive [BTKN protocol](https://docs.spark.money/learn/tokens/hello-btkn) tokens
 - **[Converting tokens]** - Send payments without holding the required asset by converting on-the-fly
