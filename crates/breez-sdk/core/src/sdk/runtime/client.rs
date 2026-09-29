@@ -11,11 +11,11 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
-    GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
+    EventEmitter, GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
     error::SdkError,
     events::{EventListener, SdkEvent},
     persist::{ObjectCacheRepository, UpdateDepositPayload},
-    token_conversion::TokenConverter,
+    token_conversion::{RefundRequest, STRANDED_INPUT_SETTLE_SECS, TokenConverter},
     utils::{
         payments::{get_payment_and_emit_event, update_balances},
         run_with_shutdown,
@@ -70,6 +70,7 @@ impl RuntimeProfile for ClientRuntime {
         sdk.try_recover_lightning_address();
         spawn_conversion_refunder(
             Arc::clone(&sdk.token_converter),
+            Arc::clone(&sdk.event_emitter),
             sdk.shutdown_sender.subscribe(),
         );
         if let Some(stable_balance) = &sdk.stable_balance {
@@ -529,62 +530,105 @@ impl EventListener for ClientSyncListener {
 
 fn spawn_conversion_refunder(
     token_converter: Arc<dyn TokenConverter>,
-    mut shutdown_receiver: watch::Receiver<()>,
+    event_emitter: Arc<EventEmitter>,
+    shutdown_receiver: watch::Receiver<()>,
 ) {
-    let mut refund_requests = token_converter.subscribe_refund_requests();
+    let refund_requests = token_converter.subscribe_refund_requests();
     let span = tracing::Span::current();
 
     tokio::spawn(
-        async move {
-            // Init pass includes the Flashnet listing reconcile; periodic
-            // ticks below are local-only.
-            select! {
-                biased;
-                _ = shutdown_receiver.changed() => {
-                    info!("Conversion refunder shutdown before init pass completed");
-                    return;
-                }
-                result = token_converter.refund_pending() => {
-                    if let Err(e) = result {
-                        error!("Init conversion-refund pass failed: {e:?}");
+        run_conversion_refunder(
+            token_converter,
+            event_emitter,
+            refund_requests,
+            shutdown_receiver,
+            Duration::from_secs(STRANDED_INPUT_SETTLE_SECS),
+        )
+        .instrument(span),
+    );
+}
+
+/// Runs refund passes on a timer and on request, and settles the stranded
+/// inputs conversions hand it. Shutdown stops it between steps, but a settle
+/// already under way completes first, so `disconnect` waits for its clawback.
+async fn run_conversion_refunder(
+    token_converter: Arc<dyn TokenConverter>,
+    event_emitter: Arc<EventEmitter>,
+    mut refund_requests: Option<broadcast::Receiver<RefundRequest>>,
+    mut shutdown_receiver: watch::Receiver<()>,
+    settle_wait: Duration,
+) {
+    // Init pass includes the Flashnet listing reconcile; periodic ticks below
+    // are local-only.
+    select! {
+        biased;
+        _ = shutdown_receiver.changed() => {
+            info!("Conversion refunder shutdown before init pass completed");
+            return;
+        }
+        result = token_converter.refund_pending(&event_emitter) => {
+            if let Err(e) = result {
+                error!("Init conversion-refund pass failed: {e:?}");
+            }
+        }
+    }
+
+    loop {
+        let request = match refund_requests.as_mut() {
+            Some(requests) => {
+                select! {
+                    biased;
+                    _ = shutdown_receiver.changed() => {
+                        info!("Conversion refunder shutdown signal received");
+                        return;
                     }
+                    request = requests.recv() => {
+                        debug!("Conversion refunder triggered");
+                        // A lagged channel dropped requests, so a pass picks up
+                        // whatever they named.
+                        request.unwrap_or(RefundRequest::Pass)
+                    }
+                    () = tokio::time::sleep(Duration::from_secs(150)) => RefundRequest::Pass,
                 }
             }
-
-            loop {
-                match refund_requests.as_mut() {
-                    Some(trigger_receiver) => {
-                        select! {
-                            biased;
-                            _ = shutdown_receiver.changed() => {
-                                info!("Conversion refunder shutdown signal received");
-                                return;
-                            }
-                            _ = trigger_receiver.recv() => {
-                                debug!("Conversion refunder triggered");
-                            }
-                            () = tokio::time::sleep(Duration::from_secs(150)) => {}
-                        }
+            None => {
+                select! {
+                    biased;
+                    _ = shutdown_receiver.changed() => {
+                        info!("Conversion refunder shutdown signal received");
+                        return;
                     }
-                    None => {
-                        select! {
-                            biased;
-                            _ = shutdown_receiver.changed() => {
-                                info!("Conversion refunder shutdown signal received");
-                                return;
-                            }
-                            () = tokio::time::sleep(Duration::from_secs(150)) => {}
-                        }
-                    }
+                    () = tokio::time::sleep(Duration::from_secs(150)) => RefundRequest::Pass,
                 }
+            }
+        };
 
+        match request {
+            RefundRequest::Settle(input) => {
+                // Shutdown here leaves the input marked `RefundNeeded`, for the
+                // init pass on the next start.
+                select! {
+                    biased;
+                    _ = shutdown_receiver.changed() => {
+                        info!("Conversion refunder shutdown before settling {}", input.clawback_id);
+                        return;
+                    }
+                    () = tokio::time::sleep(settle_wait) => {}
+                }
+                // Not raced against shutdown: a clawback that has started is
+                // seen through, so it is never left half-recorded.
+                token_converter
+                    .settle_stranded_input(*input, &event_emitter)
+                    .await;
+            }
+            RefundRequest::Pass => {
                 select! {
                     biased;
                     _ = shutdown_receiver.changed() => {
                         info!("Conversion refunder shutdown during local pass");
                         return;
                     }
-                    result = token_converter.refund_local_pending() => {
+                    result = token_converter.refund_local_pending(&event_emitter) => {
                         if let Err(e) = result {
                             error!("Periodic local refund pass failed: {e:?}");
                         }
@@ -592,6 +636,195 @@ fn spawn_conversion_refunder(
                 }
             }
         }
-        .instrument(span),
-    );
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use std::str::FromStr;
+    use std::sync::Mutex;
+
+    use spark_wallet::{PublicKey, TransferId};
+    use tokio::sync::Notify;
+
+    use super::*;
+    use crate::token_conversion::{
+        ConversionAmount, ConversionError, ConversionEstimate, ConversionOptions,
+        ConversionPurpose, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+        StrandedInput, TokenConversionResponse,
+    };
+    use crate::{EventEmitter, RefundPendingConversionsResponse};
+
+    /// Records the stranded inputs the refunder settles. With `hold_settle`, a
+    /// settle waits for the test to release it.
+    struct RecordingConverter {
+        requests: broadcast::Sender<RefundRequest>,
+        settled: Mutex<Vec<String>>,
+        settle_started: Notify,
+        settle_release: Notify,
+        hold_settle: bool,
+    }
+
+    #[macros::async_trait]
+    impl TokenConverter for RecordingConverter {
+        async fn convert(
+            &self,
+            _: Arc<EventEmitter>,
+            _: &ConversionOptions,
+            _: &ConversionPurpose,
+            _: Option<&String>,
+            _: ConversionAmount,
+            _: Option<TransferId>,
+        ) -> Result<TokenConversionResponse, ConversionError> {
+            unreachable!("the refunder does not convert")
+        }
+
+        async fn find_completed_conversion(
+            &self,
+            _: &TransferId,
+            _: &ConversionPurpose,
+        ) -> Result<Option<TokenConversionResponse>, ConversionError> {
+            unreachable!("the refunder does not look up conversions")
+        }
+
+        async fn validate(
+            &self,
+            _: Option<&ConversionOptions>,
+            _: Option<&String>,
+            _: ConversionAmount,
+        ) -> Result<Option<ConversionEstimate>, ConversionError> {
+            Ok(None)
+        }
+
+        async fn fetch_limits(
+            &self,
+            _: &FetchConversionLimitsRequest,
+        ) -> Result<FetchConversionLimitsResponse, ConversionError> {
+            Ok(FetchConversionLimitsResponse {
+                min_from_amount: None,
+                min_to_amount: None,
+            })
+        }
+
+        async fn refund_pending(
+            &self,
+            _: &EventEmitter,
+        ) -> Result<RefundPendingConversionsResponse, ConversionError> {
+            Ok(RefundPendingConversionsResponse::default())
+        }
+
+        async fn refund_local_pending(
+            &self,
+            _: &EventEmitter,
+        ) -> Result<RefundPendingConversionsResponse, ConversionError> {
+            Ok(RefundPendingConversionsResponse::default())
+        }
+
+        async fn settle_stranded_input(&self, input: StrandedInput, _: &EventEmitter) {
+            self.settle_started.notify_one();
+            if self.hold_settle {
+                self.settle_release.notified().await;
+            }
+            self.settled.lock().unwrap().push(input.clawback_id);
+        }
+
+        fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<RefundRequest>> {
+            Some(self.requests.subscribe())
+        }
+    }
+
+    fn stranded(clawback_id: &str) -> RefundRequest {
+        RefundRequest::Settle(Box::new(StrandedInput {
+            clawback_id: clawback_id.to_string(),
+            pool_id: PublicKey::from_str(
+                "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+            )
+            .unwrap(),
+            payment_id: None,
+            prior_info: None,
+        }))
+    }
+
+    /// Starts the refunder over a recording converter. Subscribes before
+    /// spawning, as production does, so no request sent after this is lost.
+    fn start(
+        hold_settle: bool,
+        settle_wait: Duration,
+    ) -> (Arc<RecordingConverter>, watch::Sender<()>) {
+        let converter = Arc::new(RecordingConverter {
+            requests: broadcast::channel(10).0,
+            settled: Mutex::new(Vec::new()),
+            settle_started: Notify::new(),
+            settle_release: Notify::new(),
+            hold_settle,
+        });
+        let requests = converter.subscribe_refund_requests();
+        let (shutdown, receiver) = watch::channel(());
+        tokio::spawn(run_conversion_refunder(
+            converter.clone(),
+            Arc::new(EventEmitter::new(false)),
+            requests,
+            receiver,
+            settle_wait,
+        ));
+        (converter, shutdown)
+    }
+
+    #[tokio::test]
+    async fn a_stranded_input_is_settled_after_the_wait() {
+        let (converter, _shutdown) = start(false, Duration::from_millis(10));
+        converter.requests.send(stranded("input")).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), converter.settle_started.notified())
+            .await
+            .expect("the refunder settles the input");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            *converter.settled.lock().unwrap(),
+            vec!["input".to_string()]
+        );
+    }
+
+    /// Shutdown during the wait stops the refunder at once and leaves the input
+    /// for the next start.
+    #[tokio::test]
+    async fn shutdown_during_the_wait_leaves_the_input_unsettled() {
+        let (converter, shutdown) = start(false, Duration::from_mins(1));
+        converter.requests.send(stranded("input")).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        shutdown.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), shutdown.closed())
+            .await
+            .expect("the refunder stops without waiting out the settle wait");
+        assert!(converter.settled.lock().unwrap().is_empty());
+    }
+
+    /// Shutdown during a settle waits for it: `disconnect` returns only once
+    /// the clawback it started has completed.
+    #[tokio::test]
+    async fn shutdown_waits_for_a_settle_under_way() {
+        let (converter, shutdown) = start(true, Duration::from_millis(10));
+        converter.requests.send(stranded("input")).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), converter.settle_started.notified())
+            .await
+            .expect("the settle starts");
+
+        shutdown.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), shutdown.closed())
+                .await
+                .is_err(),
+            "the refunder must not stop mid-settle"
+        );
+
+        converter.settle_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), shutdown.closed())
+            .await
+            .expect("the refunder stops once the settle completes");
+        assert_eq!(
+            *converter.settled.lock().unwrap(),
+            vec!["input".to_string()]
+        );
+    }
 }

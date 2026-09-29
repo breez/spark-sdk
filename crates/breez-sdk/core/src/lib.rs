@@ -39,7 +39,9 @@ pub use cross_chain::{
     DeliveryMethod, SparkAsset,
 };
 pub use error::{DepositClaimError, SdkError, SignerError};
-pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
+pub use events::{
+    AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
+};
 pub use issuer::*;
 pub use logger::DEFAULT_FILTER;
 pub use models::*;

@@ -6,7 +6,7 @@ use crate::AssetTransfer;
 
 #[derive(Error, Debug, Clone)]
 pub enum FlashnetError {
-    #[error("{reason}")]
+    #[error("{}", network_message(.reason, *.code))]
     Network { reason: String, code: Option<u16> },
 
     /// A pool execution failed after the outbound asset transfer was already
@@ -67,6 +67,18 @@ pub enum FlashnetError {
 
     #[error("Generic: {0}")]
     Generic(String),
+}
+
+/// Falls back to the status code when the provider returns a failure with an
+/// empty body, which would otherwise render as an empty message.
+fn network_message(reason: &str, code: Option<u16>) -> String {
+    if !reason.is_empty() {
+        return reason.to_string();
+    }
+    code.map_or_else(
+        || "network error".to_string(),
+        |code| format!("HTTP {code}"),
+    )
 }
 
 impl FlashnetError {

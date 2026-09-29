@@ -49,6 +49,7 @@ const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
+const CONVERSION_BACKOFF_KEY: &str = "conversion_backoff";
 
 /// Wrapper stored in the cache that carries context about whether the value
 /// was written as part of a recovery or a client-initiated change.
@@ -909,10 +910,11 @@ impl ObjectCacheRepository {
             .await
     }
 
-    pub(crate) async fn delete_stable_balance_active_label(&self) -> Result<(), StorageError> {
-        self.storage
-            .delete_cached_item(STABLE_BALANCE_ACTIVE_LABEL_KEY.to_string())
-            .await
+    /// Records that the user turned stable balance off. Stored as an empty
+    /// label rather than deleted, so a configured default does not turn it
+    /// back on at the next start.
+    pub(crate) async fn save_stable_balance_deactivated(&self) -> Result<(), StorageError> {
+        self.save_stable_balance_active_label("").await
     }
 
     /// Records a Lightning send whose preimage swap is about to be committed
@@ -947,7 +949,7 @@ impl ObjectCacheRepository {
 
     pub(crate) async fn save_pending_conversions(
         &self,
-        pending: &[super::stable_balance::PendingConversion],
+        pending: &super::stable_balance::PendingQueue,
     ) -> Result<(), StorageError> {
         self.storage
             .set_cached_item(
@@ -960,7 +962,7 @@ impl ObjectCacheRepository {
 
     pub(crate) async fn fetch_pending_conversions(
         &self,
-    ) -> Result<Option<Vec<super::stable_balance::PendingConversion>>, StorageError> {
+    ) -> Result<Option<super::stable_balance::PendingQueue>, StorageError> {
         let value = self
             .storage
             .get_cached_item(PENDING_CONVERSIONS_KEY.to_string())
@@ -974,6 +976,38 @@ impl ObjectCacheRepository {
     pub(crate) async fn delete_pending_conversions(&self) -> Result<(), StorageError> {
         self.storage
             .delete_cached_item(PENDING_CONVERSIONS_KEY.to_string())
+            .await
+    }
+
+    pub(crate) async fn save_conversion_backoff(
+        &self,
+        backoff: &super::stable_balance::ConversionBackoff,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                CONVERSION_BACKOFF_KEY.to_string(),
+                serde_json::to_string(backoff)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_conversion_backoff(
+        &self,
+    ) -> Result<Option<super::stable_balance::ConversionBackoff>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(CONVERSION_BACKOFF_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_conversion_backoff(&self) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(CONVERSION_BACKOFF_KEY.to_string())
             .await
     }
 

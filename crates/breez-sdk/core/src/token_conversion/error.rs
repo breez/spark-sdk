@@ -9,6 +9,17 @@ pub enum ConversionError {
     NoPoolsAvailable,
     #[error("Conversion failed: {0}")]
     ConversionFailed(String),
+    /// The swap ran and delivered, but the conversion failed afterwards.
+    #[error("Conversion failed: {message}")]
+    FailedAfterSwap {
+        message: String,
+        /// The payment id of the sats sent to the pool. Unset when it could
+        /// not be recorded.
+        sent_payment_id: Option<String>,
+        /// The payment id of what the pool delivered. Unset when it did not
+        /// resolve to a payment id.
+        received_payment_id: Option<String>,
+    },
     #[error("Duplicate transfer: conversion already handled")]
     DuplicateTransfer,
     #[error("Validation failed: {0}")]

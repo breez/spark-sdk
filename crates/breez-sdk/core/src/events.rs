@@ -60,6 +60,30 @@ pub enum SdkEvent {
     /// Emitted when the data a unilateral exit is built from has changed, so an
     /// exit state exported earlier is out of date and should be exported again.
     UnilateralExitStateChanged,
+    /// Emitted when a Stable Balance conversion failed: sweeping received
+    /// bitcoin into the stable token, or converting the token back to bitcoin
+    /// on deactivation. The SDK tries again after a growing delay, and
+    /// `retry_in_secs` is the soonest it will. It is unset for a received
+    /// payment's own conversion, which is not retried: its sats go to the next
+    /// batch conversion, which reports its own failures.
+    StableBalanceConversionFailed {
+        conversion: StableBalanceConversionKind,
+        error: String,
+        retry_in_secs: Option<u64>,
+    },
+}
+
+/// Which Stable Balance conversion an [`SdkEvent::StableBalanceConversionFailed`]
+/// refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum StableBalanceConversionKind {
+    /// A single received payment being converted to the stable token.
+    PerReceive,
+    /// Bitcoin above the threshold being swept into the stable token.
+    AutoConvert,
+    /// The stable token being converted back to bitcoin after deactivation.
+    Deactivation,
 }
 
 impl SdkEvent {
@@ -106,6 +130,17 @@ impl fmt::Display for SdkEvent {
                 write!(f, "NewDeposits[{}]", new_deposits.len())
             }
             SdkEvent::UnilateralExitStateChanged => write!(f, "UnilateralExitStateChanged"),
+            SdkEvent::StableBalanceConversionFailed {
+                conversion,
+                retry_in_secs: Some(retry_in_secs),
+                ..
+            } => write!(
+                f,
+                "StableBalanceConversionFailed({conversion:?}, retry in {retry_in_secs}s)"
+            ),
+            SdkEvent::StableBalanceConversionFailed { conversion, .. } => {
+                write!(f, "StableBalanceConversionFailed({conversion:?})")
+            }
         }
     }
 }

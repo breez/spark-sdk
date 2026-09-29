@@ -1,6 +1,6 @@
 use crate::frb_generated::StreamSink;
 use breez_sdk_spark::{DepositInfo, EventListener, LightningAddressInfo, Payment};
-pub use breez_sdk_spark::{AutoOptimizationEvent, SdkEvent};
+pub use breez_sdk_spark::{AutoOptimizationEvent, SdkEvent, StableBalanceConversionKind};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(SdkEvent))]
@@ -34,6 +34,18 @@ pub enum _SdkEvent {
         new_deposits: Vec<DepositInfo>,
     },
     UnilateralExitStateChanged,
+    StableBalanceConversionFailed {
+        conversion: StableBalanceConversionKind,
+        error: String,
+        retry_in_secs: Option<u64>,
+    },
+}
+
+#[frb(mirror(StableBalanceConversionKind))]
+pub enum _StableBalanceConversionKind {
+    PerReceive,
+    AutoConvert,
+    Deactivation,
 }
 
 #[frb(mirror(AutoOptimizationEvent))]
