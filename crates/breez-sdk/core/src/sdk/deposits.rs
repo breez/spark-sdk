@@ -13,7 +13,7 @@ use bitcoin::{
 use platform_utils::tokio;
 use spark_wallet::{
     InstantStaticDepositPlan, InstantStaticDepositQuoteResult, ListTransfersRequest,
-    MIN_RELAY_FEE_SAT_PER_VBYTE, SparkWalletError, TransferId, WalletTransfer,
+    SparkWalletError, TransferId, WalletTransfer,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -29,6 +29,7 @@ use crate::{
     persist::UpdateDepositPayload,
     sdk::RuntimeEvent,
     utils::deposit_chain_syncer::TxOutput,
+    utils::replacement::{Replaced, fee_paid_sats},
     utils::utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
 };
 
@@ -473,7 +474,7 @@ impl BreezSdk {
         &self,
         detailed_utxo: &DetailedUtxo,
         deposit: &DepositInfo,
-    ) -> Result<Option<PendingRefund>, SdkError> {
+    ) -> Result<Option<Replaced>, SdkError> {
         let Some(refund_tx) = deposit.refund_tx.as_ref() else {
             return Ok(None);
         };
@@ -485,10 +486,7 @@ impl BreezSdk {
             );
             return Ok(None);
         };
-        let stored = refund_fee_sats(&tx, detailed_utxo.value).map(|fee_sats| PendingRefund {
-            fee_sats,
-            vsize: tx.vsize().try_into().unwrap_or(u64::MAX),
-        });
+        let stored = Replaced::spending(&tx, detailed_utxo.value);
 
         let outspend = self
             .chain_service
@@ -1095,14 +1093,6 @@ fn select_instant_claim_plan(
     }
 }
 
-/// The refund a replacement has to displace. Its size matters as well as its
-/// fee: the replacement has to beat its feerate, not just its total.
-#[derive(Clone, Copy)]
-struct PendingRefund {
-    fee_sats: u64,
-    vsize: u64,
-}
-
 /// Rejects a refund that cannot displace one already on the network. A
 /// replacement only relays if it outbids the refund it conflicts with, and
 /// overwriting the stored transaction with one that cannot relay would leave the
@@ -1110,15 +1100,15 @@ struct PendingRefund {
 fn check_replacement_fee(
     tx: &Transaction,
     deposit_value_sats: u64,
-    pending: Option<PendingRefund>,
+    pending: Option<Replaced>,
 ) -> Result<(), SdkError> {
     let Some(pending) = pending else {
         return Ok(());
     };
     let pending_fee_sats = pending.fee_sats;
     let required_fee_sats =
-        replacement_min_fee_sats(&pending, tx.vsize().try_into().unwrap_or(u64::MAX));
-    let fee_sats = refund_fee_sats(tx, deposit_value_sats).ok_or_else(|| {
+        pending.min_replacement_fee_sats(tx.vsize().try_into().unwrap_or(u64::MAX));
+    let fee_sats = fee_paid_sats(tx, deposit_value_sats).ok_or_else(|| {
         SdkError::Generic("refund pays out more than the deposit holds".to_string())
     })?;
     if fee_sats < required_fee_sats {
@@ -1128,36 +1118,6 @@ fn check_replacement_fee(
         });
     }
     Ok(())
-}
-
-/// Fee a refund pays, from the deposit output it spends. `None` if the refund
-/// pays out more than the deposit holds.
-fn refund_fee_sats(refund_tx: &Transaction, deposit_value_sats: u64) -> Option<u64> {
-    let out_sats: u64 = refund_tx.output.iter().map(|o| o.value.to_sat()).sum();
-    deposit_value_sats.checked_sub(out_sats)
-}
-
-/// Minimum fee a replacement must pay to displace a refund already on the
-/// network: more than that refund pays, plus the relay cost of its own size.
-fn replacement_min_fee_sats(pending: &PendingRefund, replacement_vsize: u64) -> u64 {
-    // Cover the pending fee plus the replacement's own relay bandwidth.
-    let bandwidth = pending
-        .fee_sats
-        .saturating_add(replacement_vsize.saturating_mul(MIN_RELAY_FEE_SAT_PER_VBYTE));
-    // And beat its feerate outright, which only bites when the replacement is the
-    // larger transaction, as it is when the destination widens to taproot. The
-    // comparison is made on feerates truncated to whole sat/kvB, so a fee that is
-    // higher as an exact rational can still land in the same bucket and be refused.
-    let pending_per_kvb = pending
-        .fee_sats
-        .saturating_mul(1000)
-        .checked_div(pending.vsize)
-        .unwrap_or(u64::MAX);
-    let feerate = pending_per_kvb
-        .saturating_add(1)
-        .saturating_mul(replacement_vsize)
-        .div_ceil(1000);
-    bandwidth.max(feerate)
 }
 
 /// Serialises claim attempts on the same deposit within this process.
@@ -1221,11 +1181,10 @@ mod tests {
 
     use super::{
         ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, InstantClaimOutcome,
-        InstantClaimPlan, MaxFee, PendingRefund, SdkError, TxOutput, check_replacement_fee,
-        claim_deposit_quote, instant_claim_response, is_already_claimed_error,
+        InstantClaimPlan, MaxFee, Replaced, SdkError, TxOutput, check_replacement_fee,
+        claim_deposit_quote, fee_paid_sats, instant_claim_response, is_already_claimed_error,
         is_pending_confirmation_error, larger_ceiling, needs_own_ceiling_resolution,
-        refund_fee_sats, replacement_min_fee_sats, resolve_claim_ceiling,
-        select_instant_claim_plan,
+        resolve_claim_ceiling, select_instant_claim_plan,
     };
 
     // ---- resolve_claim_ceiling / larger_ceiling ----
@@ -1718,87 +1677,20 @@ mod tests {
     }
 
     #[test]
-    fn fee_is_what_the_refund_leaves_behind() {
-        assert_eq!(
-            refund_fee_sats(&refund_paying_out(99_889), 100_000),
-            Some(111)
-        );
-        assert_eq!(
-            refund_fee_sats(&refund_paying_out(100_000), 100_000),
-            Some(0)
-        );
-        // A refund cannot pay out more than the deposit holds.
-        assert_eq!(refund_fee_sats(&refund_paying_out(100_001), 100_000), None);
-    }
-
-    #[test]
-    fn replacement_must_cover_the_pending_fee_and_its_own_relay() {
-        // Displacing a 111 sat refund with a 111 vbyte replacement costs 222,
-        // not 112: the replacement also pays to relay its own bytes.
-        let pending = PendingRefund {
-            fee_sats: 111,
-            vsize: 111,
-        };
-        assert_eq!(replacement_min_fee_sats(&pending, 111), 222);
-        let free = PendingRefund {
-            fee_sats: 0,
-            vsize: 111,
-        };
-        assert_eq!(replacement_min_fee_sats(&free, 111), 111);
-    }
-
-    #[test]
-    fn a_larger_replacement_must_beat_the_pending_feerate_too() {
-        // Covering the pending fee plus the replacement's own bandwidth is not
-        // enough when the replacement is bigger: 3000 sats over 99 vB is 30.3
-        // sat/vB, and 3111 over 111 vB would be 28.0, which the network refuses.
-        let pending = PendingRefund {
-            fee_sats: 3_000,
-            vsize: 99,
-        };
-        let required = replacement_min_fee_sats(&pending, 111);
-        assert_eq!(required, 3_364);
-        assert!(
-            required * pending.vsize > pending.fee_sats * 111,
-            "a replacement has to beat the pending feerate outright"
-        );
-
-        // Same size, so paying the bandwidth is all it takes.
-        assert_eq!(replacement_min_fee_sats(&pending, 99), 3_099);
-
-        // Truncation to whole sat/kvB: 1045 over 111 vB and 932 over 99 both come
-        // to 9414, which is a tie and refused, so the floor has to be 1046.
-        let tie = PendingRefund {
-            fee_sats: 932,
-            vsize: 99,
-        };
-        assert_eq!(replacement_min_fee_sats(&tie, 111), 1_046);
-
-        // A small pending fee never reaches the feerate rule.
-        let small = PendingRefund {
-            fee_sats: 300,
-            vsize: 99,
-        };
-        assert_eq!(replacement_min_fee_sats(&small, 111), 411);
-    }
-
-    #[test]
     fn replacement_is_rejected_until_it_outbids_the_pending_refund() {
         let deposit = 100_000u64;
         let pending = 500u64;
         let vsize = refund_paying_out(0).vsize() as u64;
-        let required = replacement_min_fee_sats(
-            &PendingRefund {
-                fee_sats: pending,
-                vsize,
-            },
+        let required = Replaced {
+            fee_sats: pending,
             vsize,
-        );
+        }
+        .min_replacement_fee_sats(vsize);
 
         // Nothing on the network to outbid, so any fee is fine.
         assert!(check_replacement_fee(&refund_paying_out(deposit - 1), deposit, None).is_ok());
 
-        let pending_refund = PendingRefund {
+        let pending_refund = Replaced {
             fee_sats: pending,
             vsize,
         };
@@ -1806,7 +1698,7 @@ mod tests {
         // A single sat short of the floor is not enough, even though it pays
         // more than the refund it is trying to displace.
         let short = refund_paying_out(deposit - required + 1);
-        assert!(refund_fee_sats(&short, deposit).unwrap() > pending);
+        assert!(fee_paid_sats(&short, deposit).unwrap() > pending);
         assert!(matches!(
             check_replacement_fee(&short, deposit, Some(pending_refund)),
             Err(SdkError::RefundReplacementFeeTooLow {
