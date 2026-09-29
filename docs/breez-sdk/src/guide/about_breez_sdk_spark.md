@@ -58,7 +58,7 @@ The API key is sent to the provided email address.
 
 ## Repository
 
-Head over to the <a href="https://github.com/breez/spark-sdk" target="_blank">Breez SDK - Spark</a> repo.
+Head over to the <a href="https://github.com/breez/spark-sdk" target="_blank">Breez SDK</a> repo.
 
 
 ## Next Steps
