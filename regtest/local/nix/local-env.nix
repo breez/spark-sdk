@@ -9,7 +9,6 @@ let
   scripts = ../scripts;
   soConfig = ../../../crates/spark-itest/docker/so.config.yaml;
 
-  dkgMinAvailableKeys = 12000;
   dkgBatchSize = 2000;
 
   ports = {
@@ -95,7 +94,6 @@ let
       "SPARK_OPERATOR_INDEX=${toString index}"
       "SPARK_OPERATOR_KEY=${lib.concatStrings (lib.replicate 32 "0${toString (index + 1)}")}"
       ''OPERATOR_PORT="$OPERATOR_${toString index}_TLS_PORT"''
-      "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
       "DKG_BATCH_SIZE=${toString dkgBatchSize}"
       "${./operator.sh}"
     ];
@@ -106,7 +104,6 @@ let
       "POSTGRES_PASSWORD=postgres"
       "SPARK_OPERATOR_INDEX=${toString index}"
       ''OPERATOR_ADDRESS="127.0.0.1:$OPERATOR_${toString index}_TLS_PORT"''
-      "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
       "${scripts}/operator-ready.sh"
     ]);
   };
@@ -443,7 +440,6 @@ let
           ''SPARK_CONFIG_PATH="$LOCAL_DIR/spark-config.json"''
           ''OPERATOR_URLS="http://127.0.0.1:$OPERATOR_0_PORT http://127.0.0.1:$OPERATOR_1_PORT http://127.0.0.1:$OPERATOR_2_PORT"''
           ''OPERATOR_PUBLIC_PORTS="$OPERATOR_0_PORT $OPERATOR_1_PORT $OPERATOR_2_PORT"''
-          "DKG_MIN_AVAILABLE_KEYS=${toString dkgMinAvailableKeys}"
           "POSTGRES_HOST=127.0.0.1 POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres"
           # By store path, since only this wrapper has the tools on its PATH.
           ''BITCOIN_CLI="${bitcoinCli}"''
@@ -475,6 +471,7 @@ pkgs.writeShellApplication {
     export PUBLIC_HOST="''${PUBLIC_HOST:-127.0.0.1}"
     export LEAVES_PER_DENOMINATION="''${LEAVES_PER_DENOMINATION:-8}"
     export MAX_DENOMINATION_POWER="''${MAX_DENOMINATION_POWER:-16}"
+    export DKG_MIN_AVAILABLE_KEYS="''${DKG_MIN_AVAILABLE_KEYS:-12000}"
     export BLOCK_INTERVAL_SECONDS="''${BLOCK_INTERVAL_SECONDS:-5}"
     export PC_PORT_NUM="''${PC_PORT_NUM:-18080}"
     ${lib.concatStringsSep "\n    " (lib.mapAttrsToList exportDefault ports)}
