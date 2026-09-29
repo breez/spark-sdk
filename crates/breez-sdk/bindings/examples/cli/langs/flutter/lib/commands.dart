@@ -329,7 +329,12 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
           help: 'Max slippage in bps for cross-chain receives (10..500)',
         )
         ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)');
+        ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)')
+        ..addFlag(
+          'cross-chain-to-bitcoin',
+          defaultsTo: false,
+          help: 'Deliver cross-chain receive as Bitcoin',
+        );
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -388,6 +393,11 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         print('--amount is required for cross-chain receive');
         return;
       }
+      final crossChainToBitcoin = results.flag('cross-chain-to-bitcoin');
+      if (crossChainToBitcoin && tokenIdentifier != null) {
+        print('--cross-chain-to-bitcoin conflicts with --token-identifier');
+        return;
+      }
       final route = await _selectCrossChainRoute(sdk, CrossChainRouteFilter.receive(contractAddress: null));
       if (route == null) return;
       final crossChainFeesIncluded = results.flag('cross-chain-fees-included');
@@ -397,7 +407,9 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
       final targetOverpayBpsStr = results.option('cross-chain-target-overpay-bps');
       final targetOverpayBps = targetOverpayBpsStr != null ? int.parse(targetOverpayBpsStr) : null;
       SparkAsset? destination;
-      if (tokenIdentifier != null) {
+      if (crossChainToBitcoin) {
+        destination = SparkAsset.bitcoin();
+      } else if (tokenIdentifier != null) {
         destination = SparkAsset.token(tokenIdentifier: tokenIdentifier);
       }
       paymentMethod = ReceivePaymentMethod.crossChain(

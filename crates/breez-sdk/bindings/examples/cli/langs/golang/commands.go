@@ -290,6 +290,7 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 	crossChainMaxSlippageStr := fs.String("cross-chain-max-slippage-bps", "", "Max slippage in basis points for cross-chain receives (10..500)")
 	crossChainFeesIncluded := fs.Bool("cross-chain-fees-included", false, "Deduct fees from amount instead of padding onto deposit")
 	crossChainTargetOverpayStr := fs.String("cross-chain-target-overpay-bps", "", "Override for the overpay buffer in basis points (0..500)")
+	crossChainToBitcoin := fs.Bool("cross-chain-to-bitcoin", false, "Deliver cross-chain receive as Bitcoin (sats)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -369,6 +370,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 		paymentMethod = pm
 
 	case "crosschain":
+		if *crossChainToBitcoin && *tokenId != "" {
+			return fmt.Errorf("--cross-chain-to-bitcoin and --token-identifier are mutually exclusive")
+		}
 		if *amountStr == "" {
 			return fmt.Errorf("--amount is required for cross-chain receive")
 		}
@@ -384,7 +388,10 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 			Route:  route,
 			Amount: amount,
 		}
-		if *tokenId != "" {
+		if *crossChainToBitcoin {
+			var dest breez_sdk_spark.SparkAsset = breez_sdk_spark.SparkAssetBitcoin{}
+			pm.Destination = &dest
+		} else if *tokenId != "" {
 			var dest breez_sdk_spark.SparkAsset = breez_sdk_spark.SparkAssetToken{TokenIdentifier: *tokenId}
 			pm.Destination = &dest
 		}

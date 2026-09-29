@@ -23,6 +23,7 @@ struct CliOptions {
     var rpid: String?
     var serverMode: Bool = false
     var lnurlDomain: String?
+    var realTimeSyncServerUrl: String?
     var proxy: String?
     var proxyUser: String?
     var proxyPassword: String?
@@ -85,6 +86,9 @@ func parseCliFlags() -> CliOptions {
         case "--lnurl-domain":
             i += 1
             if i < args.count { opts.lnurlDomain = args[i] }
+        case "--real-time-sync-server-url":
+            i += 1
+            if i < args.count { opts.realTimeSyncServerUrl = args[i] }
         case "--proxy":
             i += 1
             if i < args.count { opts.proxy = args[i] }
@@ -368,6 +372,9 @@ let proxy: ProxyConfig? = opts.proxy.map {
 config.proxy = proxy
 if let lnurlDomain = opts.lnurlDomain {
     config.lnurlDomain = lnurlDomain
+}
+if let realTimeSyncServerUrl = opts.realTimeSyncServerUrl {
+    config.realTimeSyncServerUrl = realTimeSyncServerUrl
 }
 if !opts.stableBalanceTokens.isEmpty {
     let tokens: [StableBalanceToken] = opts.stableBalanceTokens.map { s in

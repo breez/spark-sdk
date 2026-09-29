@@ -282,6 +282,8 @@ def _build_receive_parser():
                    help="Deduct fees from the amount instead of padding onto the deposit")
     p.add_argument("--cross-chain-target-overpay-bps", type=int, default=None,
                    help="Overpay buffer in basis points for fees-excluded mode (0..500)")
+    p.add_argument("--cross-chain-to-bitcoin", action="store_true", default=False,
+                   help="Deliver a cross-chain receive as Bitcoin (sats) instead of the active stable-balance token")
     return p
 
 async def _handle_receive(sdk, _token_issuer, session, args):
@@ -332,11 +334,14 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             if args.cross_chain_fees_included
             else None
         )
-        destination = (
-            SparkAsset.TOKEN(token_identifier=args.token_identifier)
-            if args.token_identifier
-            else None
-        )
+        if args.cross_chain_to_bitcoin:
+            destination = SparkAsset.BITCOIN
+        else:
+            destination = (
+                SparkAsset.TOKEN(token_identifier=args.token_identifier)
+                if args.token_identifier
+                else None
+            )
         payment_method = ReceivePaymentMethod.CROSS_CHAIN(
             route=route,
             amount=args.amount,
