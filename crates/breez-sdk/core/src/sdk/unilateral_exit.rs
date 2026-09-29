@@ -1,11 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use std::sync::Arc;
 
 use bitcoin::{
     Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
     XOnlyPublicKey,
-    address::NetworkUnchecked,
     consensus::encode::{deserialize_hex, serialize_hex},
     secp256k1::PublicKey,
 };
@@ -26,14 +24,10 @@ use crate::{
     chain::{BitcoinChainService, Outspend},
     error::SdkError,
     models::{
-        CheckUnilateralExitRequest, CheckUnilateralExitResponse, ConfirmedExitNode,
-        CpfpFundingKind, CpfpInput as ModelCpfpInput, ExitChainState as ModelExitChainState,
-        ExitLeafSelection, ExitNodeConfirmation, ExitRefund, ExitRefundState,
-        ExitTransactionStatus, PerBranchFunding, PrepareUnilateralExitRequest,
-        PrepareUnilateralExitResponse, RecoverFundsLeaf, RecoveryFunding, RecoveryMethod,
-        RecoveryTransaction, RecoveryTxKind, UnilateralExitLeaf, UnilateralExitRedoReason,
-        UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction,
-        UnilateralExitTxKind, UnilateralExitVerdict,
+        ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
+        ExitChainState as ModelExitChainState, ExitLeafSelection, ExitNodeConfirmation, ExitRefund,
+        ExitRefundState, ExitTransactionStatus, PerBranchFunding, RecoverFundsLeaf,
+        RecoveryFunding, RecoveryMethod, RecoveryTransaction, RecoveryTxKind,
     },
     persist::{CachedExitingLeaf, ObjectCacheRepository, SeenAt},
     signer::CpfpSigner,
@@ -62,184 +56,6 @@ pub(super) struct UnilateralBuild {
     pub(super) fanout_fee_sat: u64,
     pub(super) sweep_fee_sat: u64,
     pub(super) transactions: Vec<RecoveryTransaction>,
-}
-
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
-    /// Quotes a unilateral exit without any funding UTXOs: selects which leaves
-    /// would exit, computes the exact fee for the given funding kind, and reports
-    /// how much to fund.
-    pub async fn prepare_unilateral_exit(
-        &self,
-        request: PrepareUnilateralExitRequest,
-    ) -> Result<PrepareUnilateralExitResponse, SdkError> {
-        debug!(
-            fee_rate_sat_per_vbyte = request.fee_rate_sat_per_vbyte,
-            funding_kind = ?request.funding_kind,
-            selection = ?request.selection,
-            "prepare_unilateral_exit: quoting"
-        );
-        let btc_network: bitcoin::Network = self.config.network.into();
-
-        let destination = request
-            .destination
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
-            .require_network(btc_network)
-            .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
-
-        let selection = wallet_selection(request.selection)?;
-        let quote = self
-            .quote_unilateral_exit(
-                &destination,
-                request.fee_rate_sat_per_vbyte,
-                Some(&request.funding_kind),
-                selection,
-                &HashSet::new(),
-            )
-            .await?;
-        let (single_utxo_funding_sat, per_branch_funding) = quote
-            .funding
-            .map_or((0, Vec::new()), |f| (f.single_utxo_sats, f.per_branch));
-
-        Ok(PrepareUnilateralExitResponse {
-            leaves: quote.leaves.into_iter().map(unilateral_exit_leaf).collect(),
-            recoverable_value_sat: quote.recoverable_value_sat,
-            total_fee_sat: quote.total_fee_sat,
-            cpfp_fee_sat: quote.cpfp_fee_sat,
-            fanout_fee_sat: quote.fanout_fee_sat,
-            sweep_fee_sat: quote.sweep_fee_sat,
-            single_utxo_funding_sat,
-            per_branch_funding,
-            fee_rate_sat_per_vbyte: request.fee_rate_sat_per_vbyte,
-            destination: request.destination,
-            exit_chain_state: quote.exit_chain_state,
-        })
-    }
-
-    /// Reads an exit you kept back against the chain: which of its transactions
-    /// are now in a block, and whether it can still be finished as it stands.
-    ///
-    /// Needs neither the wallet's leaves nor a signer, so an exit can be followed
-    /// from the response alone. Store the response in place of the one you passed
-    /// in, and broadcast what its statuses leave to send.
-    pub async fn check_unilateral_exit(
-        &self,
-        request: CheckUnilateralExitRequest,
-    ) -> Result<CheckUnilateralExitResponse, SdkError> {
-        let mut exit = request.exit;
-        debug!(
-            transactions = exit.transactions.len(),
-            "check_unilateral_exit: reading back"
-        );
-
-        let mut transactions: Vec<RecoveryTransaction> = exit
-            .transactions
-            .into_iter()
-            .map(recovery_transaction)
-            .collect();
-        let diverged =
-            check_recovery_transactions(self.chain_service.as_ref(), &mut transactions).await?;
-        exit.transactions = transactions
-            .into_iter()
-            .map(unilateral_exit_transaction)
-            .collect::<Result<_, _>>()?;
-
-        let all_confirmed = exit
-            .transactions
-            .iter()
-            .all(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }));
-        let verdict = if diverged {
-            UnilateralExitVerdict::Redo {
-                reason: UnilateralExitRedoReason::OnChainStateDiverged,
-            }
-        } else if all_confirmed && !exit.transactions.is_empty() {
-            UnilateralExitVerdict::Done
-        } else {
-            UnilateralExitVerdict::Valid
-        };
-        debug!(?verdict, "check_unilateral_exit: read back");
-
-        Ok(CheckUnilateralExitResponse { exit, verdict })
-    }
-
-    /// Builds and signs a complete unilateral exit from a `prepare_unilateral_exit`
-    /// quote and the actual funding UTXOs, returning the full transaction set in
-    /// topological broadcast order without broadcasting. Broadcast it over time,
-    /// respecting each transaction's `depends_on` and `csv_timelock_blocks`.
-    ///
-    /// It reads on-chain state first: an already-confirmed fan-out or CPFP node
-    /// is not rebuilt, and a leaf refund already on-chain (recognized by the
-    /// leaf's refund address, so any refund variant counts) is swept directly.
-    /// Re-running after partial progress therefore resumes rather than restarts.
-    pub async fn unilateral_exit(
-        &self,
-        request: UnilateralExitRequest,
-        signer: Arc<dyn CpfpSigner>,
-    ) -> Result<UnilateralExitResponse, SdkError> {
-        let UnilateralExitRequest {
-            prepared,
-            funding_inputs,
-        } = request;
-        let supplied_funding = funding_inputs.clone();
-        debug!(
-            leaves = prepared.leaves.len(),
-            funding_inputs = funding_inputs.len(),
-            fee_rate_sat_per_vbyte = prepared.fee_rate_sat_per_vbyte,
-            "unilateral_exit: building"
-        );
-        let btc_network: bitcoin::Network = self.config.network.into();
-
-        let destination = prepared
-            .destination
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
-            .require_network(btc_network)
-            .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))?;
-
-        // The build never re-selects: the quote's leaves are an explicit set.
-        let leaf_ids = prepared
-            .leaves
-            .iter()
-            .map(|l| {
-                TreeNodeId::from_str(&l.leaf_id).map_err(|e| {
-                    SdkError::InvalidInput(format!("Invalid leaf id {}: {e}", l.leaf_id))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if leaf_ids.is_empty() {
-            // An empty quote builds to an empty result rather than erroring.
-            debug!("unilateral_exit: quote has no leaves, returning empty result");
-            return Ok(empty_exit_response());
-        }
-
-        let build = self
-            .build_unilateral_exit(
-                &destination,
-                leaf_ids,
-                prepared.fee_rate_sat_per_vbyte,
-                funding_inputs,
-                prepared.single_utxo_funding_sat,
-                &prepared.exit_chain_state,
-                Some(signer.as_ref()),
-            )
-            .await?;
-        Ok(UnilateralExitResponse {
-            recoverable_value_sat: build.recoverable_value_sat,
-            total_fee_sat: build.total_fee_sat,
-            cpfp_fee_sat: build.cpfp_fee_sat,
-            fanout_fee_sat: build.fanout_fee_sat,
-            sweep_fee_sat: build.sweep_fee_sat,
-            leaves: build.leaves.into_iter().map(unilateral_exit_leaf).collect(),
-            transactions: build
-                .transactions
-                .into_iter()
-                .map(unilateral_exit_transaction)
-                .collect::<Result<_, _>>()?,
-            funding_inputs: supplied_funding,
-        })
-    }
 }
 
 impl BreezSdk {
@@ -779,57 +595,6 @@ fn swept_leaves(state: &WalletExitChainState, leaf_ids: &[TreeNodeId]) -> Vec<Tr
         .collect()
 }
 
-fn unilateral_exit_leaf(leaf: RecoverFundsLeaf) -> UnilateralExitLeaf {
-    UnilateralExitLeaf {
-        leaf_id: leaf.leaf_id,
-        value: leaf.value_sats,
-    }
-}
-
-fn recovery_transaction(tx: UnilateralExitTransaction) -> RecoveryTransaction {
-    RecoveryTransaction {
-        kind: match tx.kind {
-            UnilateralExitTxKind::FanOut => RecoveryTxKind::FanOut,
-            UnilateralExitTxKind::Node => RecoveryTxKind::Node,
-            UnilateralExitTxKind::Refund => RecoveryTxKind::Refund,
-            UnilateralExitTxKind::Sweep => RecoveryTxKind::Sweep,
-        },
-        node_id: tx.node_id,
-        txid: tx.txid,
-        tx_hex: tx.tx_hex,
-        cpfp_tx_hex: tx.cpfp_tx_hex,
-        csv_timelock_blocks: tx.csv_timelock_blocks,
-        depends_on: tx.depends_on,
-        status: tx.status,
-    }
-}
-
-fn unilateral_exit_transaction(
-    tx: RecoveryTransaction,
-) -> Result<UnilateralExitTransaction, SdkError> {
-    let kind = match tx.kind {
-        RecoveryTxKind::Cooperative => {
-            return Err(SdkError::Generic(
-                "A cooperative recovery is not part of a unilateral exit".to_string(),
-            ));
-        }
-        RecoveryTxKind::FanOut => UnilateralExitTxKind::FanOut,
-        RecoveryTxKind::Node => UnilateralExitTxKind::Node,
-        RecoveryTxKind::Refund => UnilateralExitTxKind::Refund,
-        RecoveryTxKind::Sweep => UnilateralExitTxKind::Sweep,
-    };
-    Ok(UnilateralExitTransaction {
-        kind,
-        node_id: tx.node_id,
-        txid: tx.txid,
-        tx_hex: tx.tx_hex,
-        cpfp_tx_hex: tx.cpfp_tx_hex,
-        csv_timelock_blocks: tx.csv_timelock_blocks,
-        depends_on: tx.depends_on,
-        status: tx.status,
-    })
-}
-
 /// The sweep's fee: total input value minus output value.
 fn sweep_fee(sweep_psbt: &bitcoin::Psbt) -> u64 {
     let in_value: u64 = sweep_psbt
@@ -1036,7 +801,7 @@ pub(super) fn wallet_selection(
     })
 }
 
-/// Reads back the state a caller carried over from `prepare_unilateral_exit`.
+/// Reads back the state a caller carried over from `prepare_recover_funds`.
 fn exit_chain_state_from_model(
     state: &ModelExitChainState,
 ) -> Result<WalletExitChainState, SdkError> {
@@ -1491,19 +1256,6 @@ fn sweep_initial_status(build: &UnilateralExitBuild) -> ExitTransactionStatus {
         ExitTransactionStatus::Unverified
     } else {
         ExitTransactionStatus::WaitingForDependencies
-    }
-}
-
-fn empty_exit_response() -> UnilateralExitResponse {
-    UnilateralExitResponse {
-        recoverable_value_sat: 0,
-        total_fee_sat: 0,
-        cpfp_fee_sat: 0,
-        fanout_fee_sat: 0,
-        sweep_fee_sat: 0,
-        leaves: Vec::new(),
-        transactions: Vec::new(),
-        funding_inputs: Vec::new(),
     }
 }
 

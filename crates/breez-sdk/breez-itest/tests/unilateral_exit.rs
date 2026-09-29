@@ -2,9 +2,9 @@
 //! operator pool and a regtest bitcoind.
 //!
 //! Every unilateral exit test uses the public two-phase API directly: it calls
-//! `prepare_unilateral_exit` to obtain a quote, asserts the quote is internally
+//! `prepare_recover_funds` to obtain a quote, asserts the quote is internally
 //! consistent (and, where a build follows, that the build matches it), then
-//! calls `unilateral_exit` to produce the signed transaction set. The
+//! calls `recover_funds` to produce the signed transaction set. The
 //! end-to-end tests additionally broadcast that set to bitcoind and mine it, so
 //! the transactions are proven minable, not merely well-formed.
 //!
@@ -29,14 +29,12 @@ use breez_sdk_itest::{
 };
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
-    CheckRecoverFundsRequest, CheckUnilateralExitRequest, CooperativeRecoveryError,
-    CooperativeRecoveryFailure, CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState,
-    ExitTransactionStatus, GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest,
-    PrepareRecoverFundsRequest, PrepareRecoverFundsResponse, PrepareUnilateralExitRequest,
-    PrepareUnilateralExitResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryMethod,
-    RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkError, SdkEvent, SyncWalletRequest,
-    UnilateralExitRequest, UnilateralExitResponse, UnilateralExitTransaction, UnilateralExitTxKind,
-    UnilateralExitVerdict,
+    CheckRecoverFundsRequest, CooperativeRecoveryError, CooperativeRecoveryFailure,
+    CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState, ExitTransactionStatus,
+    GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
+    PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryFunding,
+    RecoveryMethod, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkError, SdkEvent,
+    SyncWalletRequest,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -190,19 +188,17 @@ fn decode_tx(hex_str: &str) -> Result<Transaction> {
 }
 
 /// Not on-chain: still to be broadcast, whatever it is waiting for.
-fn unconfirmed(entry: &UnilateralExitTransaction) -> bool {
+fn unconfirmed(entry: &RecoveryTransaction) -> bool {
     !matches!(entry.status, ExitTransactionStatus::Confirmed { .. })
 }
 
-fn is_package(entry: &UnilateralExitTransaction) -> bool {
-    matches!(
-        entry.kind,
-        UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund
-    )
+fn is_package(entry: &RecoveryTransaction) -> bool {
+    matches!(entry.kind, RecoveryTxKind::Node | RecoveryTxKind::Refund)
 }
 
-/// Internal consistency of a non-empty exit quote, independent of how it will be
-/// funded: the summary fields agree with each other and echo the request.
+/// Internal consistency of a non-empty unilateral exit quote, independent of how
+/// it will be funded: the summary fields agree with each other and echo the
+/// request.
 /// `dust` is the funding kind's terminal-change dust reserve (330 for P2TR).
 ///
 /// Grounded in `spark::services::quote_unilateral_exit`: `per_branch[i] = estimated_cost +
@@ -210,29 +206,38 @@ fn is_package(entry: &UnilateralExitTransaction) -> bool {
 /// sum(estimated_cost) + fanout_fee`, so `single_utxo_funding - total_fee ==
 /// n*dust` and `fanout_fee == 0` iff a single branch.
 fn assert_quote_consistent(
-    quote: &PrepareUnilateralExitResponse,
+    quote: &PrepareRecoverFundsResponse,
     fee_rate_sat_per_vbyte: u64,
     destination: &str,
     dust: u64,
 ) {
     let n = quote.leaves.len() as u64;
     assert!(n > 0, "assert_quote_consistent expects a non-empty quote");
+    assert!(
+        quote
+            .leaves
+            .iter()
+            .all(|l| l.method == RecoveryMethod::Unilateral)
+            && quote.cooperative_fee_sats == 0,
+        "assert_quote_consistent expects a unilateral exit alone"
+    );
 
-    // recoverable_value_sat is exactly the selected leaves' total.
+    // recoverable_value_sats is exactly the selected leaves' total.
     assert_eq!(
-        quote.recoverable_value_sat,
-        quote.leaves.iter().map(|l| l.value).sum::<u64>(),
-        "recoverable_value_sat must equal the sum of selected leaf values"
+        quote.recoverable_value_sats,
+        quote.leaves.iter().map(|l| l.value_sats).sum::<u64>(),
+        "recoverable_value_sats must equal the sum of selected leaf values"
     );
 
     // One funding recommendation per branch, each naming a selected leaf.
+    let funding = quoted_funding(quote);
     assert_eq!(
-        quote.per_branch_funding.len(),
+        funding.per_branch.len(),
         quote.leaves.len(),
         "one per-branch funding entry per selected leaf"
     );
     let leaf_ids: HashSet<&String> = quote.leaves.iter().map(|l| &l.leaf_id).collect();
-    for b in &quote.per_branch_funding {
+    for b in &funding.per_branch {
         assert!(
             leaf_ids.contains(&b.leaf_id),
             "per-branch entry names unselected leaf {}",
@@ -244,35 +249,35 @@ fn assert_quote_consistent(
     // A single branch never fans out; multiple branches do at a positive rate.
     if n == 1 {
         assert_eq!(
-            quote.fanout_fee_sat, 0,
+            quote.fanout_fee_sats, 0,
             "a single branch has no fan-out fee"
         );
     } else if fee_rate_sat_per_vbyte > 0 {
         assert!(
-            quote.fanout_fee_sat > 0,
+            quote.fanout_fee_sats > 0,
             "multiple branches carry a positive fan-out fee at a positive rate"
         );
     }
     assert!(
-        quote.fanout_fee_sat <= quote.total_fee_sat,
+        quote.fanout_fee_sats <= quote.total_fee_sats,
         "fan-out fee is part of the total fee"
     );
 
     // Funding identities from quote_unilateral_exit.
     assert_eq!(
-        quote.single_utxo_funding_sat,
-        quote
-            .per_branch_funding
+        funding.single_utxo_sats,
+        funding
+            .per_branch
             .iter()
             .map(|b| b.funding_sats)
             .sum::<u64>()
-            + quote.fanout_fee_sat,
-        "single_utxo_funding_sat = sum(per_branch) + fanout_fee"
+            + quote.fanout_fee_sats,
+        "single_utxo_sats = sum(per_branch) + fanout_fee"
     );
     assert_eq!(
-        quote.single_utxo_funding_sat - quote.total_fee_sat,
+        funding.single_utxo_sats - quote.total_fee_sats,
         n * dust,
-        "single_utxo_funding_sat reserves exactly one dust output per branch above fees"
+        "single_utxo_sats reserves exactly one dust output per branch above fees"
     );
 
     // The quote echoes the request verbatim.
@@ -286,19 +291,31 @@ fn assert_quote_consistent(
     );
 }
 
+fn quoted_funding(quote: &PrepareRecoverFundsResponse) -> &RecoveryFunding {
+    quote
+        .funding
+        .as_ref()
+        .expect("the unilateral exit needs funding")
+}
+
 /// Cross-checks a built exit against the quote it was built from: the value and
 /// the leaf set always match (both derive from the same selection). The fee
 /// relationship is context-dependent and asserted by the individual tests.
-fn assert_build_matches_quote(
-    quote: &PrepareUnilateralExitResponse,
-    built: &UnilateralExitResponse,
-) {
+fn assert_build_matches_quote(quote: &PrepareRecoverFundsResponse, built: &RecoverFundsResponse) {
     assert_eq!(
-        built.recoverable_value_sat, quote.recoverable_value_sat,
+        built.recoverable_value_sats, quote.recoverable_value_sats,
         "built recoverable value must match the quote"
     );
-    let mut q: Vec<(&String, u64)> = quote.leaves.iter().map(|l| (&l.leaf_id, l.value)).collect();
-    let mut b: Vec<(&String, u64)> = built.leaves.iter().map(|l| (&l.leaf_id, l.value)).collect();
+    let mut q: Vec<(&String, u64)> = quote
+        .leaves
+        .iter()
+        .map(|l| (&l.leaf_id, l.value_sats))
+        .collect();
+    let mut b: Vec<(&String, u64)> = built
+        .leaves
+        .iter()
+        .map(|l| (&l.leaf_id, l.value_sats))
+        .collect();
     q.sort();
     b.sort();
     assert_eq!(q, b, "built leaf set must match the quote's");
@@ -307,7 +324,7 @@ fn assert_build_matches_quote(
 /// Outpoint to value for every output in the set plus the external funding
 /// UTXOs, so a transaction's fee is `sum(input values) - sum(outputs)`.
 fn output_value_map(
-    resp: &UnilateralExitResponse,
+    resp: &RecoverFundsResponse,
     external: &[&FundedUtxo],
 ) -> Result<HashMap<OutPoint, u64>> {
     let mut map = HashMap::new();
@@ -346,7 +363,7 @@ fn tx_input_value(tx: &Transaction, map: &HashMap<OutPoint, u64>) -> Option<u64>
 
 /// Sum of the CPFP package fees in the set. Computed from the transactions
 /// themselves to avoid a sub-dust probe, which bitcoind would reject.
-fn sum_package_fees(resp: &UnilateralExitResponse, external: &[&FundedUtxo]) -> Result<u64> {
+fn sum_package_fees(resp: &RecoverFundsResponse, external: &[&FundedUtxo]) -> Result<u64> {
     let map = output_value_map(resp, external)?;
     let mut total: u64 = 0;
     for entry in &resp.transactions {
@@ -365,7 +382,7 @@ fn sum_package_fees(resp: &UnilateralExitResponse, external: &[&FundedUtxo]) -> 
 /// below the target). With `near_exact`, packages must also not overpay by more
 /// than 1 sat (holds for P2TR, whose witness is fixed-size).
 fn assert_fee_rate(
-    resp: &UnilateralExitResponse,
+    resp: &RecoverFundsResponse,
     external: &[&FundedUtxo],
     rate: u64,
     near_exact: bool,
@@ -374,7 +391,7 @@ fn assert_fee_rate(
     let target = |weight: u64| weight.saturating_mul(rate).div_ceil(1000);
     for entry in &resp.transactions {
         let (fee, weight) = match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 let parent = decode_tx(&entry.tx_hex)?;
                 let child = decode_tx(
                     entry
@@ -389,7 +406,10 @@ fn assert_fee_rate(
                     parent.weight().to_wu() + child.weight().to_wu(),
                 )
             }
-            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Sweep => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::FanOut | RecoveryTxKind::Sweep => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 let tx_in = tx_input_value(&tx, &map).expect("input values known");
                 let tx_out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -402,12 +422,7 @@ fn assert_fee_rate(
             "{:?} fee {fee} is below the target rate ({t} for weight {weight}, rate {rate})",
             entry.kind
         );
-        if near_exact
-            && matches!(
-                entry.kind,
-                UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund
-            )
-        {
+        if near_exact && matches!(entry.kind, RecoveryTxKind::Node | RecoveryTxKind::Refund) {
             assert!(
                 fee <= t + 1,
                 "{:?} fee {fee} overpays the target {t} (weight {weight})",
@@ -420,7 +435,7 @@ fn assert_fee_rate(
 
 /// Broadcast a node/refund package (parent `tx_hex` + child `cpfp_tx_hex`) as a
 /// 1p1c package, retrying until any relative CSV matures, then mine a block.
-async fn broadcast_and_mine(sdk: &LocalSdk, entry: &UnilateralExitTransaction) -> Result<()> {
+async fn broadcast_and_mine(sdk: &LocalSdk, entry: &RecoveryTransaction) -> Result<()> {
     let parent = decode_tx(&entry.tx_hex)?;
     let child = decode_tx(
         entry
@@ -433,13 +448,29 @@ async fn broadcast_and_mine(sdk: &LocalSdk, entry: &UnilateralExitTransaction) -
     Ok(())
 }
 
+/// Broadcasts one transaction of a unilateral exit and mines it.
+async fn mine(sdk: &LocalSdk, entry: &RecoveryTransaction) -> Result<()> {
+    match entry.kind {
+        RecoveryTxKind::Cooperative => {
+            anyhow::bail!("a unilateral exit carries no cooperative recovery")
+        }
+        RecoveryTxKind::Node | RecoveryTxKind::Refund => broadcast_and_mine(sdk, entry).await,
+        RecoveryTxKind::FanOut | RecoveryTxKind::Sweep => {
+            let tx = decode_tx(&entry.tx_hex)?;
+            sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
+            sdk.fixtures.bitcoind.generate_blocks(1).await?;
+            Ok(())
+        }
+    }
+}
+
 /// Broadcast and confirm only the fan-out entry, leaving the per-branch chains
 /// unbroadcast.
-async fn confirm_fan_out(sdk: &LocalSdk, resp: &UnilateralExitResponse) -> Result<String> {
+async fn confirm_fan_out(sdk: &LocalSdk, resp: &RecoverFundsResponse) -> Result<String> {
     let fan_out = resp
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+        .find(|t| matches!(t.kind, RecoveryTxKind::FanOut))
         .expect("a fan-out entry");
     let tx = decode_tx(&fan_out.tx_hex)?;
     sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
@@ -454,27 +485,11 @@ async fn confirm_fan_out(sdk: &LocalSdk, resp: &UnilateralExitResponse) -> Resul
 /// can actually be mined" check.
 async fn assert_all_mined(
     sdk: &LocalSdk,
-    built: &UnilateralExitResponse,
+    built: &RecoverFundsResponse,
     destination: &Address,
 ) -> Result<()> {
-    let mut sweep_txid: Option<Txid> = None;
     for entry in &built.transactions {
-        match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
-                broadcast_and_mine(sdk, entry).await?;
-            }
-            UnilateralExitTxKind::FanOut => {
-                let tx = decode_tx(&entry.tx_hex)?;
-                sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
-                sdk.fixtures.bitcoind.generate_blocks(1).await?;
-            }
-            UnilateralExitTxKind::Sweep => {
-                let tx = decode_tx(&entry.tx_hex)?;
-                let txid = sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
-                sdk.fixtures.bitcoind.generate_blocks(1).await?;
-                sweep_txid = Some(txid);
-            }
-        }
+        mine(sdk, entry).await?;
     }
 
     // Every entry now reads back from a block: bitcoind mined it.
@@ -490,7 +505,12 @@ async fn assert_all_mined(
         );
     }
 
-    let sweep_txid = sweep_txid.expect("the set terminates in a sweep");
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the set terminates in a sweep")?;
     let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
     assert!(
         sweep
@@ -502,24 +522,24 @@ async fn assert_all_mined(
     Ok(())
 }
 
-/// A fresh single-UTXO auto exit quote and its build, funded by one P2TR UTXO of
-/// `funding_sat`. Returns the quote, the built set, and the funding UTXO so a
+/// A fresh single-UTXO quote of every leaf and its build, funded by one P2TR UTXO of
+/// `funding_sats`. Returns the quote, the built set, and the funding UTXO so a
 /// test can assert on all three.
 async fn quote_then_build_single(
     sdk: &LocalSdk,
-    funding_sat: u64,
+    funding_sats: u64,
     fee_rate_sat_per_vbyte: u64,
 ) -> Result<(
-    PrepareUnilateralExitResponse,
-    UnilateralExitResponse,
+    PrepareRecoverFundsResponse,
+    RecoverFundsResponse,
     FundedUtxo,
 )> {
-    let utxo = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sat)).await?;
+    let utxo = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sats)).await?;
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -527,12 +547,12 @@ async fn quote_then_build_single(
     let signer = signer_for(&utxo.secret_key.secret_bytes())?;
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&utxo)],
             },
-            signer,
+            Some(signer),
         )
         .await?;
     Ok((quote, built, utxo))
@@ -551,27 +571,40 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 1, "expected a single selected leaf");
-    assert!(quote.recoverable_value_sat > 0);
-    assert!(quote.total_fee_sat > 0);
+    assert!(quote.recoverable_value_sats > 0);
+    assert!(quote.total_fee_sats > 0);
     assert_quote_consistent(&quote, FEE_RATE, &destination, p2tr_dust());
+    let unfunded = sdk
+        .sdk
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: None,
+            destination: destination.clone(),
+            selection: ExitLeafSelection::All,
+        })
+        .await;
+    assert!(
+        matches!(unfunded, Err(SdkError::InvalidInput(_))),
+        "an exit with steps left needs a funding kind: {unfunded:?}"
+    );
 
     let signer = signer_for(&cpfp.secret_key.secret_bytes())?;
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer,
+            Some(signer),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -579,14 +612,14 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
     let sweeps: Vec<_> = resp
         .transactions
         .iter()
-        .filter(|t| matches!(t.kind, UnilateralExitTxKind::Sweep))
+        .filter(|t| matches!(t.kind, RecoveryTxKind::Sweep))
         .collect();
     assert_eq!(sweeps.len(), 1, "exactly one sweep expected");
     assert!(sweeps[0].cpfp_tx_hex.is_none(), "sweep has no CPFP child");
     assert!(
         matches!(
             resp.transactions.last().map(|t| &t.kind),
-            Some(UnilateralExitTxKind::Sweep)
+            Some(RecoveryTxKind::Sweep)
         ),
         "sweep must be last"
     );
@@ -622,9 +655,9 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -634,17 +667,17 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
     let signer = signer_for(&cpfp.secret_key.secret_bytes())?;
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer,
+            Some(signer),
         )
         .await?;
     assert_build_matches_quote(&quote, &built);
     assert_eq!(
-        built.total_fee_sat, quote.total_fee_sat,
+        built.total_fee_sats, quote.total_fee_sats,
         "a fresh single-UTXO build reproduces the quote's total fee exactly"
     );
 
@@ -657,7 +690,7 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
     let sweep_txid = built
         .transactions
         .iter()
-        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
         .map(|t| Txid::from_str(&t.txid))
         .expect("the built set terminates in a sweep")?;
     let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
@@ -667,12 +700,12 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
         .find(|o| o.script_pubkey == destination.script_pubkey())
         .map(|o| o.value.to_sat())
         .expect("the sweep pays the destination");
-    let expected = CPFP_SATS + built.recoverable_value_sat - built.total_fee_sat;
+    let expected = CPFP_SATS + built.recoverable_value_sats - built.total_fee_sats;
     assert_eq!(
         swept, expected,
         "swept {swept} must equal funding ({CPFP_SATS}) + recoverable \
          ({}) - total fee ({})",
-        built.recoverable_value_sat, built.total_fee_sat
+        built.recoverable_value_sats, built.total_fee_sats
     );
     Ok(())
 }
@@ -691,9 +724,9 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -702,12 +735,12 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
     let exited_leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_all_mined(&sdk, &built, &destination).await?;
@@ -717,15 +750,15 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     let requote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     assert_eq!(
-        requote.recoverable_value_sat, LEAF_SATS,
+        requote.recoverable_value_sats, LEAF_SATS,
         "only the new deposit is recoverable, not the swept leaf on top"
     );
     assert!(
@@ -738,9 +771,9 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
 
     let rerun_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: exited_leaf_ids.clone(),
@@ -765,12 +798,12 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
     );
     let rerun = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: rerun_quote,
                 funding_inputs: Vec::new(),
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert!(
@@ -782,16 +815,16 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
     // rebuilt from nothing.
     let checked = sdk
         .sdk
-        .check_unilateral_exit(CheckUnilateralExitRequest { exit: built })
+        .check_recover_funds(CheckRecoverFundsRequest { recovery: built })
         .await?;
     assert!(
-        matches!(checked.verdict, UnilateralExitVerdict::Done),
+        matches!(checked.verdict, RecoveryVerdict::Done),
         "the exit that ran reports itself finished: {:?}",
         checked.verdict
     );
     assert!(
         checked
-            .exit
+            .recovery
             .transactions
             .iter()
             .all(|t| matches!(t.status, ExitTransactionStatus::Confirmed { .. })),
@@ -811,21 +844,21 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     let first_pkg = first
@@ -840,21 +873,21 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -895,9 +928,9 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -907,12 +940,12 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
     let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -921,15 +954,18 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
     let mut sweep: Option<Transaction> = None;
     for entry in &resp.transactions {
         match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 broadcast_and_mine(&sdk, entry).await?;
             }
-            UnilateralExitTxKind::FanOut => {
+            RecoveryTxKind::FanOut => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
                 sdk.fixtures.bitcoind.generate_blocks(1).await?;
             }
-            UnilateralExitTxKind::Sweep => sweep = Some(decode_tx(&entry.tx_hex)?),
+            RecoveryTxKind::Sweep => sweep = Some(decode_tx(&entry.tx_hex)?),
         }
     }
     let sweep = sweep.expect("a sweep transaction");
@@ -974,27 +1010,27 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
     let higher_rate = FEE_RATE + 2;
     let bump_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: higher_rate,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
         .await?;
     let bumped = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: bump_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     let higher_sweep = bumped
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Sweep))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Sweep))
         .map(|t| decode_tx(&t.tx_hex))
         .expect("the rebuild re-emits a sweep over the pending refund")?;
 
@@ -1051,34 +1087,34 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
-    let funding_sat = CPFP_SATS * 4;
-    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sat)).await?;
+    let funding_sats = CPFP_SATS * 4;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sats)).await?;
     let destination = cpfp.address.clone();
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2, "expected two selected leaves");
     assert!(
-        quote.fanout_fee_sat > 0,
+        quote.fanout_fee_sats > 0,
         "a single funding input across two branches has a fan-out fee"
     );
     assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
 
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &built);
@@ -1086,19 +1122,19 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
         built
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "a single funding input across two branches must produce a fan-out"
     );
 
     // Only the fan-out can go out first: everything else waits on it, or on the
     // node above it. The fan-out itself has no timelock, so it is ready.
-    let ready: Vec<&UnilateralExitTransaction> = built
+    let ready: Vec<&RecoveryTransaction> = built
         .transactions
         .iter()
         .filter(|t| t.status == ExitTransactionStatus::Ready)
         .collect();
     assert_eq!(ready.len(), 1, "one transaction to send first, not several");
-    assert_eq!(ready[0].kind, UnilateralExitTxKind::FanOut);
+    assert_eq!(ready[0].kind, RecoveryTxKind::FanOut);
     assert!(
         built
             .transactions
@@ -1118,7 +1154,7 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
     let sweep_txid = built
         .transactions
         .iter()
-        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
         .map(|t| Txid::from_str(&t.txid))
         .expect("the built set terminates in a sweep")?;
     let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
@@ -1128,12 +1164,12 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
         .find(|o| o.script_pubkey == destination.script_pubkey())
         .map(|o| o.value.to_sat())
         .expect("the sweep pays the destination");
-    let expected = funding_sat + built.recoverable_value_sat - built.total_fee_sat;
+    let expected = funding_sats + built.recoverable_value_sats - built.total_fee_sats;
     assert_eq!(
         swept, expected,
-        "swept {swept} must equal funding ({funding_sat}) + recoverable \
+        "swept {swept} must equal funding ({funding_sats}) + recoverable \
          ({}) - total fee ({})",
-        built.recoverable_value_sat, built.total_fee_sat
+        built.recoverable_value_sats, built.total_fee_sats
     );
     Ok(())
 }
@@ -1164,8 +1200,8 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
         "both claimed leaves are synced into the durable store"
     );
 
-    let funding_sat = CPFP_SATS * 4;
-    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sat)).await?;
+    let funding_sats = CPFP_SATS * 4;
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(funding_sats)).await?;
     let destination = cpfp.address.clone();
 
     // Take the operators offline. Everything below must source from local storage.
@@ -1173,9 +1209,9 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1189,12 +1225,12 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
 
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &built);
@@ -1209,7 +1245,7 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
     let sweep_txid = built
         .transactions
         .iter()
-        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
         .map(|t| Txid::from_str(&t.txid))
         .expect("the built set terminates in a sweep")?;
     let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
@@ -1219,12 +1255,12 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
         .find(|o| o.script_pubkey == destination.script_pubkey())
         .map(|o| o.value.to_sat())
         .expect("the sweep pays the destination");
-    let expected = funding_sat + built.recoverable_value_sat - built.total_fee_sat;
+    let expected = funding_sats + built.recoverable_value_sats - built.total_fee_sats;
     assert_eq!(
         swept, expected,
-        "offline exit conserves value: swept {swept} = funding ({funding_sat}) \
+        "offline exit conserves value: swept {swept} = funding ({funding_sats}) \
          + recoverable ({}) - fee ({})",
-        built.recoverable_value_sat, built.total_fee_sat
+        built.recoverable_value_sats, built.total_fee_sats
     );
     Ok(())
 }
@@ -1322,9 +1358,9 @@ async fn test_importing_another_wallets_state_takes_nothing(
         .address;
     let quote = ours
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1338,7 +1374,7 @@ async fn test_importing_another_wallets_state_takes_nothing(
 
 /// Whether any CPFP child of `exit` spends an output of `txid`, which is how a
 /// resume shows it is funded from what an earlier run produced.
-fn funded_from(exit: &UnilateralExitResponse, txid: &str) -> Result<bool> {
+fn funded_from(exit: &RecoverFundsResponse, txid: &str) -> Result<bool> {
     let txid = Txid::from_str(txid)?;
     for entry in &exit.transactions {
         let Some(hex) = entry.cpfp_tx_hex.as_ref() else {
@@ -1356,9 +1392,8 @@ fn funded_from(exit: &UnilateralExitResponse, txid: &str) -> Result<bool> {
 }
 
 /// A single leaf carried to a confirmed refund, then resumed. Nothing is left to
-/// build, so the resume asks for no fee money at all and goes straight to the
-/// sweep: the leaf's own steps come back confirmed and carry no child. Priced as
-/// a fresh exit, a nearly-finished one used to be rejected here.
+/// build, so the resume needs no funding and no signer and goes straight to the
+/// sweep: the leaf's own steps come back confirmed and carry no child.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn test_settled_single_branch_needs_no_further_funding(
@@ -1371,9 +1406,9 @@ async fn test_settled_single_branch_needs_no_further_funding(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1381,12 +1416,12 @@ async fn test_settled_single_branch_needs_no_further_funding(
     let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -1395,7 +1430,7 @@ async fn test_settled_single_branch_needs_no_further_funding(
     for entry in built
         .transactions
         .iter()
-        .filter(|t| t.kind != UnilateralExitTxKind::Sweep)
+        .filter(|t| t.kind != RecoveryTxKind::Sweep)
     {
         if entry.cpfp_tx_hex.is_some() {
             broadcast_and_mine(&sdk, entry).await?;
@@ -1407,27 +1442,27 @@ async fn test_settled_single_branch_needs_no_further_funding(
         }
     }
 
-    // A tiny UTXO, far below what a fresh exit of this leaf would cost. The resume
-    // has no children left to build, so it must not be asked for the difference.
-    let dust_funding =
-        fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(p2tr_dust() + 1)).await?;
     let resumed_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
         .await?;
+    assert!(
+        resumed_quote.funding.is_none(),
+        "only the sweep is left, which pays its fee from the refund"
+    );
     let resumed = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: resumed_quote,
-                funding_inputs: vec![cpfp_input(&dust_funding)],
+                funding_inputs: Vec::new(),
             },
-            signer_for(&dust_funding.secret_key.secret_bytes())?,
+            None,
         )
         .await?;
 
@@ -1435,7 +1470,7 @@ async fn test_settled_single_branch_needs_no_further_funding(
         resumed
             .transactions
             .iter()
-            .filter(|t| t.kind != UnilateralExitTxKind::Sweep)
+            .filter(|t| t.kind != RecoveryTxKind::Sweep)
             .all(
                 |t| matches!(t.status, ExitTransactionStatus::Confirmed { .. })
                     && t.cpfp_tx_hex.is_none()
@@ -1445,12 +1480,12 @@ async fn test_settled_single_branch_needs_no_further_funding(
     let sweep = resumed
         .transactions
         .iter()
-        .find(|t| t.kind == UnilateralExitTxKind::Sweep)
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
         .expect("the refund is on-chain and unspent, so there is a sweep to make");
     assert!(unconfirmed(sweep));
 
-    // It is a real transaction the dust funding paid for: it lands, and the
-    // leaf's value arrives at the destination.
+    // It is a real transaction: it lands, and the leaf's value arrives at the
+    // destination.
     let tx = decode_tx(&sweep.tx_hex)?;
     let sweep_txid = sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
     sdk.fixtures.bitcoind.generate_blocks(1).await?;
@@ -1483,9 +1518,9 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1493,12 +1528,12 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
     let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input_for(&u1)],
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
 
@@ -1506,7 +1541,7 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
     for entry in built
         .transactions
         .iter()
-        .filter(|t| t.kind == UnilateralExitTxKind::Node && t.cpfp_tx_hex.is_some())
+        .filter(|t| t.kind == RecoveryTxKind::Node && t.cpfp_tx_hex.is_some())
     {
         broadcast_and_mine(&sdk, entry).await?;
     }
@@ -1518,28 +1553,31 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
     let b = fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(p2tr_dust() + 400), &key).await?;
     let resumed_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
         .await?;
     let resumed = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: resumed_quote,
                 funding_inputs: vec![cpfp_input_for(&a), cpfp_input_for(&b)],
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
 
     // It was accepted, and what it built is real: the refund and its child land.
     for entry in resumed.transactions.iter().filter(|t| unconfirmed(t)) {
         match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 broadcast_and_mine(&sdk, entry).await?;
             }
             _ => {
@@ -1567,23 +1605,23 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let leaf_ids: Vec<String> = quote.leaves.iter().map(|l| l.leaf_id.clone()).collect();
-    let fresh_fee = quote.total_fee_sat;
+    let fresh_fee = quote.total_fee_sats;
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -1591,16 +1629,16 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
     for entry in built
         .transactions
         .iter()
-        .filter(|t| t.kind == UnilateralExitTxKind::Node && t.cpfp_tx_hex.is_some())
+        .filter(|t| t.kind == RecoveryTxKind::Node && t.cpfp_tx_hex.is_some())
     {
         broadcast_and_mine(&sdk, entry).await?;
     }
 
     let resumed_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
@@ -1611,32 +1649,32 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
         "the leaf is still worth exiting"
     );
     assert!(
-        resumed_quote.total_fee_sat < fresh_fee,
+        resumed_quote.total_fee_sats < fresh_fee,
         "the quote reads the chain too, so it prices what is left: {} vs {fresh_fee}",
-        resumed_quote.total_fee_sat
+        resumed_quote.total_fee_sats
     );
 
     let more_funding = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let resumed = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: resumed_quote,
                 funding_inputs: vec![cpfp_input(&more_funding)],
             },
-            signer_for(&more_funding.secret_key.secret_bytes())?,
+            Some(signer_for(&more_funding.secret_key.secret_bytes())?),
         )
         .await?;
     assert!(
-        resumed.total_fee_sat < fresh_fee,
+        resumed.total_fee_sats < fresh_fee,
         "a resume is built for less than a fresh exit: {} vs {fresh_fee}",
-        resumed.total_fee_sat
+        resumed.total_fee_sats
     );
     assert!(
         resumed
             .transactions
             .iter()
-            .filter(|t| t.kind == UnilateralExitTxKind::Node)
+            .filter(|t| t.kind == RecoveryTxKind::Node)
             .all(
                 |t| matches!(t.status, ExitTransactionStatus::Confirmed { .. })
                     && t.cpfp_tx_hex.is_none()
@@ -1666,9 +1704,9 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -1680,12 +1718,12 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
     assert_eq!(leaf_ids.len(), 3, "three leaves, so the exit fans out");
     let built = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let fan_out_txid = confirm_fan_out(&sdk, &built).await?;
@@ -1708,9 +1746,9 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
 
     let resumed_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -1719,12 +1757,12 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
         .await?;
     let resumed = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: resumed_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
 
@@ -1734,7 +1772,7 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
         !resumed
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "the outputs are one per branch already"
     );
     assert!(
@@ -1772,7 +1810,10 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
     // pointed at another branch's output.
     for entry in resumed.transactions.iter().filter(|t| unconfirmed(t)) {
         match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 broadcast_and_mine(&sdk, entry).await?;
             }
             _ => {
@@ -1806,21 +1847,21 @@ async fn test_a_confirmed_fan_outs_outputs_fund_the_resume(
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let fan_out_txid = confirm_fan_out(&sdk, &first).await?;
@@ -1829,28 +1870,28 @@ async fn test_a_confirmed_fan_outs_outputs_fund_the_resume(
     // fan-out) at the same fee rate.
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     assert!(
         !second
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "one fan-out is enough: its outputs are one per branch already"
     );
     assert!(
@@ -1881,42 +1922,42 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     confirm_fan_out(&sdk, &first).await?;
 
     let high_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 40,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest,
             selection: ExitLeafSelection::All,
         })
         .await?;
     let err = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: high_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await
         .expect_err("a 40x fee cannot be funded from the original UTXO");
@@ -1937,7 +1978,7 @@ async fn test_fees_exact_at_1_sat_per_vb(#[case] backend: SignerBackend) -> Resu
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     let (quote, resp, cpfp) = quote_then_build_single(&sdk, CPFP_SATS, FEE_RATE).await?;
     assert_quote_consistent(&quote, FEE_RATE, &cpfp.address.to_string(), p2tr_dust());
-    assert_eq!(resp.total_fee_sat, quote.total_fee_sat);
+    assert_eq!(resp.total_fee_sats, quote.total_fee_sats);
     assert_fee_rate(&resp, &[&cpfp], FEE_RATE_KW, true)?;
     Ok(())
 }
@@ -1952,7 +1993,7 @@ async fn test_fees_round_up_at_3_sat_per_vb(#[case] backend: SignerBackend) -> R
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     let (quote, resp, cpfp) = quote_then_build_single(&sdk, CPFP_SATS, 3).await?;
     assert_quote_consistent(&quote, 3, &cpfp.address.to_string(), p2tr_dust());
-    assert_eq!(resp.total_fee_sat, quote.total_fee_sat);
+    assert_eq!(resp.total_fee_sats, quote.total_fee_sats);
     assert_fee_rate(&resp, &[&cpfp], 3 * 250, true)?;
     Ok(())
 }
@@ -1970,9 +2011,9 @@ async fn test_fees_p2wpkh_never_below_rate(#[case] backend: SignerBackend) -> Re
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2wpkh,
+            funding_kind: Some(CpfpFundingKind::P2wpkh),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1981,19 +2022,19 @@ async fn test_fees_p2wpkh_never_below_rate(#[case] backend: SignerBackend) -> Re
 
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input_for(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
-    // total_fee_sat now reports the fee the built txs actually pay, yet it still
+    // total_fee_sats now reports the fee the built txs actually pay, yet it still
     // equals the quote: the amount held back in each child is fixed by the
     // worst-case input weight, so a P2WPKH witness that comes in a sat under that
     // worst case raises the effective rate, not the sat amount paid.
-    assert_eq!(resp.total_fee_sat, quote.total_fee_sat);
+    assert_eq!(resp.total_fee_sats, quote.total_fee_sats);
     assert_fee_rate(&resp, &[&cpfp], FEE_RATE_KW, false)?;
     Ok(())
 }
@@ -2013,9 +2054,9 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2029,12 +2070,12 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
     ];
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: funding,
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -2043,7 +2084,7 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
         !resp
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "a single leaf never fans out"
     );
     Ok(())
@@ -2069,16 +2110,16 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     assert_eq!(quote.leaves.len(), 2);
     assert!(
-        quote.fanout_fee_sat > 0,
+        quote.fanout_fee_sats > 0,
         "the quote plans a single-UTXO fan-out"
     );
     assert_quote_consistent(&quote, FEE_RATE, &u1.address.to_string(), p2tr_dust());
@@ -2086,12 +2127,12 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
     let funding = vec![cpfp_input_for(&u1), cpfp_input_for(&u2)];
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: funding,
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -2099,7 +2140,7 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
         !resp
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "two sufficient UTXOs fund the two branches 1:1, no fan-out"
     );
     Ok(())
@@ -2120,9 +2161,9 @@ async fn test_two_leaves_undersized_utxo_fans_out(#[case] backend: SignerBackend
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: big.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2132,19 +2173,19 @@ async fn test_two_leaves_undersized_utxo_fans_out(#[case] backend: SignerBackend
     let funding = vec![cpfp_input_for(&big), cpfp_input_for(&tiny)];
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: funding,
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
     assert!(
         resp.transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "an undersized UTXO with no room to combine forces a fan-out"
     );
     Ok(())
@@ -2166,9 +2207,9 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: big.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2178,12 +2219,12 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
     let funding = vec![cpfp_input_for(&big), cpfp_input_for(&a), cpfp_input_for(&b)];
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: funding,
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -2191,7 +2232,7 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
         !resp
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "the three UTXOs partition across the two branches, so no fan-out is needed \
          (the combining logic itself is unit-tested in the planner)"
     );
@@ -2215,21 +2256,21 @@ async fn test_higher_rate_is_funded_from_the_fan_out_within_headroom(
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let fan_out_txid = confirm_fan_out(&sdk, &first).await?;
@@ -2237,28 +2278,28 @@ async fn test_higher_rate_is_funded_from_the_fan_out_within_headroom(
     // Twice the rate still fits within the generous headroom.
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 2,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest,
             selection: ExitLeafSelection::All,
         })
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     assert!(
         !second
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "the headroom is in the outputs already there; no second fan-out"
     );
     assert!(
@@ -2287,21 +2328,21 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: vec![cpfp_input_for(&cpfp)],
             },
-            signer_for(&key_bytes)?,
+            Some(signer_for(&key_bytes)?),
         )
         .await?;
     let fan_out_txid = confirm_fan_out(&sdk, &first).await?;
@@ -2309,21 +2350,21 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
     let high_rate = FEE_RATE * 40;
     let high_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: high_rate,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let err = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: high_quote,
                 funding_inputs: vec![cpfp_input_for(&cpfp)],
             },
-            signer_for(&key_bytes)?,
+            Some(signer_for(&key_bytes)?),
         )
         .await
         .expect_err("the higher rate can't be funded from the original UTXO");
@@ -2333,7 +2374,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
     let fan_entry = first
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::FanOut))
+        .find(|t| matches!(t.kind, RecoveryTxKind::FanOut))
         .expect("a fan-out entry");
     let fan_tx = decode_tx(&fan_entry.tx_hex)?;
     let extra = fund_p2tr_utxo_with_key(bitcoind, Amount::from_sat(CPFP_SATS * 4), &key).await?;
@@ -2348,21 +2389,21 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
     }
     let recovery_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: high_rate,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: dest,
             selection: ExitLeafSelection::All,
         })
         .await?;
     let recovered = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: recovery_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key_bytes)?,
+            Some(signer_for(&key_bytes)?),
         )
         .await?;
     assert_eq!(recovered.leaves.len(), 2);
@@ -2370,27 +2411,27 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
         recovered
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "the recovery builds a fresh fan-out at the higher rate"
     );
     Ok(())
 }
 
-/// Auto selection at an astronomically high rate finds no profitable leaf (the
+/// Selecting every leaf at an astronomically high rate finds no profitable leaf (the
 /// exit cost exceeds every leaf's value): the quote is empty (no leaves, all fee
 /// fields zero) and building it yields no transactions rather than erroring.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
-async fn test_no_profitable_leaves_auto(#[case] backend: SignerBackend) -> Result<()> {
+async fn test_no_profitable_leaves_all(#[case] backend: SignerBackend) -> Result<()> {
     let sdk = new_local_sdk(backend).await?;
     deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 500,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2400,20 +2441,19 @@ async fn test_no_profitable_leaves_auto(#[case] backend: SignerBackend) -> Resul
         "expected no leaves at 500x the base rate, got: {:?}",
         quote.leaves
     );
-    assert_eq!(quote.recoverable_value_sat, 0);
-    assert_eq!(quote.total_fee_sat, 0);
-    assert_eq!(quote.fanout_fee_sat, 0);
-    assert_eq!(quote.single_utxo_funding_sat, 0);
-    assert!(quote.per_branch_funding.is_empty());
+    assert_eq!(quote.recoverable_value_sats, 0);
+    assert_eq!(quote.total_fee_sats, 0);
+    assert_eq!(quote.fanout_fee_sats, 0);
+    assert!(quote.funding.is_none());
 
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await
         .expect("an empty quote builds to an empty set, not an error");
@@ -2441,9 +2481,9 @@ async fn test_specific_ignores_other_leaves(#[case] backend: SignerBackend) -> R
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: vec![first_id.clone()],
@@ -2456,12 +2496,12 @@ async fn test_specific_ignores_other_leaves(#[case] backend: SignerBackend) -> R
 
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -2480,49 +2520,49 @@ async fn test_prepare_is_idempotent(#[case] backend: SignerBackend) -> Result<()
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let funding = vec![cpfp_input(&cpfp)];
     let key = cpfp.secret_key.secret_bytes();
-    let request = || PrepareUnilateralExitRequest {
+    let request = || PrepareRecoverFundsRequest {
         fee_rate_sat_per_vbyte: FEE_RATE,
-        funding_kind: CpfpFundingKind::P2tr,
+        funding_kind: Some(CpfpFundingKind::P2tr),
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::All,
     };
 
-    let quote_a = sdk.sdk.prepare_unilateral_exit(request()).await?;
-    let quote_b = sdk.sdk.prepare_unilateral_exit(request()).await?;
+    let quote_a = sdk.sdk.prepare_recover_funds(request()).await?;
+    let quote_b = sdk.sdk.prepare_recover_funds(request()).await?;
     assert_eq!(
         (
-            quote_a.recoverable_value_sat,
-            quote_a.total_fee_sat,
-            quote_a.fanout_fee_sat,
-            quote_a.single_utxo_funding_sat
+            quote_a.recoverable_value_sats,
+            quote_a.total_fee_sats,
+            quote_a.fanout_fee_sats,
+            quoted_funding(&quote_a).single_utxo_sats
         ),
         (
-            quote_b.recoverable_value_sat,
-            quote_b.total_fee_sat,
-            quote_b.fanout_fee_sat,
-            quote_b.single_utxo_funding_sat
+            quote_b.recoverable_value_sats,
+            quote_b.total_fee_sats,
+            quote_b.fanout_fee_sats,
+            quoted_funding(&quote_b).single_utxo_sats
         ),
         "identical requests produce identical quote figures"
     );
 
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote_a,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote_b,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let a: Vec<&String> = first.transactions.iter().map(|t| &t.txid).collect();
@@ -2542,48 +2582,45 @@ async fn test_higher_rate_changes_sweep_txid(#[case] backend: SignerBackend) -> 
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let funding = vec![cpfp_input(&cpfp)];
     let key = cpfp.secret_key.secret_bytes();
-    let request = |rate| PrepareUnilateralExitRequest {
+    let request = |rate| PrepareRecoverFundsRequest {
         fee_rate_sat_per_vbyte: rate,
-        funding_kind: CpfpFundingKind::P2tr,
+        funding_kind: Some(CpfpFundingKind::P2tr),
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::All,
     };
-    let sweep_txid = |resp: &UnilateralExitResponse| {
+    let sweep_txid = |resp: &RecoverFundsResponse| {
         resp.transactions
             .iter()
-            .find(|t| matches!(t.kind, UnilateralExitTxKind::Sweep))
+            .find(|t| matches!(t.kind, RecoveryTxKind::Sweep))
             .map(|t| t.txid.clone())
             .expect("a sweep")
     };
 
-    let low_quote = sdk.sdk.prepare_unilateral_exit(request(FEE_RATE)).await?;
-    let high_quote = sdk
-        .sdk
-        .prepare_unilateral_exit(request(FEE_RATE * 3))
-        .await?;
+    let low_quote = sdk.sdk.prepare_recover_funds(request(FEE_RATE)).await?;
+    let high_quote = sdk.sdk.prepare_recover_funds(request(FEE_RATE * 3)).await?;
     assert!(
-        high_quote.total_fee_sat > low_quote.total_fee_sat,
+        high_quote.total_fee_sats > low_quote.total_fee_sats,
         "a higher rate quotes a higher total fee"
     );
 
     let low = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: low_quote,
                 funding_inputs: funding.clone(),
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     let high = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: high_quote,
                 funding_inputs: funding,
             },
-            signer_for(&key)?,
+            Some(signer_for(&key)?),
         )
         .await?;
     assert_ne!(
@@ -2604,21 +2641,21 @@ async fn test_empty_funding_rejected(#[case] backend: SignerBackend) -> Result<(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let err = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await
         .expect_err("no funding inputs");
@@ -2636,9 +2673,9 @@ async fn test_explicit_empty_list_rejected(#[case] backend: SignerBackend) -> Re
 
     let err = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids: vec![] },
         })
@@ -2659,28 +2696,28 @@ async fn test_zero_fee_rate_succeeds(#[case] backend: SignerBackend) -> Result<(
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: 0,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
-    assert_eq!(quote.total_fee_sat, 0, "a zero fee rate quotes a zero fee");
+    assert_eq!(quote.total_fee_sats, 0, "a zero fee rate quotes a zero fee");
     assert_quote_consistent(&quote, 0, &cpfp.address.to_string(), p2tr_dust());
 
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_eq!(
-        resp.total_fee_sat, 0,
+        resp.total_fee_sats, 0,
         "a zero fee rate produces zero-fee txs"
     );
     assert_eq!(resp.leaves.len(), 1);
@@ -2702,9 +2739,9 @@ async fn test_mixed_p2tr_p2wpkh_funding(#[case] backend: SignerBackend) -> Resul
     // The quote is sized for the first (P2TR) input kind.
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: taproot.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2714,25 +2751,25 @@ async fn test_mixed_p2tr_p2wpkh_funding(#[case] backend: SignerBackend) -> Resul
     let funding = vec![cpfp_input_for(&taproot), cpfp_input_for(&segwit)];
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: funding,
             },
-            signer_for(&key.secret_bytes())?,
+            Some(signer_for(&key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
     assert!(
         resp.transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::Sweep)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::Sweep)),
         "the mixed-funding exit still produces a sweep"
     );
     Ok(())
 }
 
-/// Single leaf, single UTXO: the quote's `single_utxo_funding_sat` carries
+/// Single leaf, single UTXO: the quote's `funding.single_utxo_sats` carries
 /// sweep-fee headroom above the hard build minimum (`sum(package fees) + dust`).
 /// Funding that recommendation builds; funding exactly the hard minimum still
 /// builds; one sat below it returns `InsufficientCpfpFunds` reporting that
@@ -2753,15 +2790,14 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
     assert_quote_consistent(&quote, FEE_RATE, &generous.address.to_string(), dust);
     // The hard build minimum for one leaf: CPFP package fees + one dust reserve.
     let minimum = sum_package_fees(&probe, &[&generous])? + dust;
+    let recommendation = quoted_funding(&quote).single_utxo_sats;
     assert!(
-        quote.single_utxo_funding_sat > minimum,
-        "the single-UTXO recommendation ({}) reserves sweep-fee headroom above the hard minimum ({minimum})",
-        quote.single_utxo_funding_sat
+        recommendation > minimum,
+        "the single-UTXO recommendation ({recommendation}) reserves sweep-fee headroom above the hard minimum ({minimum})",
     );
 
     // The quote's recommendation funds the exit.
-    let (_, recommended, _) =
-        quote_then_build_single(&sdk, quote.single_utxo_funding_sat, FEE_RATE).await?;
+    let (_, recommended, _) = quote_then_build_single(&sdk, recommendation, FEE_RATE).await?;
     assert_eq!(recommended.leaves.len(), 1);
 
     // Exactly the hard minimum funds it; one sat less does not.
@@ -2771,21 +2807,21 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
     let short = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(minimum - 1)).await?;
     let short_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: short.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let err = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: short_quote,
                 funding_inputs: vec![cpfp_input(&short)],
             },
-            signer_for(&short.secret_key.secret_bytes())?,
+            Some(signer_for(&short.secret_key.secret_bytes())?),
         )
         .await
         .expect_err("one sat short cannot fund the exit");
@@ -2799,7 +2835,7 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
 /// Two leaves, one UTXO (fan-out). The quote is internally consistent and plans a
 /// fan-out. The exact single-UTXO funding minimum is taken from the SDK's own
 /// `InsufficientCpfpFunds` report (by funding a floor below it), not from the
-/// quote's `single_utxo_funding_sat`: that figure is a close lower-bound estimate
+/// quote's `funding.single_utxo_sats`: that figure is a close lower-bound estimate
 /// sized off one representative input, so it can sit a little under the amount the
 /// build actually needs to complete both branches. Funding the reported minimum
 /// builds both leaves with a fan-out; one sat less fails.
@@ -2814,13 +2850,13 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
     // built set (for the package fees).
     let (quote, probe, generous) = quote_then_build_single(&sdk, CPFP_SATS * 4, FEE_RATE).await?;
     assert_eq!(quote.leaves.len(), 2);
-    assert!(quote.fanout_fee_sat > 0);
+    assert!(quote.fanout_fee_sats > 0);
     assert_quote_consistent(&quote, FEE_RATE, &generous.address.to_string(), p2tr_dust());
     assert!(
         probe
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "a single UTXO across two branches funds a fan-out"
     );
     let dust = generous
@@ -2835,21 +2871,21 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
     let floor = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(budget_floor)).await?;
     let floor_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: floor.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let required = match sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: floor_quote,
                 funding_inputs: vec![cpfp_input(&floor)],
             },
-            signer_for(&floor.secret_key.secret_bytes())?,
+            Some(signer_for(&floor.secret_key.secret_bytes())?),
         )
         .await
     {
@@ -2864,7 +2900,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
         built
             .transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::FanOut)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "the reported minimum funds a two-branch fan-out exit"
     );
 
@@ -2872,21 +2908,21 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
     let short = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(required - 1)).await?;
     let short_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: short.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let err = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: short_quote,
                 funding_inputs: vec![cpfp_input(&short)],
             },
-            signer_for(&short.secret_key.secret_bytes())?,
+            Some(signer_for(&short.secret_key.secret_bytes())?),
         )
         .await
         .expect_err("one sat short of the fan-out requirement");
@@ -2909,12 +2945,12 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::Custom {
+            funding_kind: Some(CpfpFundingKind::Custom {
                 script_pubkey_hex: script_pubkey_hex.clone(),
                 signed_input_weight: 230,
-            },
+            }),
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2930,19 +2966,19 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
     };
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![custom],
             },
-            signer_for(&utxo.secret_key.secret_bytes())?,
+            Some(signer_for(&utxo.secret_key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
     assert!(
         resp.transactions
             .iter()
-            .any(|t| matches!(t.kind, UnilateralExitTxKind::Sweep)),
+            .any(|t| matches!(t.kind, RecoveryTxKind::Sweep)),
         "the custom-funded exit still produces a sweep"
     );
     Ok(())
@@ -2959,21 +2995,21 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -2981,12 +3017,12 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
     let node_txids: Vec<String> = first
         .transactions
         .iter()
-        .filter(|t| matches!(t.kind, UnilateralExitTxKind::Node))
+        .filter(|t| matches!(t.kind, RecoveryTxKind::Node))
         .map(|t| t.txid.clone())
         .collect();
     assert!(!node_txids.is_empty(), "expected at least one node package");
     for entry in &first.transactions {
-        if matches!(entry.kind, UnilateralExitTxKind::Node) {
+        if matches!(entry.kind, RecoveryTxKind::Node) {
             broadcast_and_mine(&sdk, entry).await?;
         }
     }
@@ -2994,21 +3030,21 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
     let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     for txid in &node_txids {
@@ -3029,7 +3065,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
     let refund = second
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Refund))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Refund))
         .expect("a refund entry");
     assert!(unconfirmed(refund), "the refund is still unconfirmed");
     assert!(
@@ -3051,21 +3087,21 @@ async fn test_unconfirmed_funding_accepted(#[case] backend: SignerBackend) -> Re
 
     let quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
         .await?;
     let resp = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: quote.clone(),
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
     assert_build_matches_quote(&quote, &resp);
@@ -3158,7 +3194,7 @@ fn build_foreign_cpfp_child(
 /// skipped rather than unwrapped. Every still-driven package and the sweep must
 /// still pay at least the target rate for its actual weight.
 fn assert_unconfirmed_fee_rate(
-    resp: &UnilateralExitResponse,
+    resp: &RecoverFundsResponse,
     external: &[&FundedUtxo],
     rate: u64,
 ) -> Result<()> {
@@ -3166,7 +3202,7 @@ fn assert_unconfirmed_fee_rate(
     let target = |weight: u64| weight.saturating_mul(rate).div_ceil(1000);
     for entry in &resp.transactions {
         let (fee, weight) = match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 // A confirmed (adopted / already-on-chain) step has no child to bump.
                 let Some(child_hex) = entry.cpfp_tx_hex.as_ref() else {
                     continue;
@@ -3180,7 +3216,10 @@ fn assert_unconfirmed_fee_rate(
                     parent.weight().to_wu() + child.weight().to_wu(),
                 )
             }
-            UnilateralExitTxKind::FanOut | UnilateralExitTxKind::Sweep => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::FanOut | RecoveryTxKind::Sweep => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 let tx_in = tx_input_value(&tx, &map).expect("input values known");
                 let tx_out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -3204,19 +3243,22 @@ fn assert_unconfirmed_fee_rate(
 /// from a block and the sweep pays `destination`.
 async fn assert_resumed_all_mined(
     sdk: &LocalSdk,
-    built: &UnilateralExitResponse,
+    built: &RecoverFundsResponse,
     destination: &Address,
 ) -> Result<()> {
     let mut sweep_txid: Option<Txid> = None;
     for entry in &built.transactions {
         match entry.kind {
-            UnilateralExitTxKind::Node | UnilateralExitTxKind::Refund => {
+            RecoveryTxKind::Cooperative => {
+                anyhow::bail!("a unilateral exit carries no cooperative recovery")
+            }
+            RecoveryTxKind::Node | RecoveryTxKind::Refund => {
                 if matches!(entry.status, ExitTransactionStatus::Confirmed { .. }) {
                     continue;
                 }
                 broadcast_and_mine(sdk, entry).await?;
             }
-            UnilateralExitTxKind::FanOut => {
+            RecoveryTxKind::FanOut => {
                 if matches!(entry.status, ExitTransactionStatus::Confirmed { .. }) {
                     continue;
                 }
@@ -3224,7 +3266,7 @@ async fn assert_resumed_all_mined(
                 sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
                 sdk.fixtures.bitcoind.generate_blocks(1).await?;
             }
-            UnilateralExitTxKind::Sweep => {
+            RecoveryTxKind::Sweep => {
                 let tx = decode_tx(&entry.tx_hex)?;
                 let txid = sdk.fixtures.bitcoind.broadcast_transaction(&tx).await?;
                 sdk.fixtures.bitcoind.generate_blocks(1).await?;
@@ -3271,9 +3313,9 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3285,19 +3327,19 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
         .collect();
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
     let node_pkg = first
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Node))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Node))
         .expect("a node package");
     let node_txid = node_pkg.txid.clone();
     let node_tx = decode_tx(&node_pkg.tx_hex)?;
@@ -3310,9 +3352,9 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
     let destination = cpfp.address.clone();
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -3321,12 +3363,12 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
@@ -3347,7 +3389,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
     let refund = second
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Refund))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Refund))
         .expect("a refund entry");
     assert!(
         unconfirmed(refund),
@@ -3388,9 +3430,9 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
 
     let first_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3402,19 +3444,19 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
         .collect();
     let first = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: first_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
     let node_pkg = first
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Node))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Node))
         .expect("a node package")
         .clone();
     broadcast_and_mine(&sdk, &node_pkg).await?;
@@ -3422,7 +3464,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     let refund_pkg = first
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Refund))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Refund))
         .expect("a refund package");
     let refund_txid = refund_pkg.txid.clone();
     let refund_tx = decode_tx(&refund_pkg.tx_hex)?;
@@ -3435,9 +3477,9 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     let destination = cpfp.address.clone();
     let second_quote = sdk
         .sdk
-        .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
-            funding_kind: CpfpFundingKind::P2tr,
+            funding_kind: Some(CpfpFundingKind::P2tr),
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -3446,19 +3488,19 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
         .await?;
     let second = sdk
         .sdk
-        .unilateral_exit(
-            UnilateralExitRequest {
+        .recover_funds(
+            RecoverFundsRequest {
                 prepared: second_quote,
                 funding_inputs: vec![cpfp_input(&cpfp)],
             },
-            signer_for(&cpfp.secret_key.secret_bytes())?,
+            Some(signer_for(&cpfp.secret_key.secret_bytes())?),
         )
         .await?;
 
     let resumed_refund = second
         .transactions
         .iter()
-        .find(|t| matches!(t.kind, UnilateralExitTxKind::Refund))
+        .find(|t| matches!(t.kind, RecoveryTxKind::Refund))
         .expect("a refund entry");
     assert!(
         matches!(
@@ -3478,6 +3520,93 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
 
     assert_unconfirmed_fee_rate(&second, &[&cpfp], FEE_RATE_KW)?;
     assert_resumed_all_mined(&sdk, &second, &destination).await?;
+    Ok(())
+}
+
+/// A leaf whose exit started is recoverable, is reported once, and leaves the
+/// total once a check saw its sweep confirm. A device without a record of the
+/// leaf asks the chain whether its refund was swept.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_an_exit_is_recoverable_until_swept(#[case] backend: SignerBackend) -> Result<()> {
+    let mut sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let (quote, built, utxo) = quote_then_build_single(&sdk, CPFP_SATS, FEE_RATE).await?;
+    let [leaf] = quote.leaves.as_slice() else {
+        anyhow::bail!("expected one leaf, got {}", quote.leaves.len());
+    };
+    let (first, rest) = built
+        .transactions
+        .split_first()
+        .expect("an exit has transactions");
+    assert_eq!(first.kind, RecoveryTxKind::Node);
+
+    mine(&sdk, first).await?;
+    wait_for_recoverable_funds_event(&mut sdk, leaf.value_sats).await?;
+    let pending = prepare_recovery(
+        &sdk,
+        &utxo.address,
+        FEE_RATE,
+        ExitLeafSelection::RecoverableOnly,
+    )
+    .await?;
+    let pending: Vec<(&str, RecoveryMethod)> = pending
+        .leaves
+        .iter()
+        .map(|l| (l.leaf_id.as_str(), l.method))
+        .collect();
+    assert_eq!(
+        pending,
+        [(leaf.leaf_id.as_str(), RecoveryMethod::Unilateral)]
+    );
+    assert!(
+        !sync_reports_funds(&mut sdk).await?,
+        "funds already reported are not reported again"
+    );
+
+    let (sweep, steps) = rest.split_last().expect("an exit ends in its sweep");
+    assert_eq!(sweep.kind, RecoveryTxKind::Sweep);
+    for entry in steps {
+        mine(&sdk, entry).await?;
+    }
+    let restorable = matches!(backend, SignerBackend::Seed);
+    if restorable {
+        wait_for_leaf_status(&sdk, &leaf.leaf_id, "Exited").await?;
+        let mut restored = rebuild_on_empty_storage(&sdk).await?;
+        wait_for_recoverable_funds_event(&mut restored, leaf.value_sats)
+            .await
+            .context("a restored device reports an exit whose refund is not swept")?;
+    }
+
+    mine(&sdk, sweep).await?;
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    assert_eq!(
+        get_info(&sdk).await?.recoverable_funds_sats,
+        leaf.value_sats,
+        "a sync does not ask the chain about a leaf it has a record of"
+    );
+    wait_for_verdict(&sdk, &built, |verdict| {
+        matches!(verdict, RecoveryVerdict::Done)
+    })
+    .await?;
+    wait_for_recoverable_total(&sdk, 0).await?;
+    let after = prepare_recovery(
+        &sdk,
+        &utxo.address,
+        FEE_RATE,
+        ExitLeafSelection::RecoverableOnly,
+    )
+    .await?;
+    assert!(after.leaves.is_empty(), "a swept exit is not quoted");
+    if restorable {
+        let mut restored = rebuild_on_empty_storage(&sdk).await?;
+        restored.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        assert_eq!(get_info(&restored).await?.recoverable_funds_sats, 0);
+        assert!(
+            !funds_reported(&mut restored),
+            "a restored device does not report a swept exit"
+        );
+    }
     Ok(())
 }
 
@@ -3584,6 +3713,61 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         assert_eq!(quoted.leaf_id, leaf_id);
         assert_eq!(quoted.method, RecoveryMethod::Cooperative);
     }
+
+    // A leaf still in the balance joins the same recovery as a unilateral exit.
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let mixed = prepare_recovery(&sdk, &destination, FEE_RATE, ExitLeafSelection::All).await?;
+    let [cooperative, unilateral] = mixed.leaves.as_slice() else {
+        anyhow::bail!("expected two leaves, got {:?}", mixed.leaves);
+    };
+    assert_eq!(cooperative.leaf_id, leaf_id);
+    assert_eq!(cooperative.method, RecoveryMethod::Cooperative);
+    assert_eq!(unilateral.method, RecoveryMethod::Unilateral);
+    assert_eq!(
+        mixed.recoverable_value_sats,
+        cooperative.value_sats + unilateral.value_sats
+    );
+    assert_eq!(mixed.cooperative_fee_sats, prepared.cooperative_fee_sats);
+    assert_eq!(
+        mixed.total_fee_sats,
+        mixed.cooperative_fee_sats
+            + mixed.cpfp_fee_sats
+            + mixed.fanout_fee_sats
+            + mixed.sweep_fee_sats
+    );
+    let funded: Vec<&str> = quoted_funding(&mixed)
+        .per_branch
+        .iter()
+        .map(|b| b.leaf_id.as_str())
+        .collect();
+    assert_eq!(
+        funded,
+        [unilateral.leaf_id.as_str()],
+        "only the unilateral exit is funded"
+    );
+    let mixed_funding = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let both = sdk
+        .sdk
+        .recover_funds(
+            RecoverFundsRequest {
+                prepared: mixed.clone(),
+                funding_inputs: vec![cpfp_input(&mixed_funding)],
+            },
+            Some(signer_for(&mixed_funding.secret_key.secret_bytes())?),
+        )
+        .await?;
+    assert_build_matches_quote(&mixed, &both);
+    assert!(both.failed.is_empty(), "{:?}", both.failed);
+    let (co_signed, exit) = both
+        .transactions
+        .split_first()
+        .expect("a recovery has transactions");
+    assert_eq!(co_signed.kind, RecoveryTxKind::Cooperative);
+    assert!(
+        exit.iter().all(|t| t.kind != RecoveryTxKind::Cooperative),
+        "the cooperative recovery comes first"
+    );
+    assert!(matches!(check(&sdk, both).await?, RecoveryVerdict::Valid));
     let unaffordable = prepare_recovery(
         &sdk,
         &destination,
@@ -3870,6 +4054,22 @@ async fn stored_leaves(sdk: &LocalSdk) -> Result<HashMap<String, String>> {
             }
         })
         .collect()
+}
+
+/// Syncs, mining a block between tries, until the wallet stores the leaf in
+/// `status`.
+async fn wait_for_leaf_status(sdk: &LocalSdk, leaf_id: &str, status: &str) -> Result<()> {
+    let mut stored = None;
+    for _ in 0..30 {
+        sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        stored = stored_leaves(sdk).await?.remove(leaf_id);
+        if stored.as_deref() == Some(status) {
+            return Ok(());
+        }
+        sdk.fixtures.bitcoind.generate_blocks(1).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    anyhow::bail!("leaf {leaf_id} is stored as {stored:?}, not {status}")
 }
 
 /// Reads the events waiting, and says whether one reported recoverable funds.

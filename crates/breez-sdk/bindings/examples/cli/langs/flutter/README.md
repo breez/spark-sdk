@@ -101,7 +101,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `get-user-settings` — Get user settings
 - `set-user-settings` — Update user settings
 - `get-spark-status` — Get Spark network status
-- `advanced <subcommand>` — Expert-only commands (unilateral exit, check exit, recover funds, check recovery, exit state export/import)
+- `advanced <subcommand>` — Expert-only commands (recover funds, check recovery, exit state export/import)
 - `issuer <subcommand>` — Token issuer commands
 - `contacts <subcommand>` — Contacts commands (add, update, delete, list)
 - `webhooks <subcommand>` — Webhook commands (register, unregister, list)
