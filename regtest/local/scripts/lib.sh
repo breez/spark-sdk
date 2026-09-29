@@ -23,6 +23,12 @@ rpc() {
   printf '%s\n' "$_response" | jq -c '.result'
 }
 
+# rpc for a method that returns a string, printed without its quotes.
+rpc_string() {
+  _result=$(rpc "$@") || return 1
+  printf '%s\n' "$_result" | jq -r .
+}
+
 wait_for_bitcoind() {
   until rpc getblockchaininfo >/dev/null 2>&1; do
     sleep 1

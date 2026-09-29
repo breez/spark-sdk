@@ -6,5 +6,5 @@ set -eu
 
 : "${1:?address}" "${2:?sats}"
 btc=$(printf '%d.%08d' $(($2 / 100000000)) $(($2 % 100000000)))
-txid=$(rpc sendtoaddress "[\"$1\", $btc]" | jq -r .)
+txid=$(rpc_string sendtoaddress "[\"$1\", $btc]")
 log "sent $2 sats to $1 in $txid"

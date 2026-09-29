@@ -14,7 +14,7 @@ WALLET_MINING_HEIGHT=200
 
 wait_for_bitcoind
 ensure_wallet
-wallet_address=$(rpc getnewaddress '["mining", "bech32"]' | jq -r .)
+wallet_address=$(rpc_string getnewaddress '["mining", "bech32"]')
 
 mine() {
   if [ "$(rpc getblockcount)" -lt "$WALLET_MINING_HEIGHT" ]; then
