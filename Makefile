@@ -169,12 +169,18 @@ update-lockfiles:
 # foreground; these targets run it in the background.
 LOCAL_ENV = docker compose -f regtest/local/docker-compose.yml
 
-# The service that reports readiness runs in the foreground here, so its
-# progress is shown as it happens and its exit code is this target's. `--wait`
-# is not used: it fails when any container exits, which that service does.
+# `up` returns only once the operators hold their keyshares, so the service
+# that reports readiness starts first and its progress shows while `up` waits.
+# Its exit code is this target's. `--wait` is not used: it fails when any
+# container exits, which that service does.
 local-env-up:
-	$(LOCAL_ENV) up --detach --build --scale ready=0
-	@$(LOCAL_ENV) run --rm -e SPARK_CONFIG_PATH=$(CURDIR)/regtest/local/data/spark-config.json ready
+	$(LOCAL_ENV) up --no-start --build --scale ready=0
+	@reporter=$$($(LOCAL_ENV) --progress quiet run --detach --no-deps \
+		-e SPARK_CONFIG_PATH=$(CURDIR)/regtest/local/data/spark-config.json ready) || exit 1; \
+	trap 'docker rm --force $$reporter >/dev/null 2>&1' EXIT INT TERM; \
+	docker logs --follow $$reporter & \
+	$(LOCAL_ENV) --progress quiet up --detach --scale ready=0 || exit 1; \
+	code=$$(docker wait $$reporter); wait; exit $$code
 
 local-env-down:
 	$(LOCAL_ENV) down
