@@ -873,14 +873,14 @@ async fn test_deposit_low_amount_refund_fee_rate(#[future] env: Result<Environme
 /// A deposit whose credit after the claim fee falls below the dust limit is
 /// reported as `DepositTooSmall` by the automatic claim, the quote and a manual
 /// claim alike. The faucet sends no less than 1000 sats, so Alice sends it.
+/// Deployed only: it pins the live SSP's claim fee and its refusal.
+#[cfg(not(feature = "local-itest"))]
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_deposit_too_small_to_claim(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+async fn test_deposit_too_small_to_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
     ensure_funded(&mut alice, 5_000).await?;
 
     let bob_address = bob
