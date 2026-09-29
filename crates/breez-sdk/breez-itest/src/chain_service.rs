@@ -5,7 +5,6 @@
 //! `TestFixtures` here would keep a finished test's operator containers running
 //! — leaking clusters across the run and starving the runner.
 
-use std::collections::HashMap;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -13,12 +12,10 @@ use bitcoin::{Address, Txid};
 use breez_sdk_spark::{
     BitcoinChainService, ChainServiceError, Outspend, RecommendedFees, TxStatus, Utxo,
 };
-use platform_utils::{
-    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
-};
+use platform_utils::DefaultHttpClient;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use spark_itest::fixtures::bitcoind::BitcoindFixture;
+use spark_itest::fixtures::bitcoind::{BitcoindFixture, post_rpc};
 
 /// A detached bitcoind JSON-RPC client: the endpoint and credentials plus its
 /// own HTTP client, holding no fixture, so the SDK never pins the cluster.
@@ -52,14 +49,15 @@ impl BitcoindRpc {
             "method": method,
             "params": params,
         }))?;
-        let mut headers = HashMap::new();
-        add_basic_auth_header(&mut headers, &self.rpcuser, &self.rpcpassword);
-        add_content_type_header(&mut headers, ContentType::Json);
-        let response = self
-            .http
-            .post(self.rpc_url.clone(), Some(headers), Some(body))
-            .await
-            .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
+        let response = post_rpc(
+            &self.http,
+            &self.rpc_url,
+            &self.rpcuser,
+            &self.rpcpassword,
+            body,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
         if !response.is_success() {
             return Err(anyhow::anyhow!(
                 "bitcoind {method} failed with status {}: {}",
