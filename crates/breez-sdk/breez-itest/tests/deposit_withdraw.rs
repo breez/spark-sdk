@@ -1409,9 +1409,10 @@ async fn test_claim_deposit_rejects_concurrent_calls(
 /// dropped between two polls, which would look like it was never found.
 ///
 /// The deterministic half is discovery, which depends on nothing but the chain
-/// backend. Whether the claim then lands is up to the SSP and the block race
-/// (regtest matures a deposit at one confirmation), so it is asserted
-/// best-effort. Requires faucet credentials.
+/// backend. Whether the claim then lands is up to the SSP and, on the deployed
+/// regtest, the block race (regtest matures a deposit at one confirmation), so
+/// there it is asserted best-effort. The deployed regtest also needs faucet
+/// credentials.
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -> Result<()> {
@@ -1419,7 +1420,9 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
     // The regtest spread carries a ~3% term, so 3000 clears it at the amounts
     // this test funds.
     let mut bob = env
-        .create_wallet_with(|cfg| cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 }))
+        .create_wallet_seeing_mempool(|cfg| {
+            cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 });
+        })
         .await?;
 
     let start_balance = bob
@@ -1441,6 +1444,9 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
 
     let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
+    // Held until the early claim is credited, so a local stack's deposit is still
+    // unconfirmed when the syncs look and when the claim is made.
+    let hold = env.hold_blocks().await;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded watched deposit address, txid: {txid}");
 
@@ -1452,6 +1458,7 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
     // That is the pre-existing path, not a discovery failure, and it leaves this
     // test nothing to prove.
     if discovered.is_mature {
+        anyhow::ensure!(hold.is_none(), "the deposit matured while blocks were held");
         warn!(
             "SKIP test_zero_conf_deposit_auto_claim: the deposit confirmed before a sync observed it"
         );
@@ -1469,9 +1476,9 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
         discovered.vout
     );
 
-    // Best-effort: the cascade should now claim it early. The SSP may offer no
-    // 0-conf plan, or the deposit may mature first, and neither is a failure of
-    // the discovery this test covers.
+    // The cascade should now claim it early. On the deployed regtest this is
+    // best-effort: the SSP may offer no 0-conf plan, or the deposit may mature
+    // first, and neither is a failure of the discovery this test covers.
     match wait_for_balance(&bob.sdk, Some(start_balance + 1), None, 180).await {
         Ok(balance) => {
             info!("Background claim credited {balance} (was {start_balance})");
@@ -1482,11 +1489,18 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
             // The deposit is credited but the operators go on reporting it, and
             // once they report it mature the claim at maturity is attempted and
             // refused. That must stay invisible to the app.
+            drop(hold);
             assert_settled_while_reported(&bob.sdk, &mut bob.events, &txid, 60).await?;
         }
-        Err(e) => warn!(
-            "SKIP claim assertions: the deposit was discovered but not credited within the timeout: {e}"
-        ),
+        Err(e) => {
+            anyhow::ensure!(
+                hold.is_none(),
+                "the held deposit was not claimed early: {e}"
+            );
+            warn!(
+                "SKIP claim assertions: the deposit was discovered but not credited within the timeout: {e}"
+            );
+        }
     }
 
     Ok(())
@@ -1498,14 +1512,17 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
 /// That discovery is the input such an app acts on.
 ///
 /// Deterministic in a way the auto-claim test is not: with no ceiling the SSP is
-/// never asked for anything, so only the block race can cut it short.
+/// never asked for anything, so only the block race can cut it short, and a local
+/// stack holds its blocks.
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_zero_conf_deposit_discovered_without_auto_claim(
     #[future] env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
-    let mut bob = env.create_wallet_without_claim_fee_ceiling().await?;
+    let mut bob = env
+        .create_wallet_seeing_mempool(|cfg| cfg.max_deposit_claim_fee = None)
+        .await?;
 
     let start_balance = bob
         .sdk
@@ -1526,6 +1543,7 @@ async fn test_zero_conf_deposit_discovered_without_auto_claim(
 
     let faucet = env.faucet()?;
     let fund_amount = 50_000u64;
+    let hold = env.hold_blocks().await;
     let txid = faucet.fund_address(&addr, fund_amount).await?;
     info!("Funded watched deposit address with no claim ceiling, txid: {txid}");
 
@@ -1535,6 +1553,7 @@ async fn test_zero_conf_deposit_discovered_without_auto_claim(
     let discovered = wait_for_new_deposit(&mut bob.events, &txid, 120).await?;
 
     if discovered.is_mature {
+        anyhow::ensure!(hold.is_none(), "the deposit matured while blocks were held");
         warn!(
             "SKIP test_zero_conf_deposit_discovered_without_auto_claim: the deposit confirmed before a sync observed it"
         );
