@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use async_graphql::*;
 use chrono::{DateTime, Utc};
+use spark::services::LightningReceiveFallback;
 use uuid::Uuid;
 
 use super::require_auth;
@@ -205,9 +206,16 @@ impl MutationRoot {
                 .map_err(|e| Error::new(format!("invalid receiver_identity_pubkey: {e}")))?,
             None => user_pubkey,
         };
-        if input.spark_invoice.is_some() {
-            return Err(Error::new("spark_invoice is not supported by this SSP"));
-        }
+        let fallback = match (input.include_spark_address, input.spark_invoice) {
+            (true, Some(_)) => {
+                return Err(Error::new(
+                    "include_spark_address and spark_invoice are mutually exclusive",
+                ));
+            }
+            (true, None) => LightningReceiveFallback::Address,
+            (false, Some(spark_invoice)) => LightningReceiveFallback::Invoice(spark_invoice),
+            (false, None) => LightningReceiveFallback::None,
+        };
         let amount_sats = u64::try_from(input.amount_sats.0)
             .map_err(|_| Error::new("amount_sats must not be negative"))?;
         let expiry_secs = input
@@ -238,7 +246,7 @@ impl MutationRoot {
                 &receiver_pubkey,
                 &description,
                 expiry_secs,
-                input.include_spark_address,
+                &fallback,
             )
             .await
             .map_err(|e| Error::new(format!("lightning receive failed: {e}")))?;

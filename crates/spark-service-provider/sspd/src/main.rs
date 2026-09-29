@@ -1019,6 +1019,7 @@ fn build_lightning(
         Arc::clone(lightning_store),
         invoice_signing_key,
         cltv_delta,
+        ssp_wallet.spark.network,
     ));
 
     let listener_node = Arc::clone(&ldk);
