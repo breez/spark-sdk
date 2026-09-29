@@ -2,7 +2,7 @@
 
 # API Overview
 
-- [About Breez SDK - Spark](guide/about_breez_sdk_spark.md)
+- [About Breez SDK](guide/about_breez_sdk_spark.md)
 - [Getting started](guide/getting_started.md)
   - [Installing the SDK](guide/install.md)
     - [iOS/Swift](guide/install_ios_swift.md)
