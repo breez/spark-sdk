@@ -124,6 +124,7 @@ func isVariantType(name string) bool {
 		"UnilateralExitTxKind", "UnilateralExitVerdict",
 		"ExitTransactionStatus", "ExitLeafSelection",
 		"CpfpInput", "CpfpFundingKind",
+		"RecoveryVerdict", "CooperativeRecoveryError",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(name, prefix) && name != prefix {
@@ -147,6 +148,7 @@ func extractVariantName(name string) string {
 		"UnilateralExitTxKind", "UnilateralExitVerdict",
 		"ExitTransactionStatus", "ExitLeafSelection",
 		"CpfpInput", "CpfpFundingKind",
+		"RecoveryVerdict", "CooperativeRecoveryError",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
