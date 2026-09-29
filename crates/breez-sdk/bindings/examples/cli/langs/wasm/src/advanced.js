@@ -56,52 +56,6 @@ function parseCpfpInput(s, kind) {
 }
 
 /**
- * Print each exit transaction with a copy-pasteable Package line.
- *
- * @param {object} response - The UnilateralExitResponse
- */
-function printExitTransactions(response) {
-  console.log(
-    `Recoverable ${response.recoverableValueSat} sats, ` +
-    `total fee ${response.totalFeeSat} sats ` +
-    `(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, sweep ${response.sweepFeeSat}), ` +
-    `${response.transactions.length} transaction(s):`
-  )
-  for (let i = 0; i < response.transactions.length; i++) {
-    const tx = response.transactions[i]
-    const after = tx.dependsOn && tx.dependsOn.length > 0
-      ? `, after ${tx.dependsOn.join(',')}`
-      : ''
-    const csv = tx.csvTimelockBlocks != null
-      ? `, csv ${tx.csvTimelockBlocks} blocks`
-      : ''
-    console.log(`  [${i}] ${tx.kind} status=${JSON.stringify(tx.status)} txid=${tx.txid}${after}${csv}`)
-    if (tx.status.type === 'confirmed') {
-      if (tx.status.blockHeight != null) {
-        console.log(`      (confirmed in block ${tx.status.blockHeight}, nothing to broadcast)`)
-      } else {
-        console.log('      (already confirmed, nothing to broadcast)')
-      }
-      continue
-    }
-    if (tx.status.type === 'waitingForDependencies') {
-      console.log('      (waiting on the transactions it depends on)')
-    }
-    if (tx.status.type === 'waitingForTimelock') {
-      if (tx.status.spendableAtHeight != null) {
-        console.log(`      (waiting for its timelock, until block ${tx.status.spendableAtHeight})`)
-      } else {
-        console.log('      (waiting for its timelock)')
-      }
-    }
-    const pkg = tx.cpfpTxHex
-      ? `${tx.txHex},${tx.cpfpTxHex}`
-      : tx.txHex
-    console.log(`      Package: ${pkg}`)
-  }
-}
-
-/**
  * Print each recovery transaction with a copy-pasteable Package line.
  *
  * @param {object} response - The RecoverFundsResponse
@@ -187,84 +141,6 @@ function registerAdvancedCommands(program, getSdk, rl) {
     .command('advanced')
     .description('Expert-only commands that build raw transactions for you to broadcast yourself. Misuse can strand or lose funds.')
 
-  // --- unilateral-exit ---
-  advanced
-    .command('unilateral-exit')
-    .description('Build and sign a unilateral exit')
-    .requiredOption('--fee-rate <rate>', 'Target fee rate in sat/vByte', parseInt)
-    .option('--funding-kind <kind>', 'Funding UTXO kind (p2wpkh or p2tr)', 'p2tr')
-    .requiredOption('--destination <address>', 'Destination address for the swept funds')
-    .option('--leaf <ids...>', 'Leaf id(s) to exit (omit to auto-select every profitable leaf)')
-    .option('--output-file <path>', 'File to write the signed exit to, for check-unilateral-exit to read back')
-    .action(async (options) => {
-      const sdk = getSdk()
-
-      const fundingKind = { type: options.fundingKind }
-      const leafIds = options.leaf || []
-      const selection = leafIds.length > 0
-        ? { type: 'specific', leafIds }
-        : { type: 'all' }
-
-      const prepared = await sdk.prepareUnilateralExit({
-        feeRateSatPerVbyte: options.feeRate,
-        fundingKind,
-        destination: options.destination,
-        selection
-      })
-      printValue(prepared)
-
-      if (!prepared.leaves || prepared.leaves.length === 0) {
-        console.log('No leaves to exit.')
-        return
-      }
-
-      const utxoLine = await question(
-        rl,
-        'Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): '
-      )
-      if (utxoLine.trim() === '') {
-        console.log('No funding provided; showing the quote only.')
-        return
-      }
-      const fundingInputs = utxoLine.trim().split(/\s+/).map(
-        (u) => parseCpfpInput(u, options.fundingKind)
-      )
-
-      const keyLine = await question(rl, 'Hex secret key for the funding UTXO(s): ')
-      const secretKeyBytes = Buffer.from(keyLine.trim(), 'hex')
-      const signer = singleKeyCpfpSigner(secretKeyBytes)
-
-      const response = await sdk.unilateralExit(
-        {
-          prepared,
-          fundingInputs
-        },
-        signer
-      )
-      printExitTransactions(response)
-      if (options.outputFile) {
-        writeExit(options.outputFile, response)
-      }
-    })
-
-  // --- check-unilateral-exit ---
-  advanced
-    .command('check-unilateral-exit')
-    .description('Read a signed exit back against the chain: which transactions confirmed, what is ready to broadcast now, and whether the exit still holds')
-    .requiredOption('--input-file <path>', 'File the exit was written to')
-    .option('--output-file <path>', 'File to write the updated exit to (defaults to --input-file)')
-    .action(async (options) => {
-      const sdk = getSdk()
-      const exit = readExit(options.inputFile)
-      const checked = await sdk.checkUnilateralExit({ exit })
-      console.log(`Verdict: ${JSON.stringify(checked.verdict)}`)
-      if (checked.verdict.type === 'redo') {
-        console.log('  (this exit cannot be finished, quote and build it again)')
-      }
-      printExitTransactions(checked.exit)
-      writeExit(options.outputFile || options.inputFile, checked.exit)
-    })
-
   // --- recover-funds ---
   advanced
     .command('recover-funds')
@@ -328,15 +204,6 @@ function registerAdvancedCommands(program, getSdk, rl) {
         `left out the exit data of ${imported.skippedChains} leaf(s)`
       )
     })
-}
-
-function readExit(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-}
-
-function writeExit(filePath, exit) {
-  fs.writeFileSync(filePath, JSON.stringify(exit, null, 2))
-  console.log(`Wrote the exit to ${filePath}`)
 }
 
 /**

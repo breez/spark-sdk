@@ -25,11 +25,9 @@ type AdvancedCommand struct {
 // AdvancedCommandNames lists all advanced subcommand names (used for REPL completion).
 var AdvancedCommandNames = []string{
 	"advanced check-recover-funds",
-	"advanced check-unilateral-exit",
 	"advanced export-unilateral-exit-state",
 	"advanced import-unilateral-exit-state",
 	"advanced recover-funds",
-	"advanced unilateral-exit",
 }
 
 // BuildAdvancedRegistry returns a map of advanced subcommand name -> AdvancedCommand.
@@ -39,11 +37,6 @@ func BuildAdvancedRegistry() map[string]AdvancedCommand {
 			Name:        "check-recover-funds",
 			Description: "Read a recovery written by recover-funds back against the chain",
 			Run:         handleCheckRecoverFunds,
-		},
-		"check-unilateral-exit": {
-			Name:        "check-unilateral-exit",
-			Description: "Check status of a signed unilateral exit against the chain",
-			Run:         handleCheckUnilateralExit,
 		},
 		"export-unilateral-exit-state": {
 			Name:        "export-unilateral-exit-state",
@@ -59,11 +52,6 @@ func BuildAdvancedRegistry() map[string]AdvancedCommand {
 			Name:        "recover-funds",
 			Description: "Recover the funds that left the balance, or with --all every leaf",
 			Run:         handleRecoverFunds,
-		},
-		"unilateral-exit": {
-			Name:        "unilateral-exit",
-			Description: "Build and sign a unilateral exit",
-			Run:         handleUnilateralExit,
 		},
 	}
 }
@@ -162,146 +150,6 @@ func handleImportUnilateralExitState(sdk *breez_sdk_spark.BreezSdk, rl *readline
 		imported.SkippedChains,
 	)
 	return nil
-}
-
-// --- unilateral-exit ---
-
-func handleUnilateralExit(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
-	fs := flag.NewFlagSet("unilateral-exit", flag.ContinueOnError)
-	feeRate := fs.Uint64("fee-rate", 0, "Target fee rate in sat/vByte")
-	fundingKind := fs.String("funding-kind", "p2tr", "Funding UTXO kind: p2wpkh or p2tr")
-	destination := fs.String("destination", "", "Destination address for the swept funds")
-	var leafIDs stringSliceFlag
-	fs.Var(&leafIDs, "leaf", "Leaf id to exit (repeatable). Omit to auto-select every profitable leaf.")
-	outputFile := fs.String("output-file", "", "File to write the signed exit to, for check-unilateral-exit to read back")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *feeRate == 0 || *destination == "" {
-		fmt.Println("Usage: advanced unilateral-exit --fee-rate <sat/vByte> --destination <address> [--funding-kind p2wpkh|p2tr] [--leaf <id> ...] [--output-file <path>]")
-		return nil
-	}
-
-	var cpfpFundingKind breez_sdk_spark.CpfpFundingKind
-	switch strings.ToLower(*fundingKind) {
-	case "p2wpkh":
-		cpfpFundingKind = breez_sdk_spark.CpfpFundingKindP2wpkh{}
-	case "p2tr":
-		cpfpFundingKind = breez_sdk_spark.CpfpFundingKindP2tr{}
-	default:
-		return fmt.Errorf("invalid funding kind '%s', expected p2wpkh or p2tr", *fundingKind)
-	}
-
-	var selection breez_sdk_spark.ExitLeafSelection
-	if len(leafIDs) == 0 {
-		selection = breez_sdk_spark.ExitLeafSelectionAll{}
-	} else {
-		selection = breez_sdk_spark.ExitLeafSelectionSpecific{LeafIds: leafIDs}
-	}
-
-	prepared, err := sdk.PrepareUnilateralExit(breez_sdk_spark.PrepareUnilateralExitRequest{
-		FeeRateSatPerVbyte: *feeRate,
-		FundingKind:        cpfpFundingKind,
-		Destination:        *destination,
-		Selection:          selection,
-	})
-	if err = liftError(err); err != nil {
-		return err
-	}
-	printValue(prepared)
-
-	if len(prepared.Leaves) == 0 {
-		fmt.Println("No leaves to exit.")
-		return nil
-	}
-
-	utxoLine, err := readlinePrompt(rl, "Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(utxoLine) == "" {
-		fmt.Println("No funding provided; showing the quote only.")
-		return nil
-	}
-
-	var fundingInputs []breez_sdk_spark.CpfpInput
-	for _, u := range strings.Fields(utxoLine) {
-		input, err := parseCpfpInput(u, *fundingKind)
-		if err != nil {
-			return err
-		}
-		fundingInputs = append(fundingInputs, input)
-	}
-
-	keyLine, err := readlinePrompt(rl, "Hex secret key for the funding UTXO(s): ")
-	if err != nil {
-		return err
-	}
-	secretKeyBytes, err := hex.DecodeString(strings.TrimSpace(keyLine))
-	if err != nil {
-		return fmt.Errorf("invalid hex key: %w", err)
-	}
-	signer, err := breez_sdk_spark.SingleKeyCpfpSigner(secretKeyBytes)
-	if err = liftError(err); err != nil {
-		return err
-	}
-
-	response, err := sdk.UnilateralExit(breez_sdk_spark.UnilateralExitRequest{
-		Prepared:      prepared,
-		FundingInputs: fundingInputs,
-	}, signer)
-	if err = liftError(err); err != nil {
-		return err
-	}
-	printExitTransactions(response)
-	if *outputFile != "" {
-		if err := writeExit(*outputFile, response); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// --- check-unilateral-exit ---
-
-func handleCheckUnilateralExit(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
-	fs := flag.NewFlagSet("check-unilateral-exit", flag.ContinueOnError)
-	inputFile := fs.String("input-file", "", "File the exit was written to")
-	outputFile := fs.String("output-file", "", "File to write the updated exit to. Defaults to --input-file.")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *inputFile == "" {
-		fmt.Println("Usage: advanced check-unilateral-exit --input-file <path> [--output-file <path>]")
-		return nil
-	}
-
-	exit, err := readExit(*inputFile)
-	if err != nil {
-		return err
-	}
-
-	checked, err := sdk.CheckUnilateralExit(breez_sdk_spark.CheckUnilateralExitRequest{
-		Exit: exit,
-	})
-	if err = liftError(err); err != nil {
-		return err
-	}
-
-	fmt.Printf("Verdict: %s\n", serialize(checked.Verdict))
-	if _, ok := checked.Verdict.(breez_sdk_spark.UnilateralExitVerdictRedo); ok {
-		fmt.Println("  (this exit cannot be finished, quote and build it again)")
-	}
-
-	printExitTransactions(checked.Exit)
-
-	outPath := *inputFile
-	if *outputFile != "" {
-		outPath = *outputFile
-	}
-	return writeExit(outPath, checked.Exit)
 }
 
 // --- recover-funds ---
@@ -524,88 +372,8 @@ func redoCommand(recovery breez_sdk_spark.RecoverFundsResponse) string {
 }
 
 // ---------------------------------------------------------------------------
-// Exit file I/O
+// Recovery file I/O
 // ---------------------------------------------------------------------------
-
-func writeExit(path string, response breez_sdk_spark.UnilateralExitResponse) error {
-	data, err := json.MarshalIndent(objToMap(response), "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("Wrote the exit to %s\n", path)
-	return nil
-}
-
-func readExit(path string) (breez_sdk_spark.UnilateralExitResponse, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return breez_sdk_spark.UnilateralExitResponse{}, err
-	}
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return breez_sdk_spark.UnilateralExitResponse{}, err
-	}
-	return exitResponseFromMap(raw), nil
-}
-
-func exitResponseFromMap(m map[string]interface{}) breez_sdk_spark.UnilateralExitResponse {
-	resp := breez_sdk_spark.UnilateralExitResponse{
-		RecoverableValueSat: mapUint64(m, "recoverable_value_sat"),
-		TotalFeeSat:         mapUint64(m, "total_fee_sat"),
-		CpfpFeeSat:          mapUint64(m, "cpfp_fee_sat"),
-		FanoutFeeSat:        mapUint64(m, "fanout_fee_sat"),
-		SweepFeeSat:         mapUint64(m, "sweep_fee_sat"),
-	}
-
-	if leaves, ok := m["leaves"].([]interface{}); ok {
-		for _, l := range leaves {
-			if lm, ok := l.(map[string]interface{}); ok {
-				resp.Leaves = append(resp.Leaves, breez_sdk_spark.UnilateralExitLeaf{
-					LeafId: mapStr(lm, "leaf_id"),
-					Value:  mapUint64(lm, "value"),
-				})
-			}
-		}
-	}
-
-	if txs, ok := m["transactions"].([]interface{}); ok {
-		for _, t := range txs {
-			if tm, ok := t.(map[string]interface{}); ok {
-				resp.Transactions = append(resp.Transactions, breez_sdk_spark.UnilateralExitTransaction{
-					Kind:              exitTxKindFromMap(tm["kind"]),
-					NodeId:            mapOptStr(tm, "node_id"),
-					Txid:              mapStr(tm, "txid"),
-					TxHex:             mapStr(tm, "tx_hex"),
-					CpfpTxHex:         mapOptStr(tm, "cpfp_tx_hex"),
-					CsvTimelockBlocks: mapOptUint32(tm, "csv_timelock_blocks"),
-					DependsOn:         mapStrSlice(tm, "depends_on"),
-					Status:            exitTxStatusFromMap(tm["status"]),
-				})
-			}
-		}
-	}
-
-	if inputs, ok := m["funding_inputs"].([]interface{}); ok {
-		for _, fi := range inputs {
-			if im, ok := fi.(map[string]interface{}); ok {
-				resp.FundingInputs = append(resp.FundingInputs, cpfpInputFromMap(im))
-			}
-		}
-	}
-
-	return resp
-}
-
-func exitTxKindFromMap(v interface{}) breez_sdk_spark.UnilateralExitTxKind {
-	f, ok := v.(float64)
-	if !ok {
-		return breez_sdk_spark.UnilateralExitTxKindFanOut
-	}
-	return breez_sdk_spark.UnilateralExitTxKind(uint(f))
-}
 
 func exitTxStatusFromMap(v interface{}) breez_sdk_spark.ExitTransactionStatus {
 	m, ok := v.(map[string]interface{})
@@ -657,7 +425,7 @@ func cpfpInputFromMap(m map[string]interface{}) breez_sdk_spark.CpfpInput {
 	}
 }
 
-// JSON map accessors for exit file deserialization.
+// JSON map accessors for recovery file deserialization.
 
 func mapUint64(m map[string]interface{}, key string) uint64 {
 	v, _ := m[key].(float64)
@@ -758,54 +526,6 @@ func parseCpfpInput(s string, kindStr string) (breez_sdk_spark.CpfpInput, error)
 		}, nil
 	}
 }
-
-func printExitTransactions(response breez_sdk_spark.UnilateralExitResponse) {
-	fmt.Printf("Recoverable %d sats, total fee %d sats (cpfp %d, fanout %d, sweep %d), %d transaction(s):\n",
-		response.RecoverableValueSat, response.TotalFeeSat,
-		response.CpfpFeeSat, response.FanoutFeeSat, response.SweepFeeSat,
-		len(response.Transactions))
-	for i, tx := range response.Transactions {
-		after := ""
-		if len(tx.DependsOn) > 0 {
-			after = ", after " + strings.Join(tx.DependsOn, ",")
-		}
-		csv := ""
-		if tx.CsvTimelockBlocks != nil {
-			csv = fmt.Sprintf(", csv %d blocks", *tx.CsvTimelockBlocks)
-		}
-		fmt.Printf("  [%d] %v status=%v txid=%s%s%s\n",
-			i, tx.Kind, tx.Status, tx.Txid, after, csv)
-		switch s := tx.Status.(type) {
-		case breez_sdk_spark.ExitTransactionStatusConfirmed:
-			if s.BlockHeight != nil {
-				fmt.Printf("      (confirmed in block %d, nothing to broadcast)\n", *s.BlockHeight)
-			} else {
-				fmt.Println("      (already confirmed, nothing to broadcast)")
-			}
-			continue
-		case breez_sdk_spark.ExitTransactionStatusWaitingForDependencies:
-			fmt.Println("      (waiting on the transactions it depends on)")
-		case breez_sdk_spark.ExitTransactionStatusWaitingForTimelock:
-			if s.SpendableAtHeight != nil {
-				fmt.Printf("      (waiting for its timelock, until block %d)\n", *s.SpendableAtHeight)
-			} else {
-				fmt.Println("      (waiting for its timelock)")
-			}
-		case breez_sdk_spark.ExitTransactionStatusReady:
-		case breez_sdk_spark.ExitTransactionStatusUnverified:
-		default:
-		}
-		pkg := tx.TxHex
-		if tx.CpfpTxHex != nil {
-			pkg = tx.TxHex + "," + *tx.CpfpTxHex
-		}
-		fmt.Printf("      Package: %s\n", pkg)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Recovery file I/O
-// ---------------------------------------------------------------------------
 
 func writeRecovery(path string, recovery breez_sdk_spark.RecoverFundsResponse) error {
 	data, err := json.MarshalIndent(objToMap(recovery), "", "  ")

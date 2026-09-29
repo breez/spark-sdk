@@ -2,8 +2,8 @@
  * Advanced subcommands.
  *
  * Mirrors the Rust CLI `advanced` subcommands:
- *   unilateral-exit, check-unilateral-exit, recover-funds, check-recover-funds,
- *   export-unilateral-exit-state, import-unilateral-exit-state
+ *   recover-funds, check-recover-funds, export-unilateral-exit-state,
+ *   import-unilateral-exit-state
  */
 
 import {
@@ -24,7 +24,6 @@ import {
   RecoveryTransaction,
   RecoveryTxKind,
   RecoveryVerdict_Tags,
-  UnilateralExitVerdict_Tags,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
   BreezSdkInterface,
@@ -46,8 +45,6 @@ function hexToArrayBuffer(hex: string): ArrayBuffer {
 
 /** All advanced subcommand names for help and completion. */
 export const ADVANCED_COMMAND_NAMES = [
-  'unilateral-exit',
-  'check-unilateral-exit',
   'recover-funds',
   'check-recover-funds',
   'export-unilateral-exit-state',
@@ -65,15 +62,6 @@ function parseFlag(args: string[], ...flags: string[]): string | undefined {
     }
   }
   return undefined
-}
-
-/**
- * Parse a multi-value flag (comma-separated). Returns undefined if not provided.
- */
-function parseMultiFlag(args: string[], ...flags: string[]): string[] | undefined {
-  const val = parseFlag(args, ...flags)
-  if (val === undefined) return undefined
-  return val.split(',').map(s => s.trim()).filter(s => s.length > 0)
 }
 
 /**
@@ -96,24 +84,10 @@ function resolvePath(path: string): string {
     : `${RNFS.DocumentDirectoryPath}/${path}`
 }
 
-async function readExitFile(path: string): Promise<any> {
-  const json = await RNFS.readFile(path, 'utf8')
-  return JSON.parse(json)
-}
-
-async function writeExitFile(path: string, exit: unknown): Promise<void> {
-  const json = JSON.stringify(
-    exit,
-    (_key, value) => (typeof value === 'bigint' ? Number(value) : value),
-    2
-  )
-  await RNFS.writeFile(path, json, 'utf8')
-}
-
 /**
  * Dispatch an advanced subcommand.
  *
- * @param args - The arguments after "advanced" (e.g., ["unilateral-exit", "--fee-rate", "2", ...])
+ * @param args - The arguments after "advanced" (e.g., ["recover-funds", "--fee-rate", "2", ...])
  * @param sdk - The BreezSdkInterface instance
  * @returns A string result to display
  */
@@ -129,10 +103,6 @@ export async function dispatchAdvancedCommand(
   const subArgs = args.slice(1)
 
   switch (subcommand) {
-    case 'unilateral-exit':
-      return handleUnilateralExit(sdk, subArgs)
-    case 'check-unilateral-exit':
-      return handleCheckUnilateralExit(sdk, subArgs)
     case 'recover-funds':
       return handleRecoverFunds(sdk, subArgs)
     case 'check-recover-funds':
@@ -150,14 +120,6 @@ function printAdvancedHelp(): string {
   const lines = [
     '',
     'Advanced subcommands (expert-only, misuse can strand or lose funds):',
-    '  advanced unilateral-exit --fee-rate <rate> --destination <addr>',
-    '    [--funding-kind p2wpkh|p2tr] [--leaf <id>,<id>,...]',
-    '    [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>]',
-    '    [--output-file <path>]',
-    '                                         Build and sign a unilateral exit',
-    '  advanced check-unilateral-exit --input-file <path>',
-    '    [--output-file <path>]',
-    '                                         Check a signed exit against the chain',
     '  advanced recover-funds --fee-rate <rate> --destination <addr>',
     '    [--funding-kind p2wpkh|p2tr] [--all | --leaf <id> ...]',
     '    [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>]',
@@ -175,7 +137,7 @@ function printAdvancedHelp(): string {
   return lines.join('\n')
 }
 
-// --- unilateral-exit ---
+// --- recover-funds ---
 
 function parseCpfpInput(s: string, kind: string): InstanceType<typeof CpfpInput.P2wpkh> | InstanceType<typeof CpfpInput.P2tr> {
   const parts = s.split(':')
@@ -195,151 +157,6 @@ function parseCpfpInput(s: string, kind: string): InstanceType<typeof CpfpInput.
   }
   return new CpfpInput.P2tr({ txid, vout, valueSats, pubkey })
 }
-
-function formatExitTransactions(response: any): string[] {
-  const lines: string[] = []
-  lines.push(
-    `Recoverable ${response.recoverableValueSat} sats, ` +
-    `total fee ${response.totalFeeSat} sats ` +
-    `(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, sweep ${response.sweepFeeSat}), ` +
-    `${response.transactions.length} transaction(s):`
-  )
-
-  for (let i = 0; i < response.transactions.length; i++) {
-    const tx = response.transactions[i]
-    const after = tx.dependsOn.length > 0
-      ? `, after ${tx.dependsOn.join(',')}`
-      : ''
-    const csv = tx.csvTimelockBlocks != null
-      ? `, csv ${tx.csvTimelockBlocks} blocks`
-      : ''
-    lines.push(`  [${i}] ${tx.kind} status=${tx.status} txid=${tx.txid}${after}${csv}`)
-
-    if (tx.status.tag === ExitTransactionStatus_Tags.Confirmed) {
-      const blockHeight = tx.status.inner?.blockHeight
-      if (blockHeight != null) {
-        lines.push(`      (confirmed in block ${blockHeight}, nothing to broadcast)`)
-      } else {
-        lines.push('      (already confirmed, nothing to broadcast)')
-      }
-      continue
-    }
-    if (tx.status.tag === ExitTransactionStatus_Tags.WaitingForDependencies) {
-      lines.push('      (waiting on the transactions it depends on)')
-    }
-    if (tx.status.tag === ExitTransactionStatus_Tags.WaitingForTimelock) {
-      const spendableAtHeight = tx.status.inner?.spendableAtHeight
-      if (spendableAtHeight != null) {
-        lines.push(`      (waiting for its timelock, until block ${spendableAtHeight})`)
-      } else {
-        lines.push('      (waiting for its timelock)')
-      }
-    }
-
-    const pkg = tx.cpfpTxHex
-      ? `${tx.txHex},${tx.cpfpTxHex}`
-      : tx.txHex
-    lines.push(`      Package: ${pkg}`)
-  }
-
-  return lines
-}
-
-async function handleUnilateralExit(sdk: BreezSdkInterface, args: string[]): Promise<string> {
-  const feeRateStr = parseFlag(args, '--fee-rate')
-  const destination = parseFlag(args, '--destination')
-
-  if (!feeRateStr || !destination) {
-    return 'Usage: advanced unilateral-exit --fee-rate <rate> --destination <addr> [--funding-kind p2wpkh|p2tr] [--leaf <id>,<id>,...] [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>] [--output-file <path>]'
-  }
-
-  const feeRate = BigInt(feeRateStr)
-  const fundingKindStr = parseFlag(args, '--funding-kind') ?? 'p2tr'
-  const leafIds = parseMultiFlag(args, '--leaf')
-  const outputFile = parseFlag(args, '--output-file')
-
-  const fundingKind = fundingKindStr === 'p2wpkh'
-    ? new CpfpFundingKind.P2wpkh()
-    : new CpfpFundingKind.P2tr()
-
-  const selection = leafIds && leafIds.length > 0
-    ? new ExitLeafSelection.Specific({ leafIds })
-    : new ExitLeafSelection.All()
-
-  const prepared = await sdk.prepareUnilateralExit({
-    feeRateSatPerVbyte: feeRate,
-    fundingKind,
-    destination,
-    selection,
-  })
-
-  const lines: string[] = [formatValue(prepared)]
-
-  if (prepared.leaves.length === 0) {
-    lines.push('No leaves to exit.')
-    return lines.join('\n')
-  }
-
-  const utxoArgs = parseRepeatedFlag(args, '--utxo')
-  if (utxoArgs.length === 0) {
-    lines.push('No funding provided; showing the quote only.')
-    lines.push('Provide --utxo txid:vout:value:pubkey and --secret-key <hex> to sign.')
-    return lines.join('\n')
-  }
-
-  const secretKey = parseFlag(args, '--secret-key')
-  if (!secretKey) {
-    return 'Error: --secret-key is required when --utxo is provided'
-  }
-
-  const fundingInputs = utxoArgs.map(u => parseCpfpInput(u, fundingKindStr))
-  const signer = singleKeyCpfpSigner(hexToArrayBuffer(secretKey.trim()))
-
-  const response = await sdk.unilateralExit(
-    { prepared, fundingInputs },
-    signer
-  )
-
-  lines.push(...formatExitTransactions(response))
-
-  if (outputFile) {
-    const outputPath = resolvePath(outputFile)
-    await writeExitFile(outputPath, response)
-    lines.push(`Wrote the exit to ${outputPath}`)
-  }
-
-  return lines.join('\n')
-}
-
-// --- check-unilateral-exit ---
-
-async function handleCheckUnilateralExit(sdk: BreezSdkInterface, args: string[]): Promise<string> {
-  const inputFile = parseFlag(args, '--input-file')
-  if (!inputFile) {
-    return 'Usage: advanced check-unilateral-exit --input-file <path> [--output-file <path>]'
-  }
-  const outputFile = parseFlag(args, '--output-file')
-
-  const inputPath = resolvePath(inputFile)
-  const exit = await readExitFile(inputPath)
-
-  const checked = await sdk.checkUnilateralExit({ exit })
-
-  const lines: string[] = []
-  lines.push(`Verdict: ${formatValue(checked.verdict)}`)
-  if (checked.verdict.tag === UnilateralExitVerdict_Tags.Redo) {
-    lines.push('  (this exit cannot be finished, quote and build it again)')
-  }
-  lines.push(...formatExitTransactions(checked.exit))
-
-  const outputPath = resolvePath(outputFile ?? inputFile)
-  await writeExitFile(outputPath, checked.exit)
-  lines.push(`Wrote the exit to ${outputPath}`)
-
-  return lines.join('\n')
-}
-
-// --- recover-funds ---
 
 function recoverySelection(all: boolean, leafIds: string[]): ExitLeafSelection {
   if (all) {
