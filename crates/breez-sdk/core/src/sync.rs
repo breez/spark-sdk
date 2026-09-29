@@ -87,15 +87,8 @@ impl SparkSyncService {
             );
             // Process transfers in this batch
             for transfer in &transfers_response.items {
-                // Skip rather than fail: conversion is deterministic, so a transfer
-                // that fails once fails on every pass and would stop sync here for good.
-                let payment = match Payment::try_from(transfer.clone()) {
-                    Ok(payment) => payment,
-                    Err(e) => {
-                        error!("Skipping transfer {} during sync: {e:?}", transfer.id);
-                        continue;
-                    }
-                };
+                // Create a payment record
+                let payment: Payment = transfer.clone().try_into()?;
                 // Apply any payment metadata for the payment
                 if let Err(e) = self.apply_payment_metadata(&payment).await {
                     error!(
