@@ -19,8 +19,6 @@ public static class AdvancedCommandNames
 {
     public static readonly string[] All =
     {
-        "advanced unilateral-exit",
-        "advanced check-unilateral-exit",
         "advanced recover-funds",
         "advanced check-recover-funds",
         "advanced export-unilateral-exit-state",
@@ -40,18 +38,6 @@ public static class AdvancedCommands
     {
         return new Dictionary<string, AdvancedCliCommand>
         {
-            ["unilateral-exit"] = new()
-            {
-                Name = "unilateral-exit",
-                Description = "Build and sign a unilateral exit",
-                Run = HandleUnilateralExit
-            },
-            ["check-unilateral-exit"] = new()
-            {
-                Name = "check-unilateral-exit",
-                Description = "Check a signed exit against the chain",
-                Run = HandleCheckUnilateralExit
-            },
             ["recover-funds"] = new()
             {
                 Name = "recover-funds",
@@ -152,114 +138,7 @@ public static class AdvancedCommands
     // Advanced command handlers
     // -----------------------------------------------------------------------
 
-    // --- unilateral-exit ---
-
-    private static async Task HandleUnilateralExit(BreezSdk sdk, Func<string, string?> readline, string[] args)
-    {
-        var feeRateStr = GetFlag(args, "--fee-rate");
-        var fundingKindStr = GetFlag(args, "--funding-kind") ?? "p2tr";
-        var destination = GetFlag(args, "--destination");
-        var leafIds = GetAllFlags(args, "--leaf");
-        var outputFile = GetFlag(args, "--output-file");
-
-        if (feeRateStr == null || destination == null)
-        {
-            Console.WriteLine("Usage: advanced unilateral-exit --fee-rate <N> --destination <addr> [--funding-kind p2tr|p2wpkh] [--leaf <id> ...] [--output-file <path>]");
-            return;
-        }
-
-        var feeRate = ulong.Parse(feeRateStr);
-
-        CpfpFundingKind fundingKind = fundingKindStr.ToLower() switch
-        {
-            "p2wpkh" => new CpfpFundingKind.P2wpkh(),
-            "p2tr" => new CpfpFundingKind.P2tr(),
-            _ => throw new ArgumentException($"Invalid funding kind: {fundingKindStr}. Use 'p2wpkh' or 'p2tr'")
-        };
-
-        ExitLeafSelection selection = leafIds.Length == 0
-            ? new ExitLeafSelection.All()
-            : new ExitLeafSelection.Specific(leafIds: leafIds);
-
-        var prepared = await sdk.PrepareUnilateralExit(
-            request: new PrepareUnilateralExitRequest(
-                feeRateSatPerVbyte: feeRate,
-                fundingKind: fundingKind,
-                destination: destination,
-                selection: selection
-            )
-        );
-        Serialization.PrintValue(prepared);
-
-        if (prepared.leaves.Length == 0)
-        {
-            Console.WriteLine("No leaves to exit.");
-            return;
-        }
-
-        var utxoLine = readline(
-            "Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ");
-        if (utxoLine == null || string.IsNullOrWhiteSpace(utxoLine))
-        {
-            Console.WriteLine("No funding provided; showing the quote only.");
-            return;
-        }
-
-        var fundingInputs = utxoLine.Trim()
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Select(u => ParseCpfpInput(u, fundingKindStr.ToLower()))
-            .ToArray();
-
-        var keyLine = readline("Hex secret key for the funding UTXO(s): ");
-        if (keyLine == null || string.IsNullOrWhiteSpace(keyLine))
-        {
-            Console.WriteLine("No key provided.");
-            return;
-        }
-
-        var secretKeyBytes = Convert.FromHexString(keyLine.Trim());
-        var signer = BreezSdkSparkMethods.SingleKeyCpfpSigner(secretKeyBytes);
-
-        var response = await sdk.UnilateralExit(
-            request: new UnilateralExitRequest(
-                prepared: prepared,
-                fundingInputs: fundingInputs
-            ),
-            signer: signer
-        );
-
-        PrintExitTransactions(response);
-        if (outputFile != null)
-        {
-            WriteExit(outputFile, response);
-        }
-    }
-
-    // --- check-unilateral-exit ---
-
-    private static async Task HandleCheckUnilateralExit(BreezSdk sdk, Func<string, string?> readline, string[] args)
-    {
-        var inputFile = GetFlag(args, "--input-file");
-        var outputFile = GetFlag(args, "--output-file");
-
-        if (inputFile == null)
-        {
-            Console.WriteLine("Usage: advanced check-unilateral-exit --input-file <path> [--output-file <path>]");
-            return;
-        }
-
-        var exit = ReadExit(inputFile);
-        var checked_ = await sdk.CheckUnilateralExit(
-            request: new CheckUnilateralExitRequest(exit: exit)
-        );
-        Console.WriteLine($"Verdict: {checked_.verdict}");
-        if (checked_.verdict is UnilateralExitVerdict.Redo)
-        {
-            Console.WriteLine("  (this exit cannot be finished, quote and build it again)");
-        }
-        PrintExitTransactions(checked_.exit);
-        WriteExit(outputFile ?? inputFile, checked_.exit);
-    }
+    // --- recover-funds ---
 
     private static CpfpInput ParseCpfpInput(string s, string kind)
     {
@@ -284,8 +163,6 @@ public static class AdvancedCommands
             _ => throw new ArgumentException($"Invalid funding kind: {kind}")
         };
     }
-
-    // --- recover-funds ---
 
     private static async Task HandleRecoverFunds(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
@@ -494,77 +371,6 @@ public static class AdvancedCommands
             $"skipped {imported.skippedForeignLeaves} leaf(s) from a different wallet " +
             $"and {imported.skippedConflictingLeaves} that disagree with what this wallet holds, " +
             $"left out the exit data of {imported.skippedChains} leaf(s)");
-    }
-
-    private static UnilateralExitResponse ReadExit(string path)
-    {
-        var json = File.ReadAllText(path);
-        return Serialization.Deserialize<UnilateralExitResponse>(json);
-    }
-
-    private static void WriteExit(string path, UnilateralExitResponse exit)
-    {
-        File.WriteAllText(path, Serialization.SerializePretty(exit));
-        Console.WriteLine($"Wrote the exit to {path}");
-    }
-
-    private static void PrintExitTransactions(UnilateralExitResponse response)
-    {
-        Console.WriteLine(
-            $"Recoverable {response.recoverableValueSat} sats, " +
-            $"total fee {response.totalFeeSat} sats " +
-            $"(cpfp {response.cpfpFeeSat}, fanout {response.fanoutFeeSat}, sweep {response.sweepFeeSat}), " +
-            $"{response.transactions.Length} transaction(s):");
-
-        for (int i = 0; i < response.transactions.Length; i++)
-        {
-            var tx = response.transactions[i];
-            var after = tx.dependsOn.Length == 0
-                ? ""
-                : $", after {string.Join(",", tx.dependsOn)}";
-            var csv = tx.csvTimelockBlocks != null
-                ? $", csv {tx.csvTimelockBlocks} blocks"
-                : "";
-            Console.WriteLine(
-                $"  [{i}] {tx.kind} status={tx.status} txid={tx.txid}{after}{csv}");
-
-            switch (tx.status)
-            {
-                case ExitTransactionStatus.Confirmed confirmed:
-                    if (confirmed.blockHeight != null)
-                    {
-                        Console.WriteLine(
-                            $"      (confirmed in block {confirmed.blockHeight}, nothing to broadcast)");
-                    }
-                    else
-                    {
-                        Console.WriteLine("      (already confirmed, nothing to broadcast)");
-                    }
-                    continue;
-                case ExitTransactionStatus.WaitingForDependencies:
-                    Console.WriteLine("      (waiting on the transactions it depends on)");
-                    break;
-                case ExitTransactionStatus.WaitingForTimelock wft:
-                    if (wft.spendableAtHeight != null)
-                    {
-                        Console.WriteLine(
-                            $"      (waiting for its timelock, until block {wft.spendableAtHeight})");
-                    }
-                    else
-                    {
-                        Console.WriteLine("      (waiting for its timelock)");
-                    }
-                    break;
-                case ExitTransactionStatus.Ready:
-                case ExitTransactionStatus.Unverified:
-                    break;
-            }
-
-            var package = tx.cpfpTxHex != null
-                ? $"{tx.txHex},{tx.cpfpTxHex}"
-                : tx.txHex;
-            Console.WriteLine($"      Package: {package}");
-        }
     }
 
     private static RecoverFundsResponse ReadRecovery(string path)

@@ -10,8 +10,6 @@ import 'serialization.dart';
 
 /// Advanced subcommand names (used for help and tab completion).
 const advancedCommandNames = [
-  'advanced unilateral-exit',
-  'advanced check-unilateral-exit',
   'advanced recover-funds',
   'advanced check-recover-funds',
   'advanced export-unilateral-exit-state',
@@ -30,14 +28,6 @@ Map<String, _AdvancedEntry>? _registry;
 
 Map<String, _AdvancedEntry> _getRegistry() {
   return _registry ??= {
-    'unilateral-exit': _AdvancedEntry(
-      'Build and sign a unilateral exit (expert-only)',
-      _handleUnilateralExit,
-    ),
-    'check-unilateral-exit': _AdvancedEntry(
-      'Check a signed exit against the chain',
-      _handleCheckUnilateralExit,
-    ),
     'recover-funds': _AdvancedEntry(
       'Recover the funds that left the balance, or with --all every leaf',
       _handleRecoverFunds,
@@ -81,7 +71,7 @@ Future<void> dispatchAdvancedCommand(List<String> args, BreezSdk sdk) async {
   await registry[subName]!.handler(sdk, subArgs);
 }
 
-// --- unilateral-exit ---
+// --- argument parsing ---
 
 CpfpFundingKind? _parseFundingKind(String s) {
   switch (s.toLowerCase()) {
@@ -109,77 +99,6 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
     print(parser.usage);
     print('\nError: ${e.message}');
     return null;
-  }
-}
-
-Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
-        ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
-        ..addOption('destination', mandatory: true, help: 'Destination address for swept funds')
-        ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.')
-        ..addOption('output-file', help: 'File to write the signed exit to');
-  final results = _parseArgs(
-    parser,
-    args,
-    'advanced unilateral-exit --fee-rate <rate> --destination <addr> [--funding-kind p2tr] [--leaf <id>...]',
-  );
-  if (results == null) return;
-
-  final feeRate = BigInt.parse(results.option('fee-rate')!);
-  final fundingKindStr = results.option('funding-kind')!;
-  final fundingKind = _parseFundingKind(fundingKindStr);
-  if (fundingKind == null) {
-    print('Invalid funding kind: $fundingKindStr (expected p2wpkh or p2tr)');
-    return;
-  }
-  final destination = results.option('destination')!;
-  final leafIds = results.multiOption('leaf');
-
-  final ExitLeafSelection selection =
-      leafIds.isEmpty ? const ExitLeafSelection.all() : ExitLeafSelection.specific(leafIds: leafIds);
-
-  final prepared = await sdk.prepareUnilateralExit(
-    request: PrepareUnilateralExitRequest(
-      feeRateSatPerVbyte: feeRate,
-      fundingKind: fundingKind,
-      destination: destination,
-      selection: selection,
-    ),
-  );
-  printValue(prepared);
-
-  if (prepared.leaves.isEmpty) {
-    print('No leaves to exit.');
-    return;
-  }
-
-  final utxoLine = prompt('Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ');
-  if (utxoLine.trim().isEmpty) {
-    print('No funding provided; showing the quote only.');
-    return;
-  }
-
-  final fundingInputs = <CpfpInput>[];
-  for (final u in utxoLine.split(RegExp(r'\s+'))) {
-    if (u.isEmpty) continue;
-    final input = _parseCpfpInput(u, fundingKindStr);
-    if (input == null) return;
-    fundingInputs.add(input);
-  }
-
-  final keyLine = prompt('Hex secret key for the funding UTXO(s): ');
-  final secretKeyBytes = _hexDecode(keyLine.trim());
-
-  final response = await sdk.unilateralExit(
-    request: UnilateralExitRequest(prepared: prepared, fundingInputs: fundingInputs),
-    signerSecretKey: secretKeyBytes,
-  );
-  _printExitTransactions(response);
-  final outputFile = results.option('output-file');
-  if (outputFile != null) {
-    _writeExit(outputFile, response);
   }
 }
 
@@ -216,39 +135,6 @@ Future<void> _handleImportUnilateralExitState(BreezSdk sdk, List<String> args) a
     'and ${imported.skippedConflictingLeaves} that disagree with what this wallet holds, '
     'left out the exit data of ${imported.skippedChains} leaf(s)',
   );
-}
-
-// --- check-unilateral-exit ---
-
-Future<void> _handleCheckUnilateralExit(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('input-file', mandatory: true, help: 'File the exit was written to')
-        ..addOption('output-file', help: 'File to write the updated exit to. Defaults to --input-file.');
-  final results = _parseArgs(
-    parser,
-    args,
-    'advanced check-unilateral-exit --input-file <path> [--output-file <path>]',
-  );
-  if (results == null) return;
-
-  final inputFile = results.option('input-file')!;
-  final outputFile = results.option('output-file') ?? inputFile;
-
-  final exit = _readExit(inputFile);
-  final checked = await sdk.checkUnilateralExit(request: CheckUnilateralExitRequest(exit: exit));
-
-  final verdict = checked.verdict;
-  if (verdict is UnilateralExitVerdict_Redo) {
-    print('Verdict: Redo { reason: "${verdict.reason}" }');
-    print('  (this exit cannot be finished, quote and build it again)');
-  } else if (verdict is UnilateralExitVerdict_Done) {
-    print('Verdict: Done');
-  } else {
-    print('Verdict: Valid');
-  }
-  _printExitTransactions(checked.exit);
-  _writeExit(outputFile, checked.exit);
 }
 
 // --- recover-funds ---
@@ -622,69 +508,7 @@ void _printRecovery(RecoverFundsResponse response) {
   }
 }
 
-// --- exit file I/O ---
-
-void _writeExit(String path, UnilateralExitResponse exit) {
-  File(path).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(_exitToJson(exit)));
-  print('Wrote the exit to $path');
-}
-
-UnilateralExitResponse _readExit(String path) {
-  return _exitFromJson(jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>);
-}
-
-Map<String, dynamic> _exitToJson(UnilateralExitResponse r) => {
-  'recoverableValueSat': r.recoverableValueSat.toString(),
-  'totalFeeSat': r.totalFeeSat.toString(),
-  'cpfpFeeSat': r.cpfpFeeSat.toString(),
-  'fanoutFeeSat': r.fanoutFeeSat.toString(),
-  'sweepFeeSat': r.sweepFeeSat.toString(),
-  'leaves': [
-    for (final l in r.leaves) {'leafId': l.leafId, 'value': l.value.toString()},
-  ],
-  'transactions': [for (final t in r.transactions) _txToJson(t)],
-  'fundingInputs': [for (final i in r.fundingInputs) _cpfpInputToJson(i)],
-};
-
-UnilateralExitResponse _exitFromJson(Map<String, dynamic> j) {
-  return UnilateralExitResponse(
-    recoverableValueSat: BigInt.parse(j['recoverableValueSat'] as String),
-    totalFeeSat: BigInt.parse(j['totalFeeSat'] as String),
-    cpfpFeeSat: BigInt.parse(j['cpfpFeeSat'] as String),
-    fanoutFeeSat: BigInt.parse(j['fanoutFeeSat'] as String),
-    sweepFeeSat: BigInt.parse(j['sweepFeeSat'] as String),
-    leaves:
-        (j['leaves'] as List).map((e) {
-          final l = e as Map<String, dynamic>;
-          return UnilateralExitLeaf(leafId: l['leafId'] as String, value: BigInt.parse(l['value'] as String));
-        }).toList(),
-    transactions: (j['transactions'] as List).map((e) => _txFromJson(e as Map<String, dynamic>)).toList(),
-    fundingInputs:
-        (j['fundingInputs'] as List).map((e) => _cpfpInputFromJson(e as Map<String, dynamic>)).toList(),
-  );
-}
-
-Map<String, dynamic> _txToJson(UnilateralExitTransaction tx) => {
-  'kind': tx.kind.name,
-  'nodeId': tx.nodeId,
-  'txid': tx.txid,
-  'txHex': tx.txHex,
-  'cpfpTxHex': tx.cpfpTxHex,
-  'csvTimelockBlocks': tx.csvTimelockBlocks,
-  'dependsOn': tx.dependsOn,
-  'status': _statusToJson(tx.status),
-};
-
-UnilateralExitTransaction _txFromJson(Map<String, dynamic> j) => UnilateralExitTransaction(
-  kind: UnilateralExitTxKind.values.byName(j['kind'] as String),
-  nodeId: j['nodeId'] as String?,
-  txid: j['txid'] as String,
-  txHex: j['txHex'] as String,
-  cpfpTxHex: j['cpfpTxHex'] as String?,
-  csvTimelockBlocks: j['csvTimelockBlocks'] as int?,
-  dependsOn: (j['dependsOn'] as List).cast<String>(),
-  status: _statusFromJson(j['status'] as Map<String, dynamic>),
-);
+// --- helpers ---
 
 Map<String, dynamic> _statusToJson(ExitTransactionStatus s) {
   if (s is ExitTransactionStatus_Confirmed) {
@@ -797,43 +621,6 @@ CpfpInput? _parseCpfpInput(String s, String kindStr) {
     default:
       print('Invalid funding kind: $kindStr');
       return null;
-  }
-}
-
-void _printExitTransactions(UnilateralExitResponse response) {
-  print(
-    'Recoverable ${response.recoverableValueSat} sats, '
-    'total fee ${response.totalFeeSat} sats '
-    '(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, '
-    'sweep ${response.sweepFeeSat}), '
-    '${response.transactions.length} transaction(s):',
-  );
-  for (var i = 0; i < response.transactions.length; i++) {
-    final tx = response.transactions[i];
-    final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
-    final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
-    print('  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv');
-    final status = tx.status;
-    if (status is ExitTransactionStatus_Confirmed) {
-      final height = status.blockHeight;
-      if (height != null) {
-        print('      (confirmed in block $height, nothing to broadcast)');
-      } else {
-        print('      (already confirmed, nothing to broadcast)');
-      }
-      continue;
-    } else if (status is ExitTransactionStatus_WaitingForDependencies) {
-      print('      (waiting on the transactions it depends on)');
-    } else if (status is ExitTransactionStatus_WaitingForTimelock) {
-      final height = status.spendableAtHeight;
-      if (height != null) {
-        print('      (waiting for its timelock, until block $height)');
-      } else {
-        print('      (waiting for its timelock)');
-      }
-    }
-    final package = tx.cpfpTxHex != null ? '${tx.txHex},${tx.cpfpTxHex}' : tx.txHex;
-    print('      Package: $package');
   }
 }
 

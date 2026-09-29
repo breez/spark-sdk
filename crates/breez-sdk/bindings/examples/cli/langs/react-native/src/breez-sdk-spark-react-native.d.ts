@@ -88,7 +88,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type CrossChainRoutePair = any;
   export type CrossChainAddressDetails = any;
 
-  // --- advanced / unilateral exit ---
+  // --- advanced / recover funds ---
   export const singleKeyCpfpSigner: any;
   export const CpfpFundingKind: any;
   export type CpfpFundingKind = any;
@@ -99,10 +99,6 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const ExitTransactionStatus: any;
   export const ExitTransactionStatus_Tags: any;
   export type ExitTransactionStatus = any;
-  export const UnilateralExitVerdict_Tags: any;
-  export type UnilateralExitVerdict = any;
-
-  // --- advanced / recover funds ---
   export type CpfpSigner = any;
   export const CpfpInput_Tags: any;
   export type PrepareRecoverFundsRequest = any;

@@ -127,7 +127,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
-**Advanced** (expert-only): `advanced unilateral-exit`, `advanced recover-funds`, `advanced check-recover-funds`
+**Advanced** (expert-only): `advanced recover-funds`, `advanced check-recover-funds`
 
 **Token issuer**: `issuer create-token`, `issuer mint-token`, `issuer burn-token`, `issuer token-balance`, `issuer token-metadata`, `issuer freeze-token`, `issuer unfreeze-token`
 

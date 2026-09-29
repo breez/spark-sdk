@@ -252,40 +252,6 @@ impl BreezSdk {
         Ok(self.sdk.get_info(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "prepareUnilateralExit")]
-    pub async fn prepare_unilateral_exit(
-        &self,
-        request: PrepareUnilateralExitRequest,
-    ) -> WasmResult<PrepareUnilateralExitResponse> {
-        Ok(self
-            .sdk
-            .prepare_unilateral_exit(request.into())
-            .await?
-            .into())
-    }
-
-    #[wasm_bindgen(js_name = "unilateralExit")]
-    pub async fn unilateral_exit(
-        &self,
-        request: UnilateralExitRequest,
-        signer: crate::signer::JsCpfpSigner,
-    ) -> WasmResult<UnilateralExitResponse> {
-        let signer = std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer));
-        Ok(self
-            .sdk
-            .unilateral_exit(request.into(), signer)
-            .await?
-            .into())
-    }
-
-    #[wasm_bindgen(js_name = "checkUnilateralExit")]
-    pub async fn check_unilateral_exit(
-        &self,
-        request: CheckUnilateralExitRequest,
-    ) -> WasmResult<CheckUnilateralExitResponse> {
-        Ok(self.sdk.check_unilateral_exit(request.into()).await?.into())
-    }
-
     #[wasm_bindgen(js_name = "exportUnilateralExitState")]
     pub async fn export_unilateral_exit_state(
         &self,
