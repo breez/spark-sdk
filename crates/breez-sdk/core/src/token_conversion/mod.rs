@@ -85,15 +85,19 @@ pub(crate) trait TokenConverter: Send + Sync {
     ) -> Result<FetchConversionLimitsResponse, ConversionError>;
 
     /// Runs a local and a remote pass to refund any pending conversions.
-    async fn refund_pending(&self) -> Result<RefundPendingConversionsResponse, ConversionError>;
+    async fn refund_pending(
+        &self,
+        event_emitter: &EventEmitter,
+    ) -> Result<RefundPendingConversionsResponse, ConversionError>;
 
     /// Runs a local pass to refund any pending conversions.
     async fn refund_local_pending(
         &self,
+        event_emitter: &EventEmitter,
     ) -> Result<RefundPendingConversionsResponse, ConversionError>;
 
     /// Records the swap if it ran after all, and otherwise claws the input back.
-    async fn settle_stranded_input(&self, input: StrandedInput);
+    async fn settle_stranded_input(&self, input: StrandedInput, event_emitter: &EventEmitter);
 
     /// Optional requests that wake the client-mode periodic refunder.
     fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<RefundRequest>> {

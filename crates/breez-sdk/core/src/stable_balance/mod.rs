@@ -27,8 +27,9 @@
 //! │                     │                                               │
 //! │                     └─► Otherwise ──────────────────► AutoConvert   │
 //! │                                                                     │
-//! │  Synced ──────────────► Hand tasks deferred over 120s back to       │
-//! │                         the worker to settle                        │
+//! │  Synced ──────────────► Hand deferred tasks queued over 120s ago    │
+//! │                         back to the worker to settle, on every      │
+//! │                         sync until they do                          │
 //! │                                                                     │
 //! │  PaymentMetadataUpdated ► Sent leg of a deferred task? ► Wake       │
 //! └─────────────────────────────────────────────────────────────────────┘
@@ -46,8 +47,8 @@
 //! │  • PerReceive deduplicates by payment_id                            │
 //! │  • AutoConvert collapses multiple triggers into one                 │
 //! │  • Deactivation overrides pending AutoConvert                       │
-//! │  • AutoConvert/Deactivation only runs when no PerReceive pending    │
-//! │    (including deferred: they may still need those sats)             │
+//! │  • AutoConvert/Deactivation only runs when no PerReceive is ready   │
+//! │    to convert. A deferred one never converts again                  │
 //! │  • Deferred tasks are skipped until woken by their sent leg or      │
 //! │    timed out                                                        │
 //! │  • After a failed conversion no task is handed out until the        │
@@ -69,10 +70,12 @@
 //! │    │  • A stored sent leg settles it from its record,        │      │
 //! │    │    or the pool's listing when that record is silent     │      │
 //! │    │  • On failure: settle from the sent leg's record, else  │      │
-//! │    │    defer until the sent leg is seen or 120s pass        │      │
-//! │    │  • Deferred over 120s: settles from the record or the   │      │
-//! │    │    pool, else Failed. A pool that can't be asked is     │      │
-//! │    │    retried for up to 1h                                 │      │
+//! │    │    defer until the sent leg is seen or it times out     │      │
+//! │    │  • Deferred, queued over 120s ago: settles from the     │      │
+//! │    │    record or the pool, linking the legs of a swap that  │      │
+//! │    │    ran. A sent leg neither of them resolves waits for   │      │
+//! │    │    the refunder, whose record wakes it. No sent leg:    │      │
+//! │    │    Failed                                               │      │
 //! │    │  • Settles Completed or Failed, and on its own swap     │      │
 //! │    │    also emits the completion event                      │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
@@ -363,8 +366,9 @@ impl StableBalance {
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
     ///
-    /// Pending conversions for the old token are no longer relevant: the
-    /// queue is cleared and cleared per-receive tasks are marked Failed.
+    /// Conversions for the old token that have not been tried are dropped and
+    /// their payments marked Failed. One already tried still settles from how
+    /// its swap ended.
     pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
         self.core.set_active_token(label, &self.event_emitter).await
     }
@@ -755,8 +759,8 @@ impl StableBalance {
 }
 
 impl StableBalanceMiddleware {
-    /// Wakes the deferred task whose sent leg `payment_id` is. Returns whether one
-    /// was woken. The worker settles it: this middleware holds no emitter.
+    /// Wakes the deferred task whose sent leg `payment_id` is, for the worker
+    /// to settle. Returns whether one was woken.
     async fn wake_deferred(&self, payment_id: &str) -> bool {
         let Some(parent_id) = self.core.queue.wake_by_sent_leg(payment_id).await else {
             return false;
@@ -788,8 +792,7 @@ impl EventMiddleware for StableBalanceMiddleware {
                 Some(SdkEvent::Synced)
             }
 
-            // Metadata synced in from another device may say how a deferred
-            // task's swap ended.
+            // Wake a deferred conversion whose sent leg's record changed
             SdkEvent::PaymentMetadataUpdated { payment } => {
                 self.wake_deferred(&payment.id).await;
                 Some(SdkEvent::PaymentMetadataUpdated { payment })
@@ -816,13 +819,13 @@ impl EventMiddleware for StableBalanceMiddleware {
                         conversions: vec![],
                     });
 
-                    // Persist the pending status so it survives restarts
+                    // Queued before the pending status is written, so a crash in
+                    // between cannot leave it pending with no task to settle it.
+                    self.core.queue.push_per_receive(payment.id.clone()).await;
                     let _ = self
                         .core
                         .finalize_conversion_status(&payment.id, ConversionStatus::Pending)
                         .await;
-
-                    self.core.queue.push_per_receive(payment.id.clone()).await;
                 } else {
                     // Non-per-receive payment — queue auto-convert to handle accumulated balance
                     debug!("Queueing auto-convert after payment {}", payment.id);
@@ -907,17 +910,24 @@ mod tests {
 
         async fn refund_pending(
             &self,
+            _: &EventEmitter,
         ) -> Result<crate::RefundPendingConversionsResponse, ConversionError> {
             Ok(crate::RefundPendingConversionsResponse::default())
         }
 
         async fn refund_local_pending(
             &self,
+            _: &EventEmitter,
         ) -> Result<crate::RefundPendingConversionsResponse, ConversionError> {
             Ok(crate::RefundPendingConversionsResponse::default())
         }
 
-        async fn settle_stranded_input(&self, _: crate::token_conversion::StrandedInput) {}
+        async fn settle_stranded_input(
+            &self,
+            _: crate::token_conversion::StrandedInput,
+            _: &EventEmitter,
+        ) {
+        }
     }
 
     fn usd_config(default_active_label: Option<&str>) -> StableBalanceConfig {
@@ -1177,7 +1187,7 @@ mod tests {
         assert_eq!(core.queue.next_task().await, Some(fresh.clone()));
         core.queue.complete_task(&fresh).await;
         assert!(
-            !core.queue.has_per_receive().await,
+            !core.queue.has_runnable_per_receive().await,
             "the settled payment is not queued"
         );
     }
@@ -1203,6 +1213,29 @@ mod tests {
             stored_conversion_status(&storage, "received").await,
             Some(ConversionStatus::Completed)
         );
+    }
+
+    /// Writes how the swap ended onto the parent's sent leg, as the converter
+    /// or the refunder does.
+    async fn record_sent_leg(storage: &Arc<dyn Storage>, parent: &str, status: ConversionStatus) {
+        storage
+            .insert_payment_metadata(
+                per_receive_transfer_id(parent).to_string(),
+                PaymentMetadata {
+                    conversion_info: Some(crate::ConversionInfo::Amm {
+                        pool_id: "pool".to_string(),
+                        conversion_id: "conversion".to_string(),
+                        status,
+                        fee: None,
+                        purpose: None,
+                        amount_adjustment: None,
+                        degradation: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
     }
 
     /// Stores each parent with a pending conversion, its sent leg when a status
@@ -1239,24 +1272,7 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                storage
-                    .insert_payment_metadata(
-                        sent_leg_id,
-                        PaymentMetadata {
-                            conversion_info: Some(crate::ConversionInfo::Amm {
-                                pool_id: "pool".to_string(),
-                                conversion_id: "conversion".to_string(),
-                                status: status.clone(),
-                                fee: None,
-                                purpose: None,
-                                amount_adjustment: None,
-                                degradation: None,
-                            }),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    .unwrap();
+                record_sent_leg(storage, parent, status.clone()).await;
             }
             per_receive.push(serde_json::json!({
                 "payment_id": parent,
@@ -1323,33 +1339,111 @@ mod tests {
         }
     }
 
-    /// When neither the sent leg's record nor the pool says the swap ran, a task
-    /// past the timeout settles Failed.
+    /// A swap recorded as run on its sent leg alone, as the refunder records
+    /// one, has its legs linked to the received payment when it settles.
     #[tokio::test]
-    async fn a_timed_out_task_the_pool_does_not_report_settles_failed() {
-        let storage = label_storage("timed-out-unreported");
+    async fn a_swap_recorded_on_its_sent_leg_settles_with_its_legs() {
+        let storage = label_storage("timed-out-link");
         seed_timed_out(
             &storage,
-            &[
-                ("refunding", Some(ConversionStatus::RefundNeeded)),
-                ("unsent", None),
-            ],
+            &[("converted", Some(ConversionStatus::Completed))],
+            1_000,
+        )
+        .await;
+        store(&[&storage], &["received-leg"]).await;
+        let core = core_with(
+            Arc::clone(&storage),
+            StubConverter {
+                completed_legs: Some(("sent-leg", "received-leg")),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            core.settle_timed_out(&EventEmitter::new(false), "converted")
+                .await
+        );
+        let children = storage
+            .get_payments_by_parent_ids(vec!["converted".to_string()])
+            .await
+            .unwrap();
+        let linked: Vec<&str> = children["converted"]
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(linked, vec!["received-leg"]);
+        assert_eq!(
+            stored_conversion_status(&storage, "converted").await,
+            Some(ConversionStatus::Completed)
+        );
+    }
+
+    /// With no sent leg stored and no swap reported, the attempt never reached
+    /// the pool, so a task past the timeout settles Failed.
+    #[tokio::test]
+    async fn a_timed_out_task_that_never_sent_its_leg_settles_failed() {
+        let storage = label_storage("timed-out-unsent");
+        seed_timed_out(&storage, &[("unsent", None)], 1_000).await;
+        let core = active_core(Arc::clone(&storage)).await;
+
+        assert!(
+            core.settle_timed_out(&EventEmitter::new(false), "unsent")
+                .await
+        );
+        assert_eq!(
+            stored_conversion_status(&storage, "unsent").await,
+            Some(ConversionStatus::Failed)
+        );
+    }
+
+    /// A sent leg the pool does not report is left to the refunder. The task
+    /// waits, and settles Failed once the refund is recorded and announced.
+    #[tokio::test]
+    async fn a_timed_out_task_waits_for_its_refund() {
+        let storage = label_storage("timed-out-refund");
+        seed_timed_out(
+            &storage,
+            &[("refunding", Some(ConversionStatus::RefundNeeded))],
             1_000,
         )
         .await;
         let core = active_core(Arc::clone(&storage)).await;
+        let middleware = StableBalanceMiddleware {
+            core: Arc::clone(&core),
+        };
 
-        for parent in ["refunding", "unsent"] {
-            assert!(
-                core.settle_timed_out(&EventEmitter::new(false), parent)
-                    .await
-            );
-            assert_eq!(
-                stored_conversion_status(&storage, parent).await,
-                Some(ConversionStatus::Failed),
-                "{parent}"
-            );
-        }
+        middleware.process(SdkEvent::Synced).await;
+        assert!(
+            !core
+                .settle_timed_out(&EventEmitter::new(false), "refunding")
+                .await
+        );
+        core.queue.defer_task("refunding").await;
+        assert_eq!(
+            stored_conversion_status(&storage, "refunding").await,
+            Some(ConversionStatus::Pending)
+        );
+
+        record_sent_leg(&storage, "refunding", ConversionStatus::Refunded).await;
+        let sent_leg_id = per_receive_transfer_id("refunding").to_string();
+        let sent_leg = storage.get_payment_by_id(sent_leg_id).await.unwrap();
+        middleware
+            .process(SdkEvent::PaymentMetadataUpdated { payment: sent_leg })
+            .await;
+        assert_eq!(
+            core.queue.next_task().await,
+            Some(queue::ConversionTask::PerReceive("refunding".to_string())),
+            "the refund wakes the task"
+        );
+        assert!(
+            core.settle_timed_out(&EventEmitter::new(false), "refunding")
+                .await
+        );
+        assert_eq!(
+            stored_conversion_status(&storage, "refunding").await,
+            Some(ConversionStatus::Failed)
+        );
     }
 
     /// When the pool cannot be asked, a task past the timeout is left pending
@@ -1389,15 +1483,15 @@ mod tests {
         }
     }
 
-    /// Once the lookup deadline has passed, a task whose pool lookup keeps
-    /// failing settles Failed rather than staying pending.
+    /// However long the pool cannot be asked, the task keeps waiting rather
+    /// than settling on a guess.
     #[tokio::test]
-    async fn a_timed_out_task_settles_failed_once_the_lookup_deadline_passes() {
-        let storage = label_storage("timed-out-lookup-deadline");
+    async fn a_timed_out_task_never_gives_up_on_an_unreachable_pool() {
+        let storage = label_storage("timed-out-unreachable");
         seed_timed_out(
             &storage,
             &[("refunding", Some(ConversionStatus::RefundNeeded))],
-            2 * 3_600,
+            30 * 24 * 3_600,
         )
         .await;
         let core = core_with(
@@ -1409,13 +1503,17 @@ mod tests {
         )
         .await;
 
-        assert!(
-            core.settle_timed_out(&EventEmitter::new(false), "refunding")
-                .await
-        );
+        for _ in 0..3 {
+            assert!(
+                !core
+                    .settle_timed_out(&EventEmitter::new(false), "refunding")
+                    .await
+            );
+            core.queue.defer_task("refunding").await;
+        }
         assert_eq!(
             stored_conversion_status(&storage, "refunding").await,
-            Some(ConversionStatus::Failed)
+            Some(ConversionStatus::Pending)
         );
     }
 }

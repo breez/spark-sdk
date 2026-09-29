@@ -198,7 +198,7 @@ impl BreezSdk {
         &self,
     ) -> Result<RefundPendingConversionsResponse, SdkError> {
         self.token_converter
-            .refund_pending()
+            .refund_pending(&self.event_emitter)
             .await
             .map_err(Into::into)
     }

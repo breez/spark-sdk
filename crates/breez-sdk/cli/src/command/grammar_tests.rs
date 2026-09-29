@@ -211,7 +211,17 @@ fn receive_crosschain_flags() {
     assert!(!cross_chain_fees_included);
     assert_eq!(cross_chain_target_overpay_bps, None);
 
+    let Command::Receive {
+        cross_chain_to_bitcoin,
+        ..
+    } = parse_ok("receive -m crosschain -a 1000000 --cross-chain-to-bitcoin")
+    else {
+        panic!("expected Receive");
+    };
+    assert!(cross_chain_to_bitcoin);
+
     parse_err("receive -m crosschain -a 1000000 --cross-chain-max-slippage-bps ten");
+    parse_err("receive -m crosschain -a 1000000 --cross-chain-to-bitcoin -t btkn1abc");
 }
 
 #[test]

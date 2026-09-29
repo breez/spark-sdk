@@ -15,7 +15,7 @@ use tracing::{Instrument, debug, info, warn};
 
 use crate::events::{SdkEvent, StableBalanceConversionKind};
 use crate::persist::{ObjectCacheRepository, Storage};
-use crate::token_conversion::ConversionError;
+use crate::token_conversion::{ConversionError, ConversionStatus};
 use crate::utils::time::now_secs;
 
 use super::conversions::PerReceiveOutcome;
@@ -39,18 +39,15 @@ pub(crate) enum PendingState {
     #[default]
     Ready,
     /// Waiting for evidence of how its swap ended. Skipped by the worker until
-    /// its sent leg, named by the deterministic `transfer_id`, is seen, or
-    /// until the timeout hands it back.
+    /// its sent leg, named by the deterministic `transfer_id`, is seen or its
+    /// record changes, or until the timeout hands it back.
     Deferred,
 }
 
-/// How long after its first deferral a task is handed back to the worker to
-/// settle (seconds).
+/// How long after it was queued a deferred task is handed back to the worker
+/// to settle (seconds). Past it, every sync hands the task back until it
+/// settles, which also recovers a wake that was missed.
 const DEFERRED_TASK_TIMEOUT_SECS: u64 = 120;
-
-/// How long after its first deferral a failing swap lookup may keep a task
-/// pending (seconds). Past it, the task settles without the pool's answer.
-const SWAP_LOOKUP_DEADLINE_SECS: u64 = 3600;
 
 /// First wait after a failed conversion, doubling on each further failure.
 const CONVERSION_BACKOFF_BASE_SECS: u64 = 30;
@@ -128,12 +125,9 @@ pub(crate) struct PendingConversion {
     payment_id: String,
     #[serde(default)]
     state: PendingState,
-    /// Unix timestamp when this task was first created.
+    /// Unix timestamp when this task was queued.
     #[serde(default)]
     created_at: u64,
-    /// Unix timestamp of the task's first deferral. Zero until then.
-    #[serde(default)]
-    deferred_at: u64,
     /// Set when a deferred entry is handed back to the worker, by its sent leg
     /// being seen or by the timeout. A woken entry is handed out even while a
     /// retry delay runs.
@@ -142,9 +136,15 @@ pub(crate) struct PendingConversion {
 }
 
 impl PendingConversion {
-    /// Whether the task was first deferred longer ago than the timeout.
-    fn is_timed_out(&self, now: u64) -> bool {
-        self.deferred_at > 0 && now.saturating_sub(self.deferred_at) > DEFERRED_TASK_TIMEOUT_SECS
+    /// Whether the task has tried to convert and now only settles from how
+    /// its swap ended.
+    fn is_settling(&self) -> bool {
+        self.state == PendingState::Deferred || self.woken
+    }
+
+    /// Whether the task was queued longer ago than the timeout.
+    fn is_past_timeout(&self, now: u64) -> bool {
+        now.saturating_sub(self.created_at) > DEFERRED_TASK_TIMEOUT_SECS
     }
 }
 
@@ -320,7 +320,6 @@ impl ConversionQueue {
                 payment_id,
                 state: PendingState::Ready,
                 created_at: now_secs(),
-                deferred_at: 0,
                 woken: false,
             });
             self.persist_pending(&state).await;
@@ -362,35 +361,31 @@ impl ConversionQueue {
     ///
     /// Entries keep the creation time they were saved with, so one that
     /// predates a restored failure is gated like any other stale entry.
-    async fn restore_pending(&self, mut queue: PendingQueue) {
-        // Entries saved before the first deferral was recorded count it from
-        // when they were queued.
-        for pending in &mut queue.per_receive {
-            if pending.state == PendingState::Deferred && pending.deferred_at == 0 {
-                pending.deferred_at = pending.created_at;
-            }
-        }
+    async fn restore_pending(&self, queue: PendingQueue) {
         let mut state = self.state.lock().await;
         state.per_receive = queue.per_receive;
         state.deactivations = queue.deactivations;
     }
 
-    /// Returns `true` if there are any per-receive tasks in the queue.
-    /// Used by auto-convert to yield to per-receive tasks that arrived while it was preparing.
-    /// Matches `next_task()` semantics: auto-convert should not run while any per-receive
-    /// tasks exist (ready or deferred), since deferred tasks may still need those sats.
-    pub async fn has_per_receive(&self) -> bool {
+    /// Whether a per-receive task is queued that may still convert.
+    pub async fn has_runnable_per_receive(&self) -> bool {
         let state = self.state.lock().await;
-        !state.per_receive.is_empty()
+        state.per_receive.iter().any(|p| !p.is_settling())
     }
 
-    /// Drops the work queued for the token being left: every per-receive task,
-    /// the batch sweep, and a deactivation owed for the token being activated.
-    /// A deactivation owed for any other token is kept. Returns the payment ids
-    /// of the cleared per-receive tasks.
+    /// Drops the work queued for the token being left: every per-receive task
+    /// yet to convert, the batch sweep, and a deactivation owed for the token
+    /// being activated. A per-receive task that already tried to convert is
+    /// kept to settle from how its swap ended, as is a deactivation owed for
+    /// any other token. Returns the payment ids of the cleared per-receive tasks.
     pub async fn clear_for_token_change(&self, new_token: Option<&str>) -> Vec<String> {
         let mut state = self.state.lock().await;
-        let cleared: Vec<String> = state.per_receive.drain(..).map(|p| p.payment_id).collect();
+        let (settling, cleared): (Vec<_>, Vec<_>) = state
+            .per_receive
+            .drain(..)
+            .partition(PendingConversion::is_settling);
+        state.per_receive = settling;
+        let cleared: Vec<String> = cleared.into_iter().map(|p| p.payment_id).collect();
         state.auto_convert_pending = false;
         // A deactivation for any other token still has to run: dropping it
         // strands that balance with nothing left to convert it back.
@@ -402,21 +397,27 @@ impl ConversionQueue {
     }
 
     /// Defers a per-receive task until its sent leg is seen or the timeout
-    /// hands it back.
+    /// hands it back. A task a token change dropped during its attempt is
+    /// queued again, to settle from how its swap ended.
     pub async fn defer_task(&self, payment_id: &str) {
         let mut state = self.state.lock().await;
-        if let Some(pending) = state
+        match state
             .per_receive
             .iter_mut()
             .find(|p| p.payment_id == payment_id)
         {
-            pending.state = PendingState::Deferred;
-            if pending.deferred_at == 0 {
-                pending.deferred_at = now_secs();
+            Some(pending) => {
+                pending.state = PendingState::Deferred;
+                pending.woken = false;
             }
-            pending.woken = false;
-            self.persist_pending(&state).await;
+            None => state.per_receive.push(PendingConversion {
+                payment_id: payment_id.to_string(),
+                state: PendingState::Deferred,
+                created_at: now_secs(),
+                woken: false,
+            }),
         }
+        self.persist_pending(&state).await;
     }
 
     /// Returns the next task to process without removing it.
@@ -448,11 +449,6 @@ impl ConversionQueue {
         if let Some(pending) = ready {
             return Ok(Some(ConversionTask::PerReceive(pending.payment_id.clone())));
         }
-        // Only run auto-convert/deactivation when no per-receive tasks exist (including
-        // deferred). A deferred task may still be woken and need those sats.
-        if !state.per_receive.is_empty() {
-            return Ok(None);
-        }
         // A deactivation is a user action, so it outranks the batch sweep.
         if let Some(token) = state.deactivations.first() {
             return Ok(Some(ConversionTask::Deactivation(token.clone())));
@@ -480,8 +476,7 @@ impl ConversionQueue {
     }
 
     /// Wakes the deferred task whose deterministic `transfer_id` is
-    /// `sent_leg_id`, so the worker re-reads how the swap ended. Returns the
-    /// task's payment id.
+    /// `sent_leg_id`, and returns the task's payment id.
     pub async fn wake_by_sent_leg(&self, sent_leg_id: &str) -> Option<String> {
         let mut state = self.state.lock().await;
         let payment_id = {
@@ -505,7 +500,7 @@ impl ConversionQueue {
         let mut state = self.state.lock().await;
         let mut timed_out = Vec::new();
         for pending in &mut state.per_receive {
-            if pending.state == PendingState::Deferred && pending.is_timed_out(now) {
+            if pending.state == PendingState::Deferred && pending.is_past_timeout(now) {
                 pending.state = PendingState::Ready;
                 pending.woken = true;
                 timed_out.push(pending.payment_id.clone());
@@ -518,28 +513,15 @@ impl ConversionQueue {
         timed_out
     }
 
-    /// Whether the task was first deferred longer ago than a failing swap
-    /// lookup may keep it pending.
-    pub async fn is_past_lookup_deadline(&self, payment_id: &str) -> bool {
-        let now = now_secs();
-        let state = self.state.lock().await;
-        state.per_receive.iter().any(|p| {
-            p.payment_id == payment_id
-                && p.deferred_at > 0
-                && now.saturating_sub(p.deferred_at) > SWAP_LOOKUP_DEADLINE_SECS
-        })
-    }
-
-    /// Whether the task was first deferred longer ago than the timeout. The
-    /// worker then settles it from what is known of its swap, without
-    /// converting.
+    /// Whether the task was handed back after being deferred and was queued
+    /// longer ago than the timeout.
     pub async fn is_timed_out(&self, payment_id: &str) -> bool {
         let now = now_secs();
         let state = self.state.lock().await;
         state
             .per_receive
             .iter()
-            .any(|p| p.payment_id == payment_id && p.is_timed_out(now))
+            .any(|p| p.payment_id == payment_id && p.woken && p.is_past_timeout(now))
     }
 
     /// Persist the per-receive queue for restart recovery.
@@ -779,6 +761,9 @@ impl StableBalance {
             debug!("Per-receive conversion for {payment_id}: swap outcome unknown, deferring");
             return PerReceiveResult::Retry;
         };
+        if status == ConversionStatus::Completed {
+            self.core.link_legs_if_unlinked(payment_id).await;
+        }
         if self
             .core
             .finalize_and_emit(&self.event_emitter, payment_id, status)
@@ -1166,6 +1151,52 @@ mod tests {
         ));
     }
 
+    /// A token change drops the per-receive tasks yet to convert. One that
+    /// already tried is kept, to settle from how its swap ended.
+    #[tokio::test]
+    async fn a_token_change_keeps_a_task_that_already_tried() {
+        let (queue, _storage) = queue("token_change_keeps_settling");
+
+        queue.push_per_receive("untried".to_string()).await;
+        queue.push_per_receive("tried".to_string()).await;
+        queue.defer_task("tried").await;
+
+        let cleared = queue.clear_for_token_change(Some("token-b")).await;
+        assert_eq!(cleared, vec!["untried".to_string()]);
+        queue.wake_by_sent_leg(&sent_leg_of("tried")).await.unwrap();
+        assert!(
+            queue.clear_for_token_change(None).await.is_empty(),
+            "a woken task is kept too"
+        );
+        assert_eq!(
+            queue.next_task().await,
+            Some(ConversionTask::PerReceive("tried".to_string()))
+        );
+    }
+
+    /// A token change during an attempt drops the task as untried. Deferring it
+    /// afterwards queues it again, so its swap is still followed.
+    #[tokio::test]
+    async fn a_task_dropped_during_its_attempt_is_deferred_again() {
+        let (queue, _storage) = queue("token_change_mid_attempt");
+
+        queue.push_per_receive("attempting".to_string()).await;
+        assert_eq!(
+            queue.clear_for_token_change(Some("token-b")).await,
+            vec!["attempting".to_string()]
+        );
+
+        queue.defer_task("attempting").await;
+        queue
+            .wake_by_sent_leg(&sent_leg_of("attempting"))
+            .await
+            .unwrap();
+        assert_eq!(
+            queue.next_task().await,
+            Some(ConversionTask::PerReceive("attempting".to_string()))
+        );
+    }
+
     /// Turning the same token back on cancels its pending deactivation.
     #[tokio::test]
     async fn a_token_change_drops_a_deactivation_for_the_token_being_activated() {
@@ -1234,6 +1265,26 @@ mod tests {
             queue.next_task().await,
             Some(ConversionTask::Deactivation(id)) if id == "token-b"
         ));
+    }
+
+    /// A per-receive task that may still convert goes before the batch sweep,
+    /// since both would spend the same sats. A deferred one does not hold the
+    /// sweep back: it never converts again.
+    #[tokio::test]
+    async fn only_a_runnable_per_receive_holds_back_the_batch_sweep() {
+        let (queue, _storage) = queue("runnable_per_receive_first");
+
+        queue.push_per_receive("received".to_string()).await;
+        queue.push_auto_convert().await;
+        assert!(queue.has_runnable_per_receive().await);
+        assert_eq!(
+            queue.next_task().await,
+            Some(ConversionTask::PerReceive("received".to_string()))
+        );
+
+        queue.defer_task("received").await;
+        assert!(!queue.has_runnable_per_receive().await);
+        assert_eq!(queue.next_task().await, Some(ConversionTask::AutoConvert));
     }
 
     /// A deactivation is a user's request, so it outranks the batch sweep.
@@ -1353,11 +1404,10 @@ mod tests {
     #[tokio::test]
     async fn a_woken_task_is_not_handed_back_again() {
         let (queue, _) = queue("woken-not-swept");
-        let deferred = |payment_id: &str, deferred_at| PendingConversion {
+        let deferred = |payment_id: &str, created_at| PendingConversion {
             payment_id: payment_id.to_string(),
             state: PendingState::Deferred,
-            created_at: deferred_at,
-            deferred_at,
+            created_at,
             woken: false,
         };
         queue
@@ -1395,7 +1445,6 @@ mod tests {
             payment_id: payment_id.to_string(),
             state: PendingState::Deferred,
             created_at,
-            deferred_at: 0,
             woken: false,
         };
         queue
@@ -1424,58 +1473,46 @@ mod tests {
         );
     }
 
-    /// The timeout counts from a task's first deferral, not from when it was
-    /// queued, and deferring it again does not restart that count. An entry
-    /// saved before the first deferral was recorded counts from its queueing.
+    /// Only a task that has been deferred times out. One that waited in the
+    /// queue past the timeout is still converted, and once it fails it is
+    /// handed back on the next sweep. Deferring it again does not restart the
+    /// count.
     #[tokio::test]
-    async fn the_timeout_counts_from_the_first_deferral() {
-        let (queue, _) = queue("timeout-from-deferral");
-        let long_ago = now_secs().saturating_sub(SWAP_LOOKUP_DEADLINE_SECS * 2);
+    async fn only_a_deferred_task_times_out() {
+        let (queue, _) = queue("timeout-deferred-only");
+        let queued = |payment_id: &str, created_at| PendingConversion {
+            payment_id: payment_id.to_string(),
+            state: PendingState::Ready,
+            created_at,
+            woken: false,
+        };
         queue
             .restore_pending(PendingQueue {
                 per_receive: vec![
-                    PendingConversion {
-                        payment_id: "queued-long-ago".to_string(),
-                        state: PendingState::Ready,
-                        created_at: long_ago,
-                        deferred_at: 0,
-                        woken: false,
-                    },
-                    PendingConversion {
-                        payment_id: "deferred-long-ago".to_string(),
-                        state: PendingState::Deferred,
-                        created_at: long_ago,
-                        deferred_at: now_secs().saturating_sub(DEFERRED_TASK_TIMEOUT_SECS * 2),
-                        woken: false,
-                    },
-                    PendingConversion {
-                        payment_id: "saved-before-upgrade".to_string(),
-                        state: PendingState::Deferred,
-                        created_at: long_ago,
-                        deferred_at: 0,
-                        woken: false,
-                    },
+                    queued(
+                        "queued-long-ago",
+                        now_secs().saturating_sub(DEFERRED_TASK_TIMEOUT_SECS * 100),
+                    ),
+                    queued("queued-just-now", now_secs()),
                 ],
                 deactivations: Vec::new(),
             })
             .await;
 
         assert!(!queue.is_timed_out("queued-long-ago").await);
-        queue.defer_task("queued-long-ago").await;
-        assert!(!queue.is_past_lookup_deadline("queued-long-ago").await);
-        let both = vec![
-            "deferred-long-ago".to_string(),
-            "saved-before-upgrade".to_string(),
-        ];
-        assert_eq!(queue.wake_expired_tasks().await, both);
-        assert!(queue.is_past_lookup_deadline("saved-before-upgrade").await);
+        assert!(queue.wake_expired_tasks().await.is_empty());
 
-        queue.defer_task("deferred-long-ago").await;
-        queue.defer_task("saved-before-upgrade").await;
+        queue.defer_task("queued-long-ago").await;
+        queue.defer_task("queued-just-now").await;
+        let expired = vec!["queued-long-ago".to_string()];
+        assert_eq!(queue.wake_expired_tasks().await, expired);
+        assert!(queue.is_timed_out("queued-long-ago").await);
+
+        queue.defer_task("queued-long-ago").await;
         assert_eq!(
             queue.wake_expired_tasks().await,
-            both,
-            "deferring again keeps the first deferral's time"
+            expired,
+            "deferring again does not restart the count"
         );
     }
 }

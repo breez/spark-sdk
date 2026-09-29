@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
 use crate::events::EventEmitter;
-use crate::models::{ConversionStatus, Payment, PaymentDetails};
+use crate::models::{ConversionStatus, Payment};
 use crate::persist::PaymentMetadata;
 use crate::token_conversion::{
     ConversionAmount, ConversionError, ConversionOptions, ConversionPurpose, ConversionType,
@@ -54,8 +54,8 @@ impl PerReceiveOutcome {
 }
 
 /// A swap that ran and then failed delivered the conversion, so it settles as
-/// converted rather than as a failure. Returns its legs when both ids
-/// resolved, and `None` when the swap ran but they did not.
+/// converted rather than as a failure. Returns its legs when both were
+/// recorded, and `None` when the swap ran but they were not.
 fn settle_swap_that_ran(
     result: Result<TokenConversionResponse, ConversionError>,
 ) -> Result<Option<TokenConversionResponse>, ConversionError> {
@@ -130,6 +130,28 @@ impl StableBalanceCore {
         Ok(PerReceiveOutcome::AlreadyConverted)
     }
 
+    /// Links the legs of a swap that ran to the received payment, by asking the
+    /// pool for them, when nothing is linked to it yet. A swap recorded from
+    /// its sent leg, by the refunder or after a failed call, may be unlinked.
+    /// A lookup that fails leaves the legs listed on their own.
+    pub(super) async fn link_legs_if_unlinked(&self, parent_payment_id: &str) {
+        let linked = self
+            .storage
+            .get_payments_by_parent_ids(vec![parent_payment_id.to_string()])
+            .await
+            .is_ok_and(|children| {
+                children
+                    .get(parent_payment_id)
+                    .is_some_and(|legs| !legs.is_empty())
+            });
+        if linked {
+            return;
+        }
+        if let Err(e) = self.find_completed_per_receive(parent_payment_id).await {
+            warn!("Could not link the legs of {parent_payment_id}: {e:?}");
+        }
+    }
+
     /// Links both legs of a conversion to the received payment it converted.
     pub(super) async fn link_legs(
         &self,
@@ -150,29 +172,30 @@ impl StableBalanceCore {
         Ok(())
     }
 
-    /// Settles a task past the timeout from what is known of its swap, without
-    /// converting. An outcome still unknown settles `Failed`, including a swap
-    /// the pool does not report yet. Returns false, leaving the task to be
-    /// tried again, when the status could not be written, or when the pool
-    /// could not be asked and the lookup deadline has not passed.
+    /// Settles a task past the timeout without converting, from its sent leg's
+    /// record or, when that is silent, the pool. A sent leg neither of them
+    /// resolves is left to the refunder. No sent leg and no swap settles `Failed`, although
+    /// a sent leg not yet synced reads the same. Returns false to keep waiting.
     pub(super) async fn settle_timed_out(
         &self,
         event_emitter: &EventEmitter,
         parent_payment_id: &str,
     ) -> bool {
-        let outcome = match self.sent_leg_outcome(parent_payment_id).await {
+        let sent_leg = self.sent_leg_outcome(parent_payment_id).await;
+        let outcome = match sent_leg {
             Some(PerReceiveOutcome::Undetermined) | None => {
                 match self.find_completed_per_receive(parent_payment_id).await {
+                    Ok(PerReceiveOutcome::Undetermined) if sent_leg.is_some() => return false,
                     Ok(outcome) => outcome,
                     Err(e) => {
-                        if !self.queue.is_past_lookup_deadline(parent_payment_id).await {
-                            warn!("Could not ask the pool about {parent_payment_id}: {e:?}");
-                            return false;
-                        }
-                        warn!("Could not ask the pool about {parent_payment_id}, giving up: {e:?}");
-                        PerReceiveOutcome::Undetermined
+                        warn!("Could not ask the pool about {parent_payment_id}: {e:?}");
+                        return false;
                     }
                 }
+            }
+            Some(PerReceiveOutcome::AlreadyConverted) => {
+                self.link_legs_if_unlinked(parent_payment_id).await;
+                PerReceiveOutcome::AlreadyConverted
             }
             Some(outcome) => outcome,
         };
@@ -225,12 +248,8 @@ impl StableBalance {
             .await?;
 
         // A conversion receive is not converted again. It settles with how its
-        // own swap ended.
-        if let Some(PaymentDetails::Spark {
-            conversion_info: Some(_),
-            ..
-        }) = &payment.details
-        {
+        // own swap ended. A cross-chain receive is converted like any other.
+        if payment.is_conversion_child() {
             debug!(
                 "Per-receive conversion skipped: {} is a conversion receive",
                 parent_payment_id
@@ -350,7 +369,7 @@ impl StableBalance {
         // Per-receive converts specific payment amounts and takes priority; if we
         // proceed, we'd convert the same sats and per-receive would fail with
         // InsufficientFunds. The next Synced event will re-queue auto-convert.
-        if self.core.queue.has_per_receive().await {
+        if self.core.queue.has_runnable_per_receive().await {
             debug!("Auto-conversion aborted: per-receive tasks queued during preparation");
             return Ok(false);
         }
@@ -583,7 +602,9 @@ impl StableBalance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ConversionInfo, PaymentMethod, PaymentStatus, PaymentType};
+    use crate::models::{
+        ConversionInfo, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
+    };
 
     fn sent_leg(status: Option<ConversionStatus>) -> Payment {
         Payment {

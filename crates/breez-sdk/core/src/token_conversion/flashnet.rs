@@ -18,8 +18,9 @@ use crate::{
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::{
         payments::{
-            fetch_and_process_payment, insert_payment_metadata_with_cache_fallback,
-            insert_payment_with_metadata, resolve_and_insert_payment_metadata, resolve_payment_id,
+            emit_payment_metadata_updated, fetch_and_process_payment,
+            insert_payment_metadata_with_cache_fallback, insert_payment_with_metadata,
+            resolve_and_insert_payment_metadata, resolve_payment_id,
         },
         polling::{PollSchedule, poll_until},
         time::now_secs,
@@ -430,6 +431,7 @@ impl FlashnetTokenConverter {
     /// Refunds rows marked `ConversionStatus::RefundNeeded`.
     async fn refund_failed_conversions(
         &self,
+        event_emitter: &EventEmitter,
     ) -> Result<RefundPendingConversionsResponse, ConversionError> {
         debug!("Checking for failed conversions needing refunds");
         let payments = self
@@ -457,7 +459,7 @@ impl FlashnetTokenConverter {
 
         let mut report = RefundPendingConversionsResponse::default();
         for payment in payments {
-            match self.refund_payment(&payment).await {
+            match self.refund_payment(&payment, event_emitter).await {
                 Ok(RefundOutcome::Refunded) => report.refunded = report.refunded.saturating_add(1),
                 Ok(RefundOutcome::AlreadyExecuted) => {
                     report.skipped = report.skipped.saturating_add(1);
@@ -476,7 +478,11 @@ impl FlashnetTokenConverter {
     }
 
     /// Refund a single locally-tracked failed conversion.
-    async fn refund_payment(&self, payment: &Payment) -> Result<RefundOutcome, ConversionError> {
+    async fn refund_payment(
+        &self,
+        payment: &Payment,
+        event_emitter: &EventEmitter,
+    ) -> Result<RefundOutcome, ConversionError> {
         let (clawback_id, conversion_info) = match &payment.details {
             Some(PaymentDetails::Spark {
                 conversion_info, ..
@@ -525,6 +531,7 @@ impl FlashnetTokenConverter {
                 pool_id,
                 Some(info.clone()),
                 &swap,
+                event_emitter,
             )
             .await?;
             return Ok(RefundOutcome::AlreadyExecuted);
@@ -538,6 +545,7 @@ impl FlashnetTokenConverter {
                 pool_id,
                 Some(payment.id.clone()),
                 Some(info.clone()),
+                event_emitter,
             )
             .await?;
         Ok(if returned {
@@ -552,6 +560,7 @@ impl FlashnetTokenConverter {
     /// killed before mark).
     async fn reconcile_with_flashnet(
         &self,
+        event_emitter: &EventEmitter,
     ) -> Result<RefundPendingConversionsResponse, ConversionError> {
         let clawback_transfers = self
             .flashnet_client
@@ -583,7 +592,7 @@ impl FlashnetTokenConverter {
                 continue;
             };
             match self
-                .clawback_and_record_refunded(&transfer.id, pool_id, None, None)
+                .clawback_and_record_refunded(&transfer.id, pool_id, None, None, event_emitter)
                 .await
             {
                 Ok(true) => res.refunded = res.refunded.saturating_add(1),
@@ -657,6 +666,7 @@ impl FlashnetTokenConverter {
         pool_id: PublicKey,
         payment_id: Option<String>,
         prior_info: Option<ConversionInfo>,
+        event_emitter: &EventEmitter,
     ) {
         if let Some(swap) = self.find_executed_swap(Some(pool_id), clawback_id).await {
             info!(
@@ -674,7 +684,14 @@ impl FlashnetTokenConverter {
                 return;
             };
             if let Err(e) = self
-                .record_executed_swap(&payment_id, clawback_id, pool_id, prior_info, &swap)
+                .record_executed_swap(
+                    &payment_id,
+                    clawback_id,
+                    pool_id,
+                    prior_info,
+                    &swap,
+                    event_emitter,
+                )
                 .await
             {
                 warn!("Could not record the executed swap for {clawback_id}: {e}");
@@ -683,7 +700,13 @@ impl FlashnetTokenConverter {
         }
 
         match self
-            .clawback_and_record_refunded(clawback_id, pool_id, payment_id, prior_info)
+            .clawback_and_record_refunded(
+                clawback_id,
+                pool_id,
+                payment_id,
+                prior_info,
+                event_emitter,
+            )
             .await
         {
             Ok(true) => {}
@@ -703,6 +726,7 @@ impl FlashnetTokenConverter {
         pool_id: PublicKey,
         payment_id: Option<String>,
         prior_info: Option<ConversionInfo>,
+        event_emitter: &EventEmitter,
     ) -> Result<bool, ConversionError> {
         let refund_identifier = match self
             .flashnet_client
@@ -810,6 +834,9 @@ impl FlashnetTokenConverter {
                 ConversionStatus::Refunded,
             )
             .await;
+        }
+        if let Some(sent_payment_id) = &sent_payment_id {
+            emit_payment_metadata_updated(&self.storage, event_emitter, sent_payment_id).await;
         }
 
         Ok(true)
@@ -1099,6 +1126,7 @@ impl FlashnetTokenConverter {
         pool_id: PublicKey,
         prior: Option<ConversionInfo>,
         swap: &Swap,
+        event_emitter: &EventEmitter,
     ) -> Result<(), ConversionError> {
         let mut info = resolved_info_from_prior(prior, &pool_id, ConversionStatus::Completed);
         // The swap response is the better source and is carried forward when a
@@ -1146,6 +1174,7 @@ impl FlashnetTokenConverter {
             )
             .await;
         }
+        emit_payment_metadata_updated(&self.storage, event_emitter, payment_id).await;
         Ok(())
     }
 
@@ -1162,18 +1191,40 @@ impl FlashnetTokenConverter {
         swap: &Swap,
         purpose: &ConversionPurpose,
     ) -> Result<TokenConversionResponse, ConversionError> {
-        let info = ConversionInfo::Amm {
-            // The pool that ran it, which need not be the one just selected.
-            pool_id: swap.pool_lp_public_key.to_string(),
-            conversion_id: uuid::Uuid::now_v7().to_string(),
-            status: ConversionStatus::Completed,
-            fee: Some(swap.fee_paid),
-            purpose: Some(purpose.clone()),
-            // The swap being adopted was sized by the attempt that ran it, not
-            // by this one, so this attempt's adjustment does not describe it.
-            amount_adjustment: None,
-            // The listing states that a swap ran, not how it went.
-            degradation: None,
+        // A record the attempt that ran the swap already wrote on its sent leg
+        // describes it better than the listing does, so that record is kept.
+        let info = match self.recorded_conversion(sent_identifier).await {
+            Some(prior) => {
+                let mut info = resolved_info_from_prior(
+                    Some(prior),
+                    &swap.pool_lp_public_key,
+                    ConversionStatus::Completed,
+                );
+                if let ConversionInfo::Amm {
+                    fee,
+                    purpose: recorded_purpose,
+                    ..
+                } = &mut info
+                {
+                    fee.get_or_insert(swap.fee_paid);
+                    recorded_purpose.get_or_insert_with(|| purpose.clone());
+                }
+                info
+            }
+            None => ConversionInfo::Amm {
+                // The pool that ran it, which need not be the one just selected.
+                pool_id: swap.pool_lp_public_key.to_string(),
+                conversion_id: uuid::Uuid::now_v7().to_string(),
+                status: ConversionStatus::Completed,
+                fee: Some(swap.fee_paid),
+                purpose: Some(purpose.clone()),
+                // The swap being adopted was sized by the attempt that ran it,
+                // not by this one, so this attempt's adjustment does not
+                // describe it.
+                amount_adjustment: None,
+                // The listing states that a swap ran, not how it went.
+                degradation: None,
+            },
         };
         let (sent, received) = split_legs(&info, swap.asset_in_address == BTC_ASSET_ADDRESS);
         let sent_payment_id = resolve_and_insert_payment_metadata(
@@ -1204,6 +1255,18 @@ impl FlashnetTokenConverter {
             sent_payment_id,
             received_payment_id,
         })
+    }
+
+    /// The AMM conversion recorded on a transfer's payment, if any.
+    async fn recorded_conversion(&self, identifier: &str) -> Option<ConversionInfo> {
+        let payment_id = resolve_payment_id(identifier, &self.spark_wallet, &self.storage, true)
+            .await
+            .ok()?;
+        let payment = self.storage.get_payment_by_id(payment_id).await.ok()?;
+        match crate::utils::conversions::extract_conversion_info(payment.details)? {
+            info @ ConversionInfo::Amm { .. } => Some(info),
+            _ => None,
+        }
     }
 
     /// Stamps the conversion onto the input a declined swap returned, and
@@ -1880,9 +1943,12 @@ impl TokenConverter for FlashnetTokenConverter {
         })
     }
 
-    async fn refund_pending(&self) -> Result<RefundPendingConversionsResponse, ConversionError> {
+    async fn refund_pending(
+        &self,
+        event_emitter: &EventEmitter,
+    ) -> Result<RefundPendingConversionsResponse, ConversionError> {
         let mut local_failed = false;
-        let local = match self.refund_failed_conversions().await {
+        let local = match self.refund_failed_conversions(event_emitter).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("Local refund pass failed: {e}");
@@ -1890,7 +1956,7 @@ impl TokenConverter for FlashnetTokenConverter {
                 RefundPendingConversionsResponse::default()
             }
         };
-        let remote = match self.reconcile_with_flashnet().await {
+        let remote = match self.reconcile_with_flashnet(event_emitter).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("Reconcile with Flashnet failed: {e}");
@@ -1928,16 +1994,18 @@ impl TokenConverter for FlashnetTokenConverter {
 
     async fn refund_local_pending(
         &self,
+        event_emitter: &EventEmitter,
     ) -> Result<RefundPendingConversionsResponse, ConversionError> {
-        self.refund_failed_conversions().await
+        self.refund_failed_conversions(event_emitter).await
     }
 
-    async fn settle_stranded_input(&self, input: StrandedInput) {
+    async fn settle_stranded_input(&self, input: StrandedInput, event_emitter: &EventEmitter) {
         self.record_or_claw_back(
             &input.clawback_id,
             input.pool_id,
             input.payment_id,
             input.prior_info,
+            event_emitter,
         )
         .await;
     }
@@ -2339,17 +2407,34 @@ mod tests {
     #[cfg(feature = "sqlite")]
     const DELIVERY: &str = "01a0d391-a3fe-7a52-8e3b-265aa9f46e49";
 
+    /// Records the payment ids announced with `PaymentMetadataUpdated`.
+    #[cfg(feature = "sqlite")]
+    struct AnnouncedPayments(Arc<std::sync::Mutex<Vec<String>>>);
+
+    #[cfg(feature = "sqlite")]
+    #[macros::async_trait]
+    impl crate::EventListener for AnnouncedPayments {
+        async fn on_event(&self, event: crate::SdkEvent) {
+            if let crate::SdkEvent::PaymentMetadataUpdated { payment } = event {
+                self.0.lock().unwrap().push(payment.id);
+            }
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    struct StrandedFixture {
+        converter: FlashnetTokenConverter,
+        storage: Arc<dyn Storage>,
+        requests: Arc<std::sync::Mutex<Vec<String>>>,
+        info: ConversionInfo,
+        announced: Arc<std::sync::Mutex<Vec<String>>>,
+        event_emitter: EventEmitter,
+    }
+
     /// A converter over the fake, with the stranded input stored as a
     /// `RefundNeeded` send so its status can be read back.
     #[cfg(feature = "sqlite")]
-    async fn stranded_input_converter(
-        executed_swap: Option<Swap>,
-    ) -> (
-        FlashnetTokenConverter,
-        Arc<dyn Storage>,
-        Arc<std::sync::Mutex<Vec<String>>>,
-        ConversionInfo,
-    ) {
+    async fn stranded_input_converter(executed_swap: Option<Swap>) -> StrandedFixture {
         let mut dir = std::env::temp_dir();
         dir.push(format!("breez-test-stranded-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2367,6 +2452,11 @@ mod tests {
             .unwrap(),
         );
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let event_emitter = EventEmitter::new(false);
+        let announced = Arc::new(std::sync::Mutex::new(Vec::new()));
+        event_emitter
+            .add_external_listener(Box::new(AnnouncedPayments(Arc::clone(&announced))))
+            .await;
         let converter = FlashnetTokenConverter::new(
             FlashnetConfig::default_config(Network::Regtest.into(), None),
             Arc::clone(&storage),
@@ -2415,7 +2505,14 @@ mod tests {
             )
             .await
             .unwrap();
-        (converter, storage, requests, info)
+        StrandedFixture {
+            converter,
+            storage,
+            requests,
+            info,
+            announced,
+            event_emitter,
+        }
     }
 
     #[cfg(feature = "sqlite")]
@@ -2447,7 +2544,14 @@ mod tests {
             inbound_transfer_id: STRANDED_INPUT.to_string(),
             outbound_transfer_id: DELIVERY.to_string(),
         };
-        let (converter, storage, requests, info) = stranded_input_converter(Some(swap)).await;
+        let StrandedFixture {
+            converter,
+            storage,
+            requests,
+            info,
+            announced,
+            event_emitter,
+        } = stranded_input_converter(Some(swap)).await;
         storage
             .apply_payment_update(Payment {
                 id: DELIVERY.to_string(),
@@ -2473,6 +2577,7 @@ mod tests {
                 sample_pool_key(),
                 Some(STRANDED_INPUT.to_string()),
                 Some(info),
+                &event_emitter,
             )
             .await;
 
@@ -2488,6 +2593,7 @@ mod tests {
             stored_status(&storage, STRANDED_INPUT).await,
             Some(ConversionStatus::Completed)
         );
+        assert_eq!(*announced.lock().unwrap(), vec![STRANDED_INPUT.to_string()]);
 
         let listed: Vec<String> = storage
             .list_payments(StorageListPaymentsRequest::default())
@@ -2516,12 +2622,118 @@ mod tests {
         );
     }
 
+    /// Finding a swap the pool ran keeps the record already written on its
+    /// sent leg, only marking it completed, and gives the delivery the same
+    /// conversion.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_found_swap_keeps_the_sent_legs_record() {
+        let swap = Swap {
+            id: "swap".to_string(),
+            pool_lp_public_key: sample_pool_key(),
+            amount_in: 1_600_000,
+            amount_out: 2000,
+            asset_in_address: "token".to_string(),
+            asset_out_address: BTC_ASSET_ADDRESS.to_string(),
+            price: None,
+            timestamp: "2026-09-28T00:00:00Z".to_string(),
+            fee_paid: 7,
+            pool_asset_a_address: None,
+            pool_asset_b_address: None,
+            inbound_transfer_id: STRANDED_INPUT.to_string(),
+            outbound_transfer_id: DELIVERY.to_string(),
+        };
+        let StrandedFixture {
+            converter, storage, ..
+        } = stranded_input_converter(Some(swap)).await;
+        storage
+            .insert_payment_metadata(
+                STRANDED_INPUT.to_string(),
+                PaymentMetadata {
+                    conversion_info: Some(ConversionInfo::Amm {
+                        pool_id: sample_pool_key().to_string(),
+                        conversion_id: "conversion".to_string(),
+                        status: ConversionStatus::RefundNeeded,
+                        fee: None,
+                        purpose: Some(ConversionPurpose::SelfTransfer),
+                        amount_adjustment: Some(AmountAdjustmentReason::FlooredToMinLimit),
+                        degradation: Some(SwapDegradation::BelowMinimum),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        storage
+            .apply_payment_update(Payment {
+                id: DELIVERY.to_string(),
+                payment_type: crate::PaymentType::Receive,
+                status: crate::PaymentStatus::Completed,
+                amount: 2000,
+                fees: 0,
+                timestamp: 2,
+                method: crate::PaymentMethod::Spark,
+                details: Some(PaymentDetails::Spark {
+                    invoice_details: None,
+                    htlc_details: None,
+                    conversion_info: None,
+                }),
+                conversion_details: None,
+            })
+            .await
+            .unwrap();
+
+        let found = converter
+            .find_completed_conversion(
+                &TransferId::from_str(STRANDED_INPUT).unwrap(),
+                &ConversionPurpose::AutoConversion,
+            )
+            .await
+            .unwrap()
+            .expect("the pool reports the swap");
+
+        assert_eq!(found.sent_payment_id, STRANDED_INPUT);
+        assert_eq!(found.received_payment_id, DELIVERY);
+        let recorded = |id: &str| {
+            let storage = Arc::clone(&storage);
+            let id = id.to_string();
+            async move {
+                let payment = storage.get_payment_by_id(id).await.unwrap();
+                crate::utils::conversions::extract_conversion_info(payment.details)
+                    .expect("an AMM record")
+            }
+        };
+        assert_eq!(
+            recorded(STRANDED_INPUT).await,
+            ConversionInfo::Amm {
+                pool_id: sample_pool_key().to_string(),
+                conversion_id: "conversion".to_string(),
+                status: ConversionStatus::Completed,
+                fee: Some(7),
+                purpose: Some(ConversionPurpose::SelfTransfer),
+                amount_adjustment: Some(AmountAdjustmentReason::FlooredToMinLimit),
+                degradation: Some(SwapDegradation::BelowMinimum),
+            }
+        );
+        let ConversionInfo::Amm { conversion_id, .. } = recorded(DELIVERY).await else {
+            panic!("expected an AMM record");
+        };
+        assert_eq!(conversion_id, "conversion");
+    }
+
     /// With no swap listed for the input, it is clawed back and recorded as
     /// refunded.
     #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn a_stranded_input_with_no_swap_is_clawed_back() {
-        let (converter, storage, requests, info) = stranded_input_converter(None).await;
+        let StrandedFixture {
+            converter,
+            storage,
+            requests,
+            info,
+            announced,
+            event_emitter,
+        } = stranded_input_converter(None).await;
 
         converter
             .record_or_claw_back(
@@ -2529,6 +2741,7 @@ mod tests {
                 sample_pool_key(),
                 Some(STRANDED_INPUT.to_string()),
                 Some(info),
+                &event_emitter,
             )
             .await;
 
@@ -2544,6 +2757,7 @@ mod tests {
             stored_status(&storage, STRANDED_INPUT).await,
             Some(ConversionStatus::Refunded)
         );
+        assert_eq!(*announced.lock().unwrap(), vec![STRANDED_INPUT.to_string()]);
     }
 
     fn sample_pool_key() -> PublicKey {

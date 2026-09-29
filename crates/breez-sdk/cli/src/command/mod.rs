@@ -222,6 +222,15 @@ pub enum Command {
         /// Falls back to the SDK config default (15 bps) when unset.
         #[arg(long = "cross-chain-target-overpay-bps")]
         cross_chain_target_overpay_bps: Option<u32>,
+
+        /// Deliver a cross-chain receive as Bitcoin (sats). Without it, the SDK
+        /// delivers the active stable-balance token when the route supports it.
+        #[arg(
+            long = "cross-chain-to-bitcoin",
+            action = clap::ArgAction::SetTrue,
+            conflicts_with = "token_identifier"
+        )]
+        cross_chain_to_bitcoin: bool,
     },
 
     /// Pay the given payment request
@@ -794,6 +803,7 @@ pub(crate) async fn execute_command(
             cross_chain_max_slippage_bps,
             cross_chain_fees_included,
             cross_chain_target_overpay_bps,
+            cross_chain_to_bitcoin,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -852,9 +862,13 @@ pub(crate) async fn execute_command(
                     } else {
                         None
                     };
-                    let destination = token_identifier.map(|token_identifier| {
-                        breez_sdk_spark::SparkAsset::Token { token_identifier }
-                    });
+                    let destination = if cross_chain_to_bitcoin {
+                        Some(breez_sdk_spark::SparkAsset::Bitcoin)
+                    } else {
+                        token_identifier.map(|token_identifier| {
+                            breez_sdk_spark::SparkAsset::Token { token_identifier }
+                        })
+                    };
                     ReceivePaymentMethod::CrossChain {
                         route,
                         amount,

@@ -11,7 +11,7 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
-    GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
+    EventEmitter, GetInfoRequest, GetInfoResponse, InstantClaimStatus, Payment,
     error::SdkError,
     events::{EventListener, SdkEvent},
     persist::{ObjectCacheRepository, UpdateDepositPayload},
@@ -70,6 +70,7 @@ impl RuntimeProfile for ClientRuntime {
         sdk.try_recover_lightning_address();
         spawn_conversion_refunder(
             Arc::clone(&sdk.token_converter),
+            Arc::clone(&sdk.event_emitter),
             sdk.shutdown_sender.subscribe(),
         );
         if let Some(stable_balance) = &sdk.stable_balance {
@@ -529,6 +530,7 @@ impl EventListener for ClientSyncListener {
 
 fn spawn_conversion_refunder(
     token_converter: Arc<dyn TokenConverter>,
+    event_emitter: Arc<EventEmitter>,
     shutdown_receiver: watch::Receiver<()>,
 ) {
     let refund_requests = token_converter.subscribe_refund_requests();
@@ -537,6 +539,7 @@ fn spawn_conversion_refunder(
     tokio::spawn(
         run_conversion_refunder(
             token_converter,
+            event_emitter,
             refund_requests,
             shutdown_receiver,
             Duration::from_secs(STRANDED_INPUT_SETTLE_SECS),
@@ -550,6 +553,7 @@ fn spawn_conversion_refunder(
 /// already under way completes first, so `disconnect` waits for its clawback.
 async fn run_conversion_refunder(
     token_converter: Arc<dyn TokenConverter>,
+    event_emitter: Arc<EventEmitter>,
     mut refund_requests: Option<broadcast::Receiver<RefundRequest>>,
     mut shutdown_receiver: watch::Receiver<()>,
     settle_wait: Duration,
@@ -562,7 +566,7 @@ async fn run_conversion_refunder(
             info!("Conversion refunder shutdown before init pass completed");
             return;
         }
-        result = token_converter.refund_pending() => {
+        result = token_converter.refund_pending(&event_emitter) => {
             if let Err(e) = result {
                 error!("Init conversion-refund pass failed: {e:?}");
             }
@@ -613,7 +617,9 @@ async fn run_conversion_refunder(
                 }
                 // Not raced against shutdown: a clawback that has started is
                 // seen through, so it is never left half-recorded.
-                token_converter.settle_stranded_input(*input).await;
+                token_converter
+                    .settle_stranded_input(*input, &event_emitter)
+                    .await;
             }
             RefundRequest::Pass => {
                 select! {
@@ -622,7 +628,7 @@ async fn run_conversion_refunder(
                         info!("Conversion refunder shutdown during local pass");
                         return;
                     }
-                    result = token_converter.refund_local_pending() => {
+                    result = token_converter.refund_local_pending(&event_emitter) => {
                         if let Err(e) = result {
                             error!("Periodic local refund pass failed: {e:?}");
                         }
@@ -673,6 +679,14 @@ mod tests {
             unreachable!("the refunder does not convert")
         }
 
+        async fn find_completed_conversion(
+            &self,
+            _: &TransferId,
+            _: &ConversionPurpose,
+        ) -> Result<Option<TokenConversionResponse>, ConversionError> {
+            unreachable!("the refunder does not look up conversions")
+        }
+
         async fn validate(
             &self,
             _: Option<&ConversionOptions>,
@@ -694,17 +708,19 @@ mod tests {
 
         async fn refund_pending(
             &self,
+            _: &EventEmitter,
         ) -> Result<RefundPendingConversionsResponse, ConversionError> {
             Ok(RefundPendingConversionsResponse::default())
         }
 
         async fn refund_local_pending(
             &self,
+            _: &EventEmitter,
         ) -> Result<RefundPendingConversionsResponse, ConversionError> {
             Ok(RefundPendingConversionsResponse::default())
         }
 
-        async fn settle_stranded_input(&self, input: StrandedInput) {
+        async fn settle_stranded_input(&self, input: StrandedInput, _: &EventEmitter) {
             self.settle_started.notify_one();
             if self.hold_settle {
                 self.settle_release.notified().await;
@@ -746,6 +762,7 @@ mod tests {
         let (shutdown, receiver) = watch::channel(());
         tokio::spawn(run_conversion_refunder(
             converter.clone(),
+            Arc::new(EventEmitter::new(false)),
             requests,
             receiver,
             settle_wait,
