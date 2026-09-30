@@ -474,6 +474,8 @@ impl TimelockManager {
                                 .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
                                 .map(|j| j.signed_tx.as_ref().try_into())
                                 .transpose()?,
+                            direct_node_ladder_signing_jobs: Vec::new(),
+                            direct_node_ladder_rung_table_version: 0,
                         },
                     )),
                 },
@@ -631,6 +633,8 @@ impl TimelockManager {
                                 .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
                                 .map(|j| j.signed_tx.as_ref().try_into())
                                 .transpose()?,
+                            direct_node_ladder_signing_jobs: Vec::new(),
+                            direct_node_ladder_rung_table_version: 0,
                         },
                     )),
                 },
@@ -849,6 +853,8 @@ impl TimelockManager {
                                 .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
                                 .map(|j| j.signed_tx.as_ref().try_into())
                                 .transpose()?,
+                            direct_node_ladder_signing_jobs: Vec::new(),
+                            direct_node_ladder_rung_table_version: 0,
                         },
                     )),
                 },
