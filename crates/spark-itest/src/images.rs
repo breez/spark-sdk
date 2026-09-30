@@ -41,10 +41,16 @@ pub fn tag(image: &str) -> Result<String> {
         // crate it does not use leaves the daemon's image alone.
         SSPD => {
             let root = workspace_root();
+            // Everything the build reads from the repository root: the
+            // dockerfile copies the whole tree, and rustup picks the toolchain
+            // the pin names rather than the base image's.
             let mut inputs = vec![
                 docker.join("sspd.dockerfile"),
                 root.join("Cargo.toml"),
                 root.join("Cargo.lock"),
+                root.join("rust-toolchain.toml"),
+                root.join(".cargo/config.toml"),
+                root.join(".dockerignore"),
             ];
             for package in sspd_packages()? {
                 collect_sources(&package, &mut inputs)?;
