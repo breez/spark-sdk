@@ -97,6 +97,14 @@ Set it to `false` when a collection behind every operation costs more than it is
 
 The flag governs only the automatic collection. {{#name sync_wallet}} collects the missing data regardless of it and returns once that is done, so **with the automatic collection off, an explicit sync is what keeps the data current**. A leaf whose chain the operators will not complete stays un-exitable until a later attempt succeeds, so a successful sync means the collection ran, not that every leaf is now exitable.
 
+## Watchtower fee ladder
+
+Whether the SDK pre-signs the transactions that protect your funds on-chain at a range of fees.
+
+While you are offline, the Spark operators watch the chain for anyone trying to exit an outdated state of your balance, and broadcast your own pre-signed transactions to defend it. With a fee ladder they can pick the fee the network needs at that moment, so the defense holds when on-chain fees are high. Without one, it pays a fixed fee and can fall behind in a fee spike.
+
+The ladder is on unless you set {{#name watchtower_fee_ladder_enabled}} to false. It is not supported with a remote signer such as [Turnkey](./turnkey.md), where it stays off, and setting it to true there fails to connect.
+
 ## Optimization configuration
 
 The SDK can automatically optimize both the Spark leaf set and a token's

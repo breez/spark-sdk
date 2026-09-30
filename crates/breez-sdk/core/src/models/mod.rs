@@ -751,6 +751,13 @@ pub struct Config {
     /// Default value is true.
     pub exit_chain_auto_fetch_enabled: bool,
 
+    /// Whether the SDK pre-signs the transactions that protect funds on chain at
+    /// a range of fees, so the protection holds when on-chain fees are high.
+    ///
+    /// Unset turns it on. It is not supported with a remote signer, such as
+    /// Turnkey: unset keeps it off there, and true fails to connect.
+    pub watchtower_fee_ladder_enabled: Option<bool>,
+
     /// A set of external input parsers that are used by [`BreezSdk::parse`](crate::sdk::BreezSdk::parse) when the input
     /// is not recognized. See [`ExternalInputParser`] for more details on how to configure
     /// external parsing.
