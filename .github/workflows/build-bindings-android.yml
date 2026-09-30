@@ -61,14 +61,6 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.so dist
 
-      - name: Copy libc++_shared
-        if: ${{ matrix.target == 'armv7-linux-androideabi'}}
-        run: cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so dist
-
-      - name: Copy libc++_shared
-        if: ${{ matrix.target != 'armv7-linux-androideabi'}}
-        run: cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.target }}/libc++_shared.so dist
-
       - name: Archive bindings
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +114,6 @@ jobs:
       - name: Build Android ${{ matrix.target }} dummy
         run: |
           touch libbreez_sdk_spark_bindings.so
-          touch libc++_shared.so.so
 
       - name: Upload dummy Android ${{ matrix.target }} artifact
         uses: actions/upload-artifact@v4
