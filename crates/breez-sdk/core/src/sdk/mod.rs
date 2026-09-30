@@ -257,6 +257,7 @@ pub fn default_config(network: Network) -> Config {
         lnurl_domain,
         prefer_spark_over_lightning: false,
         exit_chain_auto_fetch_enabled: true,
+        watchtower_fee_ladder_enabled: None,
         external_input_parsers: None,
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
