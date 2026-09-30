@@ -126,6 +126,10 @@ enum StoreCommand {
     GetLeaves {
         response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
     },
+    GetLeavesWithStatus {
+        statuses: Vec<TreeNodeStatus>,
+        response_tx: oneshot::Sender<Result<Vec<TreeNode>, TreeServiceError>>,
+    },
     GetExitChains {
         leaf_ids: Vec<TreeNodeId>,
         response_tx: oneshot::Sender<Result<Vec<LeafPedigree>, TreeServiceError>>,
@@ -272,6 +276,13 @@ impl InMemoryTreeStore {
                 StoreCommand::GetLeaves { response_tx } => {
                     let result = Self::process_get_leaves(&state);
                     let _ = response_tx.send(result);
+                }
+                StoreCommand::GetLeavesWithStatus {
+                    statuses,
+                    response_tx,
+                } => {
+                    let _ = response_tx
+                        .send(Ok(Self::process_get_leaves_with_status(&state, &statuses)));
                 }
                 StoreCommand::GetExitChains {
                     leaf_ids,
@@ -455,6 +466,25 @@ impl InMemoryTreeStore {
             reserved_for_payment,
             reserved_for_swap,
         })
+    }
+
+    fn process_get_leaves_with_status(
+        state: &LeavesState,
+        statuses: &[TreeNodeStatus],
+    ) -> Vec<TreeNode> {
+        state
+            .leaves
+            .values()
+            .chain(
+                state
+                    .leaves_reservations
+                    .values()
+                    .flat_map(|entry| entry.leaves.iter()),
+            )
+            .map(|stored| &stored.node)
+            .filter(|node| statuses.contains(&node.status))
+            .cloned()
+            .collect()
     }
 
     /// Replaces `leaf_id`'s stored ancestor chain with `nodes`. An empty `nodes`
@@ -1054,6 +1084,18 @@ impl TreeStore for InMemoryTreeStore {
             .await
     }
 
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let statuses = statuses.to_vec();
+        self.send_command(|tx| StoreCommand::GetLeavesWithStatus {
+            statuses,
+            response_tx: tx,
+        })
+        .await
+    }
+
     async fn get_exit_chains(
         &self,
         leaf_ids: &[TreeNodeId],
@@ -1238,6 +1280,11 @@ mod tests {
     #[async_test_all]
     async fn test_get_verified_leaf_keys() {
         shared_tests::test_get_verified_leaf_keys(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_leaves_with_status() {
+        shared_tests::test_get_leaves_with_status(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]

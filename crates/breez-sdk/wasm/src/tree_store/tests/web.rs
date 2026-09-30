@@ -200,6 +200,12 @@ async fn test_get_leaves_not_available() {
 }
 
 #[wasm_bindgen_test]
+async fn test_get_leaves_with_status() {
+    let store = create_test_tree_store("wtree_test_get_leaves_with_status").await;
+    breez_sdk_spark::tree_store_tests::test_get_leaves_with_status(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_get_verified_leaf_keys() {
     let store = create_test_tree_store("wtree_test_get_verified_leaf_keys").await;
     breez_sdk_spark::tree_store_tests::test_get_verified_leaf_keys(&store).await;
