@@ -509,6 +509,7 @@ impl SparkWallet {
             Arc::clone(&spark_signer),
             config.network,
             operator_pool.clone(),
+            config.fee_ladder_enabled,
         ));
 
         let deposit_service = Arc::new(DepositService::new(

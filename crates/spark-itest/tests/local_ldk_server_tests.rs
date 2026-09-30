@@ -210,6 +210,7 @@ async fn client_create_htlc(
         spark_signer.clone(),
         network,
         operator_pool.clone(),
+        true,
     ));
     let tree_store: Arc<dyn TreeStore> = Arc::new(InMemoryTreeStore::default());
     let tree_service = SynchronousTreeService::new(

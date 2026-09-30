@@ -1456,6 +1456,7 @@ mod tests {
             Arc::clone(&spark_signer),
             Network::Regtest,
             Arc::clone(&operator_pool),
+            false,
         ));
 
         SynchronousTreeService::new(

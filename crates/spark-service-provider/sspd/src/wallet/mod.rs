@@ -160,6 +160,8 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             spark_signer.clone(),
             spark_network,
             operator_pool.clone(),
+            // The SSP's leaves keep their flat-fee direct node txs.
+            false,
         ));
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
