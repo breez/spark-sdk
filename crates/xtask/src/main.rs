@@ -1277,9 +1277,26 @@ fn capture_itest_state_cmd() -> Result<()> {
 }
 
 fn ensure_itest_state(sh: &Shell) -> Result<()> {
+    if state_snapshot_is_ready(sh).is_ok() {
+        return Ok(());
+    }
+    // Capturing takes a cluster of its own and a full DKG, so a test run never
+    // does it: in CI the state-snapshot job owns the snapshot every other job
+    // downloads.
+    if std::env::var_os("CI").is_some() {
+        bail!(
+            "the state snapshot is missing or stale. Rerun the state-snapshot job, which \
+             captures it and hands it to the jobs that run clusters."
+        );
+    }
+    capture_itest_state(sh)?;
+    state_snapshot_is_ready(sh)
+}
+
+fn state_snapshot_is_ready(sh: &Shell) -> Result<()> {
     cmd!(
         sh,
-        "cargo test -p spark-itest --test capture_state_snapshot ensure_state_snapshot -- --ignored --nocapture"
+        "cargo test -p spark-itest --test capture_state_snapshot state_snapshot_is_ready -- --ignored --nocapture"
     )
     .run()?;
     Ok(())

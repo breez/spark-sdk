@@ -13,26 +13,19 @@ use tracing::info;
 #[tokio::test]
 #[test_log::test]
 #[ignore = "state snapshot maintenance; run via the itest xtask targets"]
-async fn ensure_state_snapshot() -> Result<()> {
-    if let Err(e) = state_snapshot::check() {
-        info!("Building a state snapshot: {e}");
-        capture().await?;
-        state_snapshot::database_image().await?;
-        return Ok(());
-    }
+async fn state_snapshot_is_ready() -> Result<()> {
+    state_snapshot::check()?;
 
     // A change to what the daemon stores can leave the manifest unchanged, so the
-    // restored pool is also read back, and a stale one is rebuilt.
+    // restored pool is read back as well.
     let signer = DefaultSigner::new(&hex::decode(SSPD_WALLET_SEED_HEX)?, spark::Network::Regtest)?;
     let identity = derive_identity_public_key(&signer).await?;
-    if let Err(e) = state_snapshot::verify(&identity.serialize()).await {
-        info!("Rebuilding the state snapshot: {e}");
-        capture().await?;
-        state_snapshot::database_image().await?;
-        return Ok(());
-    }
+    state_snapshot::verify(&identity.serialize()).await?;
 
-    info!("State snapshot is current.");
+    // The images every test's cluster starts from, built here rather than inside
+    // the first test that wants one.
+    state_snapshot::database_image().await?;
+    state_snapshot::chain_image().await?;
     Ok(())
 }
 
