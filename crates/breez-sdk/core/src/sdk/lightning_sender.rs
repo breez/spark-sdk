@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId, WalletTransfer};
+use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId};
 use tokio::select;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, error, info, warn};
@@ -154,6 +154,19 @@ impl LightningSender {
                 displayed_amount,
             })
             .await;
+        // A send settling over Spark is tied to its Bolt11 only by this row, so it
+        // is written before the transfer can land: a crash after would otherwise
+        // leave the send reported as a bare Spark transfer. A send that then fails
+        // leaves a row no payment ever matches.
+        if prefer_spark
+            && matches!(
+                self.spark_wallet.extract_spark_fallback(invoice),
+                Ok(Some(_))
+            )
+        {
+            record_spark_settled_bolt11_send(&self.storage, &transfer_id.to_string(), invoice)
+                .await;
+        }
 
         let payment_response = Box::pin(self.spark_wallet.pay_lightning_invoice(
             invoice,
@@ -164,13 +177,8 @@ impl LightningSender {
         ))
         .await?;
         self.forget_pending_send(&transfer_id.to_string()).await;
-        self.payment_from_pay_result(
-            payment_response,
-            invoice,
-            displayed_amount,
-            completion_timeout_secs,
-        )
-        .await
+        self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
+            .await
     }
 
     /// Finishes any send that committed leaves with the operators but was
@@ -214,12 +222,7 @@ impl LightningSender {
                     info!("Resumed lightning send {}", entry.transfer_id);
                     self.forget_pending_send(&entry.transfer_id).await;
                     if let Err(e) = self
-                        .payment_from_pay_result(
-                            payment_response,
-                            &entry.invoice,
-                            entry.displayed_amount,
-                            0,
-                        )
+                        .payment_from_pay_result(payment_response, entry.displayed_amount, 0)
                         .await
                     {
                         error!("Failed to persist resumed lightning send: {e:?}");
@@ -265,7 +268,6 @@ impl LightningSender {
     pub(crate) async fn payment_from_pay_result(
         &self,
         payment_response: PayLightningInvoiceResult,
-        invoice: &str,
         displayed_amount: u128,
         completion_timeout_secs: u64,
     ) -> Result<Payment, SdkError> {
@@ -313,10 +315,7 @@ impl LightningSender {
             // `completion_timeout_secs` is ignored for this branch and the
             // payment is returned with whatever status the transfer already
             // has.
-            None => {
-                self.spark_settled_payment(payment_response.transfer, invoice)
-                    .await?
-            }
+            None => payment_response.transfer.try_into()?,
         };
         self.storage.apply_payment_update(payment.clone()).await?;
         // Read back, so a send that settled a Bolt11 over Spark is returned as
@@ -326,22 +325,6 @@ impl LightningSender {
             .get_payment_by_id(payment.id.clone())
             .await
             .unwrap_or(payment))
-    }
-
-    /// Builds the payment for a send that settled as a Spark transfer, reported
-    /// as the Bolt11 it paid rather than as a bare Spark send.
-    ///
-    /// The transfer does not name that Bolt11, so the link is recorded here:
-    /// every later rebuild of this payment from the transfer, by the sync or by
-    /// a reconcile, reads it back from there.
-    async fn spark_settled_payment(
-        &self,
-        transfer: WalletTransfer,
-        invoice: &str,
-    ) -> Result<Payment, SdkError> {
-        let payment: Payment = transfer.try_into()?;
-        record_spark_settled_bolt11_send(&self.storage, &payment.id, invoice).await;
-        Ok(payment)
     }
 
     /// Spawns the background poll that watches an outgoing Lightning send to
