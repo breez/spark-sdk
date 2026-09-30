@@ -191,6 +191,7 @@ async fn client_create_htlc(
         config.split_secret_threshold,
         operator_pool.clone(),
         None,
+        true,
     ));
     let service_provider = Arc::new(ServiceProvider::new(
         ssp_config.clone(),
@@ -275,6 +276,7 @@ async fn client_claim_htlc(
         config.split_secret_threshold,
         operator_pool.clone(),
         None,
+        true,
     ));
     let htlc_service = HtlcService::new(
         operator_pool.clone(),

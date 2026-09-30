@@ -115,6 +115,8 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             2, // split_secret_threshold
             operator_pool.clone(),
             None,
+            // The SSP's leaves keep their anchored refunds.
+            false,
         ));
 
         // DepositService requires a service provider, but the SSP never calls

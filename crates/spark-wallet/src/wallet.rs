@@ -486,6 +486,7 @@ impl SparkWallet {
             config.split_secret_threshold,
             operator_pool.clone(),
             transfer_observer.clone(),
+            config.fee_ladder_enabled,
         ));
 
         let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
