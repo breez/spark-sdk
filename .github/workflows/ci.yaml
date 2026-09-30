@@ -148,7 +148,7 @@ jobs:
         id: snapshot
         run: |
           key=$(cargo run --quiet -p spark-itest --bin itest-bootstrap-snapshot-key)
-          echo "key=itest-bootstrap-snapshot-${{ runner.os }}-$key" >> "$GITHUB_OUTPUT"
+          echo "key=itest-bootstrap-snapshot-${{ runner.os }}-${{ runner.arch }}-$key" >> "$GITHUB_OUTPUT"
 
       - name: Restore the snapshot
         id: cache
