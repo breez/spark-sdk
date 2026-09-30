@@ -191,6 +191,9 @@ async fn client_create_htlc(
         config.split_secret_threshold,
         operator_pool.clone(),
         None,
+        // TODO: turn on once the itests run Lightspark's current operator
+        // (breez/spark-sdk#1207).
+        false,
     ));
     let service_provider = Arc::new(ServiceProvider::new(
         ssp_config.clone(),
@@ -275,6 +278,9 @@ async fn client_claim_htlc(
         config.split_secret_threshold,
         operator_pool.clone(),
         None,
+        // TODO: turn on once the itests run Lightspark's current operator
+        // (breez/spark-sdk#1207).
+        false,
     ));
     let htlc_service = HtlcService::new(
         operator_pool.clone(),

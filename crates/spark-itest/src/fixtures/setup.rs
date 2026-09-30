@@ -196,6 +196,7 @@ impl TestFixtures {
             },
             self_payment_allowed: false,
             max_concurrent_claims: 1,
+            fee_ladder_enabled: true,
         })
     }
 }

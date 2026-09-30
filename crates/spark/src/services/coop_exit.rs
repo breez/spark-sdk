@@ -853,6 +853,7 @@ mod tests {
                 2,
                 Arc::clone(&operator_pool),
                 None,
+                false,
             ));
             let service = CoopExitService::new(
                 operator_pool,

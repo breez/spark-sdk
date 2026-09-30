@@ -30,6 +30,10 @@ pub struct SparkWalletConfig {
     /// Default is 1 (sequential claiming). Increase for server environments
     /// with high incoming payment volume to improve throughput.
     pub max_concurrent_claims: u32,
+    /// Whether claims and refund-timelock renewals sign watchtower fee ladders:
+    /// the leaf's exit transactions pre-signed at a range of fees, so the
+    /// watchtower can pay the fee the mempool needs when it defends the leaf.
+    pub fee_ladder_enabled: bool,
 }
 
 impl SparkWalletConfig {
@@ -72,6 +76,7 @@ impl SparkWalletConfig {
                 },
                 self_payment_allowed: false,
                 max_concurrent_claims: 1,
+                fee_ladder_enabled: true,
             },
             _ => Self {
                 network,
@@ -94,6 +99,7 @@ impl SparkWalletConfig {
                 },
                 self_payment_allowed: false,
                 max_concurrent_claims: 1,
+                fee_ladder_enabled: true,
             },
         }
     }
