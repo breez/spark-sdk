@@ -27,7 +27,23 @@ pub fn reference(image: &str) -> Result<String> {
     Ok(format!("{image}:{}", tag(image)?))
 }
 
+/// Hashing an image's inputs walks the workspace and shells out to cargo, and
+/// nothing they read changes while the process runs.
 pub fn tag(image: &str) -> Result<String> {
+    static TAGS: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
+        std::sync::Mutex::new(None);
+
+    let mut tags = TAGS.lock().expect("the image tags");
+    let tags = tags.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(tag) = tags.get(image) {
+        return Ok(tag.clone());
+    }
+    let tag = hash_inputs(image)?;
+    tags.insert(image.to_string(), tag.clone());
+    Ok(tag)
+}
+
+fn hash_inputs(image: &str) -> Result<String> {
     let docker = manifest_dir().join("docker");
     let mut inputs = match image {
         SPARK_SO => vec![
