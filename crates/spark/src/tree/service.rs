@@ -36,7 +36,9 @@ use crate::{
     },
 };
 
-use super::{LeafKeyTweak, TreeNode, error::TreeServiceError};
+use super::{
+    LeafKeyTweak, TreeNode, error::TreeServiceError, exit_chain_resolver::LEAVES_PER_FETCH,
+};
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -116,15 +118,18 @@ impl TreeService for SynchronousTreeService {
         node_ids: &[TreeNodeId],
         include_parents: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        if node_ids.is_empty() {
-            return Ok(Vec::new());
-        }
         let client = &self.operator_pool.get_coordinator().client;
-        let source = Source::NodeIds(TreeNodeIds {
-            node_ids: node_ids.iter().map(ToString::to_string).collect(),
-        });
-        self.query_nodes(client, include_parents, Some(source), vec![])
-            .await
+        let mut nodes = Vec::new();
+        for batch in node_ids.chunks(LEAVES_PER_FETCH) {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: batch.iter().map(ToString::to_string).collect(),
+            });
+            nodes.extend(
+                self.query_nodes(client, include_parents, Some(source), vec![])
+                    .await?,
+            );
+        }
+        Ok(nodes)
     }
 
     async fn load_exit_chains(
