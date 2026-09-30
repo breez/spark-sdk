@@ -198,11 +198,6 @@ pub fn plan_unilateral_exit(
     destination_script_len: usize,
     on_chain: &ExitChainState,
 ) -> Result<UnilateralExitPlan, ServiceError> {
-    if inputs.is_empty() {
-        return Err(ServiceError::ValidationError(
-            "At least one CPFP input is required".to_string(),
-        ));
-    }
     if leaf_ids.is_empty() {
         return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
@@ -212,12 +207,14 @@ pub fn plan_unilateral_exit(
         });
     }
 
-    let change_script = &inputs[0].witness_utxo.script_pubkey;
-    let change_dust_limit = change_script.minimal_non_dust().to_sat();
+    // Without inputs no CPFP child is built, so the weight is not used.
+    let input_weight = Weight::from_wu(inputs.first().map_or(0, |i| i.signed_input_weight));
     let params = UnilateralExitLeafCostParams {
-        initial_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        change_script_len: change_script.len(),
+        initial_cpfp_input_weight: input_weight,
+        single_cpfp_input_weight: input_weight,
+        change_script_len: inputs
+            .first()
+            .map_or(0, |i| i.witness_utxo.script_pubkey.len()),
         destination_script_len,
         fee_rate_sat_per_kw,
     };
@@ -239,8 +236,15 @@ pub fn plan_unilateral_exit(
         .cloned()
         .collect();
 
+    let change_dust_limit = inputs.first().map_or(0, |i| {
+        i.witness_utxo.script_pubkey.minimal_non_dust().to_sat()
+    });
     let (assigned, fan_out_psbt) = if to_build.is_empty() {
         (Vec::new(), None)
+    } else if inputs.is_empty() {
+        return Err(ServiceError::InvalidInput(
+            "At least one funding input is required".to_string(),
+        ));
     } else if to_build.len() == 1 {
         // The single-leaf arm hands every input to the one branch, so unlike the
         // multi-branch paths it has no partition step to reject underfunding. Gate
@@ -337,7 +341,8 @@ pub fn plan_unilateral_exit(
 /// funding they need, sized from the funding kind's weight with no actual UTXOs.
 pub struct UnilateralExitQuote {
     pub selected_leaves: Vec<UnilateralExitSelectedLeaf>,
-    /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats).
+    /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats). Only the
+    /// branches with steps left to build need any.
     pub per_branch_funding: Vec<(TreeNodeId, u64)>,
     pub single_utxo_funding_sat: u64,
     /// CPFP children's fees, paid by the funding UTXOs.
@@ -389,6 +394,7 @@ pub fn quote_unilateral_exit(
 
     let per_branch_funding: Vec<(TreeNodeId, u64)> = selected
         .iter()
+        .filter(|l| !is_complete_on_chain(on_chain, tree_nodes, &l.id))
         .map(|l| (l.id.clone(), branch_required_funding(l, change_dust_limit)))
         .collect();
     let leaves_total: u64 = per_branch_funding
@@ -406,13 +412,13 @@ pub fn quote_unilateral_exit(
         .map(|l| l.estimated_cost.saturating_sub(l.cpfp_cost))
         .fold(0u64, u64::saturating_add);
 
-    let fanout_fee_sat = if selected.len() == 1 {
+    let fanout_fee_sat = if per_branch_funding.len() <= 1 {
         0
     } else {
         fan_out_fee(
             Weight::from_wu(funding_input_weight),
             funding_output_script_len,
-            selected.len(),
+            per_branch_funding.len(),
             fee_rate_sat_per_kw,
         )
     };
@@ -2486,6 +2492,87 @@ mod tests {
             assert_eq!(quote.single_utxo_funding_sat, 0);
             assert_eq!(quote.fanout_fee_sat, 0);
             assert_eq!(quote.total_fee_sat, 0);
+        }
+
+        fn refunded_leaves() -> (
+            HashMap<TreeNodeId, TreeNode>,
+            Vec<TreeNodeId>,
+            ExitChainState,
+        ) {
+            let leaves = [leaf_node_n("a", 100_000, 1), leaf_node_n("b", 100_000, 2)];
+            let ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
+            let mut on_chain = on_chain_state(&ids, &[]);
+            on_chain.refunds = leaves
+                .iter()
+                .map(|leaf| ExitRefund {
+                    leaf_id: leaf.id.clone(),
+                    state: ExitRefundState::OnChain {
+                        tx: leaf.refund_tx.clone().unwrap(),
+                        vout: 0,
+                        value: leaf.value,
+                        block_height: None,
+                    },
+                })
+                .collect();
+            let nodes = leaves
+                .into_iter()
+                .map(|leaf| (leaf.id.clone(), leaf))
+                .collect();
+            (nodes, ids, on_chain)
+        }
+
+        #[test_all]
+        fn leaves_with_only_the_sweep_left_need_no_funding() {
+            let (nodes, ids, on_chain) = refunded_leaves();
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert_eq!(quote.selected_leaves.len(), 2);
+            assert!(quote.per_branch_funding.is_empty());
+            assert_eq!(quote.fanout_fee_sat, 0);
+            assert_eq!(quote.single_utxo_funding_sat, 0);
+
+            let plan = plan_unilateral_exit(
+                nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                Vec::new(),
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert_eq!(plan.selected_leaves.len(), 2);
+            assert!(plan.fan_out_psbt.is_none());
+        }
+
+        #[test_all]
+        fn a_leaf_with_steps_left_needs_funding_to_plan() {
+            let node = leaf_node("leaf", 1_000_000);
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+
+            let result = plan_unilateral_exit(
+                nodes,
+                &[id],
+                UnilateralExitLeafFilter::All,
+                Vec::new(),
+                250,
+                22,
+                &ExitChainState::default(),
+            );
+
+            assert!(matches!(result, Err(ServiceError::InvalidInput(_))));
         }
     }
 }
