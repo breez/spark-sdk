@@ -119,8 +119,15 @@ pub fn check() -> Result<()> {
             manifest_path.display()
         )
     })?;
-    let manifest: SnapshotManifest = serde_json::from_str(&manifest)
-        .with_context(|| format!("{} is not a snapshot manifest", manifest_path.display()))?;
+    // A manifest this harness cannot read is one an older harness wrote, which is
+    // a snapshot to rebuild rather than a file to repair.
+    let manifest: SnapshotManifest = serde_json::from_str(&manifest).map_err(|e| {
+        anyhow::anyhow!(
+            "{} was written by another version of this harness ({e}). Rebuild the \
+             snapshot with `make capture-itest-state`.",
+            manifest_path.display()
+        )
+    })?;
     let expected = SnapshotManifest::expected()?;
     if manifest != expected {
         bail!(
