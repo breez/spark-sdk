@@ -93,6 +93,12 @@ pub enum SdkError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
+    /// The deposit is worth too little to claim: after the claim fee, what would
+    /// be credited is below the dust limit. A drop in on-chain fees can make it
+    /// claimable.
+    #[error("Deposit too small to claim: {tx}:{vout}")]
+    DepositTooSmall { tx: String, vout: u32 },
+
     /// Another claim on this deposit is already running.
     #[error("Deposit claim already in progress: {tx}:{vout}")]
     DepositClaimInProgress { tx: String, vout: u32 },
@@ -363,6 +369,12 @@ pub enum DepositClaimError {
     #[error("Missing utxo: {tx}:{vout}")]
     MissingUtxo { tx: String, vout: u32 },
 
+    /// The deposit is worth too little to claim: after the claim fee, what would
+    /// be credited is below the dust limit. A drop in on-chain fees can make it
+    /// claimable.
+    #[error("Deposit too small to claim: {tx}:{vout}")]
+    DepositTooSmall { tx: String, vout: u32 },
+
     #[error("Generic error: {message}")]
     Generic { message: String },
 }
@@ -384,6 +396,9 @@ impl From<SdkError> for DepositClaimError {
                 required_fee_rate_sat_per_vbyte,
             },
             SdkError::MissingUtxo { tx, vout } => DepositClaimError::MissingUtxo { tx, vout },
+            SdkError::DepositTooSmall { tx, vout } => {
+                DepositClaimError::DepositTooSmall { tx, vout }
+            }
             SdkError::Generic(e) => DepositClaimError::Generic { message: e },
             _ => DepositClaimError::Generic {
                 message: value.to_string(),

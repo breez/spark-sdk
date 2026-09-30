@@ -21,6 +21,8 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
           "${claimError.requiredFeeRateSatPerVbyte} sats/vByte");
     } else if (claimError is DepositClaimError_MissingUtxo) {
       print("UTXO not found when claiming deposit");
+    } else if (claimError is DepositClaimError_DepositTooSmall) {
+      print("Deposit too small to claim");
     } else if (claimError is DepositClaimError_Generic) {
       print("Claim failed: ${claimError.message}");
     }

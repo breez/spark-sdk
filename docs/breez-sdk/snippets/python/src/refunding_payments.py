@@ -40,6 +40,8 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
                     )
                 elif isinstance(deposit.claim_error, DepositClaimError.MISSING_UTXO):
                     logging.info("Claim failed: UTXO not found")
+                elif isinstance(deposit.claim_error, DepositClaimError.DEPOSIT_TOO_SMALL):
+                    logging.info("Claim failed: deposit too small to claim")
                 elif isinstance(deposit.claim_error, DepositClaimError.GENERIC):
                     logging.info(f"Claim failed: {deposit.claim_error.message}")
     except Exception as error:

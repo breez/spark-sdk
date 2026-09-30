@@ -31,6 +31,8 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
                 )
             case .missingUtxo(let tx, let vout):
                 print("UTXO not found when claiming deposit")
+            case .depositTooSmall(let tx, let vout):
+                print("Deposit too small to claim")
             case .generic(let message):
                 print("Claim failed: \(message)")
             }

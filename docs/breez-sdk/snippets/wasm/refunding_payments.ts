@@ -40,6 +40,9 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
         case 'missingUtxo':
           console.log('UTXO not found when claiming deposit')
           break
+        case 'depositTooSmall':
+          console.log('Deposit too small to claim')
+          break
         case 'generic':
           console.log(`Claim failed: ${deposit.claimError.message}`)
           break

@@ -870,6 +870,96 @@ async fn test_deposit_low_amount_refund_fee_rate(#[future] env: Result<Environme
     Ok(())
 }
 
+/// A deposit whose credit after the claim fee falls below the dust limit is
+/// reported as `DepositTooSmall` by the automatic claim, the quote and a manual
+/// claim alike. The faucet sends no less than 1000 sats, so Alice sends it.
+/// Deployed only: it pins the live SSP's claim fee and its refusal.
+#[cfg(not(feature = "local-itest"))]
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_deposit_too_small_to_claim(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
+    ensure_funded(&mut alice, 5_000).await?;
+
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    // Regtest charges 99 sats to claim, leaving 241: below the 330 sat dust limit.
+    let fund_amount = 340u64;
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: bob_address.clone(),
+            },
+            amount: Some(fund_amount as u128),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::BitcoinAddress {
+                confirmation_speed: OnchainConfirmationSpeed::Fast,
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let unclaimed = wait_for_unclaimed_event(&mut bob.events, 300).await?;
+    let dep = unclaimed
+        .iter()
+        .find(|d| d.amount_sats == fund_amount)
+        .cloned()
+        .expect("unclaimed deposit not found");
+    assert!(
+        matches!(
+            &dep.claim_error,
+            Some(DepositClaimError::DepositTooSmall { tx, vout }) if *tx == dep.txid && *vout == dep.vout
+        ),
+        "unexpected claim error: {:?}",
+        dep.claim_error
+    );
+
+    let quote = bob
+        .sdk
+        .fetch_claim_deposit_quote(FetchClaimDepositQuoteRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+        })
+        .await;
+    assert!(
+        matches!(quote, Err(SdkError::DepositTooSmall { .. })),
+        "unexpected quote: {quote:?}"
+    );
+
+    let claim = bob
+        .sdk
+        .claim_deposit(ClaimDepositRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+            max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
+        })
+        .await;
+    assert!(
+        matches!(claim, Err(SdkError::DepositTooSmall { .. })),
+        "unexpected claim: {claim:?}"
+    );
+
+    Ok(())
+}
+
 /// Verify deposits to multiple rotated addresses are all discovered and claimed.
 ///
 /// This test:

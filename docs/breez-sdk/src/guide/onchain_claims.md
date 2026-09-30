@@ -140,6 +140,8 @@ What to offer follows from the quote and the configured max claim fee. Check the
 
 Which outcome occurs follows from the deposit's depth and the max fee rather than from anything you ask for. A {{#name max_fee}} below what an early claim costs returns {{#enum ClaimDepositOutcome::Deferred}} rather than failing. A deposit that has already reached the standard claim depth and whose claim exceeds the max fee is a different matter and returns {{#enum SdkError::MaxDepositClaimFeeExceeded}}, because nothing will claim it until the max fee rises or on-chain fees fall.
 
+A deposit worth too little to claim returns {{#enum SdkError::DepositTooSmall}}, from both {{#name claim_deposit}} and {{#name fetch_claim_deposit_quote}}, and automatic claims record it as {{#enum DepositClaimError::DepositTooSmall}} in {{#name claim_error}}. This happens when the amount left after the claim fee would be below the dust limit. No max fee changes this, but the deposit can become claimable once on-chain fees fall.
+
 Whether a deferred deposit actually waits for the standard claim depends on its {{#name reason}}. The SDK re-attempts an early claim as the deposit gains confirmations, so a claim declined at a depth the provider will not yet front is often claimed early a block or two later.
 
 - {{#enum ClaimDeferredReason::NoEarlyClaimAvailable}} usually clears with the next confirmation.
