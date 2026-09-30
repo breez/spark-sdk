@@ -17,7 +17,7 @@ use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
-use crate::utils::bolt11_fallback::{SparkFallback, extract_spark_fallback};
+use crate::utils::bolt11_fallback::{SparkFallback, all_spark_fallbacks, extract_spark_fallback};
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
@@ -356,52 +356,68 @@ enum RequestedFallback<'a> {
     Invoice(&'a SparkAddress),
 }
 
-/// Verify the Spark destination embedded in an SSP-returned receive invoice is
-/// the one we asked for.
+/// Verify every Spark destination embedded in an SSP-returned receive invoice
+/// pays us, and that the one we asked for is among them.
 ///
 /// A payer that finds a destination here transfers to it directly and settles
 /// nothing over Lightning, so a substituted one is paid instead of us with no
 /// payment hash, preimage or operator involved to catch it. Nothing else about
 /// the invoice reveals the swap: the BOLT11 is signed by the SSP's own node, so
 /// an invoice correct in every other respect can still carry a foreign
-/// destination.
+/// destination. Payers differ in which encoding they read, so each one is
+/// checked. Besides the requested one, only our own bare address is allowed.
 fn validate_received_fallback(
-    embedded: Option<&SparkAddress>,
+    embedded: &[Option<SparkAddress>],
     requested: &RequestedFallback<'_>,
-    identity_pubkey: PublicKey,
+    own_address: &SparkAddress,
 ) -> Result<(), ServiceError> {
-    match (embedded, requested) {
-        (None, RequestedFallback::None) => Ok(()),
-        (Some(_), RequestedFallback::None) => Err(ServiceError::ValidationError(
-            "SSP invoice carries a Spark destination that was not requested".to_string(),
-        )),
-        (None, _) => Err(ServiceError::ValidationError(
-            "SSP invoice is missing the requested Spark destination".to_string(),
-        )),
-        (Some(address), RequestedFallback::Address) => {
-            if address.is_invoice() {
+    if matches!(requested, RequestedFallback::None) {
+        return if embedded.is_empty() {
+            Ok(())
+        } else {
+            Err(ServiceError::ValidationError(
+                "SSP invoice carries a Spark destination that was not requested".to_string(),
+            ))
+        };
+    }
+
+    let mut found_requested = false;
+    for address in embedded {
+        let Some(address) = address else {
+            return Err(ServiceError::ValidationError(
+                "SSP invoice carries an unreadable Spark destination".to_string(),
+            ));
+        };
+        match requested {
+            // Compared parsed rather than as encoded strings, so an SSP that
+            // re-encodes an otherwise identical invoice still passes.
+            RequestedFallback::Invoice(invoice) if address == *invoice => found_requested = true,
+            RequestedFallback::Invoice(_) if address.is_invoice() => {
+                return Err(ServiceError::ValidationError(
+                    "SSP invoice Spark invoice does not match the one requested".to_string(),
+                ));
+            }
+            RequestedFallback::Address if address.is_invoice() => {
                 return Err(ServiceError::ValidationError(
                     "SSP invoice carries a Spark invoice where an address was requested"
                         .to_string(),
                 ));
             }
-            if address.identity_public_key != identity_pubkey {
+            _ if address != own_address => {
                 return Err(ServiceError::ValidationError(
                     "SSP invoice Spark address does not match our identity".to_string(),
                 ));
             }
-            Ok(())
+            RequestedFallback::Address => found_requested = true,
+            _ => {}
         }
-        (Some(address), RequestedFallback::Invoice(requested)) => {
-            // Compared parsed rather than as encoded strings, so an SSP that
-            // re-encodes an otherwise identical invoice still passes.
-            if address != *requested {
-                return Err(ServiceError::ValidationError(
-                    "SSP invoice Spark invoice does not match the one requested".to_string(),
-                ));
-            }
-            Ok(())
-        }
+    }
+    if found_requested {
+        Ok(())
+    } else {
+        Err(ServiceError::ValidationError(
+            "SSP invoice is missing the requested Spark destination".to_string(),
+        ))
     }
 }
 
@@ -646,11 +662,9 @@ impl LightningService {
             expiry,
         )?;
         validate_received_fallback(
-            extract_spark_fallback(&decoded_invoice)
-                .map(|fallback| fallback.address)
-                .as_ref(),
+            &all_spark_fallbacks(&decoded_invoice),
             &requested,
-            identity_pubkey,
+            &SparkAddress::new(identity_pubkey, self.network, None),
         )?;
 
         if let Some(prepared) = prepared_receive {
@@ -1366,26 +1380,23 @@ mod validate_received_invoice_tests {
         )
     }
 
+    fn validate(
+        embedded: &[SparkAddress],
+        requested: &RequestedFallback<'_>,
+    ) -> Result<(), ServiceError> {
+        let embedded: Vec<_> = embedded.iter().cloned().map(Some).collect();
+        validate_received_fallback(&embedded, requested, &spark_address(0x11))
+    }
+
     #[test]
     fn accepts_requested_spark_address_matching_identity() {
-        assert!(
-            validate_received_fallback(
-                Some(&spark_address(0x11)),
-                &RequestedFallback::Address,
-                pubkey(0x11)
-            )
-            .is_ok()
-        );
+        assert!(validate(&[spark_address(0x11)], &RequestedFallback::Address).is_ok());
     }
 
     #[test]
     fn rejects_requested_spark_address_for_another_identity() {
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_address(0x22)),
-                &RequestedFallback::Address,
-                pubkey(0x11),
-            ),
+            validate(&[spark_address(0x22)], &RequestedFallback::Address),
             "does not match our identity",
         );
     }
@@ -1393,12 +1404,21 @@ mod validate_received_invoice_tests {
     #[test]
     fn rejects_missing_spark_destination_when_requested() {
         assert_rejected(
-            validate_received_fallback(None, &RequestedFallback::Address, pubkey(0x11)),
+            validate(&[], &RequestedFallback::Address),
             "missing the requested Spark destination",
         );
         let requested = spark_invoice(0x11, Some(1000));
         assert_rejected(
-            validate_received_fallback(None, &RequestedFallback::Invoice(&requested), pubkey(0x11)),
+            validate(&[], &RequestedFallback::Invoice(&requested)),
+            "missing the requested Spark destination",
+        );
+        // Our own address pays us, but loses the invoice that ties the payment
+        // back to the Bolt11.
+        assert_rejected(
+            validate(
+                &[spark_address(0x11)],
+                &RequestedFallback::Invoice(&requested),
+            ),
             "missing the requested Spark destination",
         );
     }
@@ -1408,36 +1428,34 @@ mod validate_received_invoice_tests {
     #[test]
     fn rejects_unrequested_spark_destination() {
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_address(0x22)),
-                &RequestedFallback::None,
-                pubkey(0x11),
-            ),
+            validate(&[spark_address(0x22)], &RequestedFallback::None),
             "not requested",
         );
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_address(0x11)),
-                &RequestedFallback::None,
-                pubkey(0x11),
-            ),
+            validate(&[spark_address(0x11)], &RequestedFallback::None),
             "not requested",
         );
     }
 
     #[test]
     fn accepts_absent_spark_destination_when_not_requested() {
-        assert!(validate_received_fallback(None, &RequestedFallback::None, pubkey(0x11)).is_ok());
+        assert!(validate(&[], &RequestedFallback::None).is_ok());
     }
 
     #[test]
     fn accepts_the_requested_spark_invoice() {
         let requested = spark_invoice(0x11, Some(1000));
         assert!(
-            validate_received_fallback(
-                Some(&requested.clone()),
+            validate(
+                std::slice::from_ref(&requested),
+                &RequestedFallback::Invoice(&requested)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate(
+                &[requested.clone(), spark_address(0x11)],
                 &RequestedFallback::Invoice(&requested),
-                pubkey(0x11),
             )
             .is_ok()
         );
@@ -1449,30 +1467,63 @@ mod validate_received_invoice_tests {
     fn rejects_a_substituted_spark_invoice() {
         let requested = spark_invoice(0x11, Some(1000));
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_invoice(0x22, Some(1000))),
+            validate(
+                &[spark_invoice(0x22, Some(1000))],
                 &RequestedFallback::Invoice(&requested),
-                pubkey(0x11),
             ),
             "does not match the one requested",
         );
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_invoice(0x11, Some(999))),
+            validate(
+                &[spark_invoice(0x11, Some(999))],
                 &RequestedFallback::Invoice(&requested),
-                pubkey(0x11),
             ),
             "does not match the one requested",
+        );
+    }
+
+    /// A payer that reads only route hints pays the address there and never
+    /// sees the invoice, so a correct invoice cannot vouch for the rest.
+    #[test]
+    fn rejects_a_foreign_destination_beside_the_requested_one() {
+        let requested = spark_invoice(0x11, Some(1000));
+        assert_rejected(
+            validate(
+                &[requested.clone(), spark_address(0x22)],
+                &RequestedFallback::Invoice(&requested),
+            ),
+            "does not match our identity",
+        );
+        assert_rejected(
+            validate(
+                &[requested.clone(), spark_invoice(0x22, Some(1000))],
+                &RequestedFallback::Invoice(&requested),
+            ),
+            "does not match the one requested",
+        );
+        assert_rejected(
+            validate(
+                &[spark_address(0x11), spark_address(0x22)],
+                &RequestedFallback::Address,
+            ),
+            "does not match our identity",
+        );
+        assert_rejected(
+            validate_received_fallback(
+                &[Some(requested.clone()), None],
+                &RequestedFallback::Invoice(&requested),
+                &spark_address(0x11),
+            ),
+            "unreadable",
         );
     }
 
     #[test]
     fn rejects_an_invoice_where_an_address_was_requested() {
         assert_rejected(
-            validate_received_fallback(
-                Some(&spark_invoice(0x11, Some(1000))),
+            validate(
+                &[spark_invoice(0x11, Some(1000))],
                 &RequestedFallback::Address,
-                pubkey(0x11),
             ),
             "where an address was requested",
         );
