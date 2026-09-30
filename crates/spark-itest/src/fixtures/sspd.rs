@@ -169,6 +169,13 @@ impl SspdFixture {
             MAX_DENOMINATION_POWER.to_string(),
             "--receive-leaf-transfer-expiry-seconds".to_string(),
             RECEIVE_LEAF_TRANSFER_EXPIRY_SECS.to_string(),
+            // The default is a minute, so a test that waits for the receive
+            // worker's own check would wait that long for it.
+            "--receive-backup-interval-seconds".to_string(),
+            "1".to_string(),
+            // The receive worker says when it checks, which a test can wait for.
+            "--log-level".to_string(),
+            "info,sspd_lib::lightning::receive=debug".to_string(),
         ];
 
         if let Some(ldk) = ldk {
@@ -289,6 +296,22 @@ impl SspdFixture {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         anyhow::bail!("sspd onchain balance stuck at {last} sats, wanted {min_sats}")
+    }
+
+    /// Waits until the daemon has written `count` lines containing `pattern`, so a
+    /// test can carry on as soon as the work it names has run.
+    #[instrument(level = "debug", name = "wait.sspd_log", skip_all)]
+    pub async fn wait_for_log(&self, pattern: &str, count: usize, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        while self.recent_log.matches(pattern) < count {
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "sspd wrote {} of the {count} expected lines containing {pattern:?} in {timeout:?}",
+                self.recent_log.matches(pattern),
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(())
     }
 
     pub async fn pool_leaf_counts(&self) -> Result<HashMap<u64, u32>> {

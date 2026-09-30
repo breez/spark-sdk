@@ -23,7 +23,7 @@ use spark::tree::{
 };
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::handover::{HandoverOutcome, HandoverReservation, is_refusal, observe_handover};
 use crate::leaves::{LeafSigningKeys, release_reserved_leaves};
@@ -36,8 +36,6 @@ use super::node::{
 use super::repository::{HoldInvoiceStatus, LightningReceiveRecord, LightningStore};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
-const RECEIVE_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
 
 const OPERATOR_EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
@@ -290,6 +288,9 @@ pub struct ReceiveWorkerDeps {
     pub wakeup: Wakeup,
     pub leaf_transfer_expiry: Duration,
     pub largest_denomination: u64,
+    /// The longest the worker waits before checking again on its own. Paid
+    /// invoices and the coordinator's events wake it sooner.
+    pub backup_interval: Duration,
 }
 
 pub async fn run_receive_loop(deps: ReceiveWorkerDeps, token: CancellationToken) {
@@ -301,7 +302,7 @@ pub async fn run_receive_loop(deps: ReceiveWorkerDeps, token: CancellationToken)
                 return;
             }
             () = deps.wakeup.waited() => {}
-            () = tokio::time::sleep(RECEIVE_BACKUP_INTERVAL) => {}
+            () = tokio::time::sleep(deps.backup_interval) => {}
         }
         if let Err(e) = process_pending_receives(&deps).await {
             error!("Lightning receive check failed: {e}");
@@ -351,6 +352,7 @@ pub async fn wake_on_handover_events(
 }
 
 pub async fn process_pending_receives(deps: &ReceiveWorkerDeps) -> Result<(), BoxError> {
+    debug!("lightning receive: checking the pending receives");
     let paid: Vec<sha256::Hash> = deps
         .node
         .paid_hold_invoices()
