@@ -398,7 +398,7 @@ ul#searchresults span.teaser { word-wrap: break-word; overflow-wrap: anywhere; }
 @media only screen and (max-width: 900px) {
     .brand-header { gap: 12px; padding: 0 14px; }
     .brand-header .brand-product,
-    .brand-header .brand-badge,
+    .brand-header .brand-sep,
     .brand-header .brand-nav { display: none; }
 }
 
