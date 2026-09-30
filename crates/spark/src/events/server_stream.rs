@@ -40,6 +40,7 @@ pub async fn subscribe_server_events(
             .client
             .subscribe_to_events(SubscribeToEventsRequest {
                 identity_public_key: identity_public_key.serialize().to_vec(),
+                include_all_participants: false,
             })
             .await
         {

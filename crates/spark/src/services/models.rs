@@ -148,6 +148,7 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
             }),
             user_signature: signed_tx.user_signature.serialize().to_vec(),
             additional_inputs: vec![],
+            refund_ladder: None,
         })
     }
 }
@@ -537,6 +538,9 @@ fn transfer_timestamp_secs(
 impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
     type Error = ServiceError;
 
+    // The single-sender and single-receiver fields are deprecated upstream in favour of
+    // `senders` and `receivers`, which this SDK does not read yet.
+    #[allow(deprecated)]
     fn try_from(transfer: operator_rpc::spark::Transfer) -> Result<Self, Self::Error> {
         let id = TransferId::from_str(&transfer.id)
             .map_err(|_| ServiceError::Generic("Invalid transfer id".to_string()))?;
