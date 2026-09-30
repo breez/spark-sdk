@@ -228,8 +228,12 @@ version_module!(
     /// subscribes; this wallet never does, so it stays offline.
     pub async fn wallet(fx: &TestFixtures, seed: &[u8; 32]) -> Result<SparkWallet> {
         let spark_signer = build_signer(seed)?;
-        Ok(WalletBuilder::new(config(fx)?, spark_signer)
-            .build()
-            .await?)
+        let mut config = config(fx)?;
+        // The local operator build predates fee ladders and rejects the
+        // anchorless refund a ladder comes with.
+        // TODO: turn on once the itests run Lightspark's current operator
+        // (breez/spark-sdk#1207).
+        config.fee_ladder_enabled = false;
+        Ok(WalletBuilder::new(config, spark_signer).build().await?)
     }
 );

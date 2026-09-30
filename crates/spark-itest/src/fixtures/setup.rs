@@ -196,7 +196,11 @@ impl TestFixtures {
             },
             self_payment_allowed: false,
             max_concurrent_claims: 1,
-            fee_ladder_enabled: true,
+            // The local operator build predates fee ladders and rejects the
+            // anchorless refund a ladder comes with.
+            // TODO: turn on once the itests run Lightspark's current operator
+            // (breez/spark-sdk#1207).
+            fee_ladder_enabled: false,
         })
     }
 }

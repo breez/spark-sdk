@@ -1180,6 +1180,10 @@ impl TransferService {
             }
             rung.input[0].witness = Witness::from_slice(&[signature.serialize()]);
         }
+        debug!(
+            "Signed a refund fee ladder of {} rungs for leaf {leaf_id}",
+            rungs.len()
+        );
         Some(operator_rpc::spark::FeeBumpLadder {
             rung_table_version: LADDER_RUNG_TABLE_VERSION,
             rungs: rungs
