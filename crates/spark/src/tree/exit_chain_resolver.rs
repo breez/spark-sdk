@@ -27,9 +27,9 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 /// once. Bounds the id list one operator request carries as well. Tiny under
 /// test, so an ordinary fixture spans several batches.
 #[cfg(not(test))]
-const LEAVES_PER_FETCH: usize = 500;
+pub(super) const LEAVES_PER_FETCH: usize = 500;
 #[cfg(test)]
-const LEAVES_PER_FETCH: usize = 2;
+pub(super) const LEAVES_PER_FETCH: usize = 2;
 
 fn is_complete(pedigree: &LeafPedigree) -> bool {
     chain_reaches_root(&pedigree.leaf, &pedigree.ancestors)
