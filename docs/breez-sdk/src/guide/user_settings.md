@@ -12,7 +12,7 @@ The following user settings are available:
 
 - **Stable balance active label**: Controls which stable token is active for automatic Bitcoin-to-token conversion. Set to a label from your [stable balance configuration](./config.md#stable-balance-configuration) to activate, or unset to deactivate. See the [Stable balance](./stable_balance.md) guide for details.
 
-- **Spark master identity public key**: A second public key that Spark accepts as a reader of the wallet while private mode is enabled. It enables watch-only views of a private wallet: designate a key you control, and a Spark client authenticating with the corresponding private key can query the wallet's Bitcoin balance and payment history. The master identity is read-only, so making payments still requires the wallet's own keys. The same public key can be designated across many wallets.
+- **Spark master identity public key**: A second public key that Spark accepts as a reader of the wallet while private mode is enabled. Set it on the wallet you want to watch, and a Spark client authenticating with the corresponding private key can query the wallet's Bitcoin balance and payment history, but not the payment details the SDK adds on top. The Breez SDK itself can't act as this client. The master identity is read-only, so making payments still requires the wallet's own keys. The same public key can be designated across many wallets.
 
 ## Getting the current user settings
 
