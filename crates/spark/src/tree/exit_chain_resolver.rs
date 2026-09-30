@@ -293,6 +293,13 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
 
+        async fn list_leaves_with_status(
+            &self,
+            _statuses: &[TreeNodeStatus],
+        ) -> Result<Vec<TreeNode>, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn fetch_nodes(
             &self,
             _node_ids: &[TreeNodeId],

@@ -346,6 +346,16 @@ class TreeStoreMigrationManager {
              signing_public_key = data->'signing_keyshare'->>'public_key'`,
         ],
       },
+      {
+        // Mirrors Rust migration 6 in spark-postgres/src/tree_store.rs. Indexes
+        // the leaves outside the `Available` status, so reading them by status
+        // does not scan the spendable pool.
+        name: "Index leaves outside the Available status",
+        sql: [
+          `CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_user_unavailable
+             ON brz_tree_leaves(user_id, status) WHERE status <> 'Available'`,
+        ],
+      },
     ];
   }
 }

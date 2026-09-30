@@ -86,6 +86,17 @@ impl Leaves {
         ids.dedup();
         ids
     }
+
+    pub fn with_status(self, statuses: &[TreeNodeStatus]) -> Vec<TreeNode> {
+        self.available
+            .into_iter()
+            .chain(self.not_available)
+            .chain(self.available_missing_from_operators)
+            .chain(self.reserved_for_payment)
+            .chain(self.reserved_for_swap)
+            .filter(|leaf| statuses.contains(&leaf.status))
+            .collect()
+    }
 }
 
 /// The two public keys needed to confirm a stored leaf's ownership was already
@@ -634,6 +645,16 @@ pub trait TreeStore: Send + Sync {
     /// ```
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
+    /// The leaves of [`Self::get_leaves`], reserved or not, whose status is one
+    /// of `statuses`. Storage backends override the default to filter in the
+    /// database.
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.get_leaves().await?.with_status(statuses))
+    }
+
     /// Returns the wallet's spendable balance: the sum of leaf values that
     /// would be included in `Leaves::balance()` (available + missing-operators
     /// + swap-reserved). Default impl falls through to `get_leaves`; storage
@@ -879,6 +900,13 @@ pub trait TreeService: Send + Sync {
     /// # }
     /// ```
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError>;
+
+    /// Lists the stored leaves whose status is one of `statuses`, reserved or
+    /// not.
+    async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError>;
 
     /// Fetches specific tree nodes by ID from the operators, optionally
     /// including each node's ancestors up to the root.

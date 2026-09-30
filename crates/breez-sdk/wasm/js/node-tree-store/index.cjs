@@ -95,6 +95,17 @@ const SLIM_LEAF_CANDIDATES_SQL = `
 `;
 
 /**
+ * Takes one status, bound twice: given several through IN, SQLite reads every
+ * unreserved leaf instead of using the status index.
+ */
+const LEAVES_WITH_STATUS_SQL = `
+  SELECT data FROM brz_tree_leaves WHERE status = ? AND reservation_id IS NULL
+  UNION ALL
+  SELECT data FROM brz_tree_leaves
+  WHERE status = ? AND reservation_id IN (SELECT id FROM brz_tree_reservations)
+`;
+
+/**
  * Pair a leaf with its ancestors (nearest first) by walking `parent_node_id`
  * through `nodes`. Returns null if the leaf itself is absent; stops at a gap or
  * cycle, returning a partial chain.
@@ -411,6 +422,30 @@ class NodeTreeStore {
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(`Failed to get leaves: ${error.message}`, error);
+    }
+  }
+
+  /**
+   * Return the leaves, reserved or not, whose status is one of `statuses`.
+   * @param {Array<string>} statuses
+   * @returns {Promise<Array<object>>}
+   */
+  async getLeavesWithStatus(statuses) {
+    try {
+      const stmt = this.db.prepare(LEAVES_WITH_STATUS_SQL);
+      // One snapshot across the statements, so a leaf whose status changes
+      // between them is not read twice or missed.
+      return this.db.transaction(() =>
+        [...new Set(statuses)].flatMap((status) =>
+          stmt.all(status, status).map((row) => JSON.parse(row.data))
+        )
+      )();
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves with status: ${error.message}`,
+        error
+      );
     }
   }
 

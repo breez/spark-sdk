@@ -66,6 +66,14 @@ fn status_json(status: TreeNodeStatus) -> Result<String, TreeServiceError> {
     serde_json::to_string(&status).map_err(|e| generic("serialize status", e))
 }
 
+/// Takes one status: given several through `IN`, `SQLite` reads every unreserved
+/// leaf instead of using the status index.
+const LEAVES_WITH_STATUS_SQL: &str = "
+    SELECT data FROM brz_tree_leaves WHERE status = ?1 AND reservation_id IS NULL
+    UNION ALL
+    SELECT data FROM brz_tree_leaves
+    WHERE status = ?1 AND reservation_id IN (SELECT id FROM brz_tree_reservations)";
+
 /// Schema migrations applied in order. A migration's version is its 1-based
 /// position, recorded in `brz_tree_schema_migrations`. Append new migrations;
 /// never reorder or edit an applied one.
@@ -807,6 +815,38 @@ impl TreeStore for SqliteTreeStore {
         Ok(leaves)
     }
 
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut keys = statuses
+            .iter()
+            .map(|status| status_json(*status))
+            .collect::<Result<Vec<_>, _>>()?;
+        keys.sort();
+        keys.dedup();
+        let mut conn = self.get_connection()?;
+        // One snapshot across the statements, so a leaf whose status changes
+        // between them is not read twice or missed.
+        let tx = conn
+            .transaction()
+            .map_err(|e| generic("begin get_leaves_with_status", e))?;
+        let mut stmt = tx
+            .prepare(LEAVES_WITH_STATUS_SQL)
+            .map_err(|e| generic("prepare get_leaves_with_status", e))?;
+        let mut leaves = Vec::new();
+        for key in &keys {
+            let rows = stmt
+                .query_map(params![key], |row| row.get::<_, String>(0))
+                .map_err(|e| generic("query get_leaves_with_status", e))?;
+            for row in rows {
+                let data = row.map_err(|e| generic("read get_leaves_with_status row", e))?;
+                leaves.push(Self::row_to_node(&data)?);
+            }
+        }
+        Ok(leaves)
+    }
+
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let conn = self.get_connection()?;
         let available = status_json(TreeNodeStatus::Available)?;
@@ -1279,6 +1319,7 @@ mod tests {
         test_missing_from_operators_leaves_are_not_selectable,
         test_missing_from_operators_leaf_not_available,
         test_get_leaves_not_available,
+        test_get_leaves_with_status,
         // set_leaves core
         test_set_leaves,
         test_set_leaves_replaces_fully,
@@ -1347,6 +1388,27 @@ mod tests {
         test_update_reservation_clears_pending,
         test_update_reservation_preserves_purpose,
     );
+
+    #[test]
+    fn test_leaves_with_status_reads_through_indexes() {
+        let store = store();
+        let conn = store.get_connection().unwrap();
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {LEAVES_WITH_STATUS_SQL}"))
+            .unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(
+                params![status_json(TreeNodeStatus::OnChain).unwrap()],
+                |row| row.get(3),
+            )
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{plan:?}"
+        );
+    }
 
     // Durability: persisted nodes survive dropping and reopening the database.
     #[tokio::test]

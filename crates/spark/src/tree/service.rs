@@ -104,6 +104,13 @@ impl TreeService for SynchronousTreeService {
         self.state.get_leaves().await
     }
 
+    async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.state.get_leaves_with_status(statuses).await
+    }
+
     async fn fetch_nodes(
         &self,
         node_ids: &[TreeNodeId],
