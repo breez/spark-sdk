@@ -479,7 +479,7 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
 async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const method = parseFlag(args, '--method', '-m')
   if (!method) {
-    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)'
+    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)\n  --cross-chain-to-bitcoin         Deliver as Bitcoin instead of stable token'
   }
 
   const description = parseFlag(args, '--description', '-d')
@@ -492,6 +492,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
   const crossChainMaxSlippageBps = parseNumericFlag(args, '--cross-chain-max-slippage-bps')
   const crossChainFeesIncluded = hasFlag(args, '--cross-chain-fees-included')
   const crossChainTargetOverpayBps = parseNumericFlag(args, '--cross-chain-target-overpay-bps')
+  const crossChainToBitcoin = hasFlag(args, '--cross-chain-to-bitcoin')
   const routeIndex = parseNumericFlag(args, '--route')
 
   const amount = amountStr !== undefined ? BigInt(amountStr) : undefined
@@ -562,6 +563,9 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       if (amount === undefined) {
         return 'Error: --amount is required for cross-chain receive'
       }
+      if (crossChainToBitcoin && tokenIdentifier) {
+        return 'Error: --cross-chain-to-bitcoin conflicts with --token-identifier'
+      }
       const filter = new CrossChainRouteFilter.Receive({ contractAddress: undefined })
       const routeResult = await selectCrossChainRoute(sdk, filter, routeIndex)
       lines.push(routeResult.message)
@@ -569,9 +573,11 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       const feeMode = crossChainFeesIncluded
         ? CrossChainFeeMode.FeesIncluded
         : undefined
-      const destination = tokenIdentifier
-        ? new SparkAsset.Token({ tokenIdentifier })
-        : undefined
+      const destination = crossChainToBitcoin
+        ? new SparkAsset.Bitcoin()
+        : tokenIdentifier
+          ? new SparkAsset.Token({ tokenIdentifier })
+          : undefined
 
       paymentMethod = new ReceivePaymentMethod.CrossChain({
         route: routeResult.route,

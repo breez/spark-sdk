@@ -311,6 +311,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val crossChainMaxSlippageBps = fp.getUInt("cross-chain-max-slippage-bps")
     val crossChainFeesIncluded = fp.hasFlag("cross-chain-fees-included")
     val crossChainTargetOverpayBps = fp.getUInt("cross-chain-target-overpay-bps")
+    val crossChainToBitcoin = fp.hasFlag("cross-chain-to-bitcoin")
 
     if (method == null) {
         println("Usage: receive -m <method> [options]")
@@ -326,6 +327,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         println("  --cross-chain-max-slippage-bps <bps>       Max slippage in basis points (10..500, cross-chain only)")
         println("  --cross-chain-fees-included                Deduct fees from amount (cross-chain only)")
         println("  --cross-chain-target-overpay-bps <bps>     Overpay buffer in basis points (0..500, cross-chain only)")
+        println("  --cross-chain-to-bitcoin                   Deliver cross-chain receive as Bitcoin (cross-chain only)")
         return
     }
 
@@ -401,7 +403,11 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
             val filter = CrossChainRouteFilter.Receive(contractAddress = null)
             val route = selectCrossChainRoute(sdk, reader, filter)
             val feeMode = if (crossChainFeesIncluded) CrossChainFeeMode.FEES_INCLUDED else null
-            val destination = tokenIdentifier?.let { SparkAsset.Token(tokenIdentifier = it) }
+            val destination = if (crossChainToBitcoin) {
+                SparkAsset.Bitcoin
+            } else {
+                tokenIdentifier?.let { SparkAsset.Token(tokenIdentifier = it) }
+            }
             ReceivePaymentMethod.CrossChain(
                 route = route,
                 amount = amount,

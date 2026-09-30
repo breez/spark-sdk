@@ -383,6 +383,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let crossChainMaxSlippageBps = fp.get("cross-chain-max-slippage-bps").flatMap { UInt32($0) }
     let crossChainFeesIncluded = fp.has("cross-chain-fees-included")
     let crossChainTargetOverpayBps = fp.get("cross-chain-target-overpay-bps").flatMap { UInt32($0) }
+    let crossChainToBitcoin = fp.has("cross-chain-to-bitcoin")
 
     let paymentMethod: ReceivePaymentMethod
 
@@ -435,8 +436,11 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
         )
         let feeMode: CrossChainFeeMode? = crossChainFeesIncluded
             ? .feesIncluded : nil
-        let destination: SparkAsset? = tokenIdentifier.map {
-            .token(tokenIdentifier: $0)
+        let destination: SparkAsset?
+        if crossChainToBitcoin {
+            destination = .bitcoin
+        } else {
+            destination = tokenIdentifier.map { .token(tokenIdentifier: $0) }
         }
         paymentMethod = .crossChain(
             route: route,
@@ -524,13 +528,16 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     ))
 
     if let estimate = prepareResponse.conversionEstimate {
-        let units: String
+        let inUnits: String
+        let outUnits: String
         if case .fromBitcoin = estimate.options.conversionType {
-            units = "sats"
+            inUnits = "sats"
+            outUnits = "token base units"
         } else {
-            units = "token base units"
+            inUnits = "token base units"
+            outUnits = "sats"
         }
-        print("Estimated conversion of \(estimate.amountIn) \(units) -> \(estimate.amountOut) \(units) with a \(estimate.fee) \(units) fee")
+        print("Estimated conversion from \(estimate.amountIn) \(inUnits) to \(estimate.amountOut) \(outUnits) with a \(estimate.fee) token base units fee")
         let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
         if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
             print("Payment cancelled")
@@ -695,7 +702,16 @@ func handleLnurlPay(_ sdk: BreezSdk, _ args: [String]) async throws {
     ))
 
     if let estimate = prepareResponse.conversionEstimate {
-        print("Estimated conversion of \(estimate.amountIn) token base units → \(estimate.amountOut) sats with a \(estimate.fee) token base units fee")
+        let inUnits: String
+        let outUnits: String
+        if case .fromBitcoin = estimate.options.conversionType {
+            inUnits = "sats"
+            outUnits = "token base units"
+        } else {
+            inUnits = "token base units"
+            outUnits = "sats"
+        }
+        print("Estimated conversion from \(estimate.amountIn) \(inUnits) to \(estimate.amountOut) \(outUnits) with a \(estimate.fee) token base units fee")
         let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
         if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
             print("Payment cancelled")

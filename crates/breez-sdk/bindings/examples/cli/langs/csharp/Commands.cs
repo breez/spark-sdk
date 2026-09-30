@@ -325,7 +325,8 @@ public static class Commands
     private static readonly HashSet<string> BooleanFlags = new()
     {
         "--fees-included", "--from-bitcoin", "--hodl", "-f", "--freezable",
-        "--new-address", "--clear-master-key", "--cross-chain-fees-included"
+        "--new-address", "--clear-master-key", "--cross-chain-fees-included",
+        "--cross-chain-to-bitcoin"
     };
 
     private static string[] GetPositionalArgs(string[] args)
@@ -528,6 +529,7 @@ public static class Commands
         var crossChainMaxSlippageStr = GetFlag(args, "--cross-chain-max-slippage-bps");
         var crossChainFeesIncluded = HasFlag(args, "--cross-chain-fees-included");
         var crossChainTargetOverpayStr = GetFlag(args, "--cross-chain-target-overpay-bps");
+        var crossChainToBitcoin = HasFlag(args, "--cross-chain-to-bitcoin");
 
         if (method == null)
         {
@@ -607,9 +609,11 @@ public static class Commands
                 CrossChainFeeMode? feeMode = crossChainFeesIncluded
                     ? CrossChainFeeMode.FeesIncluded
                     : null;
-                SparkAsset? destination = tokenIdentifier != null
-                    ? new SparkAsset.Token(tokenIdentifier: tokenIdentifier)
-                    : null;
+                SparkAsset? destination = crossChainToBitcoin
+                    ? new SparkAsset.Bitcoin()
+                    : tokenIdentifier != null
+                        ? new SparkAsset.Token(tokenIdentifier: tokenIdentifier)
+                        : null;
                 paymentMethod = new ReceivePaymentMethod.CrossChain(
                     route: route,
                     amount: crossChainAmount,

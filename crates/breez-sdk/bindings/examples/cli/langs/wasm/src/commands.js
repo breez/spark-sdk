@@ -231,6 +231,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('--cross-chain-max-slippage-bps <bps>', 'Maximum slippage in basis points for cross-chain receives (10..500)', parseInt)
     .option('--cross-chain-fees-included', 'Deduct fees from the specified amount for cross-chain receives', false)
     .option('--cross-chain-target-overpay-bps <bps>', 'Overpay buffer in basis points for cross-chain receives (0..500)', parseInt)
+    .option('--cross-chain-to-bitcoin', 'Deliver a cross-chain receive as Bitcoin (sats) instead of the active stable-balance token', false)
     .action(async (options) => {
       const sdk = getSdk()
       let paymentMethod
@@ -290,11 +291,17 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
           if (options.amount == null) {
             throw new Error('--amount is required for cross-chain receive')
           }
+          if (options.crossChainToBitcoin && options.tokenIdentifier != null) {
+            throw new Error('--cross-chain-to-bitcoin and --token-identifier cannot be used together')
+          }
           const route = await selectCrossChainRoute(sdk, rl, { type: 'receive', contractAddress: undefined })
           const feeMode = options.crossChainFeesIncluded ? 'feesIncluded' : undefined
-          const destination = options.tokenIdentifier != null
-            ? { type: 'token', tokenIdentifier: options.tokenIdentifier }
-            : undefined
+          let destination
+          if (options.crossChainToBitcoin) {
+            destination = { type: 'bitcoin' }
+          } else if (options.tokenIdentifier != null) {
+            destination = { type: 'token', tokenIdentifier: options.tokenIdentifier }
+          }
           paymentMethod = {
             type: 'crossChain',
             route,
