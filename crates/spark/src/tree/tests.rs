@@ -1004,6 +1004,105 @@ pub async fn test_get_verified_leaf_keys(store: &dyn TreeStore) {
     assert!(keys.contains_key(&not_available.id));
 }
 
+/// Sorted by id, so the order a backend reads its rows in does not matter.
+async fn leaves_with_status(store: &dyn TreeStore, statuses: &[TreeNodeStatus]) -> Vec<TreeNode> {
+    let mut leaves = store.get_leaves_with_status(statuses).await.unwrap();
+    leaves.sort_by(|a, b| a.id.cmp(&b.id));
+    leaves
+}
+
+pub async fn test_get_leaves_with_status(store: &dyn TreeStore) {
+    let leaf = |id: &str, status| create_test_node_with_parent(id, None, status);
+    let available = leaf("available", TreeNodeStatus::Available);
+    let exited = leaf("exited", TreeNodeStatus::Exited);
+    let watchtower_exited = leaf("watchtower-exited", TreeNodeStatus::WatchtowerExited);
+    let root = leaf("root", TreeNodeStatus::OnChain);
+    let on_chain = create_test_node_with_parent("on-chain", Some("root"), TreeNodeStatus::OnChain);
+    let missing = leaf("missing-from-operators", TreeNodeStatus::OnChain);
+    let reserved = leaf("reserved", TreeNodeStatus::Available);
+    store
+        .add_leaves(&[
+            available.clone(),
+            leaf("transfer-locked", TreeNodeStatus::TransferLocked),
+            exited,
+            watchtower_exited,
+            on_chain.clone(),
+            reserved.clone(),
+        ])
+        .await
+        .unwrap();
+    store
+        .store_ancestors(&[LeafPedigree {
+            leaf: on_chain,
+            ancestors: vec![root],
+        }])
+        .await
+        .unwrap();
+    store
+        .try_reserve_leaves_by_ids(
+            std::slice::from_ref(&reserved.id),
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+    // A refresh can report a leaf on-chain while a reservation holds it.
+    let refresh_start = past_refresh_start(store).await;
+    store
+        .set_leaves(
+            &[TreeNode {
+                status: TreeNodeStatus::OnChain,
+                ..reserved
+            }],
+            &[missing],
+            refresh_start,
+        )
+        .await
+        .unwrap();
+
+    let recoverable = [
+        TreeNodeStatus::OnChain,
+        TreeNodeStatus::Exited,
+        TreeNodeStatus::ParentExited,
+        TreeNodeStatus::WatchtowerExited,
+        TreeNodeStatus::WatchtowerExitRecovered,
+    ];
+    let ids: Vec<String> = leaves_with_status(store, &recoverable)
+        .await
+        .iter()
+        .map(|leaf| leaf.id.to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "exited",
+            "missing-from-operators",
+            "on-chain",
+            "reserved",
+            "watchtower-exited"
+        ]
+    );
+
+    for statuses in [
+        &recoverable[..],
+        &[TreeNodeStatus::Available],
+        &[TreeNodeStatus::TransferLocked],
+        &[TreeNodeStatus::Exited, TreeNodeStatus::Exited],
+        &[],
+    ] {
+        let mut expected = store.get_leaves().await.unwrap().with_status(statuses);
+        expected.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(
+            leaves_with_status(store, statuses).await,
+            expected,
+            "statuses {statuses:?}"
+        );
+    }
+    assert_eq!(
+        leaves_with_status(store, &[TreeNodeStatus::Available]).await,
+        vec![available]
+    );
+}
+
 pub async fn test_add_leaves(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

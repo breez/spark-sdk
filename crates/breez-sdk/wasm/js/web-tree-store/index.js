@@ -21,7 +21,7 @@ const RESERVATION_TIMEOUT_MS = 300 * 1000; // 5 minutes
 /** Spent-leaf markers older than this (relative to a refresh) are pruned. */
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const STORE_LEAVES = "leaves";
 const STORE_ANCESTORS = "ancestors";
@@ -111,6 +111,7 @@ class WebTreeStore {
           leaves.createIndex("chain_complete", "chain_complete", {
             unique: false,
           });
+          leaves.createIndex("status", "status", { unique: false });
         }
 
         // Intermediate exit-chain nodes, kept separate from the leaf pool and
@@ -134,8 +135,10 @@ class WebTreeStore {
         // An existing wallet gets the flag derived from the ancestor rows it
         // already holds, so it does not refetch every chain. The index is
         // created here and populated by the rewrite below, since createIndex
-        // cannot run from an async callback.
-        if (event.oldVersion > 0 && event.oldVersion < DB_VERSION) {
+        // cannot run from an async callback. The flag has had its current
+        // meaning since v5, so a database already at v5 or later keeps the
+        // flags it holds.
+        if (event.oldVersion > 0 && event.oldVersion < 5) {
           const tx = event.target.transaction;
           const leaves = tx.objectStore(STORE_LEAVES);
           if (!leaves.indexNames.contains("chain_complete")) {
@@ -166,6 +169,14 @@ class WebTreeStore {
               leafCursor.continue();
             };
           };
+        }
+
+        // Every leaf row already carries its status, and IndexedDB builds a new
+        // index from the rows a store holds, so this needs no rewrite.
+        if (event.oldVersion > 0 && event.oldVersion < 6) {
+          event.target.transaction
+            .objectStore(STORE_LEAVES)
+            .createIndex("status", "status", { unique: false });
         }
 
         if (!db.objectStoreNames.contains(STORE_RESERVATIONS)) {
@@ -480,6 +491,31 @@ class WebTreeStore {
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(`Failed to get leaves: ${error.message}`, error);
+    }
+  }
+
+  async getLeavesWithStatus(statuses) {
+    try {
+      const distinct = [...new Set(statuses)];
+      if (distinct.length === 0) return [];
+      return await this._txRun(
+        [STORE_LEAVES],
+        "readonly",
+        distinct.map((status) => ({
+          name: status,
+          store: STORE_LEAVES,
+          index: "status",
+          key: status,
+          all: true,
+        })),
+        (res) => distinct.flatMap((status) => res[status].map((row) => row.data))
+      );
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves with status: ${error.message}`,
+        error
+      );
     }
   }
 
