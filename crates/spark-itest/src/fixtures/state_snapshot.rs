@@ -30,10 +30,15 @@ const BOOTSTRAP_EPOCH: u32 = 3;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnapshotManifest {
     pub bootstrap_epoch: u32,
-    pub operator_version: String,
+    /// The operator image the snapshot was captured against, which covers the
+    /// pinned commit, the operator's configuration and its entrypoint: all three
+    /// decide what the captured databases hold.
+    pub operator_image: String,
     pub num_operators: usize,
     pub min_signers: usize,
     pub postgres_image: String,
+    /// The node that wrote the chain the snapshot ships.
+    pub bitcoind_image: String,
     pub sspd_migrations: String,
     pub pool_leaves_per_denomination: u32,
     pub pool_max_denomination_power: u32,
@@ -44,27 +49,21 @@ impl SnapshotManifest {
     pub fn expected() -> Result<Self> {
         Ok(Self {
             bootstrap_epoch: BOOTSTRAP_EPOCH,
-            operator_version: pinned_operator_version()?,
+            operator_image: crate::images::tag(crate::images::SPARK_SO)?,
             num_operators: NUM_OPERATORS,
             min_signers: MIN_SIGNERS,
             postgres_image: POSTGRES_IMAGE.to_string(),
+            bitcoind_image: format!(
+                "{}:{}",
+                crate::fixtures::bitcoind::BITCOIND_DOCKER_IMAGE,
+                crate::fixtures::bitcoind::BITCOIND_VERSION
+            ),
             sspd_migrations: sspd_migrations_digest()?,
             pool_leaves_per_denomination: crate::fixtures::sspd::LEAVES_PER_DENOMINATION,
             pool_max_denomination_power: crate::fixtures::sspd::MAX_DENOMINATION_POWER,
             sspd_wallet_seed: crate::fixtures::setup::SSPD_WALLET_SEED_HEX.to_string(),
         })
     }
-}
-
-fn pinned_operator_version() -> Result<String> {
-    let dockerfile = manifest_dir().join("docker/spark-so.dockerfile");
-    let contents = std::fs::read_to_string(&dockerfile)
-        .with_context(|| format!("failed to read {}", dockerfile.display()))?;
-    contents
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("ARG VERSION="))
-        .map(str::to_string)
-        .with_context(|| format!("no `ARG VERSION=` in {}", dockerfile.display()))
 }
 
 fn sspd_migrations_digest() -> Result<String> {
@@ -468,6 +467,9 @@ fn build_snapshot_image(image: &str, tag: &str, dockerfile: &str) -> Result<()> 
 
     tracing::info!("Building {image} from the state snapshot");
     let mut build = Command::new("docker")
+        // The recipe mounts the snapshot rather than sending it as context, which
+        // only BuildKit understands, and an engine can have it turned off.
+        .env("DOCKER_BUILDKIT", "1")
         .args(["build", "--quiet", "-t", &image, "-f", "-"])
         .arg(snapshot_dir())
         .stdin(Stdio::piped())
