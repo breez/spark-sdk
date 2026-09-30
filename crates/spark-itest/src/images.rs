@@ -19,7 +19,39 @@ pub const ALL: [&str; 4] = [SPARK_SO, MIGRATIONS, LDK_SERVER, SSPD];
 
 /// The image a fixture runs, under the tag it is built with.
 pub fn image(name: &str) -> Result<testcontainers::GenericImage> {
-    Ok(testcontainers::GenericImage::new(name, tag(name)?.as_str()))
+    let tag = tag(name)?;
+    ensure_built(name, &tag)?;
+    Ok(testcontainers::GenericImage::new(name, tag.as_str()))
+}
+
+/// Docker is the only thing that can say whether this tree's image was ever
+/// built, and a fixture that starts a missing one fails with docker's "pull
+/// access denied" instead. Asked once per image: a build cannot happen while the
+/// tests run.
+fn ensure_built(image: &str, tag: &str) -> Result<()> {
+    static CHECKED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+
+    let reference = format!("{image}:{tag}");
+    let mut checked = CHECKED.lock().expect("the images looked for");
+    let checked = checked.get_or_insert_with(std::collections::HashSet::new);
+    if checked.contains(&reference) {
+        return Ok(());
+    }
+    let present = std::process::Command::new("docker")
+        .args(["image", "inspect", &reference])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("running docker to look for an itest image")?
+        .success();
+    anyhow::ensure!(
+        present,
+        "{reference} is not built. Build what this tree needs with `make \
+         itest-images`, which `make itest` does for you."
+    );
+    checked.insert(reference);
+    Ok(())
 }
 
 /// `<name>:<tag>`, as `cargo xtask` builds and CI caches the image.
