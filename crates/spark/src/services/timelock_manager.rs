@@ -20,6 +20,7 @@ use crate::{
     signer::{LeafSigningKey, SparkSigner},
     tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains},
     utils::{
+        fee_ladder::{LADDER_RUNG_TABLE_VERSION, node_hop_ladder_txs},
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
         transactions::{
             NodeTransactions, RefundTransactions, create_decremented_timelock_node_txs,
@@ -43,6 +44,10 @@ pub struct TimelockManager {
     spark_signer: Arc<dyn SparkSigner>,
     network: Network,
     operator_pool: Arc<OperatorPool>,
+    /// Whether a refund-timelock renewal signs a fee ladder for the leaf's
+    /// direct node tx, so the watchtower can pay the fee the mempool needs when
+    /// it defends the leaf's node hop.
+    fee_ladder_enabled: bool,
 }
 
 impl TimelockManager {
@@ -50,12 +55,45 @@ impl TimelockManager {
         spark_signer: Arc<dyn SparkSigner>,
         network: Network,
         operator_pool: Arc<OperatorPool>,
+        fee_ladder_enabled: bool,
     ) -> Self {
         Self {
             spark_signer,
             network,
             operator_pool,
+            fee_ladder_enabled,
         }
+    }
+
+    /// One set of operator commitments per job, not tied to a node.
+    async fn get_signing_commitments_by_count(
+        &self,
+        signing_jobs_count: usize,
+    ) -> Result<Vec<BTreeMap<Identifier, SigningCommitments>>, ServiceError> {
+        let node_id_count = u32::try_from(signing_jobs_count)
+            .map_err(|_| ServiceError::InvalidInput("too many signing jobs".to_string()))?;
+        let commitments = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .get_signing_commitments(GetSigningCommitmentsRequest {
+                node_ids: Vec::new(),
+                count: 1,
+                node_id_count,
+            })
+            .await?
+            .signing_commitments
+            .iter()
+            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Each job takes the commitments at its own index.
+        if commitments.len() != signing_jobs_count {
+            return Err(ServiceError::Generic(format!(
+                "Expected {signing_jobs_count} signing commitments, got {}",
+                commitments.len()
+            )));
+        }
+        Ok(commitments)
     }
 
     async fn get_signing_commitments_for_jobs(
@@ -494,6 +532,23 @@ impl TimelockManager {
             verifying_public_key: node.verifying_public_key,
         });
 
+        if self.fee_ladder_enabled {
+            let parent_tx_out = &parent_node_tx.output[0];
+            let script_pubkey = &direct_node_tx.output[0].script_pubkey;
+            for rung in
+                node_hop_ladder_txs(&direct_node_tx, script_pubkey, parent_tx_out.value.to_sat())
+            {
+                signing_jobs.push(SigningJob {
+                    job_type: SigningJobType::DirectNodeLadderRung,
+                    node_id: node.id.clone(),
+                    tx: rung,
+                    parent_tx_out: parent_tx_out.clone(),
+                    signing_public_key,
+                    verifying_public_key: node.verifying_public_key,
+                });
+            }
+        }
+
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
             direct_tx: direct_refund_tx,
@@ -536,8 +591,9 @@ impl TimelockManager {
             });
         }
 
+        // One commitment set per job, in a single call however many rungs there are.
         let signing_commitments = self
-            .get_signing_commitments_for_jobs(&node.id, signing_jobs.len())
+            .get_signing_commitments_by_count(signing_jobs.len())
             .await?;
 
         let signed_jobs = sign_signing_jobs(
@@ -548,6 +604,17 @@ impl TimelockManager {
             self.network,
         )
         .await?;
+
+        let ladder_jobs = signed_jobs
+            .iter()
+            .filter(|j| j.job_type == SigningJobType::DirectNodeLadderRung)
+            .map(|j| j.signed_tx.as_ref().try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        let direct_node_ladder_rung_table_version = if ladder_jobs.is_empty() {
+            0
+        } else {
+            LADDER_RUNG_TABLE_VERSION
+        };
 
         let idempotency_key = node
             .refund_tx
@@ -589,8 +656,8 @@ impl TimelockManager {
                                 .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
                                 .map(|j| j.signed_tx.as_ref().try_into())
                                 .transpose()?,
-                            direct_node_ladder_signing_jobs: Vec::new(),
-                            direct_node_ladder_rung_table_version: 0,
+                            direct_node_ladder_signing_jobs: ladder_jobs,
+                            direct_node_ladder_rung_table_version,
                         },
                     )),
                 },
@@ -777,6 +844,7 @@ mod tests {
             Arc::clone(&signer),
             Network::Regtest,
             unroutable_operator_pool(&signer).await,
+            false,
         );
         (manager, signer)
     }

@@ -90,6 +90,9 @@ async fn client_swap_leaves(
         spark_signer.clone(),
         network,
         operator_pool.clone(),
+        // TODO: turn on once the itests run Lightspark's current operator
+        // (breez/spark-sdk#1207).
+        false,
     ));
     let tree_store: Arc<dyn TreeStore> = Arc::new(InMemoryTreeStore::default());
     let tree_service = SynchronousTreeService::new(
