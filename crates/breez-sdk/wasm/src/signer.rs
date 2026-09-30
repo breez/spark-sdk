@@ -1080,6 +1080,26 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         Ok(v.into())
     }
 
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: core_types::ExternalTreeNodeId,
+        sighashes: Vec<Vec<u8>>,
+    ) -> Result<Vec<core_types::SchnorrSignatureBytes>, SignerError> {
+        let wasm_leaf: ExternalTreeNodeId = leaf_id.into();
+        let array = js_sys::Array::new();
+        for sighash in &sighashes {
+            array.push(&js_sys::Uint8Array::from(sighash.as_slice()));
+        }
+        let promise = self
+            .inner
+            .sign_leaf_refund_spends(wasm_leaf, array)
+            .map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: Vec<SchnorrSignatureBytes> =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into_iter().map(Into::into).collect())
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<core_spark::ExternalFrostJob>,
@@ -1258,6 +1278,7 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     signAuthenticationChallenge(challenge: Uint8Array): Promise<EcdsaSignatureBytes>;
     signMessage(message: Uint8Array): Promise<EcdsaSignatureBytes>;
     signLeafRefundSpend(leafId: ExternalTreeNodeId, sighash: Uint8Array): Promise<SchnorrSignatureBytes>;
+    signLeafRefundSpends(leafId: ExternalTreeNodeId, sighashes: Uint8Array[]): Promise<SchnorrSignatureBytes[]>;
     signFrost(jobs: ExternalFrostJob[]): Promise<ExternalFrostShareResult[]>;
     prepareTransfer(request: ExternalPrepareTransferRequest): Promise<ExternalPreparedTransfer>;
     prepareClaim(request: ExternalPrepareClaimRequest): Promise<ExternalPreparedClaim>;
@@ -1307,6 +1328,13 @@ extern "C" {
         this: &JsExternalSparkSigner,
         leaf_id: ExternalTreeNodeId,
         sighash: Vec<u8>,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signLeafRefundSpends", catch)]
+    pub fn sign_leaf_refund_spends(
+        this: &JsExternalSparkSigner,
+        leaf_id: ExternalTreeNodeId,
+        sighashes: js_sys::Array,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
@@ -1471,6 +1499,23 @@ impl ExternalSparkSignerHandle {
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "signLeafRefundSpends")]
+    pub async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighashes: Vec<js_sys::Uint8Array>,
+    ) -> Result<Vec<SchnorrSignatureBytes>, JsValue> {
+        let signatures = self
+            .inner
+            .sign_leaf_refund_spends(
+                leaf_id.into(),
+                sighashes.iter().map(js_sys::Uint8Array::to_vec).collect(),
+            )
+            .await
+            .map_err(spark_handle_js_err)?;
+        Ok(signatures.into_iter().map(Into::into).collect())
     }
 
     #[wasm_bindgen(js_name = "signFrost")]

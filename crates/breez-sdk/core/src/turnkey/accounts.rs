@@ -20,7 +20,9 @@ use super::types::{
     EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE, ExportWalletAccountIntent,
     ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest,
     GetWalletAccountResponse, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT,
-    SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent, SignRawPayloadResult, WalletAccountParams,
+    SIGN_RAW_PAYLOAD_TYPE, SIGN_RAW_PAYLOADS_PATH, SIGN_RAW_PAYLOADS_RESULT,
+    SIGN_RAW_PAYLOADS_TYPE, SignRawPayloadIntent, SignRawPayloadResult, SignRawPayloadsIntent,
+    SignRawPayloadsResult, WalletAccountParams,
 };
 
 /// The Spark address format (and thus the BIP-340 Schnorr signing scheme) for
@@ -184,6 +186,38 @@ impl TurnkeyClient {
             OnConflict::Retry,
         )
         .await
+    }
+
+    /// Submits a `SIGN_RAW_PAYLOADS` activity: signs every payload with the
+    /// `sign_with` account in one request, returning the signatures in order.
+    pub(crate) async fn sign_raw_many(
+        &self,
+        sign_with: String,
+        payloads_hex: Vec<String>,
+        hash_function: &'static str,
+    ) -> Result<Vec<SignRawPayloadResult>, TurnkeyError> {
+        let expected = payloads_hex.len();
+        let result: SignRawPayloadsResult = self
+            .submit_activity(
+                SIGN_RAW_PAYLOADS_PATH,
+                SIGN_RAW_PAYLOADS_TYPE,
+                SignRawPayloadsIntent {
+                    sign_with,
+                    payloads: payloads_hex,
+                    encoding: ENCODING_HEXADECIMAL,
+                    hash_function,
+                },
+                SIGN_RAW_PAYLOADS_RESULT,
+                OnConflict::Retry,
+            )
+            .await?;
+        if result.signatures.len() != expected {
+            return Err(TurnkeyError::UnexpectedResponse(format!(
+                "sign_raw_payloads returned {} signatures for {expected} payloads",
+                result.signatures.len()
+            )));
+        }
+        Ok(result.signatures)
     }
 
     /// Exports the secret key for the account at `path`, decrypting the bundle

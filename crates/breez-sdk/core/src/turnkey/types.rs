@@ -16,6 +16,9 @@ pub(crate) const GET_WALLET_ACCOUNT_PATH: &str = "/public/v1/query/get_wallet_ac
 pub(crate) const SIGN_RAW_PAYLOAD_PATH: &str = "/public/v1/submit/sign_raw_payload";
 pub(crate) const SIGN_RAW_PAYLOAD_TYPE: &str = "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2";
 pub(crate) const SIGN_RAW_PAYLOAD_RESULT: &str = "signRawPayloadResult";
+pub(crate) const SIGN_RAW_PAYLOADS_PATH: &str = "/public/v1/submit/sign_raw_payloads";
+pub(crate) const SIGN_RAW_PAYLOADS_TYPE: &str = "ACTIVITY_TYPE_SIGN_RAW_PAYLOADS";
+pub(crate) const SIGN_RAW_PAYLOADS_RESULT: &str = "signRawPayloadsResult";
 pub(crate) const ENCODING_HEXADECIMAL: &str = "PAYLOAD_ENCODING_HEXADECIMAL";
 pub(crate) const HASH_FUNCTION_SHA256: &str = "HASH_FUNCTION_SHA256";
 pub(crate) const HASH_FUNCTION_NO_OP: &str = "HASH_FUNCTION_NO_OP";
@@ -71,6 +74,21 @@ pub(crate) struct SignRawPayloadIntent {
     pub payload: String,
     pub encoding: &'static str,
     pub hash_function: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SignRawPayloadsIntent {
+    pub sign_with: String,
+    pub payloads: Vec<String>,
+    pub encoding: &'static str,
+    pub hash_function: &'static str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SignRawPayloadsResult {
+    pub signatures: Vec<SignRawPayloadResult>,
 }
 
 #[derive(Deserialize)]

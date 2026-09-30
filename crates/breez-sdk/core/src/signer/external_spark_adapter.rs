@@ -117,6 +117,30 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
             .map_err(to_spark_err)
     }
 
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: &TreeNodeId,
+        sighashes: &[[u8; 32]],
+    ) -> Result<Vec<schnorr::Signature>, SignerError> {
+        let ext = ExternalTreeNodeId::from_tree_node_id(leaf_id).map_err(to_spark_err)?;
+        let signatures = self
+            .inner
+            .sign_leaf_refund_spends(ext, sighashes.iter().map(|s| s.to_vec()).collect())
+            .await
+            .map_err(to_spark_err)?;
+        if signatures.len() != sighashes.len() {
+            return Err(SignerError::Generic(format!(
+                "signer returned {} signatures for {} sighashes",
+                signatures.len(),
+                sighashes.len()
+            )));
+        }
+        signatures
+            .iter()
+            .map(|sig| sig.to_signature().map_err(to_spark_err))
+            .collect()
+    }
+
     async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
         let ext_jobs = jobs
             .iter()
