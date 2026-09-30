@@ -79,18 +79,82 @@ pub fn token_tx_inputs_are_ours(
     }
 }
 
+/// Why a token transaction could not be mapped to payments.
+#[derive(Debug)]
+pub(crate) enum TokenPaymentsError {
+    /// No metadata is known for a token the transaction pays out.
+    MissingMetadata(String),
+    /// The transaction is malformed.
+    Invalid(String),
+}
+
+impl From<TokenPaymentsError> for SdkError {
+    fn from(value: TokenPaymentsError) -> Self {
+        match value {
+            TokenPaymentsError::MissingMetadata(msg) | TokenPaymentsError::Invalid(msg) => {
+                SdkError::Generic(msg)
+            }
+        }
+    }
+}
+
 /// Converts a token transaction to payments
 ///
 /// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
 ///
 /// Assumes all inputs of a token transaction share the same owner public key.
-#[allow(clippy::too_many_lines)]
 pub async fn token_transaction_to_payments(
     spark_wallet: &SparkWallet,
     object_repository: &ObjectCacheRepository,
     transaction: &spark_wallet::TokenTransaction,
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
+    let metadata_by_token =
+        get_token_transaction_metadata(spark_wallet, object_repository, transaction).await?;
+    Ok(payments_from_token_transaction(
+        transaction,
+        &metadata_by_token,
+        spark_wallet.get_identity_public_key(),
+        tx_inputs_are_ours,
+    )?)
+}
+
+/// Returns the metadata of the tokens in `transaction`'s outputs, keyed by token identifier.
+pub(crate) async fn get_token_transaction_metadata(
+    spark_wallet: &SparkWallet,
+    object_repository: &ObjectCacheRepository,
+    transaction: &spark_wallet::TokenTransaction,
+) -> Result<HashMap<String, TokenMetadata>, SdkError> {
+    let mut token_identifiers: Vec<&str> = transaction
+        .outputs
+        .iter()
+        .map(|o| o.token_identifier.as_ref())
+        .collect();
+    token_identifiers.sort_unstable();
+    token_identifiers.dedup();
+    if token_identifiers.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    Ok(
+        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &token_identifiers)
+            .await?
+            .into_iter()
+            .map(|m| (m.identifier.clone(), m))
+            .collect(),
+    )
+}
+
+/// Converts a token transaction to payments using already fetched token metadata.
+///
+/// See [`token_transaction_to_payments`].
+#[allow(clippy::too_many_lines)]
+pub(crate) fn payments_from_token_transaction(
+    transaction: &spark_wallet::TokenTransaction,
+    metadata_by_token: &HashMap<String, TokenMetadata>,
+    identity_public_key: PublicKey,
+    tx_inputs_are_ours: bool,
+) -> Result<Vec<Payment>, TokenPaymentsError> {
     // Transactions with no outputs (e.g. Create) produce no payments
     if transaction.outputs.is_empty() {
         debug!(
@@ -101,21 +165,6 @@ pub async fn token_transaction_to_payments(
         return Ok(Vec::new());
     }
 
-    let mut token_identifiers: Vec<&str> = transaction
-        .outputs
-        .iter()
-        .map(|o| o.token_identifier.as_ref())
-        .collect();
-    token_identifiers.sort_unstable();
-    token_identifiers.dedup();
-
-    let metadata_by_token: HashMap<String, TokenMetadata> =
-        get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &token_identifiers)
-            .await?
-            .into_iter()
-            .map(|m| (m.identifier.clone(), m))
-            .collect();
-
     let is_mint_transaction = matches!(&transaction.inputs, spark_wallet::TokenInputs::Mint(..));
     let is_transfer_transaction =
         matches!(&transaction.inputs, spark_wallet::TokenInputs::Transfer(..));
@@ -124,13 +173,11 @@ pub async fn token_transaction_to_payments(
         .created_timestamp
         .duration_since(UNIX_EPOCH)
         .map_err(|_| {
-            SdkError::Generic(
+            TokenPaymentsError::Invalid(
                 "Token transaction created timestamp is before UNIX_EPOCH".to_string(),
             )
         })?
         .as_secs();
-
-    let identity_public_key = spark_wallet.get_identity_public_key();
 
     let mut payments = Vec::new();
 
@@ -169,7 +216,7 @@ pub async fn token_transaction_to_payments(
         let metadata = metadata_by_token
             .get(&output.token_identifier)
             .ok_or_else(|| {
-                SdkError::Generic(format!(
+                TokenPaymentsError::MissingMetadata(format!(
                     "Token metadata not found for {}",
                     output.token_identifier
                 ))
@@ -186,7 +233,7 @@ pub async fn token_transaction_to_payments(
             spark_wallet::TokenInputs::Mint(..) => TokenTransactionType::Mint,
             spark_wallet::TokenInputs::Transfer(..) => TokenTransactionType::Transfer,
             spark_wallet::TokenInputs::Create(..) => {
-                return Err(SdkError::Generic(
+                return Err(TokenPaymentsError::Invalid(
                     "Create token transactions are not expected to have outputs".to_string(),
                 ));
             }
@@ -610,5 +657,35 @@ mod tests {
             fulfilled_invoices: vec![],
         };
         assert!(!token_tx_inputs_are_ours(&tx, None, identity).unwrap());
+    }
+
+    fn mint_to(owner: PublicKey) -> TokenTransaction {
+        let mut tx = parent_tx(vec![token_output(owner)]);
+        tx.hash = "mint".to_string();
+        tx
+    }
+
+    #[macros::test_all]
+    fn a_paying_output_without_metadata_is_missing_metadata() {
+        let identity = pk(1);
+        let result =
+            payments_from_token_transaction(&mint_to(identity), &HashMap::new(), identity, false);
+        assert!(matches!(
+            result,
+            Err(TokenPaymentsError::MissingMetadata(_))
+        ));
+    }
+
+    // The web `SystemTime` cannot represent a time before the epoch.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    #[macros::test_not_wasm]
+    fn a_timestamp_before_the_epoch_is_invalid() {
+        let identity = pk(1);
+        let mut tx = mint_to(identity);
+        tx.created_timestamp = UNIX_EPOCH
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap();
+        let result = payments_from_token_transaction(&tx, &HashMap::new(), identity, false);
+        assert!(matches!(result, Err(TokenPaymentsError::Invalid(_))));
     }
 }

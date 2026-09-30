@@ -1,17 +1,20 @@
 use std::{str::FromStr, sync::Arc};
 
 use spark_wallet::{
-    ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
-    TransferId,
+    ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, PublicKey,
+    SparkWallet, TokenInputs, TokenTransaction, TransferId,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{
         payments::record_payment_update,
-        token::{token_transaction_to_payments, token_tx_inputs_are_ours},
+        token::{
+            TokenPaymentsError, get_token_transaction_metadata, payments_from_token_transaction,
+            token_tx_inputs_are_ours,
+        },
     },
 };
 
@@ -258,6 +261,9 @@ impl SparkSyncService {
         let mut payments_to_sync = Vec::new();
         let mut next_offset = 0;
         let mut has_more = true;
+        // Set when a transaction is skipped for a reason that may clear, so that the
+        // next pass walks back to the current checkpoint and retries it
+        let mut hold_checkpoint = false;
         // We'll keep querying in pages until we already have a completed or failed payment stored
         // or we have fetched all transfers
         'page_loop: while has_more {
@@ -283,6 +289,7 @@ impl SparkSyncService {
             };
             // If no token transactions to sync
             if token_transactions.is_empty() {
+                has_more = false;
                 break 'page_loop;
             }
             // Optimization: if the first transaction corresponds to the last synced final token payment id,
@@ -338,35 +345,29 @@ impl SparkSyncService {
             );
             // Process transfers in this page
             for transaction in &token_transactions.items {
-                let parent_transaction = match &transaction.inputs {
-                    spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
-                        let first_input = token_transfer_input.outputs_to_spend.first().ok_or(
-                            SdkError::Generic("No input in token transfer input".to_string()),
-                        )?;
-                        Some(
-                            parent_transactions
-                                .iter()
-                                .find(|tx| tx.hash == first_input.prev_token_tx_hash)
-                                .ok_or(SdkError::Generic(
-                                    "Parent transaction not found".to_string(),
-                                ))?,
-                        )
+                let payments = match self
+                    .token_transaction_payments(
+                        object_repository,
+                        transaction,
+                        &parent_transactions,
+                        our_public_key,
+                    )
+                    .await
+                {
+                    Ok(payments) => payments,
+                    Err(TokenTxSkip::Permanent(e)) => {
+                        error!("Skipping token transaction {}: {e:?}", transaction.hash);
+                        continue;
                     }
-                    spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => {
-                        None
+                    Err(TokenTxSkip::Temporary(e)) => {
+                        warn!(
+                            "Skipping token transaction {} until a later sync: {e:?}",
+                            transaction.hash
+                        );
+                        hold_checkpoint = true;
+                        continue;
                     }
                 };
-                let tx_inputs_are_ours =
-                    token_tx_inputs_are_ours(transaction, parent_transaction, our_public_key)?;
-
-                // Create payment records
-                let payments = token_transaction_to_payments(
-                    &self.spark_wallet,
-                    object_repository,
-                    transaction,
-                    tx_inputs_are_ours,
-                )
-                .await?;
 
                 for payment in payments {
                     // Apply any payment metadata for the payment
@@ -391,9 +392,11 @@ impl SparkSyncService {
                 }
             }
 
-            // Check if we have more transfers to fetch
-            next_offset = next_offset.saturating_add(u64::try_from(token_transactions.len())?);
-            has_more = token_transactions.len() as u64 == PAYMENT_SYNC_BATCH_SIZE;
+            // Page by the server's offset: the item count shrinks when malformed records are dropped
+            match token_transactions.next {
+                Some(next) => next_offset = next.offset,
+                None => has_more = false,
+            }
         }
 
         // Insert what synced payments we have into storage, oldest to newest
@@ -413,9 +416,10 @@ impl SparkSyncService {
         }
 
         // We have synced all token transactions or found the last synced payment id.
-        // If there was a failure to fetch transactions or no transactions exist,
-        // we won't update the last synced token payment id
+        // If there was a failure to fetch transactions, no transactions exist or a
+        // transaction awaits a retry, we won't update the last synced token payment id
         if !has_more
+            && !hold_checkpoint
             && let Some(last_synced_final_token_payment_id) = payments_to_sync
                 .into_iter()
                 .rfind(|p| p.status.is_final())
@@ -433,4 +437,65 @@ impl SparkSyncService {
 
         Ok(())
     }
+
+    /// Maps a token transaction to its payments, given the parents of the page it is in.
+    async fn token_transaction_payments(
+        &self,
+        object_repository: &ObjectCacheRepository,
+        transaction: &TokenTransaction,
+        parent_transactions: &[TokenTransaction],
+        our_public_key: PublicKey,
+    ) -> Result<Vec<Payment>, TokenTxSkip> {
+        let parent_transaction = match &transaction.inputs {
+            TokenInputs::Transfer(token_transfer_input) => {
+                let first_input =
+                    token_transfer_input
+                        .outputs_to_spend
+                        .first()
+                        .ok_or_else(|| {
+                            TokenTxSkip::Permanent(SdkError::Generic(
+                                "No input in token transfer input".to_string(),
+                            ))
+                        })?;
+                Some(
+                    parent_transactions
+                        .iter()
+                        .find(|tx| tx.hash == first_input.prev_token_tx_hash)
+                        .ok_or_else(|| {
+                            TokenTxSkip::Permanent(SdkError::Generic(
+                                "Parent transaction not found".to_string(),
+                            ))
+                        })?,
+                )
+            }
+            TokenInputs::Mint(_) | TokenInputs::Create(_) => None,
+        };
+        let tx_inputs_are_ours =
+            token_tx_inputs_are_ours(transaction, parent_transaction, our_public_key)
+                .map_err(TokenTxSkip::Permanent)?;
+
+        let metadata_by_token =
+            get_token_transaction_metadata(&self.spark_wallet, object_repository, transaction)
+                .await
+                .map_err(TokenTxSkip::Temporary)?;
+
+        payments_from_token_transaction(
+            transaction,
+            &metadata_by_token,
+            our_public_key,
+            tx_inputs_are_ours,
+        )
+        .map_err(|e| match e {
+            TokenPaymentsError::MissingMetadata(_) => TokenTxSkip::Temporary(e.into()),
+            TokenPaymentsError::Invalid(_) => TokenTxSkip::Permanent(e.into()),
+        })
+    }
+}
+
+/// Why a token transaction was left out of a sync pass.
+enum TokenTxSkip {
+    /// Mapping can never succeed, so sync may move past the transaction.
+    Permanent(SdkError),
+    /// Mapping may succeed later, so sync must not move past the transaction yet.
+    Temporary(SdkError),
 }
