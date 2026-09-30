@@ -15,6 +15,9 @@ use spark_itest::fixtures::setup::TestFixtures;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::{info, warn};
 
+/// How often a loop below looks again: a local cluster answers in milliseconds.
+const POLL: Duration = Duration::from_millis(250);
+
 /// Errors from the SSP or operators not having seen the mempool tx yet. Any other
 /// error fails the test rather than being retried into a timeout.
 fn is_transient_claim_error(message: &str) -> bool {
@@ -123,7 +126,7 @@ async fn test_instant_static_deposit_claim_local() -> Result<()> {
                     anyhow::bail!("instant claim never became claimable within 90s: {e}");
                 }
                 info!("instant claim not ready yet, retrying: {e}");
-                sleep(Duration::from_secs(2)).await;
+                sleep(POLL).await;
             }
             Err(e) => return Err(anyhow::anyhow!("instant claim failed (terminal): {e}")),
         }
@@ -197,7 +200,7 @@ async fn test_instant_static_deposit_claim_local() -> Result<()> {
             );
         }
         info!("deferred CLAIM not complete yet, retrying");
-        sleep(Duration::from_secs(3)).await;
+        sleep(POLL).await;
     };
     info!("Deferred CLAIM co-signed + broadcast the deposit-spend: {spend_txid}");
 

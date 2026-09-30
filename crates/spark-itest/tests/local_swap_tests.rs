@@ -22,6 +22,9 @@ use spark_wallet::{
 };
 use tracing::info;
 
+/// How often a loop below looks again: a local cluster answers in milliseconds.
+const POLL: Duration = Duration::from_millis(250);
+
 struct SwapFixture {
     pub fixtures: TestFixtures,
     pub alice_wallet: SparkWallet,
@@ -229,7 +232,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
             if let Some(swap) = swaps.iter().find(|swap| !swap.inbound.is_empty()) {
                 break 'claim swap.inbound.clone();
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(POLL).await;
         }
         panic!("the daemon did not claim Alice's leaf within the timeout");
     };
@@ -256,7 +259,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
             std::time::Instant::now() < deadline,
             "the leaf the daemon claimed never joined the pool"
         );
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(POLL).await;
     }
 
     Ok(())
@@ -513,7 +516,7 @@ async fn test_swap_refronts_a_reclaimed_pool_leaf() -> Result<()> {
         }
         // Gives the asynchronous claim of this swap's leaves time to land before
         // the next swap.
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(POLL).await;
     }
 
     anyhow::bail!(

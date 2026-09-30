@@ -22,8 +22,7 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
 
     info!("Minted 1,000,000 tokens");
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    wait_for_token_balance(&instance.sdk, &token_metadata.identifier, 1_000_000, 30).await?;
     Ok(token_metadata)
 }
 
