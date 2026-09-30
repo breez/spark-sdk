@@ -156,18 +156,14 @@ async fn test_01_token_transfer(#[future] env: Result<Environment>) -> Result<()
         "Alice should have token payment details with correct metadata"
     );
 
-    // Sync Bob's wallet to receive the payment
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    // Confirm payment is now completed for Bob
-    let bob_payment = bob
-        .sdk
-        .get_payment(GetPaymentRequest {
-            payment_id: send_resp.payment.id.clone(),
-        })
-        .await?
-        .payment;
+    // Bob learns of the payment from a sync, and it is complete when he does.
+    let bob_payment = wait_for_payment_status(
+        &bob.sdk,
+        &send_resp.payment.id,
+        PaymentStatus::Completed,
+        30,
+    )
+    .await?;
 
     assert_eq!(
         bob_payment.status,
@@ -353,17 +349,8 @@ async fn test_02_token_invoice(#[future] env: Result<Environment>) -> Result<()>
         "Alice should have token payment details with correct metadata"
     );
 
-    // Sync Bob's wallet
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let bob_payment = bob
-        .sdk
-        .get_payment(GetPaymentRequest {
-            payment_id: alice_payment.id.clone(),
-        })
-        .await?
-        .payment;
+    let bob_payment =
+        wait_for_payment_status(&bob.sdk, &alice_payment.id, PaymentStatus::Completed, 30).await?;
 
     info!("Bob's payment: {:?}", bob_payment);
 
@@ -490,7 +477,6 @@ async fn test_03_token_burning(#[future] env: Result<Environment>) -> Result<()>
     );
 
     // Verify token balance after burning
-    //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let after_burn_balance = alice
@@ -772,7 +758,6 @@ async fn test_05_invoice_expiry(#[future] env: Result<Environment>) -> Result<()
             );
             // If it succeeded, verify it was processed
             if send_resp.payment.status == PaymentStatus::Completed {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
                 let bob_balance = bob
@@ -832,20 +817,8 @@ async fn test_06_supply_limits(#[future] env: Result<Environment>) -> Result<()>
         .mint_issuer_token(MintIssuerTokenRequest { amount: max_supply })
         .await?;
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .token_balances
-        .get(&token_metadata.identifier)
-        .unwrap()
-        .balance;
-
+    let balance =
+        wait_for_token_balance(&alice.sdk, &token_metadata.identifier, max_supply, 30).await?;
     assert_eq!(balance, max_supply, "Should have minted up to max supply");
 
     // Try to mint more - should fail
@@ -1227,18 +1200,7 @@ async fn test_08_token_batch(#[future] env: Result<Environment>) -> Result<()> {
         .payments;
     assert_eq!(listed.len(), 2, "the batch is listable by transaction hash");
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_balance = bob
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .token_balances
-        .get(&token)
-        .map(|b| b.balance)
-        .unwrap_or(0);
+    let bob_balance = wait_for_token_balance(&bob.sdk, &token, 100, 30).await?;
     assert_eq!(bob_balance, 100, "Bob receives both outputs");
 
     info!("=== Test test_08_token_batch PASSED ===");
@@ -1533,21 +1495,37 @@ async fn test_10_token_batch_invoice_attribution(#[future] env: Result<Environme
 
     // Receiver side: attribution is reconstructed from the synced transaction
     // alone, so it must land on the same invoice per amount.
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_payments = bob
-        .sdk
-        .list_payments(ListPaymentsRequest {
-            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
-                tx_hash: Some(tx_hash),
-                tx_type: None,
-            }]),
-            ..Default::default()
-        })
-        .await?
-        .payments;
-    assert_eq!(bob_payments.len(), 3, "the receiver records every output");
+    let filter = || {
+        Some(vec![PaymentDetailsFilter::Token {
+            conversion_refund_needed: None,
+            tx_hash: Some(tx_hash.clone()),
+            tx_type: None,
+        }])
+    };
+    let bob_payments = wait_for(
+        || {
+            let sdk = bob.sdk.clone();
+            let filter = filter();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let payments = sdk
+                    .list_payments(ListPaymentsRequest {
+                        payment_details_filter: filter,
+                        ..Default::default()
+                    })
+                    .await?
+                    .payments;
+                anyhow::ensure!(
+                    payments.len() == 3,
+                    "the receiver records {} of the 3 outputs",
+                    payments.len()
+                );
+                Ok(payments)
+            }
+        },
+        30,
+    )
+    .await?;
 
     let mut receiver_attribution: Vec<(u128, String, Option<String>)> = bob_payments
         .iter()
@@ -1633,7 +1611,6 @@ async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -
             idempotency_key: None,
         })
         .await?;
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let bob_address = bob
@@ -1698,8 +1675,7 @@ async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -
         "both tokens move in the one transaction"
     );
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    wait_for_token_balance(&bob.sdk, &token_a, 70, 30).await?;
     let balances = bob
         .sdk
         .get_info(GetInfoRequest {

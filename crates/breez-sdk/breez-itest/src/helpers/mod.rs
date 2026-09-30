@@ -474,6 +474,42 @@ pub async fn wait_for_claimed_event(
 /// # Returns
 /// The payment details from the PaymentSucceeded event
 #[tracing::instrument(level = "debug", name = "wait.payment_succeeded_event", skip_all)]
+/// Syncs until the wallet reports `payment_id` with `status`. A receiver learns
+/// of a payment only from a sync, and the failure names the status it did report,
+/// so a payment stuck short of `status` says so.
+#[tracing::instrument(level = "debug", name = "wait.payment_status", skip_all)]
+pub async fn wait_for_payment_status(
+    sdk: &BreezSdk,
+    payment_id: &str,
+    status: PaymentStatus,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    let id = payment_id.to_string();
+    wait_for(
+        || {
+            let sdk = sdk.clone();
+            let id = id.clone();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let payment = sdk
+                    .get_payment(GetPaymentRequest {
+                        payment_id: id.clone(),
+                    })
+                    .await?
+                    .payment;
+                anyhow::ensure!(
+                    payment.status == status,
+                    "payment {id} is {:?}, not {status:?}",
+                    payment.status
+                );
+                Ok(payment)
+            }
+        },
+        timeout_secs,
+    )
+    .await
+}
+
 pub async fn wait_for_payment_succeeded_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
