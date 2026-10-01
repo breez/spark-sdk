@@ -65,7 +65,7 @@ rusqlite_migration = { workspace = true, optional = true }
 spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
@@ -87,6 +87,8 @@ tokio = { workspace = true, features = ["macros"] }
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+# Tests compare the SDK's log filter against `EnvFilter`.
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Non-WASM dev dependencies (for PostgreSQL container tests)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
