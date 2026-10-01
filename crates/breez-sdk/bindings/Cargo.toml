@@ -26,6 +26,12 @@ crate-type = ["staticlib", "cdylib", "lib"]
 breez-sdk-spark = { workspace = true, features = ["uniffi", "passkey", "sqlite", "turnkey-p256"] }
 uniffi = { workspace = true, features = ["tokio"] }
 
+# Smaller libsecp256k1 precomputed tables on mobile: about 1 MB less binary for
+# slightly slower signing and verification. Keep the version in step with the
+# `secp256k1-sys` that `bitcoin` resolves to, or this stops applying.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+secp256k1-sys = { version = "0.10", features = ["lowmemory"] }
+
 [build-dependencies]
 glob.workspace = true
 uniffi = { workspace = true, features = ["build"] }

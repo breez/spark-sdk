@@ -1628,6 +1628,7 @@ version = "0.1.0"
 dependencies = [
  "breez-sdk-spark",
  "glob",
+ "secp256k1-sys 0.10.1",
  "uniffi",
 ]
 
