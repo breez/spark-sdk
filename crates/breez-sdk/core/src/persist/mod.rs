@@ -1,8 +1,8 @@
 pub(crate) mod backend;
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "db-storage-api"))]
 pub mod mysql;
 pub(crate) mod path;
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "db-storage-api"))]
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;

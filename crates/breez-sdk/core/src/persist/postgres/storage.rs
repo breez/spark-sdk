@@ -31,9 +31,9 @@ use crate::{
     },
 };
 
-#[cfg(test)]
-use super::base::{PostgresStorageConfig, create_pool};
 use super::base::{SchemaRenames, map_db_error, map_pool_error, run_migrations};
+#[cfg(test)]
+use super::{PostgresStorageConfig, base::create_pool};
 
 /// Name of the schema migrations table for `PostgresStorage`.
 const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
