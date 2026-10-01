@@ -21,6 +21,24 @@ runs:
         version: "30.2"
         repo-token: ${{ inputs.github-token }}
 
+    # Shortens the absolute source paths that panic locations embed in the iOS
+    # and Android libraries (about 80 KB each). Per-target variables merge with
+    # the rustflags in `.cargo/config.toml`, where `RUSTFLAGS` would replace
+    # them. Set before the Rust cache so its key covers them.
+    - name: Remap source paths for mobile targets
+      shell: bash
+      run: |
+        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        # The last matching prefix wins, so the full registry path goes last.
+        flags="--remap-path-prefix=$cargo_home/registry/src/="
+        flags="$flags --remap-path-prefix=$cargo_home/registry/src/index.crates.io-1949cf8c6b5b557f/="
+        flags="$flags --remap-path-prefix=$cargo_home/git/checkouts/="
+        flags="$flags --remap-path-prefix=$GITHUB_WORKSPACE/="
+        for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios \
+            aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android; do
+          echo "CARGO_TARGET_$(echo "$target" | tr 'a-z-' 'A-Z_')_RUSTFLAGS=$flags" >> "$GITHUB_ENV"
+        done
+
     - name: Setup rust cache
       uses: Swatinem/rust-cache@v2
       with:
