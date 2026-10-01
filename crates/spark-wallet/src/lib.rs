@@ -6,6 +6,7 @@ mod model;
 mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
+mod watchtower_exit;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
@@ -77,6 +78,11 @@ pub use spark::{
 pub use unilateral_exit::*;
 pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
+pub use watchtower_exit::{
+    ResolvedWatchtowerExits, UnsignedWatchtowerExitRecovery, WATCHTOWER_EXITED_STATUSES,
+    WatchtowerExitScan, WatchtowerExitedOutput, build_watchtower_exit_recovery,
+    is_watchtower_exited, scan_watchtower_exits,
+};
 
 #[cfg(feature = "test-utils")]
 pub use spark::session_store::tests as session_store_tests;
