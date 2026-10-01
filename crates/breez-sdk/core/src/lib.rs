@@ -43,7 +43,7 @@ pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
 };
 pub use issuer::*;
-pub use logger::DEFAULT_FILTER;
+pub use logger::{DEFAULT_FILTER, parse_log_filter};
 pub use models::*;
 pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,

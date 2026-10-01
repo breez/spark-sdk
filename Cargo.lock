@@ -1737,6 +1737,7 @@ dependencies = [
  "hex",
  "k256",
  "lnurl-models",
+ "log",
  "macros 0.1.0",
  "nostr",
  "nostr-sdk",

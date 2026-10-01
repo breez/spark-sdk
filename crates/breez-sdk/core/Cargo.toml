@@ -36,6 +36,13 @@ turnkey-p256 = ["turnkey", "dep:p256"]
 # Smaller libsecp256k1 precomputed tables: about 1 MB less binary for slightly
 # slower signing and verification.
 secp-lowmemory = ["bitcoin/secp-lowmemory"]
+# Compiles trace-level logs out of release builds: about 300 KB less binary.
+# It applies to every crate in the same cargo build.
+release-max-level-debug = [
+    "dep:log",
+    "log/release_max_level_debug",
+    "tracing/release_max_level_debug",
+]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -72,7 +79,9 @@ rusqlite_migration = { workspace = true, optional = true }
 spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber.workspace = true
+# Only for the `release-max-level-debug` feature.
+log = { workspace = true, optional = true }
 url.workspace = true
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
@@ -94,6 +103,8 @@ tokio = { workspace = true, features = ["macros"] }
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+# Tests compare the SDK's log filter against `EnvFilter`.
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Non-WASM dev dependencies (for PostgreSQL container tests)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -21,8 +21,9 @@ pub struct BreezSdk {
 pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<()> {
     crate::logger::WASM_LOGGER.set(Some(logger));
 
-    let filter =
-        EnvFilter::new(filter.unwrap_or_else(|| breez_sdk_spark::DEFAULT_FILTER.to_string()));
+    let filter = breez_sdk_spark::parse_log_filter(
+        filter.as_deref().unwrap_or(breez_sdk_spark::DEFAULT_FILTER),
+    );
     let subscriber = tracing_subscriber::registry()
         .with(filter)
         .with(WasmTracingLayer {});
