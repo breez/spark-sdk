@@ -293,7 +293,7 @@ impl SdkBuilder {
     /// **Deprecated.** Use
     /// [`with_storage_backend`](Self::with_storage_backend) with
     /// [`postgres_storage`](crate::postgres_storage).
-    #[cfg(any(feature = "postgres", feature = "uniffi"))]
+    #[cfg(any(feature = "postgres", feature = "db-storage-api"))]
     #[deprecated(note = "use `with_storage_backend(postgres_storage(config)?)`")]
     pub fn with_postgres_backend(
         self,
@@ -305,7 +305,7 @@ impl SdkBuilder {
     /// **Deprecated.** Use
     /// [`with_storage_backend`](Self::with_storage_backend) with
     /// [`mysql_storage`](crate::mysql_storage).
-    #[cfg(any(feature = "mysql", feature = "uniffi"))]
+    #[cfg(any(feature = "mysql", feature = "db-storage-api"))]
     #[deprecated(note = "use `with_storage_backend(mysql_storage(config)?)`")]
     pub fn with_mysql_backend(
         self,

@@ -1,8 +1,8 @@
 //! `MySQL` storage configuration types.
 //!
-//! Compiled with the `uniffi` feature even when the `mysql` backend is off, so
-//! the bindings expose the same API in every build. `UniFFI` derives must be on
-//! the definition, so these mirror the `spark-mysql` types.
+//! Compiled with the `db-storage-api` feature even when the `mysql` backend is
+//! off, so the bindings can expose the same API in every build. `UniFFI`
+//! derives must be on the definition, so these mirror the `spark-mysql` types.
 
 /// Controls whether `MySQL` migrations create database-enforced foreign keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

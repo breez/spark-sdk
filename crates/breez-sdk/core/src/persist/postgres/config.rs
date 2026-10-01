@@ -1,8 +1,9 @@
 //! `PostgreSQL` storage configuration types.
 //!
-//! Compiled with the `uniffi` feature even when the `postgres` backend is off,
-//! so the bindings expose the same API in every build. `UniFFI` derives must be
-//! on the definition, so these mirror the `spark-postgres` types.
+//! Compiled with the `db-storage-api` feature even when the `postgres` backend
+//! is off, so the bindings can expose the same API in every build. `UniFFI`
+//! derives must be on the definition, so these mirror the `spark-postgres`
+//! types.
 
 /// Queue mode for the connection pool.
 ///

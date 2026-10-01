@@ -105,7 +105,7 @@ pub fn default_storage(storage_dir: String) -> Arc<dyn StorageBackend> {
 /// `PostgreSQL`-backed storage built from `config`. Opens the connection pool;
 /// fails if `config` is invalid, or if this build of the SDK does not include
 /// `PostgreSQL` support.
-#[cfg(any(feature = "postgres", feature = "uniffi"))]
+#[cfg(any(feature = "postgres", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn postgres_storage(
@@ -130,7 +130,7 @@ pub fn postgres_storage(
 /// `MySQL`-backed storage built from `config`. Opens the connection pool;
 /// fails if `config` is invalid, or if this build of the SDK does not include
 /// `MySQL` support.
-#[cfg(any(feature = "mysql", feature = "uniffi"))]
+#[cfg(any(feature = "mysql", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn mysql_storage(
@@ -154,10 +154,11 @@ pub fn mysql_storage(
     }
 }
 
-/// The bindings export every database backend so their API is the same in
-/// every build. A build without a backend's feature rejects it at runtime.
+/// With `db-storage-api`, every database backend is exported so the API is the
+/// same in every build. A build without a backend's feature rejects it at
+/// runtime.
 #[cfg(all(
-    feature = "uniffi",
+    feature = "db-storage-api",
     any(not(feature = "postgres"), not(feature = "mysql"))
 ))]
 fn backend_unavailable(backend: &str) -> SdkError {

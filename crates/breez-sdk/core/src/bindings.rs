@@ -200,6 +200,7 @@ impl SdkBuilder {
     }
 }
 
+#[cfg(any(feature = "postgres", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
     /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
@@ -215,6 +216,7 @@ impl SdkBuilder {
     }
 }
 
+#[cfg(any(feature = "mysql", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
     /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
