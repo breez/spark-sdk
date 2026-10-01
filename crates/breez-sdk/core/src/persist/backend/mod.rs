@@ -103,35 +103,66 @@ pub fn default_storage(storage_dir: String) -> Arc<dyn StorageBackend> {
 }
 
 /// `PostgreSQL`-backed storage built from `config`. Opens the connection pool;
-/// fails if `config` is invalid.
-#[cfg(feature = "postgres")]
+/// fails if `config` is invalid, or if this build of the SDK does not include
+/// `PostgreSQL` support.
+#[cfg(any(feature = "postgres", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn postgres_storage(
     config: crate::persist::postgres::PostgresStorageConfig,
 ) -> Result<Arc<dyn StorageBackend>, SdkError> {
-    let run_migration = config.run_migration;
-    let pool = crate::persist::postgres::create_pool(&config)?;
-    Ok(Arc::new(postgres::PostgresBackend::new(
-        pool,
-        run_migration,
-    )))
+    #[cfg(feature = "postgres")]
+    {
+        let run_migration = config.run_migration;
+        let pool = crate::persist::postgres::create_pool(&config)?;
+        Ok(Arc::new(postgres::PostgresBackend::new(
+            pool,
+            run_migration,
+        )))
+    }
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = config;
+        Err(backend_unavailable("PostgreSQL"))
+    }
 }
 
 /// `MySQL`-backed storage built from `config`. Opens the connection pool;
-/// fails if `config` is invalid.
-#[cfg(feature = "mysql")]
+/// fails if `config` is invalid, or if this build of the SDK does not include
+/// `MySQL` support.
+#[cfg(any(feature = "mysql", feature = "db-storage-api"))]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn mysql_storage(
     config: crate::persist::mysql::MysqlStorageConfig,
 ) -> Result<Arc<dyn StorageBackend>, SdkError> {
-    let run_migration = config.run_migration;
-    let foreign_key_mode = config.foreign_key_mode;
-    let pool = crate::persist::mysql::create_pool(&config)?;
-    Ok(Arc::new(mysql::MysqlBackend::new(
-        pool,
-        run_migration,
-        foreign_key_mode,
-    )))
+    #[cfg(feature = "mysql")]
+    {
+        let run_migration = config.run_migration;
+        let foreign_key_mode = config.foreign_key_mode;
+        let pool = crate::persist::mysql::create_pool(&config)?;
+        Ok(Arc::new(mysql::MysqlBackend::new(
+            pool,
+            run_migration,
+            foreign_key_mode,
+        )))
+    }
+    #[cfg(not(feature = "mysql"))]
+    {
+        let _ = config;
+        Err(backend_unavailable("MySQL"))
+    }
+}
+
+/// With `db-storage-api`, every database backend is exported so the API is the
+/// same in every build. A build without a backend's feature rejects it at
+/// runtime.
+#[cfg(all(
+    feature = "db-storage-api",
+    any(not(feature = "postgres"), not(feature = "mysql"))
+))]
+fn backend_unavailable(backend: &str) -> SdkError {
+    SdkError::Generic(format!(
+        "{backend} storage is not available in this build of the SDK"
+    ))
 }

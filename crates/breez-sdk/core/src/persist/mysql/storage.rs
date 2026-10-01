@@ -31,7 +31,7 @@ use crate::{
 
 use super::base::{Migration, SchemaRenames, map_db_error, run_migrations};
 #[cfg(test)]
-use super::base::{MysqlStorageConfig, create_pool};
+use super::{MysqlStorageConfig, base::create_pool};
 
 const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
 const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS: u64 = 10;
