@@ -253,6 +253,22 @@ pub struct QuoteResponse {
     pub zeroconf_enabled: Option<bool>,
     #[serde(default)]
     pub amount_mode: Option<AmountMode>,
+    /// Token for `GET /status?quoteId=`, presented via `X-Read-Token`. Binds
+    /// (partnerId, apiKeyId, quoteId).
+    #[serde(default)]
+    pub read_token: Option<ReadToken>,
+}
+
+/// Opaque `X-Read-Token` value. `Debug` redacts it so logged responses don't
+/// carry a credential.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ReadToken(pub String);
+
+impl std::fmt::Debug for ReadToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +288,7 @@ pub struct SubmitRequest {
     pub source_spark_address: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitResponse {
     pub order_id: String,
@@ -280,20 +296,7 @@ pub struct SubmitResponse {
     /// Opaque token that must be presented (via `X-Read-Token` header) when
     /// querying the order status. Binds (partnerId, apiKeyId, orderId).
     #[serde(default)]
-    pub read_token: Option<String>,
-}
-
-impl std::fmt::Debug for SubmitResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubmitResponse")
-            .field("order_id", &self.order_id)
-            .field("status", &self.status)
-            .field(
-                "read_token",
-                &self.read_token.as_ref().map(|_| "<redacted>"),
-            )
-            .finish()
-    }
+    pub read_token: Option<ReadToken>,
 }
 
 // ---------------------------------------------------------------------------
@@ -500,7 +503,7 @@ mod submit_response_tests {
         let response = SubmitResponse {
             order_id: "ord_1".to_string(),
             status: OrderStatus::Completed,
-            read_token: Some("eyJ2IjoxLCJwIjoicGFyXzAxOWQ4NmIy".to_string()),
+            read_token: Some(ReadToken("eyJ2IjoxLCJwIjoicGFyXzAxOWQ4NmIy".to_string())),
         };
         let rendered = format!("{response:?}");
         assert!(!rendered.contains("eyJ2"), "token leaked: {rendered}");
@@ -552,5 +555,19 @@ mod quote_response_tests {
         let quote: QuoteResponse = serde_json::from_value(json).expect("parses without them");
         assert!(quote.fee_asset_details.is_none());
         assert!(quote.rounding_fee_amount.is_none());
+        assert!(quote.read_token.is_none());
+    }
+
+    #[test]
+    fn read_token_parses_and_stays_out_of_debug() {
+        let mut json: serde_json::Value = serde_json::from_str(BSC_QUOTE).unwrap();
+        json["readToken"] = serde_json::Value::from("eyJ2IjoxLCJwIjoicGFy");
+        let quote: QuoteResponse = serde_json::from_value(json).expect("parses with it");
+        assert_eq!(
+            quote.read_token,
+            Some(ReadToken("eyJ2IjoxLCJwIjoicGFy".to_string()))
+        );
+        let rendered = format!("{quote:?}");
+        assert!(!rendered.contains("eyJ2"), "token leaked: {rendered}");
     }
 }
