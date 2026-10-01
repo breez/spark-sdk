@@ -44,6 +44,17 @@ impl BitcoindRpc {
     }
 
     async fn rpc<T: for<'de> Deserialize<'de>>(&self, method: &str, params: &[Value]) -> Result<T> {
+        self.rpc_optional(method, params)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bitcoind {method} answered null"))
+    }
+
+    /// For a method that answers `null` when it has nothing to return.
+    async fn rpc_optional<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: &[Value],
+    ) -> Result<Option<T>> {
         let body = serde_json::to_string(&json!({
             "jsonrpc": "1.0",
             "id": "rust-client",
@@ -68,9 +79,8 @@ impl BitcoindRpc {
         }
         let parsed: RpcResponse<T> = response.json()?;
         match (parsed.result, parsed.error) {
-            (Some(result), None) => Ok(result),
-            (None, Some(error)) => Err(anyhow::anyhow!("RPC error: {error:?}")),
-            _ => Err(anyhow::anyhow!("Invalid RPC response")),
+            (result, None) => Ok(result),
+            (_, Some(error)) => Err(anyhow::anyhow!("RPC error: {error:?}")),
         }
     }
 }
@@ -236,6 +246,17 @@ impl BitcoinChainService for LocalBitcoindChainService {
     async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
         let parsed = Txid::from_str(&txid).map_err(to_chain_err)?;
         let target_txid = parsed.to_string();
+
+        // An output the UTXO set still holds, the mempool's spends taken into
+        // account, has no spender for the scans below to find.
+        let unspent: Option<Value> = self
+            .bitcoind
+            .rpc_optional("gettxout", &[json!(target_txid), json!(vout), json!(true)])
+            .await
+            .map_err(to_chain_err)?;
+        if unspent.is_some() {
+            return Ok(Outspend::Unspent);
+        }
 
         // bitcoind has no direct outspend RPC: scan mempool then blocks for a
         // transaction whose inputs consume (target_txid:vout).
