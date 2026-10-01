@@ -19,6 +19,10 @@ postgres = [
 mysql = [
     "dep:spark-mysql",
 ]
+# Exports the PostgreSQL and MySQL storage API even without their backends,
+# where calling it returns an error. Keeps the bindings' API the same whether or
+# not a build includes the backends.
+db-storage-api = []
 # Bench-only: installs an extra tracing layer in `init_logging` that
 # captures span CLOSE events for the instrumented `send_payment`,
 # `spark::operator_rpc`, and `spark::ssp` targets. Off by default — prod

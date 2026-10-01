@@ -32,7 +32,7 @@ The SDK includes a PostgreSQL backend as an alternative to file-based storage. B
 
 If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
-**Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+**Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
 {{#tabs sdk_building:init-sdk-postgres}}
 
@@ -53,7 +53,7 @@ The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based st
 
 If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
-**Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+**Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
 {{#tabs sdk_building:init-sdk-mysql}}
 
