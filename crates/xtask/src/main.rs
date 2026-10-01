@@ -1207,7 +1207,7 @@ const DEPLOYED_SUITES: &[Suite] = &[
 
 fn itest_cmd(group: Option<&str>) -> Result<()> {
     let suites = group_of(LOCAL_SUITES, group)?;
-    let sh = prepare_itest_images(ITEST_IMAGES)?;
+    let sh = prepare_itest_images(images_of(group))?;
     ensure_itest_state(&sh)?;
     run_suites(&sh, &suites)
 }
@@ -1272,7 +1272,7 @@ fn itest_bootstrap_snapshot_key_cmd() -> Result<()> {
 }
 
 fn capture_itest_state_cmd() -> Result<()> {
-    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    let sh = prepare_itest_images(CLUSTER_IMAGES)?;
     capture_itest_state(&sh)
 }
 
@@ -1316,7 +1316,7 @@ fn capture_itest_state(sh: &Shell) -> Result<()> {
 fn compat_itest_cmd() -> Result<()> {
     // The tests start no daemon: its image is for `ensure_itest_state`, which
     // rebuilds a stale snapshot.
-    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    let sh = prepare_itest_images(CLUSTER_IMAGES)?;
     ensure_itest_state(&sh)?;
 
     // The compat crate is a standalone workspace (it links the previous SDK
@@ -1332,8 +1332,21 @@ fn compat_itest_cmd() -> Result<()> {
 /// Every image a local cluster can run.
 const ITEST_IMAGES: &[&str] = &["spark-so", "spark-migrations", "ldk-server", "sspd"];
 
-/// What building the state snapshot runs: the operators and the daemon.
-const SNAPSHOT_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+/// What a cluster with no lightning node runs: the operators and the daemon.
+/// Building the state snapshot runs one, as do the groups below.
+const CLUSTER_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+
+/// The groups with a suite that runs a lightning node: the lightning suites, and
+/// the two wallet suites that sync or pay a lightning address.
+const LIGHTNING_GROUPS: [&str; 2] = ["lightning", "wallets"];
+
+/// The images the suites of `group` run, every one when no group is named.
+fn images_of(group: Option<&str>) -> &'static [&'static str] {
+    match group {
+        Some(group) if !LIGHTNING_GROUPS.contains(&group) => CLUSTER_IMAGES,
+        _ => ITEST_IMAGES,
+    }
+}
 
 fn itest_images_cmd(images: &[String]) -> Result<()> {
     let named: Vec<&str> = images.iter().map(String::as_str).collect();
