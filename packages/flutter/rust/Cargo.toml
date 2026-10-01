@@ -5,6 +5,14 @@ edition = "2024"
 
 [workspace]
 
+# Own workspace, so the root release profile does not apply here. Mirrors its
+# size settings but keeps unwinding: flutter_rust_bridge turns a Rust panic into
+# a Dart exception, which `panic = "abort"` would replace with a crash.
+[profile.release]
+lto = true
+opt-level = "z"
+codegen-units = 1
+
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
@@ -21,6 +29,8 @@ flutter_rust_bridge = "=2.13.0"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [features]
+# See breez-sdk-spark's `secp-lowmemory` feature.
+secp-lowmemory = ["breez-sdk-spark/secp-lowmemory"]
 # See breez-sdk-spark's `release-max-level-debug` feature.
 release-max-level-debug = ["breez-sdk-spark/release-max-level-debug"]
 

@@ -33,6 +33,9 @@ turnkey = ["dep:turnkey_enclave_encrypt"]
 # Additionally accept P-256 (Turnkey's default) API keys for stamping, alongside
 # the always-available secp256k1. Pulls in the `p256` crate.
 turnkey-p256 = ["turnkey", "dep:p256"]
+# Smaller libsecp256k1 precomputed tables: about 1 MB less binary for slightly
+# slower signing and verification.
+secp-lowmemory = ["bitcoin/secp-lowmemory"]
 # Compiles trace-level logs out of release builds: about 300 KB less binary.
 # It applies to every crate in the same cargo build.
 release-max-level-debug = [
