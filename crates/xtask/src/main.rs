@@ -30,7 +30,7 @@ enum ClippyFeatures {
 /// `Send` checks.
 const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     // Every native feature. Not `--all-features`: `uniffi` compiles only against
-    // `uniffi/tokio`, which breez-sdk-bindings turns on.
+    // `uniffi/tokio`, which breez-sdk-spark-bindings turns on.
     (
         "breez-sdk-spark",
         ClippyFeatures::Only(&[
@@ -50,12 +50,12 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     // `fido2` hardware-key support.
     ("cli", ClippyFeatures::All),
     // `uniffi-cli` and `span-trace`.
-    ("breez-sdk-bindings", ClippyFeatures::All),
+    ("breez-sdk-spark-bindings", ClippyFeatures::All),
     // The React Native build: no database backends or their API.
-    ("breez-sdk-bindings", ClippyFeatures::NoDefault(&[])),
+    ("breez-sdk-spark-bindings", ClippyFeatures::NoDefault(&[])),
     // The iOS and Android builds: the storage API without the database backends.
     (
-        "breez-sdk-bindings",
+        "breez-sdk-spark-bindings",
         ClippyFeatures::NoDefault(&["db-storage-api"]),
     ),
     // The Turnkey harness and the local-operator-cluster cases.

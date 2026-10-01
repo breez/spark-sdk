@@ -1475,15 +1475,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "breez-sdk-bindings"
-version = "0.1.0"
-dependencies = [
- "breez-sdk-spark",
- "glob",
- "uniffi",
-]
-
-[[package]]
 name = "breez-sdk-common"
 version = "0.1.0"
 dependencies = [
@@ -1616,6 +1607,15 @@ dependencies = [
  "uuid",
  "wasm-bindgen-test",
  "x509-cert",
+]
+
+[[package]]
+name = "breez-sdk-spark-bindings"
+version = "0.1.0"
+dependencies = [
+ "breez-sdk-spark",
+ "glob",
+ "uniffi",
 ]
 
 [[package]]
