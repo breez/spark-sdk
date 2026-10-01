@@ -1628,8 +1628,6 @@ version = "0.1.0"
 dependencies = [
  "breez-sdk-spark",
  "glob",
- "log",
- "tracing",
  "uniffi",
 ]
 
@@ -1739,6 +1737,7 @@ dependencies = [
  "hex",
  "k256",
  "lnurl-models",
+ "log",
  "macros 0.1.0",
  "nostr",
  "nostr-sdk",

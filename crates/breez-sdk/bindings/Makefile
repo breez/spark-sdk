@@ -39,10 +39,6 @@ build-release:
 build-release-target-%: install-target-%
 	cargo build --release --target $* $(if $(CARGO_FEATURES),--features $(CARGO_FEATURES))
 
-# Mobile builds compile trace-level logs out to save binary size.
-MOBILE_FEATURES := release-max-level-debug
-build-release-target-aarch64-apple-ios build-release-target-aarch64-apple-ios-sim build-release-target-x86_64-apple-ios: CARGO_FEATURES = $(MOBILE_FEATURES)
-
 install-uniffi-bindgen-cs:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch v0.29.4-with-fixes
 
@@ -63,7 +59,7 @@ check-ndk:
 	fi
 
 build-ndk-release-target-%: check-ndk install-target-%
-	cargo ndk -t $* -o $(FFI_DIR)kotlin/jniLibs build --release --features $(MOBILE_FEATURES) --link-libcxx-shared
+	cargo ndk -t $* -o $(FFI_DIR)kotlin/jniLibs build --release --link-libcxx-shared
 
 build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kotlin \

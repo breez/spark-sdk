@@ -80,6 +80,12 @@ p256 = { workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
+# Trace-level logs compiled out of mobile release builds: about 300 KB less
+# binary. Debug builds and other platforms keep them.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+log = { workspace = true, features = ["release_max_level_debug"] }
+tracing = { workspace = true, features = ["release_max_level_debug"] }
+
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tokio = { workspace = true, features = ["macros"] }
