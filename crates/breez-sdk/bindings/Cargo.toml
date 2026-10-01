@@ -24,7 +24,7 @@ required-features = ["uniffi-cli"]
 
 [lib]
 name = "breez_sdk_spark_bindings"
-crate-type = ["staticlib", "cdylib", "lib"]
+crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 breez-sdk-spark = { workspace = true, features = ["uniffi", "passkey", "sqlite", "turnkey-p256"] }
