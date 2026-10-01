@@ -4,7 +4,7 @@ use super::error::Result;
 use super::metadata::set_idempotency_key;
 use super::spark::*;
 use super::spark_token;
-use crate::header_provider::HeaderProvider;
+use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
@@ -775,7 +775,10 @@ impl SparkRpcClient {
         } else {
             self.header_provider.headers().await
         }
-        .map_err(|e| OperatorRpcError::Authentication(e.to_string()))?;
+        .map_err(|e| match e {
+            HeaderProviderError::Unavailable(message) => OperatorRpcError::Transport(message),
+            HeaderProviderError::Generic(message) => OperatorRpcError::Authentication(message),
+        })?;
         let mut headers = Vec::with_capacity(raw_headers.len());
         for (key, value) in raw_headers {
             let metadata_key = key
@@ -874,6 +877,33 @@ mod tests {
             .expect("transport")
             .into_inner();
         SparkRpcClient::new(transport, provider, 0)
+    }
+
+    struct UnreachableProvider;
+
+    #[macros::async_trait]
+    impl HeaderProvider for UnreachableProvider {
+        async fn headers(
+            &self,
+        ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+            Err(HeaderProviderError::Unavailable(
+                "connection refused".to_string(),
+            ))
+        }
+    }
+
+    #[async_test_all]
+    async fn an_operator_unreachable_while_authenticating_is_a_transport_error() {
+        let transport = GrpcClient::new("http://127.0.0.1:1".to_string(), None, None, None)
+            .expect("transport")
+            .into_inner();
+        let client = SparkRpcClient::new(transport, Arc::new(UnreachableProvider), 0);
+
+        let result = client
+            .call_with_auth_retry(|_| async { Ok(tonic::Response::new(())) })
+            .await;
+
+        assert!(matches!(result, Err(OperatorRpcError::Transport(_))));
     }
 
     fn unauthenticated() -> OperatorRpcError {

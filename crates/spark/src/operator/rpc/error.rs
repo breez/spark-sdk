@@ -30,6 +30,31 @@ pub enum OperatorRpcError {
     Generic(String),
 }
 
+impl OperatorRpcError {
+    pub fn is_unavailable(&self) -> bool {
+        match self {
+            OperatorRpcError::Transport(_) => true,
+            OperatorRpcError::Connection(status) => is_temporary_code(status.code()),
+            _ => false,
+        }
+    }
+}
+
+/// `Cancelled` is the client's own request timeout. `Unknown` is a transport
+/// failure on the web: the operators mask an `Unknown` of their own as
+/// `Internal`.
+pub fn is_temporary_code(code: tonic::Code) -> bool {
+    matches!(
+        code,
+        tonic::Code::Unavailable
+            | tonic::Code::DeadlineExceeded
+            | tonic::Code::ResourceExhausted
+            | tonic::Code::Aborted
+            | tonic::Code::Cancelled
+            | tonic::Code::Unknown
+    )
+}
+
 impl From<Status> for OperatorRpcError {
     fn from(status: Status) -> Self {
         OperatorRpcError::Connection(Box::new(status))
@@ -43,3 +68,26 @@ impl From<SessionStoreError> for OperatorRpcError {
 }
 
 pub type Result<T> = std::result::Result<T, OperatorRpcError>;
+
+#[cfg(test)]
+mod tests {
+    use tonic::{Code, Status};
+
+    use super::*;
+
+    #[test]
+    fn only_an_unreachable_or_busy_operator_is_unavailable() {
+        assert!(OperatorRpcError::Transport("refused".to_string()).is_unavailable());
+        for code in [
+            Code::Unavailable,
+            Code::DeadlineExceeded,
+            Code::Cancelled,
+            Code::Unknown,
+        ] {
+            assert!(OperatorRpcError::from(Status::new(code, "")).is_unavailable());
+        }
+        assert!(!OperatorRpcError::from(Status::internal("")).is_unavailable());
+        assert!(!OperatorRpcError::from(Status::permission_denied("")).is_unavailable());
+        assert!(!OperatorRpcError::Authentication("bad signature".to_string()).is_unavailable());
+    }
+}
