@@ -1,5 +1,5 @@
 [package]
-name = "breez-sdk-bindings"
+name = "breez-sdk-spark-bindings"
 edition = "2024"
 version.workspace = true
 
@@ -27,7 +27,9 @@ path = "uniffi-bindgen.rs"
 required-features = ["uniffi-cli"]
 
 [lib]
+# Must match the package name: with no `lib` crate type, the React Native build (ubrn) derives the library file name from the package name.
 name = "breez_sdk_spark_bindings"
+# No `lib` here: cargo silently skips LTO when it is present.
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
