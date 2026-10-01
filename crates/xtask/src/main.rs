@@ -18,12 +18,16 @@ use crate::package::{TargetPackage, package_cmd};
 enum ClippyFeatures {
     All,
     Only(&'static [&'static str]),
+    /// `--no-default-features` plus the listed features, for code that only
+    /// compiles with a default feature off.
+    NoDefault(&'static [&'static str]),
 }
 
-/// Extra clippy passes, one per package whose features the workspace passes leave
-/// off: gated code they never build is neither compiled nor linted there. Scoped
-/// per package on purpose: enabling everything workspace-wide drags the wasm
-/// chain-service into the host build, which fails clippy's `Send` checks.
+/// Extra clippy passes, for the feature sets of a package the workspace passes
+/// leave off: gated code they never build is neither compiled nor linted
+/// there. Scoped per package on purpose: enabling everything workspace-wide
+/// drags the wasm chain-service into the host build, which fails clippy's
+/// `Send` checks.
 const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     // Every native feature. Not `--all-features`: `uniffi` compiles only against
     // `uniffi/tokio`, which breez-sdk-bindings turns on.
@@ -38,13 +42,21 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
             "passkey",
             "span-trace",
             "test-utils",
+            "db-storage-api",
         ]),
     ),
     // `fido2` hardware-key support.
     ("cli", ClippyFeatures::All),
     // `uniffi-cli` and `span-trace`.
     ("breez-sdk-bindings", ClippyFeatures::All),
-    // The Turnkey harness and the local-operator-cluster (unilateral exit) cases.
+    // The React Native build: no database backends or their API.
+    ("breez-sdk-bindings", ClippyFeatures::NoDefault(&[])),
+    // The iOS and Android builds: the storage API without the database backends.
+    (
+        "breez-sdk-bindings",
+        ClippyFeatures::NoDefault(&["db-storage-api"]),
+    ),
+    // The Turnkey harness and the local-operator-cluster cases.
     ("breez-sdk-itest", ClippyFeatures::All),
     // `dev`, which adds the flag for including the spark address in invoices.
     ("lnurl", ClippyFeatures::All),
@@ -708,7 +720,7 @@ fn check_feature_clippy_coverage() -> Result<()> {
         {
             match features {
                 ClippyFeatures::All => enabled.extend(pkg.features.keys().cloned()),
-                ClippyFeatures::Only(list) => {
+                ClippyFeatures::Only(list) | ClippyFeatures::NoDefault(list) => {
                     enabled.extend(list.iter().map(ToString::to_string));
                 }
             }
@@ -785,22 +797,30 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 
     for (package, features) in FEATURE_CLIPPY_PASSES {
         let selection = match features {
-            ClippyFeatures::All => "--all-features".to_string(),
-            ClippyFeatures::Only(list) => format!("--features={}", list.join(",")),
+            ClippyFeatures::All => vec!["--all-features".to_string()],
+            ClippyFeatures::Only(list) => vec![format!("--features={}", list.join(","))],
+            ClippyFeatures::NoDefault(list) => {
+                let mut args = vec!["--no-default-features".to_string()];
+                if !list.is_empty() {
+                    args.push(format!("--features={}", list.join(",")));
+                }
+                args
+            }
         };
+        let selection_desc = selection.join(" ");
         let mut c = Command::new("cargo");
         c.arg("clippy")
             .args(["-p", package, "--all-targets"])
-            .arg(&selection);
+            .args(&selection);
         if fix {
             c.arg("--fix");
         }
         c.arg("--").arg("-D").arg("warnings").args(&rest);
         let status = c
             .status()
-            .with_context(|| format!("failed to run cargo clippy -p {package} {selection}"))?;
+            .with_context(|| format!("failed to run cargo clippy -p {package} {selection_desc}"))?;
         if !status.success() {
-            bail!("clippy {package} {selection} failed");
+            bail!("clippy {package} {selection_desc} failed");
         }
     }
     Ok(())
