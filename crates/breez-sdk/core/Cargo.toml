@@ -80,6 +80,11 @@ p256 = { workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
+# Smaller libsecp256k1 precomputed tables on mobile: about 1 MB less binary for
+# slightly slower signing and verification.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+bitcoin = { workspace = true, features = ["secp-lowmemory"] }
+
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tokio = { workspace = true, features = ["macros"] }
