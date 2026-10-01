@@ -5,9 +5,11 @@ version.workspace = true
 
 [features]
 default = ["postgres", "mysql"]
-# PostgreSQL storage backend (disable for mobile builds to reduce binary size)
+# PostgreSQL storage backend (disable for mobile builds to reduce binary size).
+# Its API stays exported without it and returns an error at runtime.
 postgres = ["breez-sdk-spark/postgres"]
-# MySQL storage backend (disable for mobile builds to reduce binary size)
+# MySQL storage backend (disable for mobile builds to reduce binary size).
+# Its API stays exported without it and returns an error at runtime.
 mysql = ["breez-sdk-spark/mysql"]
 uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
 # Bench-only: see breez-sdk-spark's `span-trace` feature.

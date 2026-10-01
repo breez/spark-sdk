@@ -66,13 +66,13 @@ pub use spark_wallet::{
     identity_master_key, identity_public_key,
 };
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "uniffi"))]
 pub use persist::{
     backend::postgres_storage,
     postgres::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config},
 };
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "uniffi"))]
 pub use persist::{
     backend::mysql_storage,
     mysql::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config},
