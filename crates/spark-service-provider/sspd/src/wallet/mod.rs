@@ -145,8 +145,13 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             spark_signer.clone(),
         ));
 
+        // By default the store releases a reservation after five minutes. That is
+        // turned off here: a handover has to keep its reservation until its outcome
+        // is known, and that can take longer.
         let tree_store: Arc<dyn TreeStore> = Arc::new(
-            PostgresTreeStore::from_config(leaf_store, &identity_public_key.serialize()).await?,
+            PostgresTreeStore::from_config(leaf_store, &identity_public_key.serialize())
+                .await?
+                .with_reservation_timeout(None),
         );
 
         let timelocks = Arc::new(TimelockManager::new(

@@ -28,7 +28,7 @@ const BACKUP_INTERVAL: Duration = Duration::from_secs(600);
 const OPERATOR_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The operators refuse a node query by more ids than this.
-const MAX_NODE_IDS_PER_QUERY: usize = 1000;
+pub(crate) const MAX_NODE_IDS_PER_QUERY: usize = 1000;
 
 pub async fn run_tree_pooling_loop<R>(
     wallet: Arc<SspWallet<R>>,
