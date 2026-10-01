@@ -3,6 +3,9 @@ cargo:
     toolchain: stable
   release:
     toolchain: stable
+    extra_flags:
+      - --features
+      - secp-lowmemory
 
 precompiled_binaries:
   # Uri prefix used when downloading precompiled binaries.

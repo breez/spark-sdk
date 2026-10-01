@@ -28,6 +28,10 @@ extend = "1.2.0"
 flutter_rust_bridge = "=2.13.0"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
+[features]
+# See breez-sdk-spark's `secp-lowmemory` feature.
+secp-lowmemory = ["breez-sdk-spark/secp-lowmemory"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 
