@@ -70,6 +70,11 @@ jobs:
           ssh-key: ${{ secrets.REPO_SSH_KEY }}
           fetch-depth: 0
 
+      # The downloads below only add files, so a library dropped from the
+      # build artifacts would otherwise stay in the Go package.
+      - name: Remove previous native libraries
+        run: find breez_sdk_spark/lib -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -delete
+
       - uses: actions/download-artifact@v4
         with:
           name: bindings-golang

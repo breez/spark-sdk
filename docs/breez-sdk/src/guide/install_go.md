@@ -27,11 +27,9 @@ So they are in the following structure
             └── main
                 └── jniLibs
                     ├── arm64-v8a
-                        ├── libbreez_sdk_spark_bindings.so
-                        └── libc++_shared.so
+                        └── libbreez_sdk_spark_bindings.so
                     └── x86_64
-                        ├── libbreez_sdk_spark_bindings.so
-                        └── libc++_shared.so
+                        └── libbreez_sdk_spark_bindings.so
                 └── AndroidManifest.xml
         └── build.gradle
     └── build.gradle
