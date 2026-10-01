@@ -20,6 +20,10 @@ extend = "1.2.0"
 flutter_rust_bridge = "=2.13.0"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
+[features]
+# See breez-sdk-spark's `release-max-level-debug` feature.
+release-max-level-debug = ["breez-sdk-spark/release-max-level-debug"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 

@@ -33,6 +33,13 @@ turnkey = ["dep:turnkey_enclave_encrypt"]
 # Additionally accept P-256 (Turnkey's default) API keys for stamping, alongside
 # the always-available secp256k1. Pulls in the `p256` crate.
 turnkey-p256 = ["turnkey", "dep:p256"]
+# Compiles trace-level logs out of release builds: about 300 KB less binary.
+# It applies to every crate in the same cargo build.
+release-max-level-debug = [
+    "dep:log",
+    "log/release_max_level_debug",
+    "tracing/release_max_level_debug",
+]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -70,6 +77,8 @@ spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Only for the `release-max-level-debug` feature.
+log = { workspace = true, optional = true }
 url.workspace = true
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
@@ -83,12 +92,6 @@ p256 = { workspace = true, optional = true }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-# Trace-level logs compiled out of mobile release builds: about 300 KB less
-# binary. Debug builds and other platforms keep them.
-[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
-log = { workspace = true, features = ["release_max_level_debug"] }
-tracing = { workspace = true, features = ["release_max_level_debug"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]

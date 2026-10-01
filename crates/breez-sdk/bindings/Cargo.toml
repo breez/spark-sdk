@@ -16,6 +16,8 @@ db-storage-api = ["breez-sdk-spark/db-storage-api"]
 uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
 # Bench-only: see breez-sdk-spark's `span-trace` feature.
 span-trace = ["breez-sdk-spark/span-trace"]
+# See breez-sdk-spark's `release-max-level-debug` feature.
+release-max-level-debug = ["breez-sdk-spark/release-max-level-debug"]
 
 [[bin]]
 name = "uniffi-bindgen"
