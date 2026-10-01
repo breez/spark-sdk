@@ -100,8 +100,8 @@ impl DepositChainSyncer {
         let mut hit_error = false;
 
         // The operators report each deposit's value, so recording one needs no
-        // chain lookup. On a page error we stop paging but still reconcile what
-        // was read.
+        // chain lookup unless that value is missing. On a page error we stop
+        // paging but still reconcile what was read.
         loop {
             let (utxos, next_cursor) = match self
                 .spark_wallet
@@ -131,10 +131,18 @@ impl DepositChainSyncer {
             };
 
             for utxo in &utxos {
+                let txid = utxo.txid.to_string();
+                let Some(amount_sats) =
+                    deposit_amount(&self.utxo_fetcher, &txid, utxo.vout, utxo.amount_sats).await
+                else {
+                    // Not recorded this pass, so no row may be deleted for lack of it.
+                    hit_error = true;
+                    continue;
+                };
                 let deposit = SyncedDeposit {
-                    txid: utxo.txid.to_string(),
+                    txid,
                     vout: utxo.vout,
-                    amount_sats: utxo.amount_sats,
+                    amount_sats,
                     is_mature: utxo.is_mature,
                 };
                 if let Err(e) = self
@@ -367,6 +375,41 @@ impl DepositChainSyncer {
                 "Failed to update refund state of deposit {}:{}: {e}",
                 deposit.txid, deposit.vout
             );
+        }
+    }
+}
+
+/// The amount to record for a deposit the operators reported. Its transaction is
+/// the authority once fetched, and the operators' figure stands in until then.
+/// `None` when neither gives a usable amount this pass.
+async fn deposit_amount(
+    utxo_fetcher: &CachedUtxoFetcher,
+    txid: &str,
+    vout: u32,
+    reported_sats: u64,
+) -> Option<u64> {
+    if let Some(value) = utxo_fetcher.cached_value(txid, vout).await {
+        if value != reported_sats {
+            warn!(
+                "Operators report {reported_sats} sats for deposit {txid}:{vout}, \
+                 its transaction holds {value}"
+            );
+        }
+        return Some(value);
+    }
+    if reported_sats > 0 {
+        return Some(reported_sats);
+    }
+    // No real deposit is worth 0 sats, so this one only gets an amount from its
+    // transaction.
+    match utxo_fetcher.fetch_detailed_utxo(txid, vout).await {
+        Ok(detailed_utxo) => Some(detailed_utxo.value),
+        Err(e) => {
+            warn!(
+                "Deposit {txid}:{vout} was reported without an amount and its \
+                 transaction is unavailable: {e}"
+            );
+            None
         }
     }
 }
@@ -1452,5 +1495,67 @@ mod chain_watch_tests {
         let watched = storage.list_watched_deposit_addresses().await.unwrap();
         let old = watched.iter().find(|w| w.address == "old").unwrap();
         assert!(old.seen);
+    }
+
+    #[tokio::test]
+    async fn a_cached_transaction_outranks_the_reported_amount() {
+        let tx = test_tx(50_000);
+        let txid = tx.compute_txid().to_string();
+        let fetcher = CachedUtxoFetcher::new(
+            Arc::new(WatchChainService::new(&[("addr", &tx, true)], false)),
+            test_storage(),
+        );
+        fetcher.fetch_detailed_utxo(&txid, 0).await.unwrap();
+
+        for reported in [0, 1, 999_999] {
+            assert_eq!(
+                deposit_amount(&fetcher, &txid, 0, reported).await,
+                Some(50_000)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_reported_amount_stands_in_without_a_chain_lookup() {
+        let tx = test_tx(50_000);
+        let txid = tx.compute_txid().to_string();
+        let storage = test_storage();
+        // The chain could answer, so a cache still empty afterwards shows it was
+        // never asked.
+        let fetcher = CachedUtxoFetcher::new(
+            Arc::new(WatchChainService::new(&[("addr", &tx, true)], false)),
+            storage.clone(),
+        );
+
+        assert_eq!(
+            deposit_amount(&fetcher, &txid, 0, 50_000).await,
+            Some(50_000)
+        );
+        let cached = crate::persist::ObjectCacheRepository::new(storage)
+            .fetch_tx(&txid)
+            .await
+            .unwrap();
+        assert!(cached.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_zero_amount_is_taken_from_the_transaction() {
+        let tx = test_tx(50_000);
+        let txid = tx.compute_txid().to_string();
+        let fetcher = CachedUtxoFetcher::new(
+            Arc::new(WatchChainService::new(&[("addr", &tx, true)], false)),
+            test_storage(),
+        );
+
+        assert_eq!(deposit_amount(&fetcher, &txid, 0, 0).await, Some(50_000));
+    }
+
+    #[tokio::test]
+    async fn a_zero_amount_without_its_transaction_is_not_recorded() {
+        let txid = test_tx(50_000).compute_txid().to_string();
+        let fetcher =
+            CachedUtxoFetcher::new(Arc::new(WatchChainService::new(&[], false)), test_storage());
+
+        assert_eq!(deposit_amount(&fetcher, &txid, 0, 0).await, None);
     }
 }
