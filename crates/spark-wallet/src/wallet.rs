@@ -51,6 +51,7 @@ use spark::{
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        WatchtowerRecoveryService,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -79,6 +80,7 @@ use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
+use crate::watchtower_exit::WatchtowerExitedOutput;
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest,
     MasterIdentityPublicKeyUpdate, PreimageRequest, QuerySparkInvoiceResult, TokenBalance,
@@ -383,6 +385,7 @@ pub struct SparkWallet {
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
     transfer_service: Arc<TransferService>,
+    watchtower_recovery_service: Arc<WatchtowerRecoveryService>,
     swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
@@ -480,6 +483,12 @@ impl SparkWallet {
             config.split_secret_threshold,
             operator_pool.clone(),
             transfer_observer.clone(),
+        ));
+
+        let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
+            Arc::clone(&spark_signer),
+            config.network,
+            operator_pool.clone(),
         ));
 
         let lightning_service = Arc::new(LightningService::new(
@@ -599,6 +608,7 @@ impl SparkWallet {
             token_output_service,
             coop_exit_service,
             transfer_service,
+            watchtower_recovery_service,
             swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
@@ -974,6 +984,37 @@ impl SparkWallet {
         };
 
         Ok(refund_tx)
+    }
+
+    pub async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        Ok(self.tree_service.list_leaves_with_status(statuses).await?)
+    }
+
+    pub async fn fetch_nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
+        Ok(self
+            .tree_service
+            .fetch_nodes(leaf_ids, true)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect())
+    }
+
+    pub async fn cosign_watchtower_exit_recovery(
+        &self,
+        output: &WatchtowerExitedOutput,
+        recovery_tx: Transaction,
+    ) -> Result<Transaction, SparkWalletError> {
+        Ok(self
+            .watchtower_recovery_service
+            .cosign_recovery_tx(&output.leaf_id, recovery_tx, &output.tx_out)
+            .await?)
     }
 
     pub async fn generate_deposit_address(
