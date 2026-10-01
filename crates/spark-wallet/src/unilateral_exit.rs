@@ -281,12 +281,12 @@ struct ExitChainWalk {
 /// An index over the observations for O(1) lookup by query, built once per
 /// [`interpret_chain`] pass instead of scanning the growing observation list on
 /// every lookup. The first observation of a query wins, matching the prior scan.
-struct ObservedIndex<'a> {
+pub(crate) struct ObservedIndex<'a> {
     by_query: HashMap<&'a ChainQuery, &'a ChainResult>,
 }
 
 impl<'a> ObservedIndex<'a> {
-    fn new(observed: &'a [Observation]) -> Self {
+    pub(crate) fn new(observed: &'a [Observation]) -> Self {
         let mut by_query = HashMap::with_capacity(observed.len());
         for obs in observed {
             by_query.entry(&obs.query).or_insert(&obs.result);
@@ -294,7 +294,7 @@ impl<'a> ObservedIndex<'a> {
         Self { by_query }
     }
 
-    fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
+    pub(crate) fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
         self.by_query.get(query).copied()
     }
 }
