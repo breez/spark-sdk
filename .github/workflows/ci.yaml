@@ -185,9 +185,38 @@ jobs:
           overwrite: true
           retention-days: 1
 
+  # Every job that loads an image needs its tag, and working one out builds a
+  # crate. This job does that once and hands the tags to the rest.
+  itest-tags:
+    name: Itest image tags
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds only crates the itest jobs build, so it borrows their Rust cache
+      # rather than adding one of its own.
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          rust-cache-shared-key: itest
+          rust-cache-save: 'false'
+
+      - name: Work out which images this tree needs
+        id: tags
+        run: |
+          {
+            echo 'tags<<ITEST_TAGS'
+            cargo run --quiet -p spark-itest --bin itest-image-tags
+            echo 'ITEST_TAGS'
+          } >> "$GITHUB_OUTPUT"
+
   itest-images:
     name: Itest images
     runs-on: ubuntu-latest
+    needs: [itest-tags]
     steps:
       - uses: actions/checkout@v4
 
@@ -203,12 +232,13 @@ jobs:
       - name: Build and cache the images
         uses: ./.github/actions/itest-images
         with:
+          tags: ${{ needs.itest-tags.outputs.tags }}
           build: 'true'
 
   itest:
     name: Integration test (${{ matrix.backend.name }}, ${{ matrix.group }})
     runs-on: ubuntu-latest
-    needs: [state-snapshot, itest-images]
+    needs: [itest-tags, state-snapshot, itest-images]
     continue-on-error: ${{ matrix.backend.allow-failure }}
     strategy:
       fail-fast: false
@@ -239,6 +269,8 @@ jobs:
 
       - name: Load the itest images
         uses: ./.github/actions/itest-images
+        with:
+          tags: ${{ needs.itest-tags.outputs.tags }}
 
       - name: Run Tests
         run: make ${{ matrix.backend.target }} GROUP=${{ matrix.group }}
@@ -267,7 +299,7 @@ jobs:
   compat-itest:
     name: Signer compatibility tests
     runs-on: ubuntu-latest
-    needs: [state-snapshot, itest-images]
+    needs: [itest-tags, state-snapshot, itest-images]
     steps:
       - uses: actions/checkout@v4
 
@@ -288,6 +320,7 @@ jobs:
         uses: ./.github/actions/itest-images
         with:
           images: spark-so spark-migrations sspd
+          tags: ${{ needs.itest-tags.outputs.tags }}
 
       - name: Run cross-version signer tests
         run: make compat-itest

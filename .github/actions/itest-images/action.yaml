@@ -9,6 +9,12 @@ inputs:
     description: 'The images to load, separated by spaces; every image when empty'
     required: false
     default: ''
+  tags:
+    description: >
+      The `image=tag` lines the tags job worked out. Computing them builds a
+      crate, so a job that can be handed them does not pay for that again.
+    required: false
+    default: ''
   build:
     description: 'Build and cache the images the cache did not hold'
     required: false
@@ -18,12 +24,24 @@ runs:
   steps:
     # Written with underscores: an expression reads a dash in an output's name as
     # a subtraction.
-    - name: Work out which images this tree needs
+    - name: Settle the image tags
       id: tags
       shell: bash
+      env:
+        HANDED: ${{ inputs.tags }}
+        WANTED: ${{ inputs.images }}
       run: |
         mkdir -p /tmp/itest-images
-        cargo run --quiet -p spark-itest --bin itest-image-tags -- ${{ inputs.images }} > /tmp/itest-images/tags
+        if [ -z "$HANDED" ]; then
+          cargo run --quiet -p spark-itest --bin itest-image-tags -- $WANTED > /tmp/itest-images/tags
+        elif [ -z "$WANTED" ]; then
+          printf '%s\n' "$HANDED" > /tmp/itest-images/tags
+        else
+          : > /tmp/itest-images/tags
+          for image in $WANTED; do
+            printf '%s\n' "$HANDED" | grep "^$image=" >> /tmp/itest-images/tags
+          done
+        fi
         tr '-' '_' < /tmp/itest-images/tags >> "$GITHUB_OUTPUT"
 
     - name: Restore the operator image
