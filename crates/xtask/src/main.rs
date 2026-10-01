@@ -43,6 +43,7 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
             "span-trace",
             "test-utils",
             "db-storage-api",
+            "secp-lowmemory",
         ]),
     ),
     // `fido2` hardware-key support.
