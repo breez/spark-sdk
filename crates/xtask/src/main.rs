@@ -18,12 +18,16 @@ use crate::package::{TargetPackage, package_cmd};
 enum ClippyFeatures {
     All,
     Only(&'static [&'static str]),
+    /// `--no-default-features`, for code that only compiles with a default
+    /// feature off.
+    NoDefault,
 }
 
-/// Extra clippy passes, one per package whose features the workspace passes leave
-/// off: gated code they never build is neither compiled nor linted there. Scoped
-/// per package on purpose: enabling everything workspace-wide drags the wasm
-/// chain-service into the host build, which fails clippy's `Send` checks.
+/// Extra clippy passes, for the feature sets of a package the workspace passes
+/// leave off: gated code they never build is neither compiled nor linted
+/// there. Scoped per package on purpose: enabling everything workspace-wide
+/// drags the wasm chain-service into the host build, which fails clippy's
+/// `Send` checks.
 const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     // Every native feature. Not `--all-features`: `uniffi` compiles only against
     // `uniffi/tokio`, which breez-sdk-bindings turns on.
@@ -44,6 +48,8 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     ("cli", ClippyFeatures::All),
     // `uniffi-cli` and `span-trace`.
     ("breez-sdk-bindings", ClippyFeatures::All),
+    // The mobile builds: the storage API without the database backends.
+    ("breez-sdk-bindings", ClippyFeatures::NoDefault),
     // The Turnkey harness and the local-operator-cluster cases.
     ("breez-sdk-itest", ClippyFeatures::All),
     // `dev`, which adds the flag for including the spark address in invoices.
@@ -725,6 +731,7 @@ fn check_feature_clippy_coverage() -> Result<()> {
                 ClippyFeatures::Only(list) => {
                     enabled.extend(list.iter().map(ToString::to_string));
                 }
+                ClippyFeatures::NoDefault => {}
             }
         }
         let built = expand_features(pkg, enabled);
@@ -801,6 +808,7 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
         let selection = match features {
             ClippyFeatures::All => "--all-features".to_string(),
             ClippyFeatures::Only(list) => format!("--features={}", list.join(",")),
+            ClippyFeatures::NoDefault => "--no-default-features".to_string(),
         };
         let mut c = Command::new("cargo");
         c.arg("clippy")
