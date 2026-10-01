@@ -5,7 +5,7 @@
 //! `TestFixtures` here would keep a finished test's operator containers running
 //! — leaking clusters across the run and starving the runner.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -17,6 +17,7 @@ use platform_utils::DefaultHttpClient;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use spark_itest::fixtures::bitcoind::{BitcoindFixture, post_rpc};
+use tokio::sync::Mutex;
 
 /// A detached bitcoind JSON-RPC client: the endpoint and credentials plus its
 /// own HTTP client, holding no fixture, so the SDK never pins the cluster.
@@ -88,6 +89,17 @@ impl BitcoindRpc {
 pub struct LocalBitcoindChainService {
     bitcoind: BitcoindRpc,
     sees_mempool: bool,
+    scanned: Mutex<ScannedBlocks>,
+}
+
+/// What the blocks read so far pay, by scriptPubKey. bitcoind has no address
+/// index, so answering from this reads each block once rather than once per
+/// query. Nothing reorgs a test's chain, so a scanned block never changes.
+#[derive(Default)]
+struct ScannedBlocks {
+    /// The last height read, or `None` before the first scan.
+    height: Option<u64>,
+    txos: HashMap<String, Vec<Utxo>>,
 }
 
 impl LocalBitcoindChainService {
@@ -96,6 +108,7 @@ impl LocalBitcoindChainService {
         Self {
             bitcoind: BitcoindRpc::new(bitcoind),
             sees_mempool: false,
+            scanned: Mutex::default(),
         }
     }
 
@@ -228,9 +241,25 @@ impl BitcoinChainService for LocalBitcoindChainService {
             .require_network(bitcoin::Network::Regtest)
             .map_err(to_chain_err)?;
         let script_hex = checked.script_pubkey().to_hex_string();
-        confirmed_txos_for_script(&self.bitcoind, &script_hex)
+        let mut scanned = self.scanned.lock().await;
+        let tip: u64 = self
+            .bitcoind
+            .rpc("getblockcount", &[])
             .await
-            .map_err(to_chain_err)
+            .map_err(to_chain_err)?;
+        let from = scanned.height.map_or(0, |height| height + 1);
+        if from <= tip {
+            for (script, txo) in scan_blocks(&self.bitcoind, from, tip)
+                .await
+                .map_err(to_chain_err)?
+            {
+                scanned.txos.entry(script).or_default().push(txo);
+            }
+            scanned.height = Some(tip);
+        }
+        let mut txos = scanned.txos.get(&script_hex).cloned().unwrap_or_default();
+        txos.sort_by_key(|txo| txo.status.block_height);
+        Ok(txos)
     }
 
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
@@ -295,18 +324,10 @@ impl BitcoinChainService for LocalBitcoindChainService {
     }
 }
 
-/// Every confirmed output ever paid to `script_hex`, spent or not. bitcoind has
-/// no address index, so scan every block (as `find_spender_in_blocks` does),
-/// matching each output's scriptPubKey against the target.
-async fn confirmed_txos_for_script(bitcoind: &BitcoindRpc, script_hex: &str) -> Result<Vec<Utxo>> {
-    let tip_info: Value = bitcoind.rpc("getblockchaininfo", &[]).await?;
-    let tip_height = tip_info
-        .get("blocks")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| anyhow::anyhow!("missing blocks in getblockchaininfo"))?;
-
+/// Every confirmed output the blocks from `from` to `to` pay, by scriptPubKey.
+async fn scan_blocks(bitcoind: &BitcoindRpc, from: u64, to: u64) -> Result<Vec<(String, Utxo)>> {
     let mut txos = Vec::new();
-    for height in 0..=tip_height {
+    for height in from..=to {
         let block_hash: String = bitcoind.rpc("getblockhash", &[json!(height)]).await?;
         let block: Value = bitcoind
             .rpc("getblock", &[json!(block_hash), json!(2)])
@@ -323,26 +344,28 @@ async fn confirmed_txos_for_script(bitcoind: &BitcoindRpc, script_hex: &str) -> 
                 continue;
             };
             for out in vouts {
-                let matches = out
+                let Some(script) = out
                     .get("scriptPubKey")
                     .and_then(|s| s.get("hex"))
                     .and_then(|h| h.as_str())
-                    .is_some_and(|h| h == script_hex);
-                if !matches {
+                else {
                     continue;
-                }
+                };
                 let n = out.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
                 let value_btc = out.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                txos.push(Utxo {
-                    txid: txid.to_string(),
-                    vout: u32::try_from(n).unwrap_or(0),
-                    value: (value_btc * 100_000_000.0).round() as u64,
-                    status: TxStatus {
-                        confirmed: true,
-                        block_height: u32::try_from(height).ok(),
-                        block_time,
+                txos.push((
+                    script.to_string(),
+                    Utxo {
+                        txid: txid.to_string(),
+                        vout: u32::try_from(n).unwrap_or(0),
+                        value: (value_btc * 100_000_000.0).round() as u64,
+                        status: TxStatus {
+                            confirmed: true,
+                            block_height: u32::try_from(height).ok(),
+                            block_time,
+                        },
                     },
-                });
+                ));
             }
         }
     }
