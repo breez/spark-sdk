@@ -5728,13 +5728,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "encoding_rs",
  "futures",
  "http",
  "hyper-util",
  "js-sys",
  "macros 0.1.0",
- "mime",
  "reqwest",
  "serde",
  "serde_json",

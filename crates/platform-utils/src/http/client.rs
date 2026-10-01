@@ -41,21 +41,6 @@ fn collect_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, Stri
         .collect()
 }
 
-/// The charset declared in `Content-Type`, defaulting to UTF-8.
-///
-/// Mirrors `reqwest::Response::text`, which [`read_capped_text`] replaces: an
-/// absent or unrecognised charset decodes as UTF-8.
-fn body_encoding(headers: &reqwest::header::HeaderMap) -> &'static encoding_rs::Encoding {
-    headers
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<mime::Mime>().ok())
-        .and_then(|mime| {
-            encoding_rs::Encoding::for_label(mime.get_param("charset")?.as_str().as_bytes())
-        })
-        .unwrap_or(encoding_rs::UTF_8)
-}
-
 /// Buffers the response body, refusing it once it passes `limit`.
 ///
 /// For callers that build their own `reqwest::Client` because [`HttpClient`]
@@ -90,14 +75,18 @@ pub async fn read_capped_bytes(
     Ok(buf)
 }
 
-/// Like [`read_capped_bytes`], decoding the body the way `Response::text` does.
+/// Like [`read_capped_bytes`], decoding the body as UTF-8.
+///
+/// A declared charset is ignored, since JSON is UTF-8 by spec. Invalid bytes
+/// become U+FFFD rather than an error, and a leading BOM is dropped so
+/// `serde_json` can parse the body.
 pub async fn read_capped_text(
     response: reqwest::Response,
     limit: usize,
 ) -> Result<String, HttpError> {
-    let encoding = body_encoding(response.headers());
     let buf = read_capped_bytes(response, limit).await?;
-    Ok(encoding.decode(&buf).0.into_owned())
+    let body = buf.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&buf);
+    Ok(String::from_utf8_lossy(body).into_owned())
 }
 
 /// Sends `req` and reads its response through the [`MAX_RESPONSE_BYTES`] cap.
@@ -587,11 +576,10 @@ mod tests {
     }
 
     #[macros::async_test_not_wasm]
-    async fn falls_back_to_utf8_when_the_charset_is_unusable() {
+    async fn decodes_as_utf8_whatever_the_charset() {
         let utf8 = "né".as_bytes().to_vec();
-        // Unknown label, and a Content-Type that is not a MIME type at all.
         assert_eq!(
-            decoded("text/plain; charset=no-such-charset", utf8.clone()).await,
+            decoded("text/plain; charset=iso-8859-1", utf8.clone()).await,
             "né"
         );
         assert_eq!(decoded("not a mime type", utf8.clone()).await, "né");
@@ -599,33 +587,15 @@ mod tests {
     }
 
     #[macros::async_test_not_wasm]
-    async fn honours_a_quoted_charset_param() {
-        assert_eq!(
-            decoded("text/plain; charset=\"iso-8859-1\"", vec![b'n', 0xE9]).await,
-            "né"
-        );
-    }
-
-    #[macros::async_test_not_wasm]
     async fn replaces_invalid_bytes_instead_of_failing() {
-        // Parity with `Response::text`, which decodes lossily rather than
-        // erroring, so a malformed body still surfaces its status to the caller.
+        // Decodes lossily rather than erroring, so a malformed body still
+        // surfaces its status to the caller.
         assert_eq!(decoded("text/plain", vec![b'n', 0xFF]).await, "n\u{FFFD}");
     }
 
     #[macros::async_test_not_wasm]
-    async fn sniffs_a_utf16_bom() {
-        // `Encoding::decode` picks the encoding from a leading BOM whatever
-        // `Content-Type` claims, matching `Response::text`. 0xFF 0xFE is the
-        // UTF-16LE BOM, so these bytes are text, not invalid UTF-8.
-        let body = vec![0xFF, 0xFE, b'n', 0x00];
-        assert_eq!(decoded("text/plain; charset=utf-8", body).await, "n");
-    }
-
-    #[macros::async_test_not_wasm]
     async fn strips_a_utf8_bom() {
-        // `Encoding::decode` sniffs the BOM, as `Response::text` does. Leaving
-        // it in place would break `serde_json` on the first byte.
+        // Leaving the BOM in place would break `serde_json` on the first byte.
         let body = vec![0xEF, 0xBB, 0xBF, b'{', b'}'];
         assert_eq!(decoded("application/json", body).await, "{}");
     }
@@ -641,26 +611,6 @@ mod tests {
         let response = client().get(url, None).await.expect("should accept");
         assert_eq!(response.status, 204);
         assert!(response.body.is_empty());
-        server.await.expect("server task");
-    }
-
-    #[macros::async_test_not_wasm]
-    async fn decodes_declared_charset() {
-        // 0xE9 is `é` in ISO-8859-1 and not valid UTF-8, so a plain lossy
-        // decode would drop it. Guards parity with `Response::text`.
-        let body = vec![b'C', b'a', b'f', 0xE9];
-        let (url, server) = serve_body_once(
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=iso-8859-1\r\n\
-                 Content-Length: {}\r\n\r\n",
-                body.len()
-            ),
-            Body::Literal(body),
-        )
-        .await;
-
-        let response = client().get(url, None).await.expect("should accept");
-        assert_eq!(response.body, "Café");
         server.await.expect("server task");
     }
 
@@ -902,20 +852,6 @@ mod wasm_tests {
 
         let response = client().get(url, None).await.expect("should accept");
         assert_eq!(response.body.len(), MAX_RESPONSE_BYTES);
-    }
-
-    #[wasm_bindgen_test]
-    async fn decodes_declared_charset() {
-        // `Response::text` delegates to the JS `Body.text()`, which always
-        // decodes UTF-8 and would produce a replacement character here.
-        let url = serve_once(&format!(
-            r#"{{"mode":"literal","contentType":"text/plain; charset=iso-8859-1","bytes":{}}}"#,
-            json_bytes(&[b'n', 0xE9])
-        ))
-        .await;
-
-        let response = client().get(url, None).await.expect("should accept");
-        assert_eq!(response.body, "né");
     }
 
     #[wasm_bindgen_test]
