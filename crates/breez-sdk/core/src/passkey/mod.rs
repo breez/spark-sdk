@@ -48,6 +48,7 @@
 mod derivation;
 mod error;
 mod models;
+mod nostr;
 mod nostr_client;
 mod passkey_client;
 mod passkey_prf_provider;
@@ -80,7 +81,7 @@ use nostr_client::{LabelStore, NostrSaltClient};
 /// network-backed [`NostrSaltClient`]; tests inject an in-memory double so
 /// unit tests never reach the relays.
 type LabelStoreBuilder =
-    Arc<dyn Fn(nostr::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
+    Arc<dyn Fn(bitcoin::secp256k1::Keypair, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
 
 /// Default store builder: a network-backed [`NostrSaltClient`] reaching the
 /// relays through `proxy`, when one is configured.
@@ -183,7 +184,7 @@ impl Passkey {
     /// cache the runtime path goes through; production code reads via
     /// [`Self::nostr_client`].
     #[cfg(test)]
-    async fn derive_keys(&self) -> Result<nostr::Keys, PasskeyError> {
+    async fn derive_keys(&self) -> Result<bitcoin::secp256k1::Keypair, PasskeyError> {
         let client = self.nostr_client().await?;
         Ok(client.signing_keys())
     }

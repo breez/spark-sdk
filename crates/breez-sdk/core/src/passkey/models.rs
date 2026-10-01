@@ -176,9 +176,7 @@ impl PasskeyConfig {
             .map_err(|e| super::PasskeyError::InvalidConfig(e.to_string()))?;
         if proxy.username.is_some() || proxy.password.is_some() {
             return Err(super::PasskeyError::InvalidConfig(
-                "Nostr relay connections do not support proxy authentication: \
-                 async-wsocket's ConnectionMode::Proxy carries only an address"
-                    .to_string(),
+                "Nostr relay connections do not support proxy authentication".to_string(),
             ));
         }
         Ok(())
