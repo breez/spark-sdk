@@ -213,10 +213,16 @@ jobs:
             echo 'ITEST_TAGS'
           } >> "$GITHUB_OUTPUT"
 
+  # One image per machine: built one after another they take sixteen minutes, and
+  # the longest on its own takes seven.
   itest-images:
-    name: Itest images
+    name: Itest images (${{ matrix.image }})
     runs-on: ubuntu-latest
     needs: [itest-tags]
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [spark-so, spark-migrations, ldk-server, sspd]
     steps:
       - uses: actions/checkout@v4
 
@@ -229,9 +235,10 @@ jobs:
           rust-cache-shared-key: itest
           rust-cache-save: 'false'
 
-      - name: Build and cache the images
+      - name: Build and cache the image
         uses: ./.github/actions/itest-images
         with:
+          images: ${{ matrix.image }}
           tags: ${{ needs.itest-tags.outputs.tags }}
           build: 'true'
 
