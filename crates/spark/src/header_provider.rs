@@ -7,6 +7,8 @@ use thiserror::Error;
 pub enum HeaderProviderError {
     #[error("{0}")]
     Generic(String),
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 #[macros::async_trait]
