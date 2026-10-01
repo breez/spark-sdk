@@ -3,7 +3,8 @@ xtask = "run --package xtask --"
 
 # The bundled SQLite enables extensions the SDK never uses: full-text search,
 # R-Tree, DBSTAT, STAT4, SOUNDEX, column metadata and extension loading.
-# Turning them off saves about 300 KB per binary.
+# Turning them off saves about 300 KB per binary. Flutter builds outside this
+# repo and sets the same flags in `packages/flutter/rust/cargokit.yaml`.
 [env]
 LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_COLUMN_METADATA -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION"
 

@@ -3,6 +3,13 @@ cargo:
     toolchain: stable
   release:
     toolchain: stable
+    # Cargokit builds outside the SDK repo, so the root `.cargo/config.toml`
+    # does not apply: keep the SQLite flags in step with it.
+    extra_flags:
+      - --features
+      - release-max-level-debug
+      - --config
+      - 'env.LIBSQLITE3_FLAGS="-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_COLUMN_METADATA -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION"'
 
 precompiled_binaries:
   # Uri prefix used when downloading precompiled binaries.

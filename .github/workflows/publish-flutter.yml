@@ -202,6 +202,21 @@ jobs:
           version: "30.2"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Shortens the absolute source paths that panic locations embed in the
+      # binaries, as `.github/actions/setup-build` does for the other mobile
+      # builds. Cargokit appends its Android flags to this variable.
+      - name: Remap source paths
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          # The last matching prefix wins, so the full registry path goes last.
+          flags=(
+            "--remap-path-prefix=$cargo_home/registry/src/="
+            "--remap-path-prefix=$cargo_home/registry/src/index.crates.io-1949cf8c6b5b557f/="
+            "--remap-path-prefix=$cargo_home/git/checkouts/="
+            "--remap-path-prefix=$GITHUB_WORKSPACE/="
+          )
+          echo "CARGO_ENCODED_RUSTFLAGS=$(IFS=$'\x1f'; echo "${flags[*]}")" >> "$GITHUB_ENV"
+
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2
 
