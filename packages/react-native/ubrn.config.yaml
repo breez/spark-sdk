@@ -9,6 +9,8 @@ android:
   # Disable server-side storage features (postgres, mysql) to reduce binary size (not needed for mobile)
   cargoExtras:
     - --no-default-features
+    - --features
+    - secp-lowmemory
 ios:
   targets:
     - aarch64-apple-ios
@@ -18,6 +20,8 @@ ios:
   # Disable server-side storage features (postgres, mysql) to reduce binary size (not needed for mobile)
   cargoExtras:
     - --no-default-features
+    - --features
+    - secp-lowmemory
 turboModule:
   cpp: cpp
   ts: src
