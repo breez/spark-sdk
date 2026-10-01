@@ -1582,7 +1582,8 @@ pub struct PreparePaymentLinkResponse {
     /// The destination stablecoin symbol (e.g. `USDC`). `estimated_out` is
     /// denominated in it.
     pub asset: String,
-    /// Provider service fee, in `service_fee_asset` base units.
+    /// Provider service fee, including the partner fee when one is set, in
+    /// `service_fee_asset` base units.
     pub service_fee_amount: u128,
     /// Denomination of `service_fee_amount`. `None` means sats: Boltz
     /// denominates its fee in sats, Orchestra in the stablecoin.
@@ -1792,7 +1793,8 @@ pub enum SendPaymentMethod {
         /// the direct path that budget lives separately in
         /// `source_transfer_fee_sats`.
         fee_amount: u128,
-        /// Provider's own service fee/spread in its native denomination.
+        /// Provider service fee, including the partner fee when one is set, in
+        /// `service_fee_asset` base units.
         service_fee_amount: u128,
         /// Asset which service fee is denominated in. Unset means BTC sats.
         service_fee_asset: Option<String>,
