@@ -646,7 +646,7 @@ mod tests {
     /// relays. Records every call into a shared [`StoreCalls`] so tests can
     /// assert the publish / query contract, not just that nothing panicked.
     struct MockLabelStore {
-        keys: nostr::Keys,
+        keys: bitcoin::secp256k1::Keypair,
         calls: Arc<Mutex<StoreCalls>>,
     }
 
@@ -666,8 +666,8 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn signing_keys(&self) -> nostr::Keys {
-            self.keys.clone()
+        fn signing_keys(&self) -> bitcoin::secp256k1::Keypair {
+            self.keys
         }
     }
 

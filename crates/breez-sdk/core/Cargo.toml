@@ -8,7 +8,7 @@ browser-tests = ["passkey"]                 # Enable browser wasm-pack tests
 uniffi = ["dep:uniffi"]
 test-utils = ["spark-wallet/test-utils"]
 # Passkey functionality
-passkey = ["dep:nostr", "dep:nostr-sdk"]
+passkey = ["dep:tokio-socks", "dep:tokio-tungstenite", "dep:tokio-tungstenite-wasm"]
 # SQLite storage backend (optional). File-based; native-only.
 sqlite = ["dep:rusqlite", "dep:rusqlite_migration", "dep:spark-sqlite"]
 # PostgreSQL storage backend (optional, for server-side use cases)
@@ -67,8 +67,6 @@ futures.workspace = true
 hex.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true
-nostr = { workspace = true, optional = true }
-nostr-sdk = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-mysql = { workspace = true, optional = true }
@@ -95,10 +93,15 @@ p256 = { workspace = true, optional = true }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Passkey relay websockets. The same versions and TLS setup as boltz-client's,
+# so the stack is linked once.
+tokio-socks = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tokio = { workspace = true, features = ["macros"] }
+tokio-tungstenite-wasm = { workspace = true, optional = true }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
