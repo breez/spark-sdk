@@ -12,7 +12,7 @@ pub mod turnkey;
 
 use std::sync::Arc;
 
-pub use chain_service::LocalBitcoindChainService;
+pub use chain_service::{LocalBitcoindChainService, TxLookupOutage};
 pub use concurrent_scenarios::{
     RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };

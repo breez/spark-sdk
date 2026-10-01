@@ -23,7 +23,7 @@ use crate::{
     utils::{
         deposit_chain_syncer::{DepositChainSyncer, TxOutput},
         payments::update_balances,
-        utxo_fetcher::DetailedUtxo,
+        utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
     },
 };
 
@@ -320,7 +320,7 @@ impl BreezSdk {
             })
             .collect();
 
-        let all_utxos = DepositChainSyncer::new(
+        let all_deposits = DepositChainSyncer::new(
             self.chain_service.clone(),
             self.storage.clone(),
             self.spark_wallet.clone(),
@@ -329,15 +329,10 @@ impl BreezSdk {
         .await?;
 
         // Emit NewDeposits for any deposits not previously known
-        let new_deposits: Vec<DepositInfo> = all_utxos
+        let new_deposits: Vec<DepositInfo> = all_deposits
             .iter()
-            .filter(|(u, _)| {
-                !existing_keys.contains(&TxOutput {
-                    txid: u.txid.to_string(),
-                    vout: u.vout,
-                })
-            })
-            .map(|(u, is_mature)| u.clone().into_deposit_info(*is_mature))
+            .filter(|deposit| !existing_keys.contains(&deposit.key()))
+            .map(|deposit| deposit.clone().into_deposit_info())
             .collect();
         if !new_deposits.is_empty() {
             self.event_emitter
@@ -345,7 +340,7 @@ impl BreezSdk {
                 .await;
         }
 
-        let has_immature = all_utxos.iter().any(|(_, is_mature)| !is_mature);
+        let has_immature = all_deposits.iter().any(|deposit| !deposit.is_mature);
         // Resolved once per pass, and only when an immature deposit could use it.
         // A deposit whose own ceiling differs from it resolves that separately, below.
         let instant_ceiling = if has_immature {
@@ -369,13 +364,12 @@ impl BreezSdk {
         // only known inside the loop. A failed read falls back to a per-deposit one.
         let mut tip_height: Option<u32> = None;
 
+        let utxo_fetcher = CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone());
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
-        for (detailed_utxo, is_mature) in all_utxos {
-            let key = TxOutput {
-                txid: detailed_utxo.txid.to_string(),
-                vout: detailed_utxo.vout,
-            };
+        for deposit in all_deposits {
+            let key = deposit.key();
+            let is_mature = deposit.is_mature;
             // Skip a deposit an explicit claim_deposit call is already working on.
             let Some(_claim_guard) = self.claim_guards.try_acquire(key.clone()) else {
                 continue;
@@ -394,6 +388,18 @@ impl BreezSdk {
             if claim_already_made(instant_status.as_ref()) {
                 continue;
             }
+            // Claiming needs the deposit transaction, which only the chain service
+            // has. Without it the deposit stays listed and is retried next pass.
+            let detailed_utxo = match utxo_fetcher.fetch_detailed_utxo(&key.txid, key.vout).await {
+                Ok(detailed_utxo) => detailed_utxo,
+                Err(e) => {
+                    warn!(
+                        "Skipping the claim of {}:{} this pass, its transaction is unavailable: {e}",
+                        key.txid, key.vout
+                    );
+                    continue;
+                }
+            };
             let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
             if let Some(max_fee) = stored_max_fee {
                 debug!(

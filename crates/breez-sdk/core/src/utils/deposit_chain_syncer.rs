@@ -31,6 +31,52 @@ pub(crate) struct TxOutput {
     pub vout: u32,
 }
 
+/// A deposit a sync pass found. Its transaction is not part of it: claiming
+/// fetches that separately, so a deposit is known even while the chain service
+/// cannot be reached.
+#[derive(Debug, Clone)]
+pub(crate) struct SyncedDeposit {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    pub is_mature: bool,
+}
+
+impl SyncedDeposit {
+    pub fn key(&self) -> TxOutput {
+        TxOutput {
+            txid: self.txid.clone(),
+            vout: self.vout,
+        }
+    }
+
+    pub fn into_deposit_info(self) -> DepositInfo {
+        DepositInfo {
+            txid: self.txid,
+            vout: self.vout,
+            amount_sats: self.amount_sats,
+            is_mature: self.is_mature,
+            refund_tx: None,
+            refund_tx_id: None,
+            refund_state: None,
+            claim_error: None,
+            instant_claim_status: None,
+            max_claim_fee: None,
+        }
+    }
+}
+
+impl From<(DetailedUtxo, bool)> for SyncedDeposit {
+    fn from((utxo, is_mature): (DetailedUtxo, bool)) -> Self {
+        Self {
+            txid: utxo.txid.to_string(),
+            vout: utxo.vout,
+            amount_sats: utxo.value,
+            is_mature,
+        }
+    }
+}
+
 impl DepositChainSyncer {
     pub fn new(
         chain_service: Arc<dyn BitcoinChainService>,
@@ -45,16 +91,17 @@ impl DepositChainSyncer {
         }
     }
 
-    /// Returns a list of (`DetailedUtxo`, `is_mature`) pairs for all non-refunded deposit UTXOs.
-    pub async fn sync(&self) -> Result<Vec<(DetailedUtxo, bool)>, SdkError> {
+    /// Returns every non-refunded deposit, recording each one in storage.
+    pub async fn sync(&self) -> Result<Vec<SyncedDeposit>, SdkError> {
         info!("Syncing deposit UTXOs via identity");
 
-        let mut detailed_utxos: HashMap<TxOutput, (DetailedUtxo, bool)> = HashMap::new();
+        let mut deposits: HashMap<TxOutput, SyncedDeposit> = HashMap::new();
         let mut cursor = None;
         let mut hit_error = false;
 
-        // Process UTXOs page by page, fetching tx details sequentially.
-        // On fetch errors we stop processing but still reconcile what succeeded.
+        // The operators report each deposit's value, so recording one needs no
+        // chain lookup. On a page error we stop paging but still reconcile what
+        // was read.
         loop {
             let (utxos, next_cursor) = match self
                 .spark_wallet
@@ -63,7 +110,7 @@ impl DepositChainSyncer {
             {
                 Ok(result) => result,
                 Err(e) => {
-                    if detailed_utxos.is_empty() {
+                    if deposits.is_empty() {
                         // Rebroadcast pending refunds before surfacing the error:
                         // a refund retry must not depend on the operator feed.
                         if let Err(e) = self
@@ -76,7 +123,7 @@ impl DepositChainSyncer {
                     }
                     warn!(
                         "Failed to fetch UTXOs page, processing {} fetched so far: {e}",
-                        detailed_utxos.len()
+                        deposits.len()
                     );
                     hit_error = true;
                     break;
@@ -84,35 +131,33 @@ impl DepositChainSyncer {
             };
 
             for utxo in &utxos {
-                let txid_str = utxo.txid.to_string();
-                match fetch_and_record_deposit(
-                    &self.utxo_fetcher,
-                    &self.storage,
-                    &txid_str,
-                    utxo.vout,
-                    utxo.is_mature,
-                )
-                .await
+                let deposit = SyncedDeposit {
+                    txid: utxo.txid.to_string(),
+                    vout: utxo.vout,
+                    amount_sats: utxo.amount_sats,
+                    is_mature: utxo.is_mature,
+                };
+                if let Err(e) = self
+                    .storage
+                    .add_deposit(
+                        deposit.txid.clone(),
+                        deposit.vout,
+                        deposit.amount_sats,
+                        deposit.is_mature,
+                    )
+                    .await
                 {
-                    Ok(detailed_utxo) => {
-                        let key = TxOutput {
-                            txid: detailed_utxo.txid.to_string(),
-                            vout: detailed_utxo.vout,
-                        };
-                        detailed_utxos.insert(key, (detailed_utxo, utxo.is_mature));
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to fetch utxo details, processing {} fetched so far: {e}",
-                            detailed_utxos.len()
-                        );
-                        hit_error = true;
-                        break;
-                    }
+                    warn!(
+                        "Failed to record deposit {}:{}: {e}",
+                        deposit.txid, deposit.vout
+                    );
+                    hit_error = true;
+                    continue;
                 }
+                deposits.insert(deposit.key(), deposit);
             }
 
-            if hit_error || next_cursor.is_none() {
+            if next_cursor.is_none() {
                 break;
             }
             cursor = next_cursor;
@@ -122,7 +167,7 @@ impl DepositChainSyncer {
         // a 0-conf claim possible; the operators only report it once it confirms.
         let mut confirmed_onchain: HashSet<TxOutput> = HashSet::new();
         if let Some(now) = now_secs() {
-            let already_seen: HashSet<TxOutput> = detailed_utxos.keys().cloned().collect();
+            let already_seen: HashSet<TxOutput> = deposits.keys().cloned().collect();
             let watch = sync_chain_watch(
                 self.chain_service.as_ref(),
                 &self.utxo_fetcher,
@@ -131,7 +176,12 @@ impl DepositChainSyncer {
                 now,
             )
             .await;
-            detailed_utxos.extend(watch.unconfirmed);
+            deposits.extend(
+                watch
+                    .unconfirmed
+                    .into_iter()
+                    .map(|(key, found)| (key, SyncedDeposit::from(found))),
+            );
             confirmed_onchain = watch.confirmed;
             if !watch.complete {
                 hit_error = true;
@@ -141,17 +191,12 @@ impl DepositChainSyncer {
         }
 
         let refunded = self
-            .reconcile_deposits(&detailed_utxos, &confirmed_onchain, hit_error)
+            .reconcile_deposits(&deposits, &confirmed_onchain, hit_error)
             .await?;
 
-        Ok(detailed_utxos
+        Ok(deposits
             .into_values()
-            .filter(|(u, _)| {
-                !refunded.contains(&TxOutput {
-                    txid: u.txid.to_string(),
-                    vout: u.vout,
-                })
-            })
+            .filter(|deposit| !refunded.contains(&deposit.key()))
             .collect())
     }
 
@@ -162,7 +207,7 @@ impl DepositChainSyncer {
     /// hides a deposit from both; this is the evidence that it is still there.
     async fn reconcile_deposits(
         &self,
-        all_utxos: &HashMap<TxOutput, (DetailedUtxo, bool)>,
+        all_utxos: &HashMap<TxOutput, SyncedDeposit>,
         confirmed_onchain: &HashSet<TxOutput>,
         incomplete: bool,
     ) -> Result<HashSet<TxOutput>, SdkError> {
@@ -529,7 +574,7 @@ async fn can_drop_unobserved_deposit(
 /// counts as observed even though it is not claimable here.
 fn deposit_unobserved(
     key: &TxOutput,
-    all_utxos: &HashMap<TxOutput, (DetailedUtxo, bool)>,
+    all_utxos: &HashMap<TxOutput, SyncedDeposit>,
     confirmed_onchain: &HashSet<TxOutput>,
 ) -> bool {
     !all_utxos.contains_key(key) && !confirmed_onchain.contains(key)
@@ -730,7 +775,7 @@ mod tests {
 
 #[cfg(test)]
 mod reconcile_tests {
-    use super::{DetailedUtxo, TxOutput, deposit_unobserved};
+    use super::{SyncedDeposit, TxOutput, deposit_unobserved};
     use std::collections::{HashMap, HashSet};
 
     fn key(txid: &str) -> TxOutput {
@@ -763,25 +808,15 @@ mod reconcile_tests {
 
     #[test]
     fn the_operator_feed_still_counts_on_its_own() {
-        let tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version::TWO,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-        let txid = tx.compute_txid();
-        let mut all_utxos: HashMap<TxOutput, (DetailedUtxo, bool)> = HashMap::new();
+        let mut all_utxos: HashMap<TxOutput, SyncedDeposit> = HashMap::new();
         all_utxos.insert(
             key("a"),
-            (
-                DetailedUtxo {
-                    tx,
-                    vout: 0,
-                    txid,
-                    value: 1,
-                },
-                true,
-            ),
+            SyncedDeposit {
+                txid: "a".to_string(),
+                vout: 0,
+                amount_sats: 1,
+                is_mature: true,
+            },
         );
         assert!(!deposit_unobserved(&key("a"), &all_utxos, &HashSet::new()));
     }

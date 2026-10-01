@@ -5,11 +5,13 @@
 //! runs against.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Result;
 use bitcoin::{Transaction, Txid};
 use breez_sdk_spark::{
-    Config, LeafOptimizationConfig, MaxFee, Network, default_config, default_server_config,
+    BitcoinChainService, Config, LeafOptimizationConfig, MaxFee, Network, default_config,
+    default_server_config,
 };
 use rstest::fixture;
 use spark_itest::mempool::MempoolClient;
@@ -18,7 +20,8 @@ use crate::SdkInstance;
 use crate::faucet::{FaucetConfig, RegtestFaucet};
 use crate::fixtures::{lnurl::LnurlFixture, random_mnemonic, stable_balance_config};
 use crate::helpers::regtest::{
-    build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
+    build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_dir_and_chain_service,
+    build_sdk_with_external_signer, default_regtest_chain_service,
 };
 use crate::local_sdk::{BlockHold, LocalIdentity, LocalStack};
 
@@ -108,6 +111,39 @@ impl Environment {
             Environment::Local(stack) => {
                 stack
                     .create_wallet(LocalIdentity::Seed(rand::random()), false, |_cfg| {})
+                    .await
+            }
+        }
+    }
+
+    /// A wallet whose chain service is `wrap` applied to the one it would have
+    /// had otherwise, for a test that controls what the chain service answers.
+    pub async fn create_wallet_with_chain_service(
+        &self,
+        wrap: impl FnOnce(Arc<dyn BitcoinChainService>) -> Arc<dyn BitcoinChainService> + Send,
+    ) -> Result<SdkInstance> {
+        match self {
+            Environment::Deployed => {
+                let dir = tempfile::Builder::new()
+                    .prefix("breez-sdk-wallet")
+                    .tempdir()?;
+                let path = dir.path().to_string_lossy().to_string();
+                let chain_service = wrap(default_regtest_chain_service().await?);
+                build_sdk_with_dir_and_chain_service(
+                    path,
+                    rand::random(),
+                    Some(dir),
+                    Some(chain_service),
+                )
+                .await
+            }
+            Environment::Local(stack) => {
+                stack
+                    .create_wallet_with_chain_service(
+                        LocalIdentity::Seed(rand::random()),
+                        wrap,
+                        |_cfg| {},
+                    )
                     .await
             }
         }
