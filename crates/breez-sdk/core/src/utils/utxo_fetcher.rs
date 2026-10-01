@@ -89,6 +89,21 @@ impl CachedUtxoFetcher {
         })
     }
 
+    /// The value of `txid:vout` from a transaction already in the cache, without
+    /// reaching the chain service. `None` when it is not cached, or the cached
+    /// entry does not check out.
+    pub async fn cached_value(&self, txid: &str, vout: u32) -> Option<u64> {
+        let requested_txid = Txid::from_str(txid).ok()?;
+        let cached = ObjectCacheRepository::new(self.storage.clone())
+            .fetch_tx(txid)
+            .await
+            .ok()??;
+        let tx = verify_tx_hex(&cached.raw_tx, requested_txid).ok()?;
+        tx.output
+            .get(vout as usize)
+            .map(|txout| txout.value.to_sat())
+    }
+
     /// Fetches the tx from the chain backend and rebinds it to the requested
     /// txid before cache insertion, so a wrong response is rejected instead of
     /// poisoning the cache.
