@@ -4,6 +4,9 @@
 //! Handles quoting, sending (deposit + submit), and background monitoring
 //! of in-flight orders.
 
+mod affiliates;
+pub(super) mod storage_adapter;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,11 +43,10 @@ use super::{
     CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
     CrossChainReceiveInfo, CrossChainReceivePrepared, CrossChainRouteFilter, CrossChainRouteLimits,
     CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
-    derive_btc_leg_transfer_id,
-    orchestra_affiliates::Affiliates,
-    orchestra_storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData},
-    payment_with_conversion_info,
+    derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
+use affiliates::Affiliates;
+use storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData};
 
 use crate::utils::{
     payments::{
@@ -3923,7 +3925,7 @@ mod tests {
 
     fn stored_receive_row(data: &OrchestraSwapData) -> crate::StoredCrossChainSwap {
         crate::StoredCrossChainSwap {
-            provider: super::super::orchestra_storage_adapter::PROVIDER_TAG_ORCHESTRA.to_string(),
+            provider: super::storage_adapter::PROVIDER_TAG_ORCHESTRA.to_string(),
             id: data.quote_id.clone(),
             is_terminal: false,
             updated_at: 0,
