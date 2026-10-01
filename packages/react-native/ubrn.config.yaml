@@ -6,18 +6,20 @@ bindings:
   ts: src/generated
 android:
   useSharedLibrary: true
-  # Disable server-side storage features (postgres, mysql) to reduce binary size (not needed for mobile)
+  # Disable server-side storage features (postgres, mysql) and compile out trace-level logs to reduce binary size
   cargoExtras:
     - --no-default-features
+    - --features=release-max-level-debug
 ios:
   targets:
     - aarch64-apple-ios
     - aarch64-apple-ios-sim
     - x86_64-apple-ios
   frameworkName: build/RnBreezSdkSpark
-  # Disable server-side storage features (postgres, mysql) to reduce binary size (not needed for mobile)
+  # Disable server-side storage features (postgres, mysql) and compile out trace-level logs to reduce binary size
   cargoExtras:
     - --no-default-features
+    - --features=release-max-level-debug
 turboModule:
   cpp: cpp
   ts: src

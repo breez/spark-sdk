@@ -1,15 +1,30 @@
 [alias]
 xtask = "run --package xtask --"
 
-# Support for 16KB page sizes on Android 15+ 64-bit architectures
+# The bundled SQLite enables extensions the SDK never uses: full-text search,
+# R-Tree, DBSTAT, STAT4, SOUNDEX, column metadata and extension loading.
+# Turning them off saves about 300 KB per binary.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_COLUMN_METADATA -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION"
+
+# Android: 16KB page sizes for Android 15+ on 64-bit architectures, and packed
+# relocations (API 23+), which shrink `.rela.dyn` from about 900 KB to 130 KB.
 [target.aarch64-linux-android]
 rustflags = [
     "-C", "link-arg=-Wl,--hash-style=both",
     "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
 ]
 
 [target.x86_64-linux-android]
 rustflags = [
     "-C", "link-arg=-Wl,--hash-style=both",
     "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
 ]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "link-arg=-Wl,--pack-dyn-relocs=android"]
+
+[target.i686-linux-android]
+rustflags = ["-C", "link-arg=-Wl,--pack-dyn-relocs=android"]

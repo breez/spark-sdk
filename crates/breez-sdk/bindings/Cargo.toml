@@ -12,6 +12,14 @@ mysql = ["breez-sdk-spark/mysql"]
 uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
 # Bench-only: see breez-sdk-spark's `span-trace` feature.
 span-trace = ["breez-sdk-spark/span-trace"]
+# Compiles trace-level logs out of release builds, about 300 KB per binary.
+# Enabled for mobile only: it applies to every crate in the same cargo build.
+release-max-level-debug = [
+    "dep:log",
+    "dep:tracing",
+    "log/release_max_level_debug",
+    "tracing/release_max_level_debug",
+]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -25,6 +33,9 @@ crate-type = ["staticlib", "cdylib", "lib"]
 [dependencies]
 breez-sdk-spark = { workspace = true, features = ["uniffi", "passkey", "sqlite", "turnkey-p256"] }
 uniffi = { workspace = true, features = ["tokio"] }
+# Only for the `release-max-level-debug` feature.
+log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [build-dependencies]
 glob.workspace = true

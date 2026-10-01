@@ -1628,6 +1628,8 @@ version = "0.1.0"
 dependencies = [
  "breez-sdk-spark",
  "glob",
+ "log",
+ "tracing",
  "uniffi",
 ]
 

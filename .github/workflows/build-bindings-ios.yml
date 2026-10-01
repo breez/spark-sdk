@@ -60,7 +60,7 @@ jobs:
 
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --features release-max-level-debug --target ${{ matrix.target }}
 
       - name: Generate dSYM and strip dylib
         run: |
