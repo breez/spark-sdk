@@ -242,7 +242,9 @@ fn lightning_payment_cases(
 #[apply(lightning_payment_cases)]
 #[test_log::test(tokio::test)]
 async fn test_03_lightning_invoice_payment(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
     #[case] invoice_amount_sats: Option<u64>,
     #[case] sender_amount: Option<u64>,
     #[case] test_type: &str,
@@ -538,7 +540,9 @@ async fn test_03_lightning_invoice_payment(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_04_lightning_invoice_for_external_recipient(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
     let mut alice = env.create_wallet().await?;
@@ -616,7 +620,9 @@ async fn test_04_lightning_invoice_for_external_recipient(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_05_lightning_invoice_prefer_spark_fee_path(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_05_lightning_invoice_prefer_spark_fee_path ===");
@@ -724,7 +730,9 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_06_lightning_send_without_completion_wait(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_06_lightning_send_without_completion_wait ===");
@@ -953,7 +961,11 @@ async fn test_07_spark_invoice(#[future] env: Result<Environment>) -> Result<()>
 /// Test 8: Lightning invoice with custom expiry_secs
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment>) -> Result<()> {
+async fn test_08_lightning_invoice_expiry_secs(
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
+) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_08_lightning_invoice_expiry_secs ===");
 
@@ -1129,7 +1141,9 @@ async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_09_bolt11_send_all_with_fee_overpayment(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_09_bolt11_send_all_with_fee_overpayment ===");
@@ -1433,7 +1447,9 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_10_lightning_completion_timeout_resolves_to_completed(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_10_lightning_completion_timeout_resolves_to_completed ===");

@@ -51,7 +51,11 @@ impl ServerModeFixture {
 
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_send_bolt11_invoice_server_mode(#[future] env: Result<Environment>) -> Result<()> {
+async fn test_send_bolt11_invoice_server_mode(
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
+) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_send_bolt11_invoice_server_mode ===");
     let invoice_amount_sats: u64 = 10_000;

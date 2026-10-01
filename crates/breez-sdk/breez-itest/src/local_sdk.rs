@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tracing::{Instrument, debug, debug_span, instrument};
 
 use crate::chain_service::LocalBitcoindChainService;
+use crate::environment::Needs;
 use crate::fixtures::lnurl::LnurlFixture;
 use crate::helpers::regtest::SignerBackend;
 use crate::{FaucetConfig, SdkInstance};
@@ -388,19 +389,20 @@ impl LocalStack {
         }
     }
 
-    /// Starts operators, an sspd and a bitcoind, and stocks the SSP's pool.
-    pub async fn start() -> Result<Self> {
+    /// Starts operators, an sspd and a bitcoind, stocks the SSP's pool, and runs
+    /// what `needs` names besides.
+    pub async fn start(needs: &[Needs]) -> Result<Self> {
         // Boxed: spans deepen the future type past the layout recursion limit.
-        Box::pin(Self::start_traced()).await
+        Box::pin(Self::start_traced(needs)).await
     }
 
     #[instrument(level = "debug", name = "setup.stack", skip_all)]
-    async fn start_traced() -> Result<Self> {
-        let fixtures = TestFixtures::builder()
-            .with_lightning(&["ssp"])
-            .build()
-            .await?;
-        let fixtures = Arc::new(fixtures);
+    async fn start_traced(needs: &[Needs]) -> Result<Self> {
+        let mut builder = TestFixtures::builder().with_sspd();
+        if needs.contains(&Needs::Lightning) {
+            builder = builder.with_lightning(&["ssp"]);
+        }
+        let fixtures = Arc::new(builder.build().await?);
 
         let ssp_base_url = fixtures.sspd().base_url.clone();
 
