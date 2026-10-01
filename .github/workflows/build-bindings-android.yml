@@ -54,7 +54,7 @@ jobs:
 
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
-        run: cargo ndk -t ${{ matrix.target }} build --release
+        run: cargo ndk -t ${{ matrix.target }} build --release --features secp-lowmemory
 
       - name: Copy build output
         run: |

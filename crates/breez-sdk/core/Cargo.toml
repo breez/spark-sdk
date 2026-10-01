@@ -29,6 +29,9 @@ turnkey = ["dep:turnkey_enclave_encrypt"]
 # Additionally accept P-256 (Turnkey's default) API keys for stamping, alongside
 # the always-available secp256k1. Pulls in the `p256` crate.
 turnkey-p256 = ["turnkey", "dep:p256"]
+# Smaller libsecp256k1 precomputed tables: about 1 MB less binary for slightly
+# slower signing and verification.
+secp-lowmemory = ["bitcoin/secp-lowmemory"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -79,11 +82,6 @@ p256 = { workspace = true, optional = true }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-# Smaller libsecp256k1 precomputed tables on mobile: about 1 MB less binary for
-# slightly slower signing and verification.
-[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
-bitcoin = { workspace = true, features = ["secp-lowmemory"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
