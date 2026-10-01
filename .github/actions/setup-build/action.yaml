@@ -29,9 +29,20 @@ runs:
       shell: bash
       run: |
         cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        # The registry directory name carries a hash that can change between
+        # cargo versions, so ask cargo (the toolchain the build uses) where it
+        # unpacks a small crate.
+        probe="$RUNNER_TEMP/registry-probe"
+        mkdir -p "$probe/src"
+        touch "$probe/src/lib.rs"
+        printf '[package]\nname = "probe"\nversion = "0.0.0"\n\n[dependencies]\ncfg-if = "1"\n' > "$probe/Cargo.toml"
+        registry=$(cargo metadata --format-version 1 --manifest-path "$probe/Cargo.toml" \
+          | grep -o '"manifest_path":"[^"]*/registry/src/[^/"]*/' | head -1 | cut -d'"' -f4) || true
         # The last matching prefix wins, so the full registry path goes last.
         flags="--remap-path-prefix=$cargo_home/registry/src/="
-        flags="$flags --remap-path-prefix=$cargo_home/registry/src/index.crates.io-1949cf8c6b5b557f/="
+        if [ -n "$registry" ]; then
+          flags="$flags --remap-path-prefix=$registry="
+        fi
         flags="$flags --remap-path-prefix=$cargo_home/git/checkouts/="
         flags="$flags --remap-path-prefix=$GITHUB_WORKSPACE/="
         for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios \
