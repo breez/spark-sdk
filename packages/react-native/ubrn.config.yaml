@@ -10,7 +10,7 @@ android:
   cargoExtras:
     - --no-default-features
     - --features
-    - secp-lowmemory
+    - secp-lowmemory,release-max-level-debug
 ios:
   targets:
     - aarch64-apple-ios
@@ -21,7 +21,7 @@ ios:
   cargoExtras:
     - --no-default-features
     - --features
-    - secp-lowmemory
+    - secp-lowmemory,release-max-level-debug
 turboModule:
   cpp: cpp
   ts: src

@@ -41,7 +41,7 @@ pub use cross_chain::{
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
-pub use logger::DEFAULT_FILTER;
+pub use logger::{DEFAULT_FILTER, parse_log_filter};
 pub use models::*;
 pub use persist::{
     ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,

@@ -201,7 +201,15 @@ class AndroidEnvironment {
         ? kPageSize16Kb
         : kPageSize4Kb;
 
-    final baseLinkerArgs = ["-L", workaroundDir];
+    final baseLinkerArgs = [
+      "-L",
+      workaroundDir,
+      // Packed relocations, which the loader supports from API 23.
+      if (minSdkVersion >= 23) ...[
+        "-C",
+        "link-arg=-Wl,--pack-dyn-relocs=android",
+      ],
+    ];
 
     final linkerArgs = pageSize != kPageSize4Kb
         ? [
