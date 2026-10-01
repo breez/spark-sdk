@@ -59,7 +59,7 @@ check-ndk:
 	fi
 
 build-ndk-release-target-%: check-ndk install-target-%
-	cargo ndk -t $* -o $(FFI_DIR)kotlin/jniLibs build --release --link-libcxx-shared
+	cargo ndk -t $* -o $(FFI_DIR)kotlin/jniLibs build --release
 
 build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kotlin \

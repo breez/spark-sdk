@@ -6,9 +6,6 @@ on:
 # Version pins for the kmp-* matrix jobs. Bump these in lockstep with the
 # canonical source so the cache keys invalidate alongside the binary itself.
 env:
-  # cargo-ndk 4.x is required by the `--link-libcxx-shared` flag the
-  # bindings Makefile passes (see `build-ndk-release-target-%`); the flag
-  # was added in 4.0.
   CARGO_NDK_VERSION: 4.1.2
   # Mirror of the gobley branch pinned in
   # `crates/breez-sdk/bindings/Makefile` (`install-uniffi-bindgen-gobley`).
