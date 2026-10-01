@@ -240,7 +240,7 @@ pub(crate) fn boltz_metadata_from_swap(
 
     let new_status = map_boltz_status_to_conversion(&swap.status);
     let delivered_amount = swap.delivered_amount.map(u128::from);
-    let updated_fee_amount = super::compute_terminal_fee_amount(
+    let updated_fee_amount = crate::cross_chain::compute_terminal_fee_amount(
         &new_status,
         asset_amount_in,
         delivered_amount,

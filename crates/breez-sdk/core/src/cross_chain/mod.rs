@@ -8,14 +8,8 @@
 // stay compiled so the wiring can be restored in one place.
 #[allow(dead_code)]
 pub(crate) mod boltz;
-#[allow(dead_code)]
-pub(crate) mod boltz_event_listener;
-#[allow(dead_code)]
-pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
-mod orchestra_affiliates;
-mod orchestra_storage_adapter;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
 pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService};
@@ -1419,7 +1413,7 @@ mod tests {
 
         async fn storage_with_open_receive(invoice: &str) -> Arc<dyn crate::Storage> {
             let storage = sqlite_storage();
-            let data = orchestra_storage_adapter::OrchestraSwapData {
+            let data = orchestra::storage_adapter::OrchestraSwapData {
                 quote_id: "q_match".to_string(),
                 order_id: None,
                 read_token: None,
@@ -1442,7 +1436,7 @@ mod tests {
                 fee_asset_decimals: Some(6),
                 expires_at: 1_700_000_120,
             };
-            orchestra_storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
+            orchestra::storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
                 .upsert(&data)
                 .await
                 .unwrap();
