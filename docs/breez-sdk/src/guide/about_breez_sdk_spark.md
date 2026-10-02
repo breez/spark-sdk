@@ -28,8 +28,6 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] **[Integrated On-ramps](/guide/buy_bitcoin.md)**: Let users buy bitcoin directly via Cash App and MoonPay.
 - [x] **[Fiat Currencies](/guide/fiat_currencies.md)**: Real-time exchange rates to display value in fiat currencies.
 - [x] **[Multi-user Server Mode](/guide/server_mode.md)**: Run multiple user balances from a single backend server.
-- [x] **[Open-source](https://github.com/breez/spark-sdk)**: Free and open-source, available to any developer at any scale.
-- [x] **[Partner Portal](https://partners.breez.technology/)**: Track your volume and activity in one dashboard.
 
 ## Pricing
 
