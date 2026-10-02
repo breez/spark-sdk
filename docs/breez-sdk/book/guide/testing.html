@@ -1,0 +1,562 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Testing and development - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/testing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="testing-and-development"><a class="header" href="#testing-and-development">Testing and development</a></h1>
+<p>There are three networks to test an integration against:</p>
+<ul>
+<li>The <a href="#regtest-network"><strong>Regtest Network</strong></a> maintained by Lightspark, for most testing and development</li>
+<li>A <a href="#local-environment"><strong>local environment</strong></a>: a Spark regtest network of your own, running on your machine</li>
+<li><a href="#mainnet-testing"><strong>Mainnet with small amounts</strong></a>, for features that depend on live networks</li>
+</ul>
+<h2 id="regtest-network"><a class="header" href="#regtest-network">Regtest Network</a></h2>
+<p>For most testing and development, we recommend using the <strong>Regtest Network</strong> - a deployed test network maintained by Lightspark that is free to use and carries no real-world value.</p>
+<h3 id="what-you-can-test-on-regtest"><a class="header" href="#what-you-can-test-on-regtest">What you can test on Regtest</a></h3>
+<ul>
+<li><strong>Spark Payments</strong>: Bitcoin and token payments using the Spark protocol</li>
+<li><strong>Deposits</strong>: Receiving test Bitcoin from the <a href="https://app.lightspark.com/regtest-faucet">Lightspark Regtest Faucet</a></li>
+<li><strong>Withdrawals</strong>: Sending funds back to on-chain addresses</li>
+<li><strong>Token Issuance</strong>: Creating and testing tokens using the SDK's <a href="./issuing_tokens.html">issuing functionality</a></li>
+</ul>
+<h3 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h3>
+<ol>
+<li><a href="./initializing.html">Initialize the SDK</a> using the default regtest config (no API key required)</li>
+<li><a href="./receive_payment.html#bitcoin">Generate a Bitcoin receiving address</a></li>
+<li>Request funds from the <a href="https://app.lightspark.com/regtest-faucet">faucet</a> to your generated address</li>
+<li>Test all Spark-related functionality in a controlled development environment</li>
+</ol>
+<h2 id="local-environment"><a class="header" href="#local-environment">Local environment</a></h2>
+<p>The local environment is a complete Spark network on your own machine: a Bitcoin Core node in regtest mode, three Spark operators, a Spark service provider (SSP) with its Lightning node, a second Lightning node the SSP's holds a channel with, an LNURL server, a data-sync service, and a <a href="https://mempool.space">mempool</a> block explorer with its API. It shares nothing with any other network, so the chain moves only when the environment mines, funds come from the environment's own Bitcoin node, and a reset returns everything to an empty chain.</p>
+<h3 id="what-you-can-test-locally"><a class="header" href="#what-you-can-test-locally">What you can test locally</a></h3>
+<ul>
+<li><strong>Spark payments</strong>: Bitcoin and token payments between wallets on the environment</li>
+<li><strong>Deposits</strong>: On-chain deposits, funded from the environment's Bitcoin node</li>
+<li><strong>Withdrawals</strong>: Sending funds back to on-chain addresses</li>
+<li><strong>Lightning payments</strong>, between wallets on the environment and with Alice, the second Lightning node</li>
+<li><strong>Lightning addresses</strong>: registered with, and served by, the environment's own LNURL server</li>
+<li><strong>Multi-device sync</strong>: a wallet's data kept in step across its instances by the environment's data-sync service</li>
+<li><strong>Token issuance</strong>, using the SDK's <a href="./issuing_tokens.html">issuing functionality</a></li>
+<li><strong>Unilateral exits</strong>, which need the chain mined past a <a href="./unilateral_exit.html">timelock</a></li>
+</ul>
+<p>Alice stands in for the Lightning network outside the environment: she and the SSP's node share a 50 BTC channel, funded on both sides, so a wallet can pay her and be paid by her. A payment to any other node fails, since the environment is not connected to one.</p>
+<h3 id="starting-the-environment"><a class="header" href="#starting-the-environment">Starting the environment</a></h3>
+<p>The environment runs on macOS and Linux, either in Docker or natively with Nix. The first start builds the Spark operator, the SSP and the Lightning node from source, which takes a while. A new environment then needs a few more minutes before it can serve wallets: the operators generate the signing keys the SSP needs to build its pool of leaves.</p>
+<p><strong>Docker</strong>: from a clone of the <a href="https://github.com/breez/spark-sdk">spark-sdk repository</a>, run:</p>
+<pre><code class="language-bash">docker compose -f regtest/local/docker-compose.yml up
+</code></pre>
+<p>It builds what it needs and starts every service in order, reporting what it waits on as it goes: the operators generating their signing keys, then the SSP stocking its leaf pool. It ends by printing the addresses below. <code>make local-env-up</code> does the same in the background, <code>make local-env-down</code> stops it and keeps its state, and <code>make local-env-reset</code> deletes it.</p>
+<p><strong>Nix</strong>: with flakes enabled, run:</p>
+<pre><code class="language-bash">nix run github:breez/spark-sdk#local-env
+</code></pre>
+<p>The environment runs in the foreground until you quit it, and keeps its state in <code>./.spark-local</code>, or in <code>SPARK_LOCAL_DIR</code> when set. Deleting that directory resets it.</p>
+<p>Docker writes the environment's Spark configuration to <code>regtest/local/data/spark-config.json</code>, and Nix to <code>spark-config.json</code> in its state directory. Both print where it is, along with these endpoints:</p>
+<div class="table-wrapper"><table><thead><tr><th>Endpoint</th><th>Address</th><th>Port setting</th></tr></thead><tbody>
+<tr><td>Chain API (mempool.space)</td><td><code>http://127.0.0.1:8090/api</code></td><td><code>MEMPOOL_PORT</code></td></tr>
+<tr><td>Mempool explorer</td><td><code>http://127.0.0.1:8090</code></td><td><code>MEMPOOL_PORT</code></td></tr>
+<tr><td>Spark service provider (SSP)</td><td><code>http://127.0.0.1:59049</code></td><td><code>SSP_PORT</code></td></tr>
+<tr><td>LNURL server</td><td><code>http://127.0.0.1:8080</code></td><td><code>LNURL_PORT</code></td></tr>
+<tr><td>Data-sync service</td><td><code>http://127.0.0.1:8081</code></td><td><code>DATA_SYNC_PORT</code></td></tr>
+<tr><td>Data-sync service, for JavaScript</td><td><code>http://127.0.0.1:8082</code></td><td><code>DATA_SYNC_WEB_PORT</code></td></tr>
+<tr><td>Bitcoin Core RPC (<code>rpcuser</code> / <code>rpcpassword</code>)</td><td><code>http://127.0.0.1:18443</code></td><td><code>BITCOIND_RPC_PORT</code></td></tr>
+</tbody></table>
+</div>
+<p>Every port is an environment variable, so an address already in use can be moved: <code>BITCOIND_RPC_PORT=18500 docker compose -f regtest/local/docker-compose.yml up</code>. The ports, what the environment mines and what the SSP keeps are listed in the environment's <a href="https://github.com/breez/spark-sdk/blob/main/regtest/local/README.md">README</a>.</p>
+<h3 id="connecting-the-sdk"><a class="header" href="#connecting-the-sdk">Connecting the SDK</a></h3>
+<p>Every service a wallet uses is served over plain HTTP and answers cross-origin requests, so a wallet connects the same way in a browser. Start from the default config for <code class="lang-fn"><span class="fn-rust">Network::Regtest</span><span class="fn-python">Network.REGTEST</span><span class="fn-swift">Network.regtest</span><span class="fn-kotlin">Network.Regtest</span><span class="fn-javascript">Network.Regtest</span><span class="fn-react-native">Network.Regtest</span><span class="fn-flutter">Network.Regtest</span><span class="fn-go">NetworkRegtest</span><span class="fn-csharp">Network.Regtest</span></code> and change five things:</p>
+<ul>
+<li><strong>Spark environment</strong>: <code class="lang-fn"><span class="fn-rust">parse_spark_config</span><span class="fn-python">parse_spark_config</span><span class="fn-swift">parseSparkConfig</span><span class="fn-kotlin">parseSparkConfig</span><span class="fn-javascript">parseSparkConfig</span><span class="fn-react-native">parseSparkConfig</span><span class="fn-flutter">parseSparkConfig</span><span class="fn-go">ParseSparkConfig</span><span class="fn-csharp">ParseSparkConfig</span></code> reads the configuration file the environment writes, which carries its operators and its SSP. Set the result on <code class="lang-fn"><span class="fn-rust">spark_config</span><span class="fn-python">spark_config</span><span class="fn-swift">sparkConfig</span><span class="fn-kotlin">sparkConfig</span><span class="fn-javascript">sparkConfig</span><span class="fn-react-native">sparkConfig</span><span class="fn-flutter">sparkConfig</span><span class="fn-go">SparkConfig</span><span class="fn-csharp">SparkConfig</span></code>. The fields are those of the <a href="./config.html#spark-environment-configuration">Spark environment configuration</a>.</li>
+<li><strong>Chain service</strong>: use a <a href="./customizing.html#with-rest-chain-service">REST chain service</a> at <code>http://127.0.0.1:8090/api</code>, of type <code class="lang-fn"><span class="fn-rust">ChainApiType::MempoolSpace</span><span class="fn-python">ChainApiType.MEMPOOL_SPACE</span><span class="fn-swift">ChainApiType.mempoolSpace</span><span class="fn-kotlin">ChainApiType.MempoolSpace</span><span class="fn-javascript">ChainApiType.MempoolSpace</span><span class="fn-react-native">ChainApiType.MempoolSpace</span><span class="fn-flutter">ChainApiType.MempoolSpace</span><span class="fn-go">ChainApiTypeMempoolSpace</span><span class="fn-csharp">ChainApiType.MempoolSpace</span></code>.</li>
+<li><strong>Deposit claim fee</strong>: the environment's SSP can quote more to claim a deposit than the default <code class="lang-fn"><span class="fn-rust">max_deposit_claim_fee</span><span class="fn-python">max_deposit_claim_fee</span><span class="fn-swift">maxDepositClaimFee</span><span class="fn-kotlin">maxDepositClaimFee</span><span class="fn-javascript">maxDepositClaimFee</span><span class="fn-react-native">maxDepositClaimFee</span><span class="fn-flutter">maxDepositClaimFee</span><span class="fn-go">MaxDepositClaimFee</span><span class="fn-csharp">MaxDepositClaimFee</span></code> of 1 sat/vbyte allows. Deposits it quotes above the ceiling wait to be <a href="./onchain_claims.html#manually-claiming-deposits">claimed manually</a>, unless the ceiling is raised.</li>
+<li><strong>Lightning address domain</strong>: set <code class="lang-fn"><span class="fn-rust">lnurl_domain</span><span class="fn-python">lnurl_domain</span><span class="fn-swift">lnurlDomain</span><span class="fn-kotlin">lnurlDomain</span><span class="fn-javascript">lnurlDomain</span><span class="fn-react-native">lnurlDomain</span><span class="fn-flutter">lnurlDomain</span><span class="fn-go">LnurlDomain</span><span class="fn-csharp">LnurlDomain</span></code> to the environment's LNURL server, <code>http://127.0.0.1:8080</code>, which <a href="./receive_lnurl_pay.html">registering an address</a> then goes to.</li>
+<li><strong>Sync server</strong>: set <code class="lang-fn"><span class="fn-rust">real_time_sync_server_url</span><span class="fn-python">real_time_sync_server_url</span><span class="fn-swift">realTimeSyncServerUrl</span><span class="fn-kotlin">realTimeSyncServerUrl</span><span class="fn-javascript">realTimeSyncServerUrl</span><span class="fn-react-native">realTimeSyncServerUrl</span><span class="fn-flutter">realTimeSyncServerUrl</span><span class="fn-go">RealTimeSyncServerUrl</span><span class="fn-csharp">RealTimeSyncServerUrl</span></code> to the environment's data-sync service, <code>http://127.0.0.1:8081</code>, which keeps <a href="./config.html#real-time-sync-server-url">a wallet's instances in step</a>. The JavaScript SDK reaches it over gRPC-Web, at <code>http://127.0.0.1:8082</code>.</li>
+</ul>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let mut config = default_config(Network::Regtest);
+
+// The local environment writes this file when it starts
+let spark_config = std::fs::read_to_string("regtest/local/data/spark-config.json")?;
+config.spark_config = Some(parse_spark_config(spark_config)?);
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 5 });
+
+// Its LNURL server serves the lightning addresses wallets register
+config.lnurl_domain = Some("http://127.0.0.1:8080".to_string());
+
+// Its data-sync service keeps this wallet's instances in step
+config.real_time_sync_server_url = Some("http://127.0.0.1:8081".to_string());</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">var config = defaultConfig(network: Network.regtest)
+
+// The local environment writes this file when it starts
+let sparkConfig = try String(
+    contentsOfFile: "regtest/local/data/spark-config.json", encoding: .utf8)
+config.sparkConfig = try parseSparkConfig(json: sparkConfig)
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config.maxDepositClaimFee = MaxFee.rate(satPerVbyte: 5)
+
+// Its LNURL server serves the lightning addresses wallets register
+config.lnurlDomain = "http://127.0.0.1:8080"
+
+// Its data-sync service keeps this wallet's instances in step
+config.realTimeSyncServerUrl = "http://127.0.0.1:8081"
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val config = defaultConfig(Network.REGTEST)
+
+// The local environment writes regtest/local/data/spark-config.json when it
+// starts; read that file and pass its contents here
+config.sparkConfig = parseSparkConfig(sparkConfigJson)
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config.maxDepositClaimFee = MaxFee.Rate(5u)
+
+// Its LNURL server serves the lightning addresses wallets register
+config.lnurlDomain = "http://127.0.0.1:8080"
+
+// Its data-sync service keeps this wallet's instances in step
+config.realTimeSyncServerUrl = "http://127.0.0.1:8081"
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// The local environment writes this file when it starts
+var sparkConfigJson = File.ReadAllText("regtest/local/data/spark-config.json");
+
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Regtest) with
+{
+    sparkConfig = BreezSdkSparkMethods.ParseSparkConfig(sparkConfigJson),
+
+    // Its SSP charges more than the default ceiling to claim a deposit
+    maxDepositClaimFee = new MaxFee.Rate(satPerVbyte: 5),
+
+    // Its LNURL server serves the lightning addresses wallets register
+    lnurlDomain = "http://127.0.0.1:8080",
+
+    // Its data-sync service keeps this wallet's instances in step
+    realTimeSyncServerUrl = "http://127.0.0.1:8081"
+};
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const config = defaultConfig('regtest')
+
+// The local environment writes this file when it starts
+config.sparkConfig = parseSparkConfig(
+  readFileSync('regtest/local/data/spark-config.json', 'utf8')
+)
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config.maxDepositClaimFee = { type: 'rate', satPerVbyte: 5 }
+
+// Its LNURL server serves the lightning addresses wallets register
+config.lnurlDomain = 'http://127.0.0.1:8080'
+
+// Its data-sync service keeps this wallet's instances in step, over gRPC-Web
+config.realTimeSyncServerUrl = 'http://127.0.0.1:8082'
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const config = defaultConfig(Network.Regtest)
+
+// The local environment writes this file when it starts
+config.sparkConfig = parseSparkConfig(
+  await RNFS.readFile(`${RNFS.DocumentDirectoryPath}/spark-config.json`, 'utf8')
+)
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config.maxDepositClaimFee = new MaxFee.Rate({ satPerVbyte: BigInt(5) })
+
+// Its LNURL server serves the lightning addresses wallets register
+config.lnurlDomain = 'http://127.0.0.1:8080'
+
+// Its data-sync service keeps this wallet's instances in step
+config.realTimeSyncServerUrl = 'http://127.0.0.1:8081'
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">var config = defaultConfig(network: Network.regtest);
+
+// The local environment writes this file when it starts
+final sparkConfig =
+    await File('regtest/local/data/spark-config.json').readAsString();
+config = config.copyWith(sparkConfig: parseSparkConfig(json: sparkConfig));
+
+// Its SSP charges more than the default ceiling to claim a deposit
+config = config.copyWith(
+    maxDepositClaimFee: MaxFee.rate(satPerVbyte: BigInt.from(5)));
+
+// Its LNURL server serves the lightning addresses wallets register
+config = config.copyWith(lnurlDomain: 'http://127.0.0.1:8080');
+
+// Its data-sync service keeps this wallet's instances in step
+config = config.copyWith(realTimeSyncServerUrl: 'http://127.0.0.1:8081');
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">config = default_config(network=Network.REGTEST)
+
+# The local environment writes this file when it starts
+with open("regtest/local/data/spark-config.json", encoding="utf-8") as spark_config_file:
+    spark_config = spark_config_file.read()
+config.spark_config = parse_spark_config(json=spark_config)
+
+# Its SSP charges more than the default ceiling to claim a deposit
+config.max_deposit_claim_fee = MaxFee.RATE(sat_per_vbyte=5)
+
+# Its LNURL server serves the lightning addresses wallets register
+config.lnurl_domain = "http://127.0.0.1:8080"
+
+# Its data-sync service keeps this wallet's instances in step
+config.real_time_sync_server_url = "http://127.0.0.1:8081"
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkRegtest)
+
+// The local environment writes this file when it starts
+sparkConfigJson, err := os.ReadFile("regtest/local/data/spark-config.json")
+if err != nil {
+	return err
+}
+sparkConfig, err := breez_sdk_spark.ParseSparkConfig(string(sparkConfigJson))
+if err != nil {
+	return err
+}
+config.SparkConfig = &amp;sparkConfig
+
+// Its SSP charges more than the default ceiling to claim a deposit
+feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{SatPerVbyte: 5})
+config.MaxDepositClaimFee = &amp;feeRateInterface
+
+// Its LNURL server serves the lightning addresses wallets register
+lnurlDomain := "http://127.0.0.1:8080"
+config.LnurlDomain = &amp;lnurlDomain
+
+// Its data-sync service keeps this wallet's instances in step
+syncServerUrl := "http://127.0.0.1:8081"
+config.RealTimeSyncServerUrl = &amp;syncServerUrl
+</code></pre>
+</section>
+</custom-tabs>
+<p>Both setups print a command for each service, including <code>ldk-server-cli</code> calls that invoice from Alice and pay a wallet's invoice with her.</p>
+<h3 id="funding-wallets-and-mining-blocks"><a class="header" href="#funding-wallets-and-mining-blocks">Funding wallets and mining blocks</a></h3>
+<p>The environment mines a block every 5 seconds. To send a wallet funds from the environment's Bitcoin node, to mine blocks at once, for example to pass a timelock, or to change how often the environment mines:</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th>Docker</th><th>Nix</th></tr></thead><tbody>
+<tr><td>Fund an address</td><td><code>make local-env-fund ADDRESS=&lt;address&gt; AMOUNT_SATS=&lt;sats&gt;</code></td><td><code>nix run github:breez/spark-sdk#local-env -- fund &lt;address&gt; &lt;sats&gt;</code></td></tr>
+<tr><td>Mine blocks</td><td><code>make local-env-mine BLOCKS=&lt;blocks&gt;</code></td><td><code>nix run github:breez/spark-sdk#local-env -- mine &lt;blocks&gt;</code></td></tr>
+<tr><td>Mine a block every <code>&lt;seconds&gt;</code></td><td><code>make local-env-block-interval SECONDS=&lt;seconds&gt;</code></td><td><code>nix run github:breez/spark-sdk#local-env -- block-interval &lt;seconds&gt;</code></td></tr>
+</tbody></table>
+</div>
+<p>At an interval of <code>0</code> the environment stops mining once it is ready, and the chain moves only by the blocks you mine, so a test decides when a timelock passes. A new interval lasts until the environment restarts.</p>
+<h3 id="testing-from-another-device"><a class="header" href="#testing-from-another-device">Testing from another device</a></h3>
+<p>By default every service accepts connections only from the machine the environment runs on, and the Spark configuration file points wallets at <code>127.0.0.1</code>. <code>PUBLIC_HOST</code> points them at another address, and takes effect when a stopped environment starts. The configuration file and the endpoints the environment prints then use that address.</p>
+<ul>
+<li><strong>Android emulator</strong>: set <code>PUBLIC_HOST=10.0.2.2</code>, the address under which the emulator reaches its host.</li>
+<li><strong>A phone on your network</strong>: set <code>PUBLIC_HOST</code> to your machine's address on that network, and <code>BIND_ADDRESS=0.0.0.0</code> so the services accept connections from other machines, for example <code>BIND_ADDRESS=0.0.0.0 PUBLIC_HOST=192.168.1.10 make local-env-up</code>.</li>
+</ul>
+<h2 id="mainnet-testing"><a class="header" href="#mainnet-testing">Mainnet testing</a></h2>
+<p>Some features rely on live networks that Regtest doesn't reproduce. Test these on <strong>Mainnet with small amounts</strong>: use real satoshis, but keep transaction values very low while verifying the flows work correctly.</p>
+<h3 id="lightning-payments"><a class="header" href="#lightning-payments">Lightning payments</a></h3>
+<p>The Regtest Network doesn't have a developed Lightning Network, so test Lightning send and receive flows on Mainnet.</p>
+<h3 id="stable-balance-and-usdcusdt"><a class="header" href="#stable-balance-and-usdcusdt">Stable balance and USDC/USDT</a></h3>
+<p>The stablecoin assets are only available on Mainnet:</p>
+<ul>
+<li><strong>USDB</strong> is the Spark-native stablecoin behind <a href="./stable_balance.html">Stable Balance</a>.</li>
+<li><strong>USDC</strong> and <strong>USDT</strong> are cross-chain assets. Use <a href="./cross_chain.html">USDC/USDT</a> to pay recipients on their native chains or receive from them. The cross-chain providers operate against live external networks and have no testnet equivalent.</li>
+</ul>
+<p>Test these integrations on Mainnet with small amounts.</p>
+<h2 id="development-best-practices"><a class="header" href="#development-best-practices">Development best practices</a></h2>
+<ul>
+<li><strong>Start with Regtest</strong> for most development and testing</li>
+<li><strong>Use a local environment</strong> to control the chain, or to test without depending on a shared network</li>
+<li><strong>Use Mainnet</strong> for Lightning, stable balance, and USDC/USDT testing</li>
+<li><strong>Test all payment types</strong> you plan to support in your application</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/install_csharp.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/initializing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/install_csharp.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/initializing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

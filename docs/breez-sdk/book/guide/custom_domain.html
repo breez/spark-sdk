@@ -1,0 +1,334 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Custom Lightning address domain - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/custom_domain.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="custom-lightning-address-domain"><a class="header" href="#custom-lightning-address-domain">Custom Lightning address domain</a></h1>
+<p>To use Lightning addresses with the Breez SDK, you need a domain served by an LNURL server. You can use the LNURL server hosted by Breez, or run your own.</p>
+<h2 id="hosted"><a class="header" href="#hosted">Option #1: Hosted</a></h2>
+<p>Breez runs the LNURL server for your domain. Point your domain to it with a CNAME record, or, if the domain also serves your website, forward the LNURL paths to it from your web server.</p>
+<h3 id="cname"><a class="header" href="#cname">Using a CNAME record</a></h3>
+<p>This sends all of the domain's web traffic to Breez.</p>
+<h4 id="step-1-add-a-cname-record"><a class="header" href="#step-1-add-a-cname-record">Step 1: Add a CNAME record</a></h4>
+<p>Add a CNAME record in your domain's DNS settings. You can use your root domain or a subdomain:</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th>Root domain</th><th>Subdomain</th></tr></thead><tbody>
+<tr><td><strong>Example address</strong></td><td><code>user@yourdomain.com</code></td><td><code>user@pay.yourdomain.com</code></td></tr>
+<tr><td><strong>Host/Name</strong></td><td><code>@</code></td><td><code>pay</code> (or another prefix like <code>tip</code> or <code>donate</code>)</td></tr>
+<tr><td><strong>Type</strong></td><td>CNAME (or ALIAS if available)</td><td>CNAME</td></tr>
+<tr><td><strong>Value/Target</strong></td><td><code>breez.tips</code></td><td><code>breez.tips</code></td></tr>
+</tbody></table>
+</div>
+<p>Some DNS providers do not support CNAME or ALIAS records on the root domain. If yours doesn't, either use a subdomain or configure your domain at the registrar level to use an external DNS provider (like Google Cloud DNS).</p>
+<blockquote>
+<p><strong>Note:</strong> If you're using Cloudflare, make sure the CNAME record is set to 'DNS only' (not 'Proxied').</p>
+</blockquote>
+<h4 id="step-2-register-your-domain-with-breez"><a class="header" href="#step-2-register-your-domain-with-breez">Step 2: Register your domain with Breez</a></h4>
+<p><a href="mailto:contact@breez.technology">Send us</a> your domain name (e.g., yourdomain.com or pay.yourdomain.com), together with the Breez API key you want the LNURL payments on that domain to be associated with.</p>
+<p>We will verify and add it to our list of allowed domains.</p>
+<h3 id="reverse-proxy"><a class="header" href="#reverse-proxy">Using a reverse proxy</a></h3>
+<p>Your web server forwards the LNURL paths to Breez and serves the rest of the site itself.</p>
+<h4 id="step-1-register-your-domain-with-breez"><a class="header" href="#step-1-register-your-domain-with-breez">Step 1: Register your domain with Breez</a></h4>
+<p><a href="mailto:contact@breez.technology">Send us</a> your domain name and the Breez API key to associate its LNURL payments with, and specify that you will use a reverse proxy. We will verify the domain, add it to our allowed domains, and send you a shared secret for it.</p>
+<h4 id="step-2-forward-the-lnurl-paths-to-breez"><a class="header" href="#step-2-forward-the-lnurl-paths-to-breez">Step 2: Forward the LNURL paths to Breez</a></h4>
+<p>Forward all requests on these paths to <code>https://breez.tips</code> unchanged: any HTTP method, with the path, query string, body and headers as received, apart from the three headers set below. Don't cache the responses.</p>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>Used for</th></tr></thead><tbody>
+<tr><td><code>/.well-known/lnurlp/*</code></td><td>Lightning address lookups</td></tr>
+<tr><td><code>/lnurlp/*</code></td><td>LNURL-Pay requests, invoice callbacks and payment verification (<a href="https://github.com/lnurl/luds/blob/luds/21.md">LUD-21</a>)</td></tr>
+<tr><td><code>/lnurlpay/*</code></td><td>Lightning address registration and management by the SDK</td></tr>
+</tbody></table>
+</div>
+<p>Set these headers on every forwarded request:</p>
+<div class="table-wrapper"><table><thead><tr><th>Header</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>Host</code></td><td>Your domain as registered with Breez, in lowercase (not <code>breez.tips</code>)</td></tr>
+<tr><td><code>X-Breez-Reverse-Proxy-Shared-Secret</code></td><td>The shared secret Breez sent you</td></tr>
+<tr><td><code>X-Forwarded-For</code></td><td>The client's IP address only. Replace any <code>X-Forwarded-For</code> the request arrived with. Don't append to it.</td></tr>
+</tbody></table>
+</div>
+<p>For example, with nginx:</p>
+<pre><code class="language-nginx">location ~ ^/(\.well-known/lnurlp|lnurlp|lnurlpay)/ {
+    proxy_pass https://breez.tips;
+    proxy_ssl_server_name on;
+    proxy_set_header Host yourdomain.com;
+    proxy_set_header X-Breez-Reverse-Proxy-Shared-Secret "&lt;your shared secret&gt;";
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+</code></pre>
+<p>If your web server sits behind a CDN or load balancer, set <code>X-Forwarded-For</code> to the client IP that the CDN or load balancer reports instead of <code>$remote_addr</code>.</p>
+<h2 id="self-hosted"><a class="header" href="#self-hosted">Option #2: Self-hosted</a></h2>
+<p>Run the <a href="https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl">LNURL server</a> yourself, point your domain to it, and add the domain to the server's allowed domains. There is no need to contact Breez. See the server's README for how to build, configure and run it.</p>
+<h2 id="configuring-the-sdk"><a class="header" href="#configuring-the-sdk">Configuring the SDK</a></h2>
+<p>Once your domain is set up, pass it as <code class="lang-fn"><span class="fn-rust">lnurl_domain</span><span class="fn-python">lnurl_domain</span><span class="fn-swift">lnurlDomain</span><span class="fn-kotlin">lnurlDomain</span><span class="fn-javascript">lnurlDomain</span><span class="fn-react-native">lnurlDomain</span><span class="fn-flutter">lnurlDomain</span><span class="fn-go">LnurlDomain</span><span class="fn-csharp">LnurlDomain</span></code> in the SDK configuration, as described in <a href="./receive_lnurl_pay.html#configuring-lightning-addresses-for-users">Configuring Lightning addresses for users</a>.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/lnurl_auth.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/passkey.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/lnurl_auth.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/passkey.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
