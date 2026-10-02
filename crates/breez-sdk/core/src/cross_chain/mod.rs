@@ -14,6 +14,7 @@ pub(crate) mod boltz_event_listener;
 pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
+mod orchestra_affiliates;
 mod orchestra_storage_adapter;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
@@ -486,8 +487,8 @@ pub struct CrossChainReceiveInfo {
     /// Spark token identifier when the destination is a token. Absent when
     /// the destination is BTC and the receiver will see sats.
     pub token_identifier: Option<String>,
-    /// Provider-quoted total fee for this receive, in `service_fee_asset`
-    /// units.
+    /// Provider-quoted total fee for this receive, including the partner fee
+    /// when one is set, in `service_fee_asset` units.
     pub service_fee_amount: u128,
     /// Ticker for `service_fee_amount`. Absent when the fee is denominated
     /// in sats.
@@ -516,7 +517,8 @@ pub(crate) struct CrossChainSendPrepared {
     /// lives separately in `source_transfer_fee_sats`. The dispatcher
     /// overrides this on the conversion path to reflect the token-side debit.
     pub fee_amount: u128,
-    /// Provider's own service fee/spread, in its native denomination.
+    /// Provider service fee, including the partner fee when one is set, in
+    /// `service_fee_asset` base units.
     pub service_fee_amount: u128,
     /// Asset that the service fee is denominated in. Unset means BTC sats.
     pub service_fee_asset: Option<String>,

@@ -134,7 +134,7 @@ pub(crate) fn process_success_action(
 // OID 2.5.4.3 = commonName
 const OID_COMMON_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
 
-pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
+fn decode_breez_api_key_cert(api_key: &str) -> Result<Certificate, SdkError> {
     let api_key_decoded = base64::engine::general_purpose::STANDARD
         .decode(api_key.as_bytes())
         .map_err(|err| {
@@ -142,9 +142,12 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
                 "Could not base64 decode the Breez API key: {err:?}"
             ))
         })?;
-    let cert = Certificate::from_der(&api_key_decoded).map_err(|err| {
-        SdkError::Generic(format!("Invalid certificate for Breez API key: {err:?}"))
-    })?;
+    Certificate::from_der(&api_key_decoded)
+        .map_err(|err| SdkError::Generic(format!("Invalid certificate for Breez API key: {err:?}")))
+}
+
+pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
+    let cert = decode_breez_api_key_cert(api_key)?;
 
     let issuer = cert
         .tbs_certificate
@@ -172,6 +175,29 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     }
 
     Ok(())
+}
+
+/// The partner's Orchestra affiliate id: `breez_` and the API key
+/// certificate's serial in lowercase hex without leading zeros. The partner
+/// portal derives the same id when it registers the affiliate. `None` for a
+/// key that doesn't decode or a serial of zero or below, which the portal
+/// doesn't register.
+pub(crate) fn partner_affiliate_id(api_key: &str) -> Option<String> {
+    let cert = decode_breez_api_key_cert(api_key).ok()?;
+    affiliate_id_from_serial(cert.tbs_certificate.serial_number.as_bytes())
+}
+
+/// `serial` is the DER integer content: big-endian two's complement.
+fn affiliate_id_from_serial(serial: &[u8]) -> Option<String> {
+    if serial.first().is_none_or(|b| b & 0x80 != 0) {
+        return None;
+    }
+    let hex = hex::encode(serial);
+    let hex = hex.trim_start_matches('0');
+    if hex.is_empty() {
+        return None;
+    }
+    Some(format!("breez_{hex}"))
 }
 
 /// Returns a static deposit address, and starts watching it on-chain for
@@ -219,5 +245,60 @@ async fn watch_deposit_address(storage: &Arc<dyn Storage>, address: &str) {
         .await
     {
         error!("Failed to watch deposit address {address}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use macros::test_all;
+
+    use super::{affiliate_id_from_serial, partner_affiliate_id};
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    /// Self-signed, serial 17749916839830091 (`0x3f0f749007e24b`).
+    const TEST_CERT: &str = "MIIBdDCCARmgAwIBAgIHPw90kAfiSzAKBggqhkjOPQQDAjAXMRUwEwYDVQQDDAxUZXN0IFBhcnRuZXIwHhcNMjYwOTI5MTExMTIxWhcNMzYwOTI2MTExMTIxWjAXMRUwEwYDVQQDDAxUZXN0IFBhcnRuZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR3fCMa/dUTWirY4lWDghTBHNpTGwBIGb5mADnkaW6rkFOoSL5a/b9Ezo5QX2n8E8At37Bj/g5btO399N7f3I91o1AwTjAdBgNVHQ4EFgQUSERuHJQdsI/QHAY8EKEBaSeotZYwHwYDVR0jBBgwFoAUSERuHJQdsI/QHAY8EKEBaSeotZYwDAYDVR0TAQH/BAIwADAKBggqhkjOPQQDAgNJADBGAiEAhkEIcH7ZkK9RL/dX+ux9yKQk+YintD8fsQ2lmqhg+JUCIQCHajjJoy+771zOTtJSVjs15z+mA4l5E1p5PeOgYBXl8g==";
+
+    /// Vectors shared with the partner portal's derivation tests.
+    #[test_all]
+    fn affiliate_id_matches_the_portal_vectors() {
+        let max_serial = [[0x7f].as_slice(), &[0xff; 19]].concat();
+        let cases: [(&[u8], &str); 4] = [
+            (&[0x01], "breez_1"),
+            (&[0x00, 0xff], "breez_ff"),
+            (
+                &[0x3f, 0x0f, 0x74, 0x90, 0x07, 0xe2, 0x4b],
+                "breez_3f0f749007e24b",
+            ),
+            (
+                &max_serial,
+                "breez_7fffffffffffffffffffffffffffffffffffffff",
+            ),
+        ];
+        for (serial, expected) in cases {
+            assert_eq!(affiliate_id_from_serial(serial).as_deref(), Some(expected));
+        }
+    }
+
+    #[test_all]
+    fn affiliate_id_is_none_for_a_serial_of_zero_or_below() {
+        for serial in [&[][..], &[0x00], &[0x00, 0x00], &[0x80], &[0xff, 0x01]] {
+            assert_eq!(affiliate_id_from_serial(serial), None, "{serial:?}");
+        }
+    }
+
+    #[test_all]
+    fn affiliate_id_is_derived_from_the_api_key_certificate() {
+        assert_eq!(
+            partner_affiliate_id(TEST_CERT).as_deref(),
+            Some("breez_3f0f749007e24b")
+        );
+    }
+
+    #[test_all]
+    fn affiliate_id_is_none_for_an_undecodable_key() {
+        assert_eq!(partner_affiliate_id("not base64!"), None);
+        assert_eq!(partner_affiliate_id("aGVsbG8="), None);
     }
 }

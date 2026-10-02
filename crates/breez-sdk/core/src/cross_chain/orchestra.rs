@@ -41,6 +41,7 @@ use super::{
     CrossChainReceiveInfo, CrossChainReceivePrepared, CrossChainRouteFilter, CrossChainRouteLimits,
     CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
     derive_btc_leg_transfer_id,
+    orchestra_affiliates::Affiliates,
     orchestra_storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData},
     payment_with_conversion_info,
 };
@@ -82,7 +83,6 @@ fn delivery_method_from_wire(chain: &str) -> Option<DeliveryMethod> {
     }
 }
 
-const DEFAULT_AFFILIATE_ID: &str = "breez_sdk";
 // Polling cadence for the outbound Spark transfer leg.
 const SEND_POLL_INITIAL_DELAY_MS: u64 = 500;
 const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
@@ -185,6 +185,7 @@ impl EventListener for InboundPaymentListener {
 /// Flashnet Orchestra cross-chain provider.
 pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
+    affiliates: Affiliates,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
@@ -196,8 +197,10 @@ pub(crate) struct OrchestraService {
 }
 
 impl OrchestraService {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
+        partner_affiliate_id: Option<String>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
@@ -222,6 +225,7 @@ impl OrchestraService {
 
         let service = Self {
             client,
+            affiliates: Affiliates::new(partner_affiliate_id),
             spark_wallet,
             storage,
             fiat_service,
@@ -669,7 +673,7 @@ impl OrchestraService {
     /// Probes `/submit` with a fresh idempotency key. A 200 means Orchestra
     /// has the deposit and issues an order handle: the adapter persists it
     /// and this returns the updated `(row, data, order_id)` for immediate
-    /// status polling. Any error (including the `invalid_tx_hash` 400
+    /// status polling. Any error (including the `invalid_request` 400
     /// Orchestra returns before the deposit arrives) leaves the row
     /// non-terminal for the next tick.
     ///
@@ -706,9 +710,9 @@ impl OrchestraService {
                 // transport failure) is surfaced so a persistent outage or a
                 // bad key doesn't read as a quote waiting on its deposit.
                 if is_expected_no_deposit_error(&e) {
-                    debug!("Orchestra receive {quote_id}: no deposit yet: {e}");
+                    debug!("Orchestra receive {quote_id}: no deposit yet: {e:?}");
                 } else {
-                    warn!("Orchestra receive {quote_id}: submit error: {e}");
+                    warn!("Orchestra receive {quote_id}: submit error: {e:?}");
                 }
                 Ok(None)
             }
@@ -805,6 +809,30 @@ impl OrchestraService {
             _ => {}
         }
         Ok(())
+    }
+
+    /// `/quote` with the current affiliate ids in place of `request`'s.
+    async fn quote(&self, request: &QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
+        self.affiliates
+            .run(|affiliate_ids| {
+                self.client.quote(QuoteRequest {
+                    affiliate_ids,
+                    ..request.clone()
+                })
+            })
+            .await
+    }
+
+    /// `/estimate` with the current affiliate ids in place of `request`'s.
+    async fn estimate(&self, request: &EstimateRequest) -> Result<EstimateResponse, FlashnetError> {
+        self.affiliates
+            .run(|affiliate_ids| {
+                self.client.estimate(EstimateRequest {
+                    affiliate_ids,
+                    ..request.clone()
+                })
+            })
+            .await
     }
 
     /// Resolves the Orchestra-side `source_asset` wire symbol (e.g. `"BTC"`,
@@ -905,7 +933,7 @@ impl OrchestraService {
             destination_asset: destination_asset.to_string(),
             amount: source_amount.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
-            affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
+            affiliate_ids: Vec::new(),
         };
         debug!(
             "Orchestra: estimating delivery ratio: {}/{} -> {}/{} source={}",
@@ -915,7 +943,7 @@ impl OrchestraService {
             request.destination_asset,
             request.amount
         );
-        let estimate: EstimateResponse = self.client.estimate(request).await?;
+        let estimate: EstimateResponse = self.estimate(&request).await?;
         debug!("Orchestra: estimate response: {:?}", estimate);
         let delivered = parse_amount(&estimate.estimated_out, "estimatedOut")?;
         let effective_delivered = if apply_rounding_margin {
@@ -980,8 +1008,7 @@ impl OrchestraService {
             sized.target
         );
         let retry = self
-            .client
-            .quote(QuoteRequest {
+            .quote(&QuoteRequest {
                 amount: retry_in.to_string(),
                 ..request
             })
@@ -1172,11 +1199,12 @@ fn pad_required_in(scaled: u128, reported_pad: u128) -> (u128, u128) {
 /// provider or configuration issue worth logging louder, not a quote still
 /// waiting on its deposit.
 fn is_expected_no_deposit_error(err: &FlashnetError) -> bool {
-    matches!(
-        err,
+    let code = match err {
         FlashnetError::Network { code: Some(c), .. }
-            if *c < 500 && !matches!(*c, 401 | 403 | 429)
-    )
+        | FlashnetError::InvalidRequest { code: c, .. } => *c,
+        _ => return false,
+    };
+    code < 500 && !matches!(code, 401 | 403 | 429)
 }
 
 /// Errors if `quoted_amount_in` differs from `requested_source_amount` by
@@ -1510,7 +1538,7 @@ impl CrossChainService for OrchestraService {
             slippage_bps: Some(max_slippage_bps),
             zeroconf_enabled: None,
             app_fees: Vec::new(),
-            affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
+            affiliate_ids: Vec::new(),
         };
 
         debug!(
@@ -1522,8 +1550,7 @@ impl CrossChainService for OrchestraService {
             request.amount
         );
         let quote: QuoteResponse = self
-            .client
-            .quote(request)
+            .quote(&request)
             .await
             .map_err(|e| with_limits(SdkError::from(e)))?;
         debug!("Orchestra: quote response: {:?}", quote);
@@ -1703,7 +1730,7 @@ impl CrossChainService for OrchestraService {
             slippage_bps: Some(max_slippage_bps),
             zeroconf_enabled: None,
             app_fees: Vec::new(),
-            affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
+            affiliate_ids: Vec::new(),
         };
 
         debug!(
@@ -1715,8 +1742,7 @@ impl CrossChainService for OrchestraService {
             request.amount
         );
         let quote: QuoteResponse = self
-            .client
-            .quote(request.clone())
+            .quote(&request)
             .await
             .map_err(|e| attach_route_limits(SdkError::from(e), route, destination))?;
         debug!("Orchestra: receive quote response: {:?}", quote);
@@ -3919,6 +3945,12 @@ mod tests {
                 "{code} should read as no deposit yet"
             );
         }
+        assert!(is_expected_no_deposit_error(
+            &FlashnetError::InvalidRequest {
+                reason: "No deposit found".to_string(),
+                code: 400,
+            }
+        ));
         // A rejected key or read token is not a quote waiting on its deposit,
         // and must not log at debug as one.
         for code in [401, 403, 429, 500, 503] {
