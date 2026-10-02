@@ -89,9 +89,9 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
 /// Grace period to keep probing a receive quote before giving up.
 const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
-/// How often a receive row may hit `/submit`, once it is off the every-tick
-/// cadence: an expired quote probing for a late deposit (Orchestra reprices
-/// those), and a funded row re-acquiring a rejected read token.
+/// How often a receive row is checked once it is off the every-tick cadence:
+/// an expired quote looking for a late deposit (Orchestra reprices those), and
+/// a funded row re-acquiring a rejected read token through `/submit`.
 const RECEIVE_EXPIRED_PROBE_SECS: u64 = 10 * 60;
 
 /// One-cent margin (in 6-decimal USDB base units) covering Orchestra's
@@ -155,9 +155,10 @@ struct ResolvedSparkAsset {
 
 /// Wakes the monitor when a payment comes in while a cross-chain receive is
 /// open, so its conversion info is attached right away instead of on the
-/// next timed pass.
+/// next timed pass. The wake carries the Spark invoice the payment
+/// fulfilled, if any.
 struct InboundPaymentListener {
-    monitor_trigger: broadcast::Sender<()>,
+    monitor_trigger: broadcast::Sender<Option<String>>,
     has_active_receives: Arc<AtomicBool>,
 }
 
@@ -178,7 +179,24 @@ impl EventListener for InboundPaymentListener {
             "Orchestra: inbound payment {} while a receive is open, waking the monitor",
             payment.id
         );
-        let _ = self.monitor_trigger.send(());
+        let _ = self.monitor_trigger.send(fulfilled_invoice(payment));
+    }
+}
+
+/// The Spark invoice an inbound payment fulfilled, if any.
+fn fulfilled_invoice(payment: &Payment) -> Option<String> {
+    match &payment.details {
+        Some(
+            PaymentDetails::Spark {
+                invoice_details: Some(details),
+                ..
+            }
+            | PaymentDetails::Token {
+                invoice_details: Some(details),
+                ..
+            },
+        ) => Some(details.invoice.clone()),
+        _ => None,
     }
 }
 
@@ -189,7 +207,9 @@ pub(crate) struct OrchestraService {
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
     event_emitter: Arc<EventEmitter>,
-    monitor_trigger: broadcast::Sender<()>,
+    /// Wakes the monitor, carrying the Spark invoice of the inbound payment
+    /// that woke it, if any.
+    monitor_trigger: broadcast::Sender<Option<String>>,
     /// Whether any receive row is still open. Refreshed by every monitor
     /// pass, set when a receive is prepared.
     has_active_receives: Arc<AtomicBool>,
@@ -235,13 +255,13 @@ impl OrchestraService {
     }
 
     fn trigger_monitor(&self) {
-        let _ = self.monitor_trigger.send(());
+        let _ = self.monitor_trigger.send(None);
     }
 
     fn spawn_monitor(
         &self,
         mut shutdown_receiver: watch::Receiver<()>,
-        monitor_trigger: &broadcast::Sender<()>,
+        monitor_trigger: &broadcast::Sender<Option<String>>,
     ) {
         let storage = Arc::clone(&self.storage);
         let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
@@ -260,6 +280,8 @@ impl OrchestraService {
                 // `SyncedStorage` and replicates a bump to every device. A
                 // restart costs one extra probe per expired row.
                 let mut probe_clock: HashMap<String, u64> = HashMap::new();
+                // Spark invoice of the inbound payment that woke this pass.
+                let mut paid_invoice: Option<String> = None;
                 loop {
                     if let Err(e) =
                         Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
@@ -276,6 +298,7 @@ impl OrchestraService {
                         &event_emitter,
                         &has_active_receives,
                         &mut probe_clock,
+                        paid_invoice.take().as_deref(),
                     )
                     .await
                     {
@@ -287,8 +310,9 @@ impl OrchestraService {
                             info!("Orchestra monitor shutdown signal received");
                             return;
                         }
-                        _ = trigger_receiver.recv() => {
+                        wake = trigger_receiver.recv() => {
                             debug!("Orchestra monitor triggered");
+                            paid_invoice = wake.ok().flatten();
                         }
                         () = tokio::time::sleep(super::MONITOR_INTERVAL) => {}
                     }
@@ -344,7 +368,7 @@ impl OrchestraService {
                     "Orchestra: recovered order {} for payment {}",
                     response.order_id, payment.id
                 );
-                Some((response.order_id, response.read_token))
+                Some((response.order_id, response.read_token.map(|t| t.0)))
             }
             Err(e) => {
                 debug!(
@@ -576,6 +600,10 @@ impl OrchestraService {
     /// Each row is resolved to an order handle by
     /// [`Self::ensure_receive_order_handle`], then polled by
     /// [`Self::poll_receive_order_status`].
+    ///
+    /// `paid_invoice` is the Spark invoice of the inbound payment that woke
+    /// the pass. When it belongs to an open row, the pass checks only that
+    /// row, whatever its probe clock says.
     #[allow(clippy::too_many_arguments)]
     async fn poll_in_flight_receives(
         storage: &Arc<dyn Storage>,
@@ -586,6 +614,7 @@ impl OrchestraService {
         event_emitter: &EventEmitter,
         has_active_receives: &AtomicBool,
         probe_clock: &mut HashMap<String, u64>,
+        paid_invoice: Option<&str>,
     ) -> Result<(), SdkError> {
         let active = swap_storage.list_active().await?;
         debug!(
@@ -594,7 +623,11 @@ impl OrchestraService {
         );
         has_active_receives.store(!active.is_empty(), Ordering::Relaxed);
         prune_probe_clock(probe_clock, &active);
+        let (mut active, invoice_paid) = select_receive_rows(active, paid_invoice);
+        let now = now_secs();
+        active.sort_by_key(|(_, data)| receive_poll_priority(data, probe_clock, now));
 
+        let mut submits_throttled = false;
         for (row, data) in active {
             let quote_id = data.quote_id.clone();
             // Long-stop for unfunded quotes
@@ -610,9 +643,16 @@ impl OrchestraService {
                 continue;
             }
 
-            let Some((row, data, order_id)) =
-                Self::ensure_receive_order_handle(swap_storage, client, row, data, probe_clock)
-                    .await
+            let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
+                swap_storage,
+                client,
+                row,
+                data,
+                probe_clock,
+                invoice_paid,
+                &mut submits_throttled,
+            )
+            .await
             else {
                 continue;
             };
@@ -626,7 +666,9 @@ impl OrchestraService {
                 row,
                 data,
                 &order_id,
+                status,
                 probe_clock,
+                &mut submits_throttled,
             )
             .await
             {
@@ -638,29 +680,145 @@ impl OrchestraService {
     }
 
     /// Resolves a row to the `(row, data, order_id)` triple `/status` needs,
-    /// probing `/submit` first for a row without an order handle. `None` means
-    /// there is nothing to poll this tick.
+    /// with the status the lookup fetched when it found the order. A row
+    /// without an order handle is looked up by quote id when it holds the
+    /// quote's read token, and probed through `/submit` otherwise. `None`
+    /// means there is nothing to poll this tick.
+    ///
+    /// `invoice_paid` marks a row whose invoice an inbound payment just
+    /// fulfilled. It is checked even when the probe clock would hold it off.
+    /// `submits_throttled` is set once `/submit` answers 429, and holds off
+    /// further submits for the rest of the pass.
     async fn ensure_receive_order_handle(
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         probe_clock: &mut HashMap<String, u64>,
-    ) -> Option<(crate::StoredCrossChainSwap, OrchestraSwapData, String)> {
+        invoice_paid: bool,
+        submits_throttled: &mut bool,
+    ) -> Option<(ReceiveOrderHandle, Option<StatusResponse>)> {
         if let Some(order_id) = data.order_id.clone() {
-            return Some((row, data, order_id));
+            return Some(((row, data, order_id), None));
         }
         let quote_id = data.quote_id.clone();
-        // A live quote is probed every tick. Past expiry it drops to the
+        // A live quote is checked every tick. Past expiry it drops to the
         // slower clock.
-        if is_past_quote_expiry(&data) && !is_probe_due(probe_clock, &quote_id) {
+        if is_past_quote_expiry(&data) && !is_probe_due(probe_clock, &quote_id) && !invoice_paid {
             return None;
         }
-        record_probe(probe_clock, &quote_id);
-        match Self::submit_receive_probe(swap_storage, client, row, data).await {
-            Ok(handle) => handle,
+        let (row, data) = match data.read_token.clone() {
+            Some(read_token) => {
+                match Self::quote_status_probe(swap_storage, client, row, data, &read_token).await {
+                    Ok(QuoteStatusProbe::Ordered(handle, status)) => {
+                        record_probe(probe_clock, &quote_id);
+                        return Some((handle, Some(*status)));
+                    }
+                    Ok(QuoteStatusProbe::NotYet) => {
+                        record_probe(probe_clock, &quote_id);
+                        return None;
+                    }
+                    // With submits throttled the fallback cannot run, so the
+                    // check counts as made rather than repeating every tick.
+                    Ok(QuoteStatusProbe::TokenRejected(..)) if *submits_throttled => {
+                        record_probe(probe_clock, &quote_id);
+                        return None;
+                    }
+                    Ok(QuoteStatusProbe::TokenRejected(row, data)) => (row, data),
+                    Err(e) => {
+                        record_probe(probe_clock, &quote_id);
+                        error!("Orchestra receive {quote_id}: deposit check failed: {e:?}");
+                        return None;
+                    }
+                }
+            }
+            None => (row, data),
+        };
+        Self::submit_probe_unless_throttled(
+            swap_storage,
+            client,
+            row,
+            data,
+            probe_clock,
+            submits_throttled,
+        )
+        .await
+        .map(|handle| (handle, None))
+    }
+
+    /// Looks the quote up on `/status?quoteId=` with the read token `/quote`
+    /// issued. An order in the response means Orchestra has the deposit: the
+    /// adapter persists its id, and the handle is returned with the status.
+    async fn quote_status_probe(
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+        read_token: &str,
+    ) -> Result<QuoteStatusProbe, SdkError> {
+        let quote_id = data.quote_id.clone();
+        match client.status_by_quote_id(&quote_id, read_token).await {
+            Ok(resp) => {
+                info!(
+                    "Orchestra receive {quote_id}: detected deposit, orderId={}",
+                    resp.order.id
+                );
+                let order_id = resp.order.id.clone();
+                let token = Some(read_token.to_string());
+                let (row, data) = swap_storage
+                    .attach_order_handle(row, data, order_id.clone(), token)
+                    .await?;
+                Ok(QuoteStatusProbe::Ordered(
+                    (row, data, order_id),
+                    Box::new(resp),
+                ))
+            }
+            Err(e) if is_invalid_read_token(&e) => {
+                info!("Orchestra receive {quote_id}: quote read token rejected");
+                Ok(QuoteStatusProbe::TokenRejected(row, data))
+            }
             Err(e) => {
-                error!("Orchestra receive {quote_id}: deposit check failed: {e:?}");
+                if is_quote_not_ordered_error(&e) {
+                    debug!("Orchestra receive {quote_id}: no deposit yet: {e}");
+                } else {
+                    warn!("Orchestra receive {quote_id}: quote status error: {e}");
+                }
+                Ok(QuoteStatusProbe::NotYet)
+            }
+        }
+    }
+
+    /// Probes `/submit` for a row unless an earlier probe this pass was
+    /// throttled. A throttled probe is not recorded on the probe clock, so the
+    /// row stays due.
+    async fn submit_probe_unless_throttled(
+        swap_storage: &OrchestraStorageAdapter,
+        client: &Arc<OrchestraClient>,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+        probe_clock: &mut HashMap<String, u64>,
+        submits_throttled: &mut bool,
+    ) -> Option<ReceiveOrderHandle> {
+        if *submits_throttled {
+            return None;
+        }
+        let quote_id = data.quote_id.clone();
+        match Self::submit_receive_probe(swap_storage, client, row, data).await {
+            Ok(SubmitProbe::Funded(handle)) => {
+                record_probe(probe_clock, &quote_id);
+                Some(*handle)
+            }
+            Ok(SubmitProbe::NotYet) => {
+                record_probe(probe_clock, &quote_id);
+                None
+            }
+            Ok(SubmitProbe::Throttled) => {
+                *submits_throttled = true;
+                None
+            }
+            Err(e) => {
+                record_probe(probe_clock, &quote_id);
+                error!("Orchestra receive {quote_id}: submit probe failed: {e:?}");
                 None
             }
         }
@@ -668,10 +826,11 @@ impl OrchestraService {
 
     /// Probes `/submit` with a fresh idempotency key. A 200 means Orchestra
     /// has the deposit and issues an order handle: the adapter persists it
-    /// and this returns the updated `(row, data, order_id)` for immediate
-    /// status polling. Any error (including the `invalid_tx_hash` 400
-    /// Orchestra returns before the deposit arrives) leaves the row
-    /// non-terminal for the next tick.
+    /// and this returns [`SubmitProbe::Funded`] with the updated row. A 429
+    /// is [`SubmitProbe::Throttled`]. Any other error (including the
+    /// `invalid_tx_hash` 400 Orchestra returns before the deposit arrives) is
+    /// [`SubmitProbe::NotYet`], leaving the row non-terminal for the next
+    /// tick.
     ///
     /// `/submit` is idempotent, so this also serves as the recovery path for
     /// a read token `/status` has rejected: the same order id comes back with
@@ -681,7 +840,7 @@ impl OrchestraService {
         client: &Arc<OrchestraClient>,
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
-    ) -> Result<Option<(crate::StoredCrossChainSwap, OrchestraSwapData, String)>, SdkError> {
+    ) -> Result<SubmitProbe, SdkError> {
         let quote_id = data.quote_id.clone();
         let request = flashnet::orchestra::SubmitRequest {
             quote_id: quote_id.clone(),
@@ -697,9 +856,9 @@ impl OrchestraService {
                 );
                 let order_id = resp.order_id.clone();
                 let (row, data) = swap_storage
-                    .attach_order_handle(row, data, resp.order_id, resp.read_token)
+                    .attach_order_handle(row, data, resp.order_id, resp.read_token.map(|t| t.0))
                     .await?;
-                Ok(Some((row, data, order_id)))
+                Ok(SubmitProbe::Funded(Box::new((row, data, order_id))))
             }
             Err(e) => {
                 // Everything else (rejected credentials, throttling, 5xx,
@@ -710,14 +869,19 @@ impl OrchestraService {
                 } else {
                     warn!("Orchestra receive {quote_id}: submit error: {e}");
                 }
-                Ok(None)
+                if is_rate_limited(&e) {
+                    Ok(SubmitProbe::Throttled)
+                } else {
+                    Ok(SubmitProbe::NotYet)
+                }
             }
         }
     }
 
-    /// Polls `/status` for an in-flight order. On `Completed` attaches
-    /// metadata to the inbound Spark Payment (caching it if the row is not
-    /// visible yet). On `Failed` / `Refunded` closes the row with no
+    /// Polls `/status` for an in-flight order, or reads `prefetched` when the
+    /// lookup that found the order already fetched it. On `Completed`
+    /// attaches metadata to the inbound Spark Payment (caching it if the row
+    /// is not visible yet). On `Failed` / `Refunded` closes the row with no
     /// metadata.
     #[allow(clippy::too_many_arguments)]
     async fn poll_receive_order_status(
@@ -730,12 +894,15 @@ impl OrchestraService {
         row: crate::StoredCrossChainSwap,
         data: OrchestraSwapData,
         order_id: &str,
+        prefetched: Option<StatusResponse>,
         probe_clock: &mut HashMap<String, u64>,
+        submits_throttled: &mut bool,
     ) -> Result<(), SdkError> {
         let quote_id = data.quote_id.clone();
-        let status = client
-            .status_by_id(order_id, data.read_token.as_deref())
-            .await;
+        let status = match prefetched {
+            Some(resp) => Ok(resp),
+            None => fetch_receive_status(client, &data, order_id).await,
+        };
         let resp = match status {
             Ok(resp) => resp,
             Err(e) => {
@@ -750,8 +917,15 @@ impl OrchestraService {
                     info!(
                         "Orchestra receive {quote_id}: read token rejected, re-acquiring via submit"
                     );
-                    record_probe(probe_clock, &quote_id);
-                    Self::submit_receive_probe(swap_storage, client, row, data).await?;
+                    Self::submit_probe_unless_throttled(
+                        swap_storage,
+                        client,
+                        row,
+                        data,
+                        probe_clock,
+                        submits_throttled,
+                    )
+                    .await;
                 }
                 return Ok(());
             }
@@ -1176,6 +1350,105 @@ fn is_expected_no_deposit_error(err: &FlashnetError) -> bool {
         err,
         FlashnetError::Network { code: Some(c), .. }
             if *c < 500 && !matches!(*c, 401 | 403 | 429)
+    )
+}
+
+/// Reads `/status` for a funded receive row. A token from `/quote` only
+/// answers by quote id and one from `/submit` only by order id, so a 403 by
+/// quote id is retried by order id before the token counts as rejected.
+async fn fetch_receive_status(
+    client: &OrchestraClient,
+    data: &OrchestraSwapData,
+    order_id: &str,
+) -> Result<StatusResponse, FlashnetError> {
+    let Some(token) = data.read_token.as_deref() else {
+        return client.status_by_id(order_id, None).await;
+    };
+    match client.status_by_quote_id(&data.quote_id, token).await {
+        Err(e) if is_invalid_read_token(&e) => client.status_by_id(order_id, Some(token)).await,
+        result => result,
+    }
+}
+
+/// Whether Orchestra refused a request for exceeding the client's rate limit.
+fn is_rate_limited(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network {
+            code: Some(429),
+            ..
+        }
+    )
+}
+
+/// Whether a `/status?quoteId=` error is the 404 "Order not found" Orchestra
+/// answers for a quote whose deposit it has not picked up. Any other 404 is a
+/// misrouted request, not a quote waiting on its deposit.
+fn is_quote_not_ordered_error(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network { code: Some(404), reason }
+            if reason.to_ascii_lowercase().contains("order not found")
+    )
+}
+
+/// The `(row, data, order_id)` a funded receive row is polled with.
+type ReceiveOrderHandle = (crate::StoredCrossChainSwap, OrchestraSwapData, String);
+
+/// Outcome of looking a receive quote up on `/status?quoteId=`.
+enum QuoteStatusProbe {
+    /// Orchestra has the deposit. The order handle is persisted, and the
+    /// status that found it is kept.
+    Ordered(ReceiveOrderHandle, Box<StatusResponse>),
+    /// No order behind the quote yet, or a transient failure.
+    NotYet,
+    /// The quote's read token was refused. The row is returned unchanged.
+    TokenRejected(crate::StoredCrossChainSwap, OrchestraSwapData),
+}
+
+/// Outcome of a receive-side `/submit` probe.
+enum SubmitProbe {
+    /// Orchestra has the deposit. The order handle is persisted.
+    Funded(Box<ReceiveOrderHandle>),
+    /// No deposit yet, or a failure other than throttling.
+    NotYet,
+    /// Orchestra answered 429.
+    Throttled,
+}
+
+/// The receive rows a pass polls, and whether they are there because an
+/// inbound payment fulfilled their invoice. A `paid_invoice` that belongs to
+/// an open row narrows the pass to that row. Otherwise every row is polled.
+fn select_receive_rows(
+    active: Vec<(crate::StoredCrossChainSwap, OrchestraSwapData)>,
+    paid_invoice: Option<&str>,
+) -> (Vec<(crate::StoredCrossChainSwap, OrchestraSwapData)>, bool) {
+    let Some(invoice) = paid_invoice else {
+        return (active, false);
+    };
+    let (paid, unpaid): (Vec<_>, Vec<_>) = active
+        .into_iter()
+        .partition(|(_, data)| data.spark_invoice.as_deref() == Some(invoice));
+    if paid.is_empty() {
+        (unpaid, false)
+    } else {
+        (paid, true)
+    }
+}
+
+/// Order in which a pass visits receive rows, lowest first: live quotes,
+/// then rows never checked by this process, then the longest since their last
+/// check, with ties going to the newest quote. Under a `/submit` limit the
+/// rows a pass could not reach move to the front of the next one.
+fn receive_poll_priority(
+    data: &OrchestraSwapData,
+    probe_clock: &HashMap<String, u64>,
+    now: u64,
+) -> (bool, Option<u64>, std::cmp::Reverse<u64>) {
+    (
+        now >= data.expires_at,
+        probe_clock.get(&data.quote_id).copied(),
+        std::cmp::Reverse(data.expires_at),
     )
 }
 
@@ -1754,7 +2027,7 @@ impl CrossChainService for OrchestraService {
         let data = OrchestraSwapData {
             quote_id: quote.quote_id.clone(),
             order_id: None,
-            read_token: None,
+            read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
             recipient_address: recipient_address.to_string(),
             spark_invoice: Some(spark_invoice),
             source_chain: route.chain.clone(),
@@ -1878,7 +2151,7 @@ impl CrossChainService for OrchestraService {
             Ok(response) => (
                 ConversionStatus::Pending,
                 response.order_id.clone(),
-                response.read_token.clone(),
+                response.read_token.clone().map(|t| t.0),
             ),
             Err(_) => {
                 // Orchestra detects the deposit on the address, so the order
@@ -2424,7 +2697,7 @@ async fn build_orchestra_receive_conversion_info(
 }
 
 /// Whether a pre-order receive row is past the grace window past
-/// `expires_at`, at which point the poller stops probing `/submit` for it.
+/// `expires_at`, at which point the poller stops checking it for a deposit.
 fn is_past_receive_grace(data: &OrchestraSwapData) -> bool {
     now_secs() >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
 }
@@ -2435,7 +2708,7 @@ fn is_past_quote_expiry(data: &OrchestraSwapData) -> bool {
     now_secs() >= data.expires_at
 }
 
-/// Whether `quote_id` is due another `/submit`, at most one per
+/// Whether `quote_id` is due another deposit check, at most one per
 /// [`RECEIVE_EXPIRED_PROBE_SECS`] window. A quote the clock has never seen
 /// (a fresh row, or the first pass after a restart) is due immediately.
 fn is_probe_due(probe_clock: &HashMap<String, u64>, quote_id: &str) -> bool {
@@ -3958,6 +4231,68 @@ mod tests {
     }
 
     #[test_all]
+    fn a_pass_visits_live_then_least_recently_checked_rows() {
+        let now = 10_000;
+        let row = |quote_id: &str, expires_at: u64| {
+            let mut data = receive_swap_data();
+            data.quote_id = quote_id.to_string();
+            data.expires_at = expires_at;
+            data
+        };
+        let rows = [
+            row("q_checked_long_ago", 1_000),
+            row("q_checked_recently", 2_000),
+            row("q_live", now + 60),
+            row("q_unchecked_old", 3_000),
+            row("q_unchecked_new", 4_000),
+        ];
+        let mut probe_clock = HashMap::new();
+        probe_clock.insert("q_checked_long_ago".to_string(), 5_000);
+        probe_clock.insert("q_checked_recently".to_string(), 9_000);
+        probe_clock.insert("q_live".to_string(), 9_990);
+
+        let mut ordered: Vec<_> = rows.iter().collect();
+        ordered.sort_by_key(|data| receive_poll_priority(data, &probe_clock, now));
+        let ids: Vec<_> = ordered.iter().map(|d| d.quote_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "q_live",
+                "q_unchecked_new",
+                "q_unchecked_old",
+                "q_checked_long_ago",
+                "q_checked_recently",
+            ]
+        );
+    }
+
+    #[test_all]
+    fn only_order_not_found_reads_as_a_quote_without_a_deposit() {
+        let err = |reason: &str, code| FlashnetError::Network {
+            reason: reason.to_string(),
+            code: Some(code),
+        };
+        assert!(is_quote_not_ordered_error(&err("Order not found", 404)));
+        // A 404 for anything else is a misrouted request, not a missing deposit.
+        assert!(!is_quote_not_ordered_error(&err("Not Found", 404)));
+        assert!(!is_quote_not_ordered_error(&err("Order not found", 400)));
+    }
+
+    #[test_all]
+    fn only_a_429_reads_as_throttling() {
+        assert!(is_rate_limited(&FlashnetError::Network {
+            reason: "Too many requests from this client".to_string(),
+            code: Some(429),
+        }));
+        for code in [400, 403, 500] {
+            assert!(!is_rate_limited(&FlashnetError::Network {
+                reason: "other".to_string(),
+                code: Some(code),
+            }));
+        }
+    }
+
+    #[test_all]
     fn a_probe_clock_entry_dies_with_its_row() {
         let mut probe_clock = HashMap::new();
         record_probe(&mut probe_clock, "q_live");
@@ -4702,7 +5037,9 @@ mod tests {
         assert!(!needs_refund_address_to_receive("base"));
     }
 
-    fn inbound_listener(active: bool) -> (InboundPaymentListener, broadcast::Receiver<()>) {
+    fn inbound_listener(
+        active: bool,
+    ) -> (InboundPaymentListener, broadcast::Receiver<Option<String>>) {
         let (trigger, receiver) = broadcast::channel(4);
         let listener = InboundPaymentListener {
             monitor_trigger: trigger,
@@ -4735,6 +5072,59 @@ mod tests {
             .await;
 
         assert!(receiver.try_recv().is_ok());
+    }
+
+    #[async_test_all]
+    async fn inbound_payment_wakes_the_monitor_for_the_invoice_it_fulfilled() {
+        let (listener, mut receiver) = inbound_listener(true);
+        let mut payment = inbound_spark_payment();
+        payment.details = Some(PaymentDetails::Spark {
+            invoice_details: Some(crate::SparkInvoicePaymentDetails {
+                description: None,
+                invoice: "spark1paid".to_string(),
+            }),
+            htlc_details: None,
+            conversion_info: None,
+        });
+
+        listener
+            .on_event(SdkEvent::PaymentPending { payment })
+            .await;
+
+        assert_eq!(receiver.try_recv().unwrap().as_deref(), Some("spark1paid"));
+    }
+
+    #[test_all]
+    fn a_paid_invoice_narrows_the_pass_to_its_row() {
+        let row = |quote_id: &str, invoice: Option<&str>| {
+            let mut data = receive_swap_data();
+            data.quote_id = quote_id.to_string();
+            data.spark_invoice = invoice.map(str::to_string);
+            (stored_receive_row(&data), data)
+        };
+        let active = || {
+            vec![
+                row("q_paid", Some("spark1paid")),
+                row("q_other", Some("spark1other")),
+                row("q_legacy", None),
+            ]
+        };
+        let ids = |rows: &[(crate::StoredCrossChainSwap, OrchestraSwapData)]| {
+            rows.iter()
+                .map(|(_, d)| d.quote_id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let (rows, invoice_paid) = select_receive_rows(active(), Some("spark1paid"));
+        assert_eq!(ids(&rows), ["q_paid"]);
+        assert!(invoice_paid);
+
+        // An invoice no open row carries, or no invoice at all, polls every row.
+        for paid_invoice in [Some("spark1unknown"), None] {
+            let (rows, invoice_paid) = select_receive_rows(active(), paid_invoice);
+            assert_eq!(ids(&rows), ["q_paid", "q_other", "q_legacy"]);
+            assert!(!invoice_paid);
+        }
     }
 
     #[async_test_all]

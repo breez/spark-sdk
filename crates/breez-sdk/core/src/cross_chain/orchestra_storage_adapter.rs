@@ -22,14 +22,14 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 /// Persisted shape of an Orchestra row's `data`. The receive poller drives
 /// the row through two states:
 ///
-/// * **Pre-order** (`order_id` / `read_token` absent): probe `POST /submit`
-///   with a fresh idempotency key, every tick while the quote is live and on
-///   the poller's slower in-memory clock once it expires. Any error means "no
-///   deposit yet". A 200 returns `{ orderId, readToken }` and the adapter
-///   writes both.
-/// * **Order in flight** (`order_id` / `read_token` set): poll
-///   `GET /status?id={orderId}&readToken={token}` until terminal. `/submit`
-///   is idempotent, so a rejected read token is refreshed by probing again.
+/// * **Pre-order** (`order_id` absent): look the quote up on
+///   `GET /status?quoteId=` with `read_token`. Orchestra picks the deposit up
+///   on its own, and an order in the response gives `order_id`. A row without
+///   a usable token probes `POST /submit` instead, whose 200 returns
+///   `{ orderId, readToken }` for the adapter to write.
+/// * **Order in flight** (`order_id` set): poll `/status` until terminal, by
+///   quote id, or by order id when the token is one `/submit` issued.
+///   `/submit` is idempotent, so a rejected token is replaced by probing it.
 ///
 /// Live status / `sparkTxHash` / `amountOut` / refund tx are always read
 /// off the poll response, never cached here.
@@ -37,11 +37,14 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OrchestraSwapData {
     pub quote_id: String,
-    /// Orchestra order id. Populated on the first `/submit` 200, then stable.
+    /// Orchestra order id. Populated once `/status?quoteId=` or `/submit`
+    /// returns the order, then stable.
     #[serde(default)]
     pub order_id: Option<String>,
-    /// `X-Read-Token` for `/status` calls. Born together with `order_id` on
-    /// the same `/submit` 200.
+    /// `X-Read-Token` for `/status`. Issued by `/quote`, which binds it to the
+    /// quote id for 24h from quote creation, or by `/submit`, which binds it
+    /// to `order_id`. Absent on a row written before quote tokens were stored
+    /// until `/submit` returns its order.
     #[serde(default)]
     pub read_token: Option<String>,
     /// Wallet's Spark address (the receive destination).
@@ -161,9 +164,9 @@ impl OrchestraStorageAdapter {
     }
 
     /// Pre-order to in-flight transition: persist `order_id` and
-    /// `read_token` from the first successful `/submit`, returning the
-    /// updated `(row, data)` so the caller can poll `/status` in the same
-    /// tick. `data` is stable after this until `mark_terminal`.
+    /// `read_token` once Orchestra reports the order, returning the updated
+    /// `(row, data)` so the caller can poll `/status` in the same tick.
+    /// `data` is stable after this until `mark_terminal`.
     pub(crate) async fn attach_order_handle(
         &self,
         mut row: StoredCrossChainSwap,
@@ -175,7 +178,7 @@ impl OrchestraStorageAdapter {
         data.read_token = read_token;
         row.data = serde_json::to_string(&data).map_err(|e| {
             SdkError::Generic(format!(
-                "Failed to serialize Orchestra row after submit response: {e}"
+                "Failed to serialize Orchestra row with its order handle: {e}"
             ))
         })?;
         row.updated_at = now_secs();

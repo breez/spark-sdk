@@ -239,6 +239,28 @@ impl OrchestraClient {
         .await
     }
 
+    /// Look up the order behind a quote, by the quote's id.
+    ///
+    /// `read_token` is the one `/quote` returned.
+    pub async fn status_by_quote_id(
+        &self,
+        quote_id: &str,
+        read_token: &str,
+    ) -> Result<StatusResponse, FlashnetError> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Query<'a> {
+            quote_id: &'a str,
+        }
+        self.get_with_read_token(
+            "v1/orchestration/status",
+            Some(Query { quote_id }),
+            true,
+            Some(read_token),
+        )
+        .await
+    }
+
     // -----------------------------------------------------------------------
     // internals
     // -----------------------------------------------------------------------
