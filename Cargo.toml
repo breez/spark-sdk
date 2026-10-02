@@ -27,7 +27,7 @@ debug = "line-tables-only" # Emit line tables so dsymutil can build dSYMs with
 [profile.release.package."*"]
 debug = false
 
-[profile.release.package.breez-sdk-bindings]
+[profile.release.package.breez-sdk-spark-bindings]
 debug = "line-tables-only"
 
 [profile.release.package.breez-sdk-spark]
