@@ -2,7 +2,7 @@
 ARG USER=so
 # A commit, not a branch, so the image does not change when a branch moves.
 # migrations.dockerfile must pin the same commit.
-ARG VERSION=42afde75a5197ea8ffffbd29d3a5f5425823f4c4
+ARG VERSION=b54845c68118197124c53eff5d0fa2db4338e3b5
 ARG REPOSITORY=https://github.com/breez/spark.git
 
 FROM debian:bookworm-20250721-slim AS downloader

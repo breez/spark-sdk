@@ -475,3 +475,61 @@ fn match_input(tx: &Value, target_txid: &str, vout: u32) -> Option<u32> {
     }
     None
 }
+
+/// A chain service that stops serving raw transactions while switched off, as
+/// a chain API does when it is down or rate-limiting. Everything else passes
+/// through to `inner`.
+pub struct TxLookupOutage {
+    inner: std::sync::Arc<dyn BitcoinChainService>,
+    down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl TxLookupOutage {
+    /// Wraps `inner`, with the outage controlled by `down`.
+    pub fn new(
+        inner: std::sync::Arc<dyn BitcoinChainService>,
+        down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self { inner, down }
+    }
+}
+
+#[macros::async_trait]
+impl BitcoinChainService for TxLookupOutage {
+    async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.inner.get_address_utxos(address).await
+    }
+
+    async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.inner.get_address_txos(address).await
+    }
+
+    async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError> {
+        self.inner.get_transaction_status(txid).await
+    }
+
+    async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
+        if self.down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ChainServiceError::Generic(
+                "transaction lookups are down".to_string(),
+            ));
+        }
+        self.inner.get_transaction_hex(txid).await
+    }
+
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        self.inner.get_outspend(txid, vout).await
+    }
+
+    async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
+        self.inner.broadcast_transaction(tx).await
+    }
+
+    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
+        self.inner.recommended_fees().await
+    }
+
+    async fn tip_height(&self) -> Result<u32, ChainServiceError> {
+        self.inner.tip_height().await
+    }
+}

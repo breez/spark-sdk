@@ -182,6 +182,36 @@ pub async fn build_sdk_with_dir(
     seed_bytes: [u8; 32],
     temp_dir: Option<tempfile::TempDir>,
 ) -> Result<SdkInstance> {
+    build_sdk_with_dir_and_chain_service(storage_dir, seed_bytes, temp_dir, None).await
+}
+
+/// The chain service the SDK uses on regtest when none is set: the deployed
+/// regtest's mempool API, with the same credentials and overrides.
+pub async fn default_regtest_chain_service() -> Result<Arc<dyn BitcoinChainService>> {
+    let (username, password) = match (
+        std::env::var("CHAIN_SERVICE_USERNAME"),
+        std::env::var("CHAIN_SERVICE_PASSWORD"),
+    ) {
+        (Ok(username), Ok(password)) => (username, password),
+        _ => ("spark-sdk".to_string(), "mCMk1JqlBNtetUNy".to_string()),
+    };
+    Ok(new_rest_chain_service(
+        "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
+        Network::Regtest,
+        ChainApiType::MempoolSpace,
+        Some(Credentials { username, password }),
+        NewRestChainServiceRequest::default(),
+    )
+    .await?)
+}
+
+/// [`build_sdk_with_dir`] with `chain_service` in place of the SDK's default.
+pub async fn build_sdk_with_dir_and_chain_service(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
+    temp_dir: Option<tempfile::TempDir>,
+    chain_service: Option<Arc<dyn BitcoinChainService>>,
+) -> Result<SdkInstance> {
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -190,7 +220,10 @@ pub async fn build_sdk_with_dir(
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let builder = SdkBuilder::new(config, seed);
+    let mut builder = SdkBuilder::new(config, seed);
+    if let Some(chain_service) = chain_service {
+        builder = builder.with_chain_service(chain_service);
+    }
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 

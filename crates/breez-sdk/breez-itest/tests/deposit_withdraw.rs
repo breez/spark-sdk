@@ -120,7 +120,7 @@ async fn sync_until_new_deposit(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     loop {
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("the mempool deposit {txid} was never announced as a new deposit");
+            anyhow::bail!("the deposit {txid} was never announced as a new deposit");
         }
         if let Err(e) = sdk.sync_wallet(SyncWalletRequest {}).await {
             warn!("sync while waiting for the mempool deposit failed: {e}");
@@ -1678,6 +1678,64 @@ async fn test_zero_conf_deposit_discovered_without_auto_claim(
             .any(|d| d.txid == txid),
         "the deposit must stay listed for the app to claim itself"
     );
+
+    Ok(())
+}
+
+/// A deposit is announced and listed with its amount while the chain service
+/// cannot serve its transaction, and is claimed once it can again.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_deposit_listed_while_tx_lookups_are_down(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let env = env.await?;
+    let down = Arc::new(AtomicBool::new(true));
+    let outage = Arc::clone(&down);
+    let mut bob = env
+        .create_wallet_with_chain_service(move |chain| Arc::new(TxLookupOutage::new(chain, outage)))
+        .await?;
+
+    let addr = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+    let fund_amount = 25_000u64;
+    let txid = env.faucet()?.fund_address(&addr, fund_amount).await?;
+    info!("Funded {fund_amount} sats while tx lookups are down, txid {txid}");
+
+    let announced = sync_until_new_deposit(&bob.sdk, &mut bob.events, &txid, 180).await?;
+    assert_eq!(announced.amount_sats, fund_amount);
+
+    let listed = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits
+        .into_iter()
+        .find(|d| d.txid == txid)
+        .expect("the deposit should be listed while tx lookups are down");
+    assert_eq!(listed.amount_sats, fund_amount);
+
+    // Every claim path needs the transaction, so nothing was credited yet.
+    let balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    assert_eq!(balance, 0);
+
+    down.store(false, Ordering::SeqCst);
+    let balance = wait_for_balance(&bob.sdk, Some(1), None, 180).await?;
+    info!("Claimed once tx lookups recovered, balance {balance}");
 
     Ok(())
 }
