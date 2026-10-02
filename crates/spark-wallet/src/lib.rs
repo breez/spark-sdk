@@ -28,8 +28,9 @@ pub use spark::{
         StaticDepositAddress, TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction,
         TokenTransactionStatus, TokenTransferInput, TransferId, TransferObserver,
         TransferObserverError, TransferStatus, TransferTokenOutput, TransferType,
-        UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo, build_cpfp_child, compute_sweep_fee,
-        csv_timelock, p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
+        UnilateralExitPlan, UnilateralExitSelectedLeaf, UnilateralExitSkipReason,
+        UnilateralExitSkippedLeaf, Utxo, build_cpfp_child, compute_sweep_fee, csv_timelock,
+        p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{

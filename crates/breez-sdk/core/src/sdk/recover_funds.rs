@@ -23,7 +23,7 @@ use crate::{
     CooperativeRecoveryFailure, ExitLeafSelection, ExitTransactionStatus, Network,
     PrepareRecoverFundsRequest, PrepareRecoverFundsResponse, RecoverFundsLeaf, RecoverFundsRequest,
     RecoverFundsResponse, RecoveryMethod, RecoveryRedoReason, RecoveryTransaction, RecoveryTxKind,
-    RecoveryVerdict, SdkEvent,
+    RecoveryVerdict, SdkEvent, SkippedLeaf, SkippedLeafReason,
     chain::{BitcoinChainService, Outspend},
     error::SdkError,
     persist::{CachedWatchtowerExit, ObjectCacheRepository},
@@ -53,13 +53,15 @@ impl BreezSdk {
         let selection = self.split_selection(request.selection).await?;
 
         let mut leaves = Vec::new();
+        let mut skipped = selection.skipped;
         let mut cooperative_fee_sats = 0u64;
         for exit in selection.cooperative {
             let Some(recovery) = build_recovery(&exit.output()?, &destination, fee_rate) else {
-                debug!(
-                    leaf_id = exit.leaf_id,
-                    "prepare_recover_funds: too small to pay the fee"
-                );
+                skipped.push(SkippedLeaf {
+                    leaf_id: exit.leaf_id,
+                    value_sats: exit.value_sats,
+                    reason: SkippedLeafReason::FeeExceedsValue,
+                });
                 continue;
             };
             cooperative_fee_sats = cooperative_fee_sats
@@ -86,9 +88,11 @@ impl BreezSdk {
             None => UnilateralQuote::default(),
         };
         leaves.extend(unilateral.leaves);
+        skipped.extend(unilateral.skipped);
 
         let response = PrepareRecoverFundsResponse {
             leaves,
+            skipped,
             recoverable_value_sats: cooperative_value_sats
                 .saturating_add(unilateral.recoverable_value_sat),
             total_fee_sats: cooperative_fee_sats.saturating_add(unilateral.total_fee_sat),
@@ -234,6 +238,8 @@ struct CooperativeRecoveries {
 
 struct RecoverySelection {
     cooperative: Vec<CachedWatchtowerExit>,
+    /// Leaves only a cooperative recovery reaches, and that have none to quote.
+    skipped: Vec<SkippedLeaf>,
     unilateral: Option<spark_wallet::ExitLeafSelection>,
     /// Leaves that no unilateral exit recovers.
     not_unilateral: HashSet<String>,
@@ -527,6 +533,17 @@ impl BreezSdk {
                 .filter(|exit| exit.output.is_some())
                 .map(|exit| exit.leaf_id.clone()),
         );
+        let skipped = {
+            let checks = self.recovery_checks.lock().await;
+            selected
+                .iter()
+                .filter_map(|leaf| {
+                    let leaf_id = leaf.id.to_string();
+                    let exit = exits.iter().find(|exit| exit.leaf_id == leaf_id);
+                    skipped_cooperative_leaf(leaf, exit, &checks.unrecoverable)
+                })
+                .collect()
+        };
         let cooperative = exits
             .into_iter()
             .filter(|exit| exit.output.is_some() && exit.recovered.is_none())
@@ -550,10 +567,40 @@ impl BreezSdk {
         };
         Ok(RecoverySelection {
             cooperative,
+            skipped,
             unilateral,
             not_unilateral,
         })
     }
+}
+
+/// The entry of a watchtower-exited `leaf` the quote leaves out: `exit` holds no
+/// output for it, and its recovery did not finish.
+fn skipped_cooperative_leaf(
+    leaf: &TreeNode,
+    exit: Option<&CachedWatchtowerExit>,
+    unrecoverable: &HashSet<String>,
+) -> Option<SkippedLeaf> {
+    if !is_watchtower_exited(leaf.status)
+        || exit.is_some_and(|exit| exit.output.is_some() || exit.recovered.is_some())
+    {
+        return None;
+    }
+    let leaf_id = leaf.id.to_string();
+    let reason = if unrecoverable.contains(&leaf_id) {
+        SkippedLeafReason::NotRecoverable {
+            message: "The transaction that took the leaf's funds on-chain pays none of them to \
+                      the leaf's key"
+                .to_string(),
+        }
+    } else {
+        SkippedLeafReason::FundsNotFound
+    };
+    Some(SkippedLeaf {
+        leaf_id,
+        value_sats: leaf.value,
+        reason,
+    })
 }
 
 fn total_value(leaves: &[RecoverFundsLeaf]) -> u64 {
@@ -608,10 +655,65 @@ fn parse_destination(destination: &str, network: Network) -> Result<Address, Sdk
 #[cfg(test)]
 mod tests {
     use bitcoin::{OutPoint, hashes::Hash};
+    use spark_wallet::tree_store_tests::create_test_node_with_parent;
 
-    use crate::chain::stub::{ChainStub, tx_paying};
+    use crate::{
+        chain::stub::{ChainStub, tx_paying},
+        persist::{CachedWatchtowerExitOutput, SeenAt},
+    };
 
     use super::*;
+
+    const LEAF_ID: &str = "00000000-0000-0000-0000-00000000000a";
+
+    fn stored_exit(found: bool, recovered: bool) -> CachedWatchtowerExit {
+        CachedWatchtowerExit {
+            leaf_id: LEAF_ID.to_string(),
+            value_sats: 10_955,
+            output: found.then(|| CachedWatchtowerExitOutput {
+                txid: "00".repeat(32),
+                vout: 0,
+                amount_sats: 10_000,
+                script_pubkey: String::new(),
+                found: Some(SeenAt::default()),
+            }),
+            recoveries: Vec::new(),
+            recovered: recovered.then(SeenAt::default),
+        }
+    }
+
+    #[test]
+    fn a_watchtower_exited_leaf_without_an_output_is_skipped() {
+        let leaf = create_test_node_with_parent(LEAF_ID, None, TreeNodeStatus::WatchtowerExited);
+        let none = HashSet::new();
+        let unrecoverable = HashSet::from([LEAF_ID.to_string()]);
+        let skipped = |exit: Option<&CachedWatchtowerExit>, unrecoverable| {
+            skipped_cooperative_leaf(&leaf, exit, unrecoverable).map(|skipped| skipped.reason)
+        };
+
+        assert_eq!(skipped(None, &none), Some(SkippedLeafReason::FundsNotFound));
+        assert_eq!(
+            skipped(Some(&stored_exit(false, false)), &none),
+            Some(SkippedLeafReason::FundsNotFound)
+        );
+        assert!(matches!(
+            skipped(None, &unrecoverable),
+            Some(SkippedLeafReason::NotRecoverable { .. })
+        ));
+        assert_eq!(skipped(Some(&stored_exit(true, false)), &none), None);
+        assert_eq!(
+            skipped(Some(&stored_exit(false, true)), &none),
+            None,
+            "a finished recovery is not listed"
+        );
+
+        let on_chain = create_test_node_with_parent(LEAF_ID, None, TreeNodeStatus::OnChain);
+        assert_eq!(
+            skipped_cooperative_leaf(&on_chain, None, &none),
+            None,
+            "its unilateral exit is quoted"
+        );
+    }
 
     fn cooperative_spending(
         outpoint: OutPoint,
