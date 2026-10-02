@@ -704,6 +704,22 @@ pub fn evaluate_unilateral_exit_leaf_costs(
             report_unexitable(filter, leaf_id, "no refund transaction")?;
             continue;
         };
+        // A leaf that went out through its direct tx is refunded by its
+        // `direct_refund_tx`, which pays its own fee.
+        let went_direct = on_chain.nodes.iter().any(|node| {
+            node.node_id == **leaf_id && node.confirmed_by == ExitNodeConfirmation::Direct
+        });
+        if !on_chain.has_refund(leaf_id)
+            && !went_direct
+            && !refund_tx.output.iter().any(is_ephemeral_anchor_output)
+        {
+            report_unexitable(
+                filter,
+                leaf_id,
+                "its refund has no anchor output for a child to pay its fee through",
+            )?;
+            continue;
+        }
         let ancestors = match walk_unilateral_exit_chain(tree_nodes, leaf) {
             Ok(ancestors) => ancestors,
             Err(missing) => {
@@ -2032,6 +2048,40 @@ mod tests {
                 .unwrap();
                 assert!(sel.is_empty());
             }
+        }
+
+        #[test_all]
+        fn evaluate_takes_a_refund_without_an_anchor_only_once_it_is_on_chain() {
+            let mut node = leaf_node("leaf", 1_000_000);
+            node.refund_tx = Some(Transaction {
+                version: Version::non_standard(3),
+                lock_time: LockTime::ZERO,
+                input: Vec::new(),
+                output: vec![TxOut {
+                    value: Amount::from_sat(1_000_000),
+                    script_pubkey: ScriptBuf::new(),
+                }],
+            });
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+            let evaluate = |filter, on_chain: &ExitChainState| {
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    std::slice::from_ref(&id),
+                    &cost_params(),
+                    filter,
+                    on_chain,
+                )
+            };
+
+            let nothing = ExitChainState::default();
+            assert!(evaluate(UnilateralExitLeafFilter::All, &nothing).is_err());
+            let skipped = evaluate(UnilateralExitLeafFilter::ProfitableOnly, &nothing).unwrap();
+            assert!(skipped.is_empty());
+
+            let refunded = on_chain_state(std::slice::from_ref(&id), std::slice::from_ref(&id));
+            let selected = evaluate(UnilateralExitLeafFilter::All, &refunded).unwrap();
+            assert_eq!(selected.len(), 1);
         }
 
         const DUST: u64 = 330;
