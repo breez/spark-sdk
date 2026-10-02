@@ -153,6 +153,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Detect pending mempool deposits
 - [x] Instant claim of on-chain deposits
 - [ ] Add additional fees via the partner portal
+- [ ] Token allowance
+- [ ] Delegated spend
 - [ ] NWC
 - [ ] Bolt12
 
