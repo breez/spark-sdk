@@ -1018,6 +1018,40 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// The protocol treats the invoice signature as optional, so a server can issue
+    /// invoices for a receiver whose signing key it doesn't hold.
+    #[test_all]
+    fn test_unsigned_invoice_parses() {
+        let public_key = create_test_public_key();
+        let proto_address = ProtoSparkAddress {
+            identity_public_key: public_key.serialize().to_vec(),
+            spark_invoice_fields: Some(ProtoSparkInvoiceFields {
+                id: uuid::Uuid::now_v7().as_bytes().to_vec(),
+                version: 1,
+                sender_public_key: None,
+                expiry_time: None,
+                payment_type: Some(ProtoPaymentType::SatsPayment(ProtoSatsPayment {
+                    amount: Some(500),
+                })),
+                memo: None,
+            }),
+            signature: None,
+        };
+        let invoice =
+            bech32::encode::<Bech32m>(HRP_REGTEST, &encode_spark_address_canonical(&proto_address))
+                .unwrap();
+
+        let parsed = SparkAddress::from_str(&invoice).unwrap();
+
+        assert_eq!(parsed.identity_public_key, public_key);
+        assert_eq!(
+            parsed.spark_invoice_fields.unwrap().payment_type,
+            Some(SparkAddressPaymentType::SatsPayment(SatsPayment {
+                amount: Some(500)
+            }))
+        );
+    }
+
     /// Cross-language signing-hash fixtures. JS is the source of truth; these vectors are
     /// shared with Go and spark-primitives. If this test fails, Breez's hash has drifted
     /// from the rest of the ecosystem and signatures produced elsewhere will not verify.

@@ -2409,11 +2409,20 @@ impl SparkWallet {
 
         match &invoice_fields.payment_type {
             Some(SparkAddressPaymentType::SatsPayment(payment)) => {
-                let amount = payment.amount.or(amount.map(|a| a as u64)).ok_or(
-                    SparkWalletError::Generic(
-                        "Amount is required when invoice does not include an amount".to_string(),
-                    ),
-                )?;
+                let amount = match payment.amount {
+                    Some(invoice_amount) => invoice_amount,
+                    None => {
+                        let amount = amount.ok_or(SparkWalletError::Generic(
+                            "Amount is required when invoice does not include an amount"
+                                .to_string(),
+                        ))?;
+                        u64::try_from(amount).map_err(|_| {
+                            SparkWalletError::ValidationError(format!(
+                                "Amount {amount} exceeds the maximum sats amount"
+                            ))
+                        })?
+                    }
+                };
 
                 let transfer = self
                     .transfer_with_invoice(
@@ -4525,6 +4534,37 @@ mod tests {
             &output_key,
         )
         .expect("the sweep signs with the key the refund pays to");
+    }
+
+    #[macros::async_test_all]
+    async fn fulfill_amountless_sats_invoice_rejects_amount_above_u64() {
+        let wallet = wallet_over(Arc::new(InMemoryTreeStore::new())).await;
+        let receiver_signer = SparkSignerAdapter::new(Arc::new(
+            DefaultSigner::new(&[8u8; 32], Network::Regtest).unwrap(),
+        ));
+        let invoice = SparkAddress::new(
+            receiver_signer.get_identity_public_key().await.unwrap(),
+            Network::Regtest,
+            Some(SparkInvoiceFields {
+                id: uuid::Uuid::now_v7(),
+                version: 1,
+                memo: None,
+                sender_public_key: None,
+                expiry_time: None,
+                payment_type: Some(SparkAddressPaymentType::SatsPayment(SatsPayment {
+                    amount: None,
+                })),
+            }),
+        )
+        .to_invoice_string(&receiver_signer)
+        .await
+        .unwrap();
+
+        let result = wallet
+            .fulfill_spark_invoice(&invoice, Some(u128::from(u64::MAX) + 1), None)
+            .await;
+
+        assert!(matches!(result, Err(SparkWalletError::ValidationError(_))));
     }
 
     async fn wallet_holding(leaves: &[TreeNode]) -> SparkWallet {
