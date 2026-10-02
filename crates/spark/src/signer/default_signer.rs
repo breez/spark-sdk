@@ -374,11 +374,11 @@ impl Signer for DefaultSigner {
         &self,
         keys: &[SecretSource],
     ) -> Result<(SecretSource, PublicKey), SignerError> {
-        if keys.is_empty() {
+        let Some((first, rest)) = keys.split_first() else {
             return Err(SignerError::Generic("no keys to combine".into()));
-        }
-        let mut combined = keys[0].to_secret_key(self)?;
-        for key in &keys[1..] {
+        };
+        let mut combined = first.to_secret_key(self)?;
+        for key in rest {
             let sk = key.to_secret_key(self)?;
             combined = combined
                 .add_tweak(&sk.into())

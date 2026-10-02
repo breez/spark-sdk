@@ -12,7 +12,7 @@ use bitcoin::{
 use crate::{
     Network,
     signer::SignerError,
-    utils::transactions::{RefundTransactions, create_spark_tx},
+    utils::transactions::{RefundTransactions, create_spark_tx, first_output},
 };
 
 const LIGHTNING_HTLC_TIME_LOCK: u16 = 2160;
@@ -160,7 +160,9 @@ pub(crate) fn create_lightning_htlc_refund_txs(
         sequence_lock_pubkey,
         network,
     } = params;
-    let node_value = node_tx.output[0].value;
+    let node_value = first_output(node_tx)
+        .map_err(|e| SignerError::Generic(e.to_string()))?
+        .value;
     let cpfp_outpoint = OutPoint {
         txid: node_tx.compute_txid(),
         vout: 0,
@@ -180,7 +182,9 @@ pub(crate) fn create_lightning_htlc_refund_txs(
 
     let direct_tx = direct_tx
         .map(|tx| {
-            let direct_value = tx.output[0].value;
+            let direct_value = first_output(tx)
+                .map_err(|e| SignerError::Generic(e.to_string()))?
+                .value;
             let direct_outpoint = OutPoint {
                 txid: tx.compute_txid(),
                 vout: 0,

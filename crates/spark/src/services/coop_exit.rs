@@ -28,9 +28,11 @@ use crate::ssp::{CoopExitAcceptance, SparkCoopExitRequestStatus};
 use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
 use crate::utils::frost::derive_leaf_signing_public_key;
+use crate::utils::refund::commitments_at;
 use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::transactions::{
-    ConnectorRefundTxsParams, RefundTransactions, create_connector_refund_txs,
+    ConnectorRefundTxsParams, RefundTransactions, create_connector_refund_txs, first_input,
+    first_output,
 };
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(7 * 24 * 60 * 60 + 5 * 60); // 1 week + 5 minutes
@@ -266,7 +268,14 @@ impl CoopExitService {
                 ServiceError::Generic("invalid raw_connector_transaction tx".to_string())
             })?;
         let connector_txid = connector_tx.compute_txid();
-        let coop_exit_input = connector_tx.input[0].previous_output.txid;
+        let coop_exit_input = connector_tx
+            .input
+            .first()
+            .ok_or_else(|| {
+                ServiceError::ValidationError("SSP connector transaction has no inputs".to_string())
+            })?
+            .previous_output
+            .txid;
 
         if coop_exit_input != expected_exit_txid {
             return Err(ServiceError::ValidationError(format!(
@@ -572,7 +581,7 @@ impl CoopExitService {
                 .refund_tx
                 .clone()
                 .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
-            let old_sequence = refund_tx.input[0].sequence;
+            let old_sequence = first_input(&refund_tx)?.sequence;
             let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence)
                 .ok_or_else(|| ServiceError::Generic("Failed to get next sequence".to_string()))?;
             let RefundTransactions {
@@ -590,13 +599,14 @@ impl CoopExitService {
                 },
                 receiving_pubkey: receiving_public_key,
                 network: self.network,
-            });
+            })?;
+            let node_output = first_output(node_tx)?;
 
             // Coop-exit refunds spend multiple inputs (node_tx + connector); BIP-341
             // sighash requires all prev outs.
             let node_all_prev_outs = connector_prev_out
                 .as_ref()
-                .map(|c| vec![node_tx.output[0].clone(), c.clone()]);
+                .map(|c| vec![node_output.clone(), c.clone()]);
 
             let cpfp_sighash = if let Some(prev_outs) = node_all_prev_outs
                 .as_ref()
@@ -604,7 +614,7 @@ impl CoopExitService {
             {
                 sighash_from_multi_input_tx(&cpfp_refund_tx, 0, prev_outs)
             } else {
-                sighash_from_tx(&cpfp_refund_tx, 0, &node_tx.output[0])
+                sighash_from_tx(&cpfp_refund_tx, 0, node_output)
             }?;
             let cpfp = build_refund_signing_job(
                 &leaf.node.id,
@@ -613,7 +623,7 @@ impl CoopExitService {
                 &signing_public_key,
                 cpfp_refund_tx,
                 *cpfp_sighash.as_byte_array(),
-                cpfp_commitments[i].clone(),
+                commitments_at(cpfp_commitments, i)?,
                 None, // connector refunds never use adaptor signatures
                 self.network,
             );
@@ -621,16 +631,17 @@ impl CoopExitService {
             let direct = if let (Some(direct_tx), Some(direct_refund_tx)) =
                 (leaf.node.direct_tx.as_ref(), direct_refund_tx)
             {
+                let direct_output = first_output(direct_tx)?;
                 let direct_all_prev_outs = connector_prev_out
                     .as_ref()
-                    .map(|c| vec![direct_tx.output[0].clone(), c.clone()]);
+                    .map(|c| vec![direct_output.clone(), c.clone()]);
                 let sighash = if let Some(prev_outs) = direct_all_prev_outs
                     .as_ref()
                     .filter(|_| direct_refund_tx.input.len() > 1)
                 {
                     sighash_from_multi_input_tx(&direct_refund_tx, 0, prev_outs)
                 } else {
-                    sighash_from_tx(&direct_refund_tx, 0, &direct_tx.output[0])
+                    sighash_from_tx(&direct_refund_tx, 0, direct_output)
                 }?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
@@ -639,7 +650,7 @@ impl CoopExitService {
                     &signing_public_key,
                     direct_refund_tx,
                     *sighash.as_byte_array(),
-                    direct_commitments[i].clone(),
+                    commitments_at(direct_commitments, i)?,
                     None, // connector refunds never use adaptor signatures
                     self.network,
                 ))
@@ -654,7 +665,7 @@ impl CoopExitService {
                 {
                     sighash_from_multi_input_tx(&dfc_refund_tx, 0, prev_outs)
                 } else {
-                    sighash_from_tx(&dfc_refund_tx, 0, &node_tx.output[0])
+                    sighash_from_tx(&dfc_refund_tx, 0, node_output)
                 }?;
                 Some(build_refund_signing_job(
                     &leaf.node.id,
@@ -663,7 +674,7 @@ impl CoopExitService {
                     &signing_public_key,
                     dfc_refund_tx,
                     *sighash.as_byte_array(),
-                    direct_from_cpfp_commitments[i].clone(),
+                    commitments_at(direct_from_cpfp_commitments, i)?,
                     None, // connector refunds never use adaptor signatures
                     self.network,
                 ))

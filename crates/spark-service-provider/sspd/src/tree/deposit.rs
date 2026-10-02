@@ -649,7 +649,7 @@ impl TreeDepositService {
                     None,
                     &key_tree.public_key,
                     self.network,
-                );
+                )?;
                 let dfcr_tx = refund_txs.direct_from_cpfp_tx.ok_or(ServiceError::Generic(
                     "Missing direct_from_cpfp refund tx".to_string(),
                 ))?;

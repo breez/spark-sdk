@@ -7,6 +7,7 @@ mod service;
 mod store;
 
 #[cfg(any(test, feature = "test-utils"))]
+#[allow(clippy::indexing_slicing)] // Test suites: a panic there is a failed assertion.
 pub mod tests;
 
 pub use chain::{assemble_exit_chains, chain_backs_exit, chain_reaches_root};
@@ -131,6 +132,37 @@ mod verified_leaf_keys_tests {
         assert_eq!(
             keys.get(&exiting.id).map(|k| k.verifying_public_key),
             Some(exiting.verifying_public_key)
+        );
+    }
+}
+
+#[cfg(test)]
+mod malformed_tx_tests {
+    use crate::tree::tests::create_test_tree_node;
+
+    #[test]
+    fn a_leaf_whose_txs_all_have_inputs_and_outputs_is_well_formed() {
+        let mut leaf = create_test_tree_node("leaf", 1_000);
+        leaf.refund_tx = Some(leaf.node_tx.clone());
+        assert_eq!(leaf.malformed_tx(), None);
+    }
+
+    #[test]
+    fn names_the_tx_missing_inputs_or_outputs() {
+        let mut leaf = create_test_tree_node("leaf", 1_000);
+        leaf.node_tx.output.clear();
+        assert_eq!(
+            leaf.malformed_tx().as_deref(),
+            Some("node tx has no outputs")
+        );
+
+        let mut leaf = create_test_tree_node("leaf", 1_000);
+        let mut direct_refund_tx = leaf.node_tx.clone();
+        direct_refund_tx.input.clear();
+        leaf.direct_refund_tx = Some(direct_refund_tx);
+        assert_eq!(
+            leaf.malformed_tx().as_deref(),
+            Some("direct refund tx has no inputs")
         );
     }
 }
@@ -298,21 +330,29 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    fn node_sequence(&self) -> Sequence {
-        self.node_tx.input[0].sequence
+    /// `None` for a node tx with no inputs, which [`Self::malformed_tx`] keeps
+    /// out of the pool: such a leaf reads as neither due nor zero-timelock.
+    fn node_sequence(&self) -> Option<Sequence> {
+        self.node_tx.input.first().map(|input| input.sequence)
     }
 
     fn refund_sequence(&self) -> Result<Sequence, TreeServiceError> {
-        Ok(self
-            .refund_tx
+        self.refund_tx
             .as_ref()
             .ok_or(TreeServiceError::Generic("No refund tx".to_string()))?
-            .input[0]
-            .sequence)
+            .input
+            .first()
+            .map(|input| input.sequence)
+            .ok_or(TreeServiceError::Generic(
+                "Refund tx has no inputs".to_string(),
+            ))
     }
 
     pub fn needs_node_tx_renewed(&self) -> bool {
-        let sequence_num = self.node_sequence().to_consensus_u32() as u16;
+        let Some(sequence) = self.node_sequence() else {
+            return false;
+        };
+        let sequence_num = sequence.to_consensus_u32() as u16;
         trace!("Node tx sequence: {} node id: {}", sequence_num, self.id);
         sequence_num <= 100
     }
@@ -324,8 +364,35 @@ impl TreeNode {
     }
 
     pub fn is_zero_timelock(&self) -> bool {
-        let sequence_num = self.node_sequence().to_consensus_u32() as u16;
-        sequence_num == 0
+        self.node_sequence()
+            .is_some_and(|sequence| sequence.to_consensus_u32() as u16 == 0)
+    }
+
+    /// Names the first transaction of this leaf that has no inputs or no outputs,
+    /// or `None` when every one has both. Such a leaf can be neither renewed,
+    /// sent nor exited, so the leaf pool only holds leaves for which this is
+    /// `None`.
+    pub fn malformed_tx(&self) -> Option<String> {
+        [
+            ("node tx", Some(&self.node_tx)),
+            ("refund tx", self.refund_tx.as_ref()),
+            ("direct tx", self.direct_tx.as_ref()),
+            ("direct refund tx", self.direct_refund_tx.as_ref()),
+            (
+                "direct from cpfp refund tx",
+                self.direct_from_cpfp_refund_tx.as_ref(),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(name, tx)| {
+            let tx = tx?;
+            match (tx.input.is_empty(), tx.output.is_empty()) {
+                (false, false) => None,
+                (true, false) => Some(format!("{name} has no inputs")),
+                (false, true) => Some(format!("{name} has no outputs")),
+                (true, true) => Some(format!("{name} has no inputs and no outputs")),
+            }
+        })
     }
 
     pub fn direct_refund_tx(&self) -> Option<&Transaction> {

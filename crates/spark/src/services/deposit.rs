@@ -36,7 +36,7 @@ use crate::{
         tagged_hasher::TaggedHasher,
         transactions::{
             NodeTransactions, RefundTransactions, create_initial_timelock_refund_txs,
-            create_root_node_txs, create_static_deposit_refund_tx,
+            create_root_node_txs, create_static_deposit_refund_tx, first_output,
         },
     },
 };
@@ -517,9 +517,9 @@ impl DepositService {
             .get(output_index as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
 
-        // Create the refund transaction with a dummy output amount.
-        // The witness vsize is accounted for separately via SCHNORR_SIG_WITNESS_VBYTES.
-        let mut refund_tx = create_static_deposit_refund_tx(
+        // Sized with a dummy output amount, which does not change the size. The
+        // witness vsize is accounted for separately via SCHNORR_SIG_WITNESS_VBYTES.
+        let refund_tx = create_static_deposit_refund_tx(
             OutPoint {
                 txid,
                 vout: output_index,
@@ -539,7 +539,14 @@ impl DepositService {
         }
 
         let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);
-        refund_tx.output[0].value = Amount::from_sat(credit_amount_sats);
+        let mut refund_tx = create_static_deposit_refund_tx(
+            OutPoint {
+                txid,
+                vout: output_index,
+            },
+            credit_amount_sats,
+            &refund_address,
+        );
 
         // Validate the output amount meets the dust limit for this address type
         let dust_limit = refund_address.script_pubkey().minimal_non_dust();
@@ -645,7 +652,13 @@ impl DepositService {
         // Update the input with the aggregated signature
         let mut witness = Witness::new();
         witness.push(&spend_signature.serialize()?);
-        refund_tx.input[0].witness = witness;
+        refund_tx
+            .input
+            .first_mut()
+            .ok_or_else(|| {
+                ServiceError::Generic("static deposit refund tx has no input".to_string())
+            })?
+            .witness = witness;
 
         Ok(refund_tx)
     }
@@ -731,7 +744,7 @@ impl DepositService {
             None,
             &signing_public_key,
             self.network,
-        );
+        )?;
 
         let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx else {
             return Err(ServiceError::Generic(
@@ -767,9 +780,10 @@ impl DepositService {
 
         // Compute sighashes for all transactions
         let cpfp_root_sighash = sighash_from_tx(&cpfp_root_tx, 0, deposit_tx_out)?;
-        let cpfp_refund_sighash = sighash_from_tx(&cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
+        let cpfp_root_tx_out = first_output(&cpfp_root_tx)?;
+        let cpfp_refund_sighash = sighash_from_tx(&cpfp_refund_tx, 0, cpfp_root_tx_out)?;
         let direct_from_cpfp_refund_sighash =
-            sighash_from_tx(&direct_from_cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
+            sighash_from_tx(&direct_from_cpfp_refund_tx, 0, cpfp_root_tx_out)?;
 
         // The user produces a FROST signature share for each transaction; the
         // operators aggregate server-side during finalization. The deposit

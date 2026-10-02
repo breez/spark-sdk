@@ -692,13 +692,11 @@ pub(crate) fn leaf_output_value(
     node_tx: &Transaction,
     verifying_public_key: &PublicKey,
 ) -> Option<u64> {
-    match node_tx.output.len() {
-        1 => {}
-        2 if is_ephemeral_anchor_output(&node_tx.output[1]) => {}
+    let output = match node_tx.output.as_slice() {
+        [output] => output,
+        [output, anchor] if is_ephemeral_anchor_output(anchor) => output,
         _ => return None,
-    }
-
-    let output = &node_tx.output[0];
+    };
     let expected_script = ScriptBuf::new_p2tr(
         &SECP_VERIFY,
         verifying_public_key.x_only_public_key().0,

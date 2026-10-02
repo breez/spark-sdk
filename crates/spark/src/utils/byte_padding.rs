@@ -11,42 +11,40 @@ impl BytePadding for u128 {
         if *self == 0 {
             return vec![0];
         }
-        let bytes = self.to_be_bytes();
-        let first_non_zero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-        bytes[first_non_zero..].to_vec()
+        self.to_be_bytes()
+            .into_iter()
+            .skip_while(|&b| b == 0)
+            .collect()
     }
 
     fn to_unpadded_le_bytes(&self) -> Vec<u8> {
         if *self == 0 {
             return vec![0];
         }
-        let bytes = self.to_le_bytes();
-        let last_non_zero = bytes
-            .iter()
-            .rposition(|&b| b != 0)
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
-        bytes[..last_non_zero].to_vec()
+        let mut bytes = self.to_le_bytes().to_vec();
+        while bytes.last() == Some(&0) {
+            bytes.pop();
+        }
+        bytes
     }
 
     fn from_unpadded_be_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         if bytes.len() > 16 {
             return Err("Input bytes exceed u128 size".into());
         }
-        let mut padded = [0u8; 16];
-        let len = bytes.len().min(16);
-        padded[16 - len..].copy_from_slice(&bytes[..len]);
-        Ok(u128::from_be_bytes(padded))
+        Ok(bytes
+            .iter()
+            .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte)))
     }
 
     fn from_unpadded_le_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         if bytes.len() > 16 {
             return Err("Input bytes exceed u128 size".into());
         }
-        let mut padded = [0u8; 16];
-        let len = bytes.len().min(16);
-        padded[..len].copy_from_slice(&bytes[..len]);
-        Ok(u128::from_le_bytes(padded))
+        Ok(bytes
+            .iter()
+            .rev()
+            .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte)))
     }
 }
 

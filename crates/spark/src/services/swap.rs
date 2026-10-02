@@ -22,7 +22,7 @@ use crate::{
     signer::{AggregateFrostRequest, PrepareTransferRequest, PreparedTransfer, SparkSigner},
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
-    utils::frost::aggregate_frost,
+    utils::{frost::aggregate_frost, transactions::first_output},
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
@@ -245,8 +245,11 @@ impl Swap {
 
             // The refund transaction spends the node transaction's output 0, so
             // that is the prevout the sighash commits to.
-            let sighash =
-                sighash_from_tx(&signed_tx.tx, 0, &leaf_key_tweak.node.node_tx.output[0])?;
+            let sighash = sighash_from_tx(
+                &signed_tx.tx,
+                0,
+                first_output(&leaf_key_tweak.node.node_tx)?,
+            )?;
 
             // Aggregate the user's already-produced FROST share (signed during
             // `prepare_transfer_request`, bound to `self_nonce_commitment`) with

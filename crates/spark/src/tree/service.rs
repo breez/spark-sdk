@@ -91,6 +91,20 @@ fn partition_renewable(leaves: Vec<TreeNode>) -> (Vec<TreeNode>, Vec<TreeNode>) 
         .partition(|leaf| leaf.status == TreeNodeStatus::Available)
 }
 
+/// Whether `leaf` may enter the pool, logging why not. A leaf is kept out when
+/// one of its transactions has no inputs or no outputs (see
+/// [`TreeNode::malformed_tx`]), which leaves it as if the operators had not
+/// reported it: a well-formed copy served later is picked up as usual.
+fn well_formed(leaf: &TreeNode, source: &str) -> bool {
+    match leaf.malformed_tx() {
+        None => true,
+        Some(defect) => {
+            error!("Leaving out leaf {} from {source}: its {defect}", leaf.id);
+            false
+        }
+    }
+}
+
 /// Notifications buffered per listener before it starts missing them. Each one
 /// says only that the pool grew, so a listener that falls behind loses nothing
 /// a single later notification does not tell it just as well.
@@ -179,9 +193,18 @@ impl TreeService for SynchronousTreeService {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        self.state.finalize_reservation(&id, new_leaves).await?;
+        let new_leaves: Option<Vec<TreeNode>> = new_leaves.map(|leaves| {
+            leaves
+                .iter()
+                .filter(|leaf| well_formed(leaf, "a finalized reservation"))
+                .cloned()
+                .collect()
+        });
+        self.state
+            .finalize_reservation(&id, new_leaves.as_deref())
+            .await?;
         // A swap's change, which the reservation being finalized paid for.
-        self.notify_leaves_added(new_leaves.unwrap_or_default());
+        self.notify_leaves_added(new_leaves.as_deref().unwrap_or_default());
         Ok(())
     }
 
@@ -213,7 +236,7 @@ impl TreeService for SynchronousTreeService {
             .await?;
         let leaves: Vec<LeafPedigree> = leaves
             .iter()
-            .filter(|p| owned.contains(&p.leaf.id))
+            .filter(|p| owned.contains(&p.leaf.id) && well_formed(&p.leaf, "a restore"))
             .cloned()
             .collect();
         let nodes: Vec<TreeNode> = leaves.iter().map(|p| p.leaf.clone()).collect();
@@ -385,7 +408,7 @@ impl TreeService for SynchronousTreeService {
             .collect();
         let coordinator_leaves: Vec<TreeNode> = coordinator_nodes
             .into_iter()
-            .filter(|n| !parent_ids.contains(&n.id))
+            .filter(|n| !parent_ids.contains(&n.id) && well_formed(n, "a refresh"))
             .collect();
         debug!(
             leaves = coordinator_leaves.len(),
@@ -836,6 +859,8 @@ impl SynchronousTreeService {
                                         original.id.clone(),
                                         format!("status:{:?}", fresh.status),
                                     ));
+                                } else if let Some(defect) = fresh.malformed_tx() {
+                                    dropped.push((original.id.clone(), defect));
                                 } else {
                                     keep.push(fresh.clone());
                                 }
@@ -935,6 +960,11 @@ impl SynchronousTreeService {
         &self,
         pedigrees: Vec<LeafPedigree>,
     ) -> Result<RenewalOutcome, TreeServiceError> {
+        // One such leaf would otherwise fail the whole pass on its refund sequence.
+        let pedigrees: Vec<LeafPedigree> = pedigrees
+            .into_iter()
+            .filter(|p| well_formed(&p.leaf, "a renewal pass"))
+            .collect();
         let before = refund_sequences(&pedigrees);
         // A due leaf held under any key but the one derived from its node id is
         // left as it is: that is the key a renewal here signs with.
@@ -1445,7 +1475,10 @@ mod tests {
                 sequence: bitcoin::Sequence::from_consensus(sequence),
                 ..Default::default()
             }],
-            output: vec![],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
         });
     }
 
@@ -1688,6 +1721,73 @@ mod tests {
 
         assert_eq!(inserted, vec![leaf]);
         assert!(!rx.has_changed().unwrap());
+    }
+
+    /// A refund tx with no inputs is what the renewal check would read input 0 of.
+    fn malformed_leaf(id: &str) -> TreeNode {
+        let mut leaf = leaf_with_refund_sequence(id, 2_000);
+        leaf.refund_tx.as_mut().unwrap().input.clear();
+        leaf
+    }
+
+    #[async_test_all]
+    async fn inserting_leaves_leaves_out_a_malformed_one() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let good = leaf_with_refund_sequence("good", 2_000);
+
+        let inserted = service
+            .insert_leaves(vec![malformed_leaf("malformed"), good.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(inserted, vec![good.clone()]);
+        assert_eq!(service.list_leaves().await.unwrap().available, vec![good]);
+    }
+
+    #[async_test_all]
+    async fn finalizing_a_reservation_leaves_out_a_malformed_leaf() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let spent = leaf_with_refund_sequence("spent", 2_000);
+        service
+            .state
+            .add_leaves(std::slice::from_ref(&spent))
+            .await
+            .unwrap();
+        let reservation = service
+            .reserve_leaves_by_ids(&[spent.id], ReservationPurpose::Swap)
+            .await
+            .unwrap();
+        let change = leaf_with_refund_sequence("change", 2_000);
+
+        service
+            .finalize_reservation(
+                reservation.id,
+                Some(&[malformed_leaf("malformed"), change.clone()]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(service.list_leaves().await.unwrap().available, vec![change]);
+    }
+
+    #[async_test_all]
+    async fn restore_leaves_leaves_out_a_malformed_leaf() {
+        let service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let mut malformed = owned_leaf(
+            &service,
+            "malformed",
+            Some("root"),
+            TreeNodeStatus::Available,
+        )
+        .await;
+        malformed.node_tx.output.clear();
+
+        service
+            .restore_leaves(&bare_pedigrees(vec![malformed]))
+            .await
+            .unwrap();
+
+        assert!(service.list_leaves().await.unwrap().available.is_empty());
     }
 
     /// A leaf this wallet owns: our signing share plus the operators' comes to its

@@ -18,7 +18,9 @@ use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
-use crate::utils::transactions::{RefundTransactions, create_refund_txs};
+use crate::utils::transactions::{
+    RefundTransactions, create_refund_txs, first_input, first_output,
+};
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
 
 pub struct SignRefundsParams<'a> {
@@ -66,13 +68,14 @@ pub async fn sign_refunds(
         let node_tx = &leaf.node.node_tx;
         let direct_tx = leaf.node.direct_refund_tx();
 
-        let old_sequence = leaf
-            .node
-            .refund_tx
-            .as_ref()
-            .ok_or(SignerError::Generic("No refund transaction".to_string()))?
-            .input[0]
-            .sequence;
+        let old_sequence = first_input(
+            leaf.node
+                .refund_tx
+                .as_ref()
+                .ok_or(SignerError::Generic("No refund transaction".to_string()))?,
+        )
+        .map_err(|e| SignerError::Generic(e.to_string()))?
+        .sequence;
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
@@ -107,12 +110,14 @@ pub async fn sign_refunds(
                     receiver_pubkey,
                     network,
                 )
+                .map_err(|e| SignerError::Generic(e.to_string()))?
             }
         };
 
         info!(
-            "sign_refunds for leaf {}: Current sequence: {old_sequence}, next sequence: {}",
-            leaf.node.id, cpfp_refund_tx.input[0].sequence
+            "sign_refunds for leaf {}: Current sequence: {old_sequence}, next sequence: {:?}",
+            leaf.node.id,
+            cpfp_refund_tx.input.first().map(|input| input.sequence)
         );
 
         let signing_public_key = derive_leaf_signing_public_key(&leaf.node, &secp)?;
@@ -122,7 +127,7 @@ pub async fn sign_refunds(
             node_tx,
             cpfp_refund_tx,
             signing_public_key,
-            cpfp_signing_commitments[i].clone(),
+            commitments_at(&cpfp_signing_commitments, i)?,
             network,
             cpfp_adaptor_public_key,
         )?;
@@ -139,7 +144,7 @@ pub async fn sign_refunds(
                 direct_tx,
                 direct_refund_tx,
                 signing_public_key,
-                direct_signing_commitments[i].clone(),
+                commitments_at(&direct_signing_commitments, i)?,
                 network,
                 None, // Direct transactions don't use adaptor signatures
             )?)
@@ -156,7 +161,7 @@ pub async fn sign_refunds(
                 node_tx,
                 direct_from_cpfp_refund_tx,
                 signing_public_key,
-                direct_from_cpfp_signing_commitments[i].clone(),
+                commitments_at(&direct_from_cpfp_signing_commitments, i)?,
                 network,
                 None, // Direct transactions don't use adaptor signatures
             )?)
@@ -183,6 +188,20 @@ pub async fn sign_refunds(
     })
 }
 
+/// The operators' signing commitments for the `index`th leaf, erroring when
+/// they returned fewer than one per leaf.
+pub(crate) fn commitments_at(
+    commitments: &[BTreeMap<Identifier, SigningCommitments>],
+    index: usize,
+) -> Result<BTreeMap<Identifier, SigningCommitments>, SignerError> {
+    commitments.get(index).cloned().ok_or_else(|| {
+        SignerError::Generic(format!(
+            "operators returned {} signing commitments, none for leaf {index}",
+            commitments.len()
+        ))
+    })
+}
+
 /// Builds the shared refund FROST job, computing the sighash from the parent
 /// output first. A thin wrapper over `build_refund_signing_job` that keeps the
 /// send-path call sites terse (they pass the leaf and its parent tx rather than
@@ -196,7 +215,8 @@ fn build_refund_job(
     network: Network,
     adaptor_public_key: Option<&PublicKey>,
 ) -> Result<RefundJob, SignerError> {
-    let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
+    let parent_output = first_output(tx).map_err(|e| SignerError::Generic(e.to_string()))?;
+    let sighash = sighash_from_tx(&refund_tx, 0, parent_output)
         .map_err(|e| SignerError::Generic(e.to_string()))?;
     Ok(build_refund_signing_job(
         &leaf.node.id,

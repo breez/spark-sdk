@@ -13,6 +13,21 @@ use crate::{
     services::ServiceError,
 };
 
+/// Input 0 of `tx`, erroring when it has none.
+pub(crate) fn first_input(tx: &Transaction) -> Result<&TxIn, ServiceError> {
+    tx.input.first().ok_or_else(|| {
+        ServiceError::ValidationError(format!("transaction {} has no inputs", tx.compute_txid()))
+    })
+}
+
+/// Output 0 of `tx`, the one a spark tx spends from its parent, erroring when
+/// it has none.
+pub(crate) fn first_output(tx: &Transaction) -> Result<&TxOut, ServiceError> {
+    tx.output.first().ok_or_else(|| {
+        ServiceError::ValidationError(format!("transaction {} has no outputs", tx.compute_txid()))
+    })
+}
+
 const ESTIMATED_TX_SIZE: u64 = 191;
 const DEFAULT_FEE_RATE: u64 = 5;
 const DEFAULT_FEE_SATS: u64 = ESTIMATED_TX_SIZE * DEFAULT_FEE_RATE;
@@ -171,7 +186,7 @@ pub(crate) fn create_decremented_timelock_node_txs(
     parent_tx: &Transaction,
     node_tx: &Transaction,
 ) -> Result<NodeTransactions, ServiceError> {
-    let old_sequence = node_tx.input[0].sequence;
+    let old_sequence = first_input(node_tx)?.sequence;
     let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or(
         ServiceError::Generic("Failed to get next sequence".to_string()),
     )?;
@@ -230,10 +245,10 @@ pub(crate) fn create_refund_txs(
     direct_sequence: Sequence,
     receiving_pubkey: &PublicKey,
     network: Network,
-) -> RefundTransactions {
+) -> Result<RefundTransactions, ServiceError> {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
-    let node_value = node_tx.output[0].value;
+    let node_value = first_output(node_tx)?.value;
     let cpfp_outpoint = OutPoint {
         txid: node_tx.compute_txid(),
         vout: 0,
@@ -254,21 +269,23 @@ pub(crate) fn create_refund_txs(
         true,
     );
 
-    let direct_tx = direct_tx.map(|tx| {
-        let direct_value = tx.output[0].value;
-        let direct_outpoint = OutPoint {
-            txid: tx.compute_txid(),
-            vout: 0,
-        };
-        create_spark_tx(
-            direct_outpoint,
-            direct_sequence,
-            direct_value,
-            addr.script_pubkey(),
-            true,
-            false,
-        )
-    });
+    let direct_tx = direct_tx
+        .map(|tx| {
+            let direct_value = first_output(tx)?.value;
+            let direct_outpoint = OutPoint {
+                txid: tx.compute_txid(),
+                vout: 0,
+            };
+            Ok::<_, ServiceError>(create_spark_tx(
+                direct_outpoint,
+                direct_sequence,
+                direct_value,
+                addr.script_pubkey(),
+                true,
+                false,
+            ))
+        })
+        .transpose()?;
 
     let direct_from_cpfp_tx = Some(create_spark_tx(
         cpfp_outpoint,
@@ -279,11 +296,11 @@ pub(crate) fn create_refund_txs(
         false,
     ));
 
-    RefundTransactions {
+    Ok(RefundTransactions {
         cpfp_tx,
         direct_tx,
         direct_from_cpfp_tx,
-    }
+    })
 }
 
 pub fn create_initial_timelock_refund_txs(
@@ -291,7 +308,7 @@ pub fn create_initial_timelock_refund_txs(
     direct_tx: Option<&Transaction>,
     receiving_pubkey: &PublicKey,
     network: Network,
-) -> RefundTransactions {
+) -> Result<RefundTransactions, ServiceError> {
     let (cpfp_sequence, direct_sequence) = initial_timelock_sequence();
     create_refund_txs(
         node_tx,
@@ -338,11 +355,11 @@ pub fn create_initial_timelock_refund_txs(
 ///   outpoints with the direct sequence number
 pub(crate) fn create_connector_refund_txs(
     params: ConnectorRefundTxsParams<'_>,
-) -> RefundTransactions {
+) -> Result<RefundTransactions, ServiceError> {
     // TODO: Isolate secp256k1 initialization to avoid multiple initializations
     let secp = Secp256k1::new();
     let network: bitcoin::Network = params.network.into();
-    let node_value = params.node_tx.output[0].value;
+    let node_value = first_output(params.node_tx)?.value;
     let cpfp_outpoint = OutPoint {
         txid: params.node_tx.compute_txid(),
         vout: 0,
@@ -367,26 +384,29 @@ pub(crate) fn create_connector_refund_txs(
         ..Default::default()
     });
 
-    let direct_tx = params.direct_tx.map(|tx| {
-        let direct_value = tx.output[0].value;
-        let direct_outpoint = OutPoint {
-            txid: tx.compute_txid(),
-            vout: 0,
-        };
-        let mut tx = create_spark_tx(
-            direct_outpoint,
-            params.direct_sequence,
-            direct_value,
-            addr.script_pubkey(),
-            true,
-            false,
-        );
-        tx.input.push(TxIn {
-            previous_output: params.connector_outpoint,
-            ..Default::default()
-        });
-        tx
-    });
+    let direct_tx = params
+        .direct_tx
+        .map(|tx| {
+            let direct_value = first_output(tx)?.value;
+            let direct_outpoint = OutPoint {
+                txid: tx.compute_txid(),
+                vout: 0,
+            };
+            let mut tx = create_spark_tx(
+                direct_outpoint,
+                params.direct_sequence,
+                direct_value,
+                addr.script_pubkey(),
+                true,
+                false,
+            );
+            tx.input.push(TxIn {
+                previous_output: params.connector_outpoint,
+                ..Default::default()
+            });
+            Ok::<_, ServiceError>(tx)
+        })
+        .transpose()?;
 
     let direct_from_cpfp_tx = {
         let mut tx = create_spark_tx(
@@ -404,11 +424,11 @@ pub(crate) fn create_connector_refund_txs(
         Some(tx)
     };
 
-    RefundTransactions {
+    Ok(RefundTransactions {
         cpfp_tx,
         direct_tx,
         direct_from_cpfp_tx,
-    }
+    })
 }
 
 pub(crate) fn create_static_deposit_refund_tx(
@@ -483,7 +503,8 @@ mod tests {
             Sequence::ENABLE_RBF_NO_LOCKTIME,
             &receiving_pubkey,
             Network::Regtest,
-        );
+        )
+        .unwrap();
 
         let expected = Address::p2tr(
             &secp,

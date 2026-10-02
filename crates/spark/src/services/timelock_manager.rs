@@ -24,7 +24,7 @@ use crate::{
         transactions::{
             NodeTransactions, RefundTransactions, create_decremented_timelock_node_txs,
             create_initial_timelock_node_txs, create_initial_timelock_refund_txs,
-            create_zero_timelock_node_txs,
+            create_zero_timelock_node_txs, first_output,
         },
     },
 };
@@ -219,6 +219,16 @@ impl TimelockManager {
             }
         };
 
+        // The coordinator returns these, and the renewed leaf goes straight to
+        // the pool. Failing here keeps the leaf as it was for the next pass.
+        for node in std::iter::once(&renewed_leaf).chain(split_node.as_ref()) {
+            if let Some(defect) = node.malformed_tx() {
+                return Err(ServiceError::ValidationError(format!(
+                    "renewal of leaf {} returned node {} whose {defect}",
+                    leaf.id, node.id
+                )));
+            }
+        }
         if let Some(split_node) = split_node {
             nodes.insert(split_node.id.clone(), split_node);
         }
@@ -288,7 +298,7 @@ impl TimelockManager {
             job_type: SigningJobType::CpfpSplitNode,
             node_id: node.id.clone(),
             tx: cpfp_split_node_tx.clone(),
-            parent_tx_out: parent_node_tx.output[0].clone(),
+            parent_tx_out: first_output(parent_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -297,7 +307,7 @@ impl TimelockManager {
             job_type: SigningJobType::DirectSplitNode,
             node_id: node.id.clone(),
             tx: direct_split_node_tx.clone(),
-            parent_tx_out: parent_node_tx.output[0].clone(),
+            parent_tx_out: first_output(parent_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -311,7 +321,7 @@ impl TimelockManager {
             job_type: SigningJobType::CpfpNode,
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
-            parent_tx_out: cpfp_split_node_tx.output[0].clone(),
+            parent_tx_out: first_output(&cpfp_split_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -320,7 +330,7 @@ impl TimelockManager {
             job_type: SigningJobType::DirectNode,
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
-            parent_tx_out: cpfp_split_node_tx.output[0].clone(),
+            parent_tx_out: first_output(&cpfp_split_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -334,13 +344,13 @@ impl TimelockManager {
             Some(&direct_node_tx),
             &signing_public_key,
             self.network,
-        );
+        )?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpRefund,
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
-            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -350,7 +360,7 @@ impl TimelockManager {
                 job_type: SigningJobType::DirectRefund,
                 node_id: node.id.clone(),
                 tx: direct_refund_tx.clone(),
-                parent_tx_out: direct_node_tx.output[0].clone(),
+                parent_tx_out: first_output(&direct_node_tx)?.clone(),
                 signing_public_key,
                 verifying_public_key: node.verifying_public_key,
             });
@@ -361,7 +371,7 @@ impl TimelockManager {
                 job_type: SigningJobType::DirectFromCpfpRefund,
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
-                parent_tx_out: cpfp_node_tx.output[0].clone(),
+                parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
                 signing_public_key,
                 verifying_public_key: node.verifying_public_key,
             });
@@ -478,7 +488,7 @@ impl TimelockManager {
             job_type: SigningJobType::CpfpNode,
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
-            parent_tx_out: parent_node_tx.output[0].clone(),
+            parent_tx_out: first_output(parent_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -487,7 +497,7 @@ impl TimelockManager {
             job_type: SigningJobType::DirectNode,
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
-            parent_tx_out: parent_node_tx.output[0].clone(),
+            parent_tx_out: first_output(parent_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -501,13 +511,13 @@ impl TimelockManager {
             Some(&direct_node_tx),
             &signing_public_key,
             self.network,
-        );
+        )?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpRefund,
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
-            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -517,7 +527,7 @@ impl TimelockManager {
                 job_type: SigningJobType::DirectRefund,
                 node_id: node.id.clone(),
                 tx: direct_refund_tx.clone(),
-                parent_tx_out: direct_node_tx.output[0].clone(),
+                parent_tx_out: first_output(&direct_node_tx)?.clone(),
                 signing_public_key,
                 verifying_public_key: node.verifying_public_key,
             });
@@ -528,7 +538,7 @@ impl TimelockManager {
                 job_type: SigningJobType::DirectFromCpfpRefund,
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
-                parent_tx_out: cpfp_node_tx.output[0].clone(),
+                parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
                 signing_public_key,
                 verifying_public_key: node.verifying_public_key,
             });
@@ -633,7 +643,7 @@ impl TimelockManager {
             job_type: SigningJobType::CpfpNode,
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
-            parent_tx_out: node_tx.output[0].clone(),
+            parent_tx_out: first_output(node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -642,7 +652,7 @@ impl TimelockManager {
             job_type: SigningJobType::DirectNode,
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
-            parent_tx_out: node_tx.output[0].clone(),
+            parent_tx_out: first_output(node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -656,13 +666,13 @@ impl TimelockManager {
             Some(&direct_node_tx),
             &signing_public_key,
             self.network,
-        );
+        )?;
 
         signing_jobs.push(SigningJob {
             job_type: SigningJobType::CpfpRefund,
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
-            parent_tx_out: cpfp_node_tx.output[0].clone(),
+            parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
             signing_public_key,
             verifying_public_key: node.verifying_public_key,
         });
@@ -672,7 +682,7 @@ impl TimelockManager {
                 job_type: SigningJobType::DirectFromCpfpRefund,
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
-                parent_tx_out: cpfp_node_tx.output[0].clone(),
+                parent_tx_out: first_output(&cpfp_node_tx)?.clone(),
                 signing_public_key,
                 verifying_public_key: node.verifying_public_key,
             });

@@ -5,6 +5,7 @@ mod store;
 mod token_service;
 
 #[cfg(any(test, feature = "test-utils"))]
+#[allow(clippy::indexing_slicing)] // Test suites: a panic there is a failed assertion.
 pub mod tests;
 
 use std::collections::HashSet;

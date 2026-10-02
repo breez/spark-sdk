@@ -3671,8 +3671,11 @@ mod tests {
         Transaction {
             version: Version::non_standard(3),
             lock_time: LockTime::from_consensus(lock_time),
-            input: Vec::new(),
-            output: Vec::new(),
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
         }
     }
 

@@ -1,3 +1,7 @@
+// Operators and the SSP supply most of the data this crate handles, and a
+// release build aborts on panic, so an out-of-range index is not allowed.
+#![warn(clippy::indexing_slicing)]
+
 pub mod address;
 pub mod bitcoin;
 pub mod core;

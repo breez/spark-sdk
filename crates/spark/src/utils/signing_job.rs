@@ -12,6 +12,7 @@ use crate::bitcoin::sighash_from_tx;
 use crate::services::SignedTx;
 use crate::signer::{FrostJob, LeafSigningKey, SparkSigner};
 use crate::utils::frost::sign_frost_batch;
+use crate::utils::refund::commitments_at;
 use crate::{signer::SignerError, tree::TreeNodeId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -57,7 +58,7 @@ pub async fn sign_signing_jobs(
             derivation: signing_key.into(),
             sighash: sighash.to_raw_hash().to_byte_array(),
             verifying_key: signing_job.verifying_public_key,
-            operator_commitments: signing_commitments[i].clone(),
+            operator_commitments: commitments_at(&signing_commitments, i)?,
             adaptor_public_key: None,
         });
     }

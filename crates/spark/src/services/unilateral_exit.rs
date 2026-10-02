@@ -245,7 +245,7 @@ pub fn plan_unilateral_exit(
         return Err(ServiceError::InvalidInput(
             "At least one funding input is required".to_string(),
         ));
-    } else if to_build.len() == 1 {
+    } else if let [only] = to_build.as_slice() {
         // The single-leaf arm hands every input to the one branch, so unlike the
         // multi-branch paths it has no partition step to reject underfunding. Gate
         // it on build_cpfp_child's physical floor (CPFP fees + dust); the sweep is
@@ -260,15 +260,15 @@ pub fn plan_unilateral_exit(
         let cpfp_cost = if inputs.len() > 1 {
             first_child_cpfp_floor(
                 &tree_nodes,
-                &to_build[0].id,
+                &only.id,
                 &inputs,
                 destination_script_len,
                 fee_rate_sat_per_kw,
                 on_chain,
             )
-            .unwrap_or(to_build[0].cpfp_cost)
+            .unwrap_or(only.cpfp_cost)
         } else {
-            to_build[0].cpfp_cost
+            only.cpfp_cost
         };
         let required = cpfp_cost.saturating_add(change_dust_limit);
         let available = inputs
@@ -280,7 +280,7 @@ pub fn plan_unilateral_exit(
                 required_sat: required,
             });
         }
-        (vec![(to_build[0].id.clone(), inputs)], None)
+        (vec![(only.id.clone(), inputs)], None)
     } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &to_build, change_dust_limit)
         .filter(|a| {
             assignment_covers_first_child(
@@ -970,19 +970,19 @@ pub fn build_fan_out_psbt(
     fee_rate_sat_per_kw: u64,
     change_dust_limit: u64,
 ) -> Result<(psbt::Psbt, Vec<(TreeNodeId, CpfpInput)>), ServiceError> {
-    if inputs.is_empty() {
+    let Some(first_input) = inputs.first() else {
         return Err(ServiceError::ValidationError(
             "fan-out: at least one CPFP input is required".to_string(),
         ));
-    }
+    };
     if selected_leaves.is_empty() {
         return Err(ServiceError::ValidationError(
             "fan-out: at least one selected leaf is required".to_string(),
         ));
     }
 
-    let script_pubkey = inputs[0].witness_utxo.script_pubkey.clone();
-    let signed_input_weight = inputs[0].signed_input_weight;
+    let script_pubkey = first_input.witness_utxo.script_pubkey.clone();
+    let signed_input_weight = first_input.signed_input_weight;
 
     let total_input_value: u64 = inputs
         .iter()
@@ -1025,7 +1025,7 @@ pub fn build_fan_out_psbt(
             .map(|l| u128::from(l.estimated_cost))
             .sum();
         let mut distributed: u64 = 0;
-        for (idx, leaf) in selected_leaves.iter().enumerate() {
+        for (value, leaf) in output_values.iter_mut().zip(selected_leaves) {
             // checked_div guards cost_total == 0 (all branch costs zero): no share
             // is distributed and the whole surplus falls to the first branch below.
             let share = u128::from(surplus)
@@ -1033,10 +1033,13 @@ pub fn build_fan_out_psbt(
                 .checked_div(cost_total)
                 .and_then(|s| u64::try_from(s).ok())
                 .unwrap_or(0);
-            output_values[idx] = output_values[idx].saturating_add(share);
+            *value = value.saturating_add(share);
             distributed = distributed.saturating_add(share);
         }
-        output_values[0] = output_values[0].saturating_add(surplus.saturating_sub(distributed));
+        // Never `None`: there is one output per selected leaf, and there is one.
+        if let Some(first) = output_values.first_mut() {
+            *first = first.saturating_add(surplus.saturating_sub(distributed));
+        }
     }
 
     let tx_inputs: Vec<TxIn> = inputs
@@ -1066,8 +1069,8 @@ pub fn build_fan_out_psbt(
     let mut psbt_unsigned = psbt::Psbt::from_unsigned_tx(tx).map_err(|e| {
         ServiceError::ValidationError(format!("Failed to create fan-out PSBT: {e}"))
     })?;
-    for (i, cpfp_input) in inputs.iter().enumerate() {
-        psbt_unsigned.inputs[i] = psbt::Input {
+    for (psbt_input, cpfp_input) in psbt_unsigned.inputs.iter_mut().zip(inputs) {
+        *psbt_input = psbt::Input {
             witness_utxo: Some(cpfp_input.witness_utxo.clone()),
             ..Default::default()
         };
@@ -1075,8 +1078,9 @@ pub fn build_fan_out_psbt(
 
     let per_leaf_inputs: Vec<(TreeNodeId, CpfpInput)> = selected_leaves
         .iter()
+        .zip(&output_values)
         .enumerate()
-        .map(|(idx, leaf)| {
+        .map(|(idx, (leaf, &value))| {
             (
                 leaf.id.clone(),
                 CpfpInput {
@@ -1085,7 +1089,7 @@ pub fn build_fan_out_psbt(
                         vout: idx as u32,
                     },
                     witness_utxo: TxOut {
-                        value: Amount::from_sat(output_values[idx]),
+                        value: Amount::from_sat(value),
                         script_pubkey: script_pubkey.clone(),
                     },
                     signed_input_weight,
@@ -1113,7 +1117,7 @@ pub fn build_cpfp_child(
     funding_inputs: &[CpfpInput],
     fee_rate_sat_per_kw: u64,
 ) -> Result<CpfpChild, ServiceError> {
-    use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput, Psbt};
+    use bitcoin::psbt::{Input as PsbtInput, Psbt};
 
     let (vout, anchor_tx_out) = parent_tx
         .output
@@ -1124,18 +1128,18 @@ pub fn build_cpfp_child(
             "Ephemeral anchor output not found".to_string(),
         ))?;
 
-    if funding_inputs.is_empty() {
+    let Some(first_funding_input) = funding_inputs.first() else {
         return Err(ServiceError::ValidationError(
             "At least one CPFP input is required for fee bumping".to_string(),
         ));
-    }
+    };
 
     let total_input_value: u64 = funding_inputs
         .iter()
         .map(|i| i.witness_utxo.value.to_sat())
         .fold(0u64, u64::saturating_add);
-    let change_script_pubkey = funding_inputs[0].witness_utxo.script_pubkey.clone();
-    let first_signed_input_weight = funding_inputs[0].signed_input_weight;
+    let change_script_pubkey = first_funding_input.witness_utxo.script_pubkey.clone();
+    let first_signed_input_weight = first_funding_input.signed_input_weight;
 
     let rbf_sequence = Sequence::ENABLE_RBF_NO_LOCKTIME;
     let mut tx_inputs = Vec::with_capacity(funding_inputs.len() + 1);
@@ -1197,17 +1201,17 @@ pub fn build_cpfp_child(
 
     let mut psbt = Psbt::from_unsigned_tx(fee_bump_tx.clone())
         .map_err(|e| ServiceError::ValidationError(format!("Failed to create PSBT: {e}")))?;
-    for (i, cpfp_input) in funding_inputs.iter().enumerate() {
-        psbt.inputs[i] = PsbtInput {
-            witness_utxo: Some(cpfp_input.witness_utxo.clone()),
+    // The funding inputs come first and the anchor last, as in `tx_inputs`.
+    let prevouts = funding_inputs
+        .iter()
+        .map(|cpfp_input| &cpfp_input.witness_utxo)
+        .chain(std::iter::once(anchor_tx_out));
+    for (psbt_input, prevout) in psbt.inputs.iter_mut().zip(prevouts) {
+        *psbt_input = PsbtInput {
+            witness_utxo: Some(prevout.clone()),
             ..Default::default()
         };
     }
-    psbt.inputs[funding_inputs.len()] = PsbtInput {
-        witness_utxo: Some(anchor_tx_out.clone()),
-        ..Default::default()
-    };
-    psbt.outputs[0] = PsbtOutput::default();
 
     let change_input = CpfpInput {
         outpoint: OutPoint {

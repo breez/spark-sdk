@@ -36,7 +36,10 @@ use crate::{
         PreparedTransfer, SparkSigner, TransferLeafInput,
     },
     tree::{TreeNode, TreeNodeId},
-    utils::transactions::{RefundTransactions, create_refund_txs},
+    utils::{
+        refund::commitments_at,
+        transactions::{RefundTransactions, create_refund_txs},
+    },
 };
 
 use super::ServiceError;
@@ -1013,12 +1016,7 @@ impl TransferService {
                         old_sequence.to_consensus_u32()
                     ))
                 })?;
-            // `create_refund_txs` reads the first output of both txs it is given,
-            // so both have to be checked before the call, not after it.
             let direct_tx = leaf.node.direct_refund_tx();
-            if let Some(direct_tx) = direct_tx {
-                first_output(direct_tx, &leaf.node.id, "direct tx")?;
-            }
             let RefundTransactions {
                 cpfp_tx: cpfp_refund_tx,
                 direct_tx: direct_refund_tx,
@@ -1030,7 +1028,7 @@ impl TransferService {
                 direct_sequence,
                 &signing_public_key,
                 self.network,
-            );
+            )?;
 
             let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, node_tx_out)?;
             let cpfp = build_refund_signing_job(
@@ -1040,7 +1038,7 @@ impl TransferService {
                 &signing_public_key,
                 cpfp_refund_tx,
                 *cpfp_sighash.as_byte_array(),
-                cpfp_commitments[i].clone(),
+                commitments_at(cpfp_commitments, i)?,
                 None, // claim refunds never use adaptor signatures
                 self.network,
             );
@@ -1057,7 +1055,7 @@ impl TransferService {
                     &signing_public_key,
                     direct_refund_tx,
                     *sighash.as_byte_array(),
-                    direct_commitments[i].clone(),
+                    commitments_at(direct_commitments, i)?,
                     None, // claim refunds never use adaptor signatures
                     self.network,
                 ))
@@ -1074,7 +1072,7 @@ impl TransferService {
                     &signing_public_key,
                     dfc_refund_tx,
                     *sighash.as_byte_array(),
-                    direct_from_cpfp_commitments[i].clone(),
+                    commitments_at(direct_from_cpfp_commitments, i)?,
                     None, // claim refunds never use adaptor signatures
                     self.network,
                 ))
@@ -1347,9 +1345,6 @@ fn first_output<'a>(
 }
 
 /// Reads the node tx timelock sequence, erroring when the tx has no inputs.
-///
-/// The claim reads the same sequence through `is_zero_timelock`, which indexes
-/// `input[0]` and so panics on an input-less tx rather than claiming it.
 fn node_timelock(
     node_tx: &bitcoin::Transaction,
     node_id: &TreeNodeId,

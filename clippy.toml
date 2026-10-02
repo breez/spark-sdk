@@ -14,3 +14,7 @@ disallowed-methods = [
   { path = "reqwest::Client::builder", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
   { path = "reqwest::ClientBuilder::new", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
 ]
+
+# `crates/spark` denies `indexing_slicing` so wire data cannot panic the wallet.
+# Tests index freely: a panic there is a failed assertion.
+allow-indexing-slicing-in-tests = true

@@ -29,8 +29,11 @@ pub fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
         node_tx: Transaction {
             version: Version::non_standard(3),
             lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: ScriptBuf::new(),
+            }],
         },
         refund_tx: None,
         direct_tx: None,
