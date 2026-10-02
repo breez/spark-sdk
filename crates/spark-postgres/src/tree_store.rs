@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use platform_utils::time::{Instant, SystemTime};
 
@@ -123,9 +124,9 @@ impl LeafLike for SlimLeaf {
 /// share a database.
 const TREE_STORE_LOCK_PREFIX: &[u8] = b"breez-spark-sdk:tree:";
 
-/// Timeout for reservations in seconds. Reservations older than this are considered stale
+/// Default timeout for reservations. Reservations older than this are considered stale
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
-const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
+const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_mins(5);
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
@@ -180,6 +181,9 @@ pub struct PostgresTreeStore {
     /// Passed to the single-arg form `pg_advisory_xact_lock(bigint)` so two
     /// tenants don't serialize on each other's writes.
     lock_key: i64,
+    /// How long a reservation may exist before `set_leaves` treats it as stale and
+    /// releases it. `None` means reservations are never released this way.
+    reservation_timeout: Option<Duration>,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
 }
@@ -1218,6 +1222,7 @@ impl PostgresTreeStore {
             pool,
             identity: identity.to_vec(),
             lock_key: identity_lock_key(TREE_STORE_LOCK_PREFIX, identity),
+            reservation_timeout: Some(DEFAULT_RESERVATION_TIMEOUT),
             balance_changed_tx: Arc::new(balance_changed_tx),
             balance_changed_rx,
         };
@@ -1228,6 +1233,15 @@ impl PostgresTreeStore {
         store.notify_balance_change();
 
         Ok(store)
+    }
+
+    /// Sets how long a reservation may exist before `set_leaves` treats it as stale
+    /// and releases it. The default is five minutes. With `None`, a reservation is
+    /// never released this way and only ends when it is finalized or cancelled.
+    #[must_use]
+    pub fn with_reservation_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.reservation_timeout = timeout;
+        self
     }
 
     /// Runs database migrations for tree store tables.
@@ -1760,6 +1774,11 @@ impl PostgresTreeStore {
         &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
+        let Some(timeout) = self.reservation_timeout else {
+            return Ok(0);
+        };
+        let timeout_secs = timeout.as_secs_f64();
+
         // Release leaves still pointing at any soon-to-be-deleted reservation,
         // matching the previous `ON DELETE SET NULL` behavior.
         tx.execute(
@@ -1770,7 +1789,7 @@ impl PostgresTreeStore {
                     WHERE user_id = $2
                       AND created_at < NOW() - make_interval(secs => $1)
                 )",
-            &[&RESERVATION_TIMEOUT_SECS, &self.identity],
+            &[&timeout_secs, &self.identity],
         )
         .await
         .map_err(map_err)?;
@@ -1780,7 +1799,7 @@ impl PostgresTreeStore {
                 r"DELETE FROM brz_tree_reservations
                   WHERE user_id = $2
                     AND created_at < NOW() - make_interval(secs => $1)",
-                &[&RESERVATION_TIMEOUT_SECS, &self.identity],
+                &[&timeout_secs, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -2516,7 +2535,7 @@ mod tests {
         assert_eq!(all_leaves.available.len(), 1);
 
         // Manually update the reservation's created_at to be older than the timeout
-        // (RESERVATION_TIMEOUT_SECS = 300 seconds = 5 minutes)
+        // (DEFAULT_RESERVATION_TIMEOUT = 5 minutes)
         let client = fixture.store.pool.get().await.unwrap();
         client
             .execute(
@@ -2562,6 +2581,51 @@ mod tests {
                 .iter()
                 .any(|l| l.id.to_string() == "node2")
         );
+    }
+
+    #[tokio::test]
+    async fn test_stale_reservation_kept_without_timeout() {
+        let PostgresTreeStoreTestFixture {
+            store,
+            container: _container,
+        } = PostgresTreeStoreTestFixture::new().await;
+        let store = store.with_reservation_timeout(None);
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        store.add_leaves(&leaves).await.unwrap();
+        let reservation = reserve_leaves(
+            &store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        let client = store.pool.get().await.unwrap();
+        client
+            .execute(
+                "UPDATE brz_tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                &[&reservation.id],
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        store
+            .set_leaves(&leaves, &[], SystemTime::now())
+            .await
+            .unwrap();
+
+        let all_leaves = store.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.reserved_for_payment.len(), 1);
+        assert_eq!(all_leaves.available.len(), 1);
+        store
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
+        assert_eq!(store.get_leaves().await.unwrap().leaf_ids().len(), 1);
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ use super::frost::{SignAggregateFrostParams, sign_aggregate_frost};
 use spark::{
     Network,
     bitcoin::sighash_from_tx,
-    core::{initial_root_timelock_sequence, initial_timelock_sequence},
+    core::initial_zero_timelock_sequence,
     operator::{
         OperatorPool,
         rpc::{self as operator_rpc, spark::SigningJob},
@@ -278,7 +278,6 @@ impl TreeDepositService {
                 &key_tree,
                 &deposit_tx,
                 vout,
-                true,
                 Some(verifying_public_key),
             )
             .await?;
@@ -313,7 +312,6 @@ impl TreeDepositService {
         key_tree: &KeyTree,
         parent_tx: &Transaction,
         parent_vout: u32,
-        is_root: bool,
         expected_verifying_key: Option<&PublicKey>,
     ) -> Result<CreatedNodes, ServiceError> {
         if fits_in_one_call(blueprint, self.max_nodes_per_request) {
@@ -324,7 +322,6 @@ impl TreeDepositService {
                     key_tree,
                     parent_tx,
                     parent_vout,
-                    is_root,
                     expected_verifying_key,
                 )
                 .await?;
@@ -346,7 +343,6 @@ impl TreeDepositService {
                 key_tree,
                 parent_tx,
                 parent_vout,
-                is_root,
                 expected_verifying_key,
             )
             .await?;
@@ -385,7 +381,6 @@ impl TreeDepositService {
                     child_kt,
                     &node.node_tx,
                     0,
-                    false,
                     None,
                 ))
                 .await?;
@@ -407,7 +402,6 @@ impl TreeDepositService {
         key_tree: &KeyTree,
         parent_tx: &Transaction,
         parent_vout: u32,
-        is_root: bool,
         expected_verifying_key: Option<&PublicKey>,
     ) -> Result<CallNodes, ServiceError> {
         let address_request_node = Self::build_address_request_node(blueprint, key_tree);
@@ -440,7 +434,6 @@ impl TreeDepositService {
                 &verifying_key_tree,
                 parent_tx,
                 parent_vout,
-                is_root,
             )
             .await?;
 
@@ -604,7 +597,6 @@ impl TreeDepositService {
         vk_tree: &VerifyingKeyTree,
         parent_tx: &Transaction,
         parent_vout: u32,
-        is_root: bool,
     ) -> Result<NodeBuildData, ServiceError> {
         let parent_output = parent_tx
             .output
@@ -615,11 +607,7 @@ impl TreeDepositService {
         let verifying_key = vk_tree.key;
         let is_branch = matches!(blueprint, TreeBlueprint::Branch { .. });
 
-        let (cpfp_sequence, _direct_sequence) = if is_root {
-            initial_root_timelock_sequence()
-        } else {
-            initial_timelock_sequence()
-        };
+        let (cpfp_sequence, _direct_sequence) = initial_zero_timelock_sequence();
 
         let parent_outpoint = OutPoint {
             txid: parent_tx.compute_txid(),
@@ -677,28 +665,25 @@ impl TreeDepositService {
                 (None, None, None, None)
             };
 
-        let children =
-            if is_branch {
-                let cpfp_tx = &cpfp_tx;
-                futures::future::try_join_all(
-                    blueprint
-                        .children()
-                        .iter()
-                        .zip(key_tree.children.iter())
-                        .zip(vk_tree.children.iter())
-                        .enumerate()
-                        .map(|(i, ((child_bp, child_kt), child_vk))| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let vout = i as u32;
-                            Box::pin(self.build_node_tree(
-                                child_bp, child_kt, child_vk, cpfp_tx, vout, false,
-                            ))
-                        }),
-                )
-                .await?
-            } else {
-                vec![]
-            };
+        let children = if is_branch {
+            let cpfp_tx = &cpfp_tx;
+            futures::future::try_join_all(
+                blueprint
+                    .children()
+                    .iter()
+                    .zip(key_tree.children.iter())
+                    .zip(vk_tree.children.iter())
+                    .enumerate()
+                    .map(|(i, ((child_bp, child_kt), child_vk))| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let vout = i as u32;
+                        Box::pin(self.build_node_tree(child_bp, child_kt, child_vk, cpfp_tx, vout))
+                    }),
+            )
+            .await?
+        } else {
+            vec![]
+        };
 
         Ok(NodeBuildData {
             signing_key: key_tree.signing_key.clone(),

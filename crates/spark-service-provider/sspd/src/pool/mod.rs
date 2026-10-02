@@ -1,6 +1,7 @@
 pub mod config;
 pub mod deficit;
 pub mod incoming;
+pub mod leaf_sync;
 pub mod replenish;
 pub mod repository;
 pub mod restock;

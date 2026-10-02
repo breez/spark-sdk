@@ -236,6 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coop_exit_wakeup = wakeup::Wakeup::new();
     let static_deposit_blocks = wakeup::Wakeup::new();
     let htlc_sweep_blocks = wakeup::Wakeup::new();
+    let leaf_sync_blocks = wakeup::Wakeup::new();
     let static_deposit_claims = wakeup::Wakeup::new();
 
     let chain_info = loop {
@@ -271,6 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             coop_exit_wakeup.clone(),
             static_deposit_blocks.clone(),
             htlc_sweep_blocks.clone(),
+            leaf_sync_blocks.clone(),
         ],
         &token,
     );
@@ -406,6 +408,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let htlc_sweep_token = token.clone();
     tracker.spawn(async move {
         lightning::htlc_sweep::run_htlc_sweep_loop(htlc_sweep, htlc_sweep_token).await;
+    });
+
+    let leaf_sync = pool::leaf_sync::LeafSyncDeps {
+        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
+        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        identity: ssp_wallet.spark.identity_public_key,
+        blocks: leaf_sync_blocks,
+    };
+    let leaf_sync_token = token.clone();
+    tracker.spawn(async move {
+        pool::leaf_sync::run_leaf_sync_loop(leaf_sync, leaf_sync_token).await;
     });
 
     let lightning = build_lightning(
