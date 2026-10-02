@@ -607,6 +607,44 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSON NULL`,
         ],
       },
+      {
+        // Bolt11s settled over Spark, one table per direction, joined when a
+        // payment is read: sends by the payment id, receives by a digest of the
+        // Spark invoice the Bolt11 embeds, which the Spark details row carries.
+        // Born multi-tenant. A payment settled this way involves no HTLC, so the
+        // lightning columns describing one become nullable.
+        name: "Create brz_spark_settled_bolt11 tables",
+        sql: [
+          `ALTER TABLE brz_payment_details_lightning
+             MODIFY payment_hash VARCHAR(255) NULL,
+             MODIFY htlc_status VARCHAR(64) NULL,
+             MODIFY htlc_expiry_time BIGINT NULL`,
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_sends (
+              user_id VARBINARY(33) NOT NULL,
+              payment_id VARCHAR(255) NOT NULL,
+              bolt11 TEXT NOT NULL,
+              description TEXT NULL,
+              destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
+              PRIMARY KEY (user_id, payment_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_spark_settled_bolt11_receives (
+              user_id VARBINARY(33) NOT NULL,
+              id VARCHAR(64) NOT NULL,
+              spark_invoice TEXT NOT NULL,
+              bolt11 TEXT NOT NULL,
+              expires_at BIGINT NULL,
+              description TEXT NULL,
+              destination_pubkey VARCHAR(255) NOT NULL DEFAULT '',
+              PRIMARY KEY (user_id, id),
+              INDEX brz_idx_spark_settled_bolt11_receives_user_expires_at
+                  (user_id, expires_at)
+          )`,
+          `ALTER TABLE brz_payment_details_spark
+             ADD COLUMN spark_invoice_digest VARCHAR(64) NULL`,
+          `CREATE INDEX brz_idx_payment_details_spark_invoice_digest
+             ON brz_payment_details_spark(user_id, spark_invoice_digest)`,
+        ],
+      },
     ];
   }
 }

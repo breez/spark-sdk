@@ -41,7 +41,7 @@ For Bitcoin addresses, choose the confirmation speed when building the package. 
 
 ### Lightning
 
-For BOLT11 invoices the build options work like the send options in [Sending payments](send_payment.md#lightning-1): {{#name prefer_spark}} sends via a direct Spark transfer when the invoice also contains a Spark address, and {{#name completion_timeout_secs}} controls how long publishing waits for the payment to complete before returning it while still pending:
+For BOLT11 invoices the build options work like the send options in [Sending payments](send_payment.md#lightning-1): {{#name prefer_spark}} sends via a direct Spark transfer when the invoice also offers a Spark destination, and {{#name completion_timeout_secs}} controls how long publishing waits for the payment to complete before returning it while still pending:
 
 {{#tabs client_signing:client-signing-build-bolt11-options}}
 

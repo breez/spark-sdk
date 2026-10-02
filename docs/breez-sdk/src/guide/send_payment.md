@@ -25,7 +25,7 @@ Payments can be sent without holding Bitcoin by converting on-the-fly as a step 
 
 For BOLT11 invoices the amount can be optionally set. It is only required if the invoice doesn't specify an amount. If the invoice specifies an amount, providing a different amount is not supported.
 
-If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee. Note that only one fee is paid: either the Lightning fee or the Spark transfer fee, depending on which payment method is ultimately used. See [Lightning](send_payment.md#lightning-1) for how to select the payment method.
+If the invoice also offers a Spark destination, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee. Note that only one fee is paid: either the Lightning fee or the Spark transfer fee, depending on which payment method is ultimately used. See [Lightning](send_payment.md#lightning-1) for how to select the payment method.
 
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
@@ -98,7 +98,7 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 
 In the optional send payment options for BOLT11 invoices, you can set:
 
-- **Prefer Spark** - Set the preference to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
+- **Prefer Spark** - Set the preference to use Spark to transfer the payment if the invoice offers a Spark destination. By default, using Spark transfers are disabled.
 - **Completion Timeout** - By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the timeout is reached, a pending payment object is returned. If the payment completes within the timeout, the completed payment object is returned.
 
 {{#tabs send_payment:send-payment-lightning-bolt11}}

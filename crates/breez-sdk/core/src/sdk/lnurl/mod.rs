@@ -41,7 +41,7 @@ impl BreezSdk {
         request: PublishSignedLnurlPayPackageRequest,
     ) -> Result<PublishSignedLnurlPayResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
-        pay::publish_signed_package(self, request.signed_package).await
+        Box::pin(pay::publish_signed_package(self, request.signed_package)).await
     }
 
     /// Performs an LNURL withdraw operation for the amount of satoshis to
@@ -109,20 +109,25 @@ impl BreezSdk {
         let payment_request = receive.invoice.clone();
         let ssp_receive_id = receive.id;
 
-        // Store the LNURL withdraw metadata before executing the withdraw
+        // Store the LNURL withdraw metadata before executing the withdraw. A
+        // transfer paying the Spark invoice embedded in the Bolt11 is synced as
+        // a Spark payment, which looks its metadata up by that Spark invoice.
+        let metadata = PaymentMetadata {
+            lnurl_withdraw_info: Some(LnurlWithdrawInfo {
+                withdraw_url: withdraw_request.callback.clone(),
+            }),
+            lnurl_description: Some(withdraw_request.default_description.clone()),
+            ..Default::default()
+        };
         let cache = ObjectCacheRepository::new(self.storage.clone());
         cache
-            .save_payment_metadata(
-                &payment_request,
-                &PaymentMetadata {
-                    lnurl_withdraw_info: Some(LnurlWithdrawInfo {
-                        withdraw_url: withdraw_request.callback.clone(),
-                    }),
-                    lnurl_description: Some(withdraw_request.default_description.clone()),
-                    ..Default::default()
-                },
-            )
+            .save_payment_metadata(&payment_request, &metadata)
             .await?;
+        if let Ok(Some(embedded)) = self.spark_wallet.extract_spark_fallback(&payment_request) {
+            cache
+                .save_payment_metadata(&embedded.encoded, &metadata)
+                .await?;
+        }
 
         // Perform the LNURL withdraw using the generated invoice
         let withdraw_response = execute_lnurl_withdraw(

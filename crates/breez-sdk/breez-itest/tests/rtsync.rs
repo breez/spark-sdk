@@ -53,6 +53,15 @@ async fn create_sdk_with_rtsync(
     Ok(sdk)
 }
 
+/// Bob's wallet, creating Bolt11s that advertise a Spark destination so a payer
+/// settles them with a transfer.
+async fn create_bob_spark_sdk(env: &Environment) -> Result<SdkInstance> {
+    env.create_wallet_with(|config| {
+        config.sync_interval_secs = 1;
+    })
+    .await
+}
+
 /// Bob's wallet, which registers lightning addresses with `lnurl`.
 async fn create_bob_sdk(env: &Environment, lnurl: &Arc<LnurlFixture>) -> Result<SdkInstance> {
     let lnurl_domain = lnurl.http_url().to_string();
@@ -246,5 +255,242 @@ async fn test_02_rtsync_lightning_address_sync(
     info!("Alice2 get_lightning_address returns None");
 
     info!("=== Test test_02_rtsync_lightning_address_sync PASSED ===");
+    Ok(())
+}
+
+/// A Bolt11 settled over Spark is attributed on the payer's other devices too.
+///
+/// Only the device that paid knows which Bolt11 the transfer settled, and the
+/// SSP never saw the send, so the mapping has to travel over data-sync for the
+/// second device to report anything but a bare Spark send.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_03_rtsync_spark_settled_bolt11_send_sync(
+    #[future] env: Result<Environment>,
+    #[future] data_sync_fixture: DataSyncFixture,
+    alice_seed: [u8; 32],
+) -> Result<()> {
+    let env = env.await?;
+    info!("=== Starting test_03_rtsync_spark_settled_bolt11_send_sync ===");
+    const AMOUNT_SATS: u64 = 1_000;
+
+    let data_sync = Arc::new(data_sync_fixture.await);
+    let mut alice1 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let alice2 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let bob = create_bob_spark_sdk(&env).await?;
+
+    receive_and_fund(&mut alice1, 50_000, false).await?;
+
+    let invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "rtsync send attribution".to_string(),
+                amount_sats: Some(AMOUNT_SATS),
+                expiry_secs: Some(3600),
+                payment_hash: None,
+                receiver_identity_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = alice1
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: invoice.clone(),
+            },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let SendPaymentMethod::Bolt11Invoice {
+        spark_transfer_fee_sats,
+        ..
+    } = &prepare.payment_method
+    else {
+        anyhow::bail!("expected a Bolt11 send method");
+    };
+    assert_eq!(
+        *spark_transfer_fee_sats,
+        Some(0),
+        "the invoice should advertise a Spark destination"
+    );
+
+    let sent = alice1
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?
+        .payment;
+    assert_eq!(sent.method, PaymentMethod::Lightning);
+
+    wait_for_payment_succeeded_event(&mut alice1.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice1");
+
+    // Alice2 needs both halves: the transfer from its own wallet sync, and the
+    // mapping over data-sync. Either can land first, so poll rather than
+    // assert on the first sync that completes.
+    let payment_id = sent.id.clone();
+    let alice2_payment = wait_for(
+        || async {
+            alice2.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let payment = alice2
+                .sdk
+                .get_payment(GetPaymentRequest {
+                    payment_id: payment_id.clone(),
+                })
+                .await?
+                .payment;
+            if payment.method == PaymentMethod::Lightning {
+                return Ok(payment);
+            }
+            anyhow::bail!("Alice2 still reports {:?}", payment.method)
+        },
+        60,
+    )
+    .await?;
+
+    let Some(PaymentDetails::Lightning {
+        invoice: settled_invoice,
+        htlc_details,
+        ..
+    }) = &alice2_payment.details
+    else {
+        anyhow::bail!(
+            "expected Lightning payment details, got {:?}",
+            alice2_payment.details
+        );
+    };
+    assert_eq!(settled_invoice, &invoice);
+    assert!(
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
+    );
+
+    info!("=== Test test_03_rtsync_spark_settled_bolt11_send_sync PASSED ===");
+    Ok(())
+}
+
+/// A Bolt11 settled over Spark is attributed on the receiver's other devices
+/// too.
+///
+/// Only the device that created the Bolt11 knows which Spark invoice it
+/// embedded, and the SSP never saw the settlement, so the mapping has to travel
+/// over data-sync for the second device to report anything but a bare Spark
+/// receive.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_04_rtsync_spark_settled_bolt11_receive_sync(
+    #[future] env: Result<Environment>,
+    #[future] data_sync_fixture: DataSyncFixture,
+    alice_seed: [u8; 32],
+) -> Result<()> {
+    let env = env.await?;
+    info!("=== Starting test_04_rtsync_spark_settled_bolt11_receive_sync ===");
+    const AMOUNT_SATS: u64 = 1_000;
+
+    let data_sync = Arc::new(data_sync_fixture.await);
+    let mut alice1 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let alice2 = create_sdk_with_rtsync(&env, alice_seed, &data_sync, None).await?;
+    let mut bob = create_bob_spark_sdk(&env).await?;
+
+    receive_and_fund(&mut bob, 50_000, false).await?;
+
+    // Created on alice1, so alice2 only learns the mapping over data-sync.
+    let invoice = alice1
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "rtsync receive attribution".to_string(),
+                amount_sats: Some(AMOUNT_SATS),
+                expiry_secs: Some(3600),
+                payment_hash: None,
+                receiver_identity_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: invoice.clone(),
+            },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let SendPaymentMethod::Bolt11Invoice {
+        spark_transfer_fee_sats,
+        ..
+    } = &prepare.payment_method
+    else {
+        anyhow::bail!("expected a Bolt11 send method");
+    };
+    assert_eq!(
+        *spark_transfer_fee_sats,
+        Some(0),
+        "the invoice should advertise a Spark destination"
+    );
+
+    bob.sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    let received =
+        wait_for_payment_succeeded_event(&mut alice1.events, PaymentType::Receive, 60).await?;
+
+    let payment_id = received.id.clone();
+    let alice2_payment = wait_for(
+        || async {
+            alice2.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let payment = alice2
+                .sdk
+                .get_payment(GetPaymentRequest {
+                    payment_id: payment_id.clone(),
+                })
+                .await?
+                .payment;
+            if payment.method == PaymentMethod::Lightning {
+                return Ok(payment);
+            }
+            anyhow::bail!("Alice2 still reports {:?}", payment.method)
+        },
+        60,
+    )
+    .await?;
+
+    let Some(PaymentDetails::Lightning {
+        invoice: settled_invoice,
+        htlc_details,
+        ..
+    }) = &alice2_payment.details
+    else {
+        anyhow::bail!(
+            "expected Lightning payment details, got {:?}",
+            alice2_payment.details
+        );
+    };
+    assert_eq!(settled_invoice, &invoice);
+    assert!(
+        htlc_details.is_none(),
+        "a Spark-settled invoice has no HTLC"
+    );
+
+    info!("=== Test test_04_rtsync_spark_settled_bolt11_receive_sync PASSED ===");
     Ok(())
 }

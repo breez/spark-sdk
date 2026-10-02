@@ -126,6 +126,13 @@ pub(super) async fn send_signed(
 
     let payment: Payment = transfer.try_into()?;
     sdk.storage.apply_payment_update(payment.clone()).await?;
+    // Read back, so a send that settled a Bolt11 over Spark is returned as that
+    // invoice: the row naming it is applied when a payment is read.
+    let payment = sdk
+        .storage
+        .get_payment_by_id(payment.id.clone())
+        .await
+        .unwrap_or(payment);
     Ok(SendPaymentResponse { payment })
 }
 
