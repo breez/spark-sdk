@@ -3196,6 +3196,9 @@ pub struct PrepareRecoverFundsRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareRecoverFundsResponse {
     pub leaves: Vec<RecoverFundsLeaf>,
+    /// The leaves the selection covers that are not in `leaves`, each with the
+    /// reason. A leaf whose recovery already finished is not listed.
+    pub skipped: Vec<SkippedLeaf>,
     /// Total value of the selected leaves, in satoshis.
     pub recoverable_value_sats: u64,
     /// `cooperative_fee_sats + cpfp_fee_sats + fanout_fee_sats + sweep_fee_sats`.
@@ -3230,6 +3233,29 @@ pub struct RecoveryFunding {
     /// To skip the fan-out, fund one UTXO per branch of at least the given
     /// amount.
     pub per_branch: Vec<PerBranchFunding>,
+}
+
+/// A leaf the selection covers that a quote leaves out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SkippedLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub reason: SkippedLeafReason,
+}
+
+/// Why a quote leaves a leaf out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SkippedLeafReason {
+    /// At the quoted fee rate, recovering the leaf costs at least what it holds.
+    /// A low enough fee rate brings the leaf back into the quote.
+    FeeExceedsValue,
+    /// The SDK did not find the leaf's funds on-chain, or could not read the
+    /// chain for them. A later quote can find them.
+    FundsNotFound,
+    /// No recovery can be built for the leaf as it stands. `message` says why.
+    NotRecoverable { message: String },
 }
 
 /// A leaf selected for recovery.

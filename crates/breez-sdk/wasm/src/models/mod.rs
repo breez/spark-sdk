@@ -1006,6 +1006,7 @@ pub struct PrepareRecoverFundsRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareRecoverFundsResponse)]
 pub struct PrepareRecoverFundsResponse {
     pub leaves: Vec<RecoverFundsLeaf>,
+    pub skipped: Vec<SkippedLeaf>,
     pub recoverable_value_sats: u64,
     pub total_fee_sats: u64,
     pub cooperative_fee_sats: u64,
@@ -1022,6 +1023,20 @@ pub struct PrepareRecoverFundsResponse {
 pub struct RecoveryFunding {
     pub single_utxo_sats: u64,
     pub per_branch: Vec<PerBranchFunding>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeaf)]
+pub struct SkippedLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub reason: SkippedLeafReason,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeafReason)]
+pub enum SkippedLeafReason {
+    FeeExceedsValue,
+    FundsNotFound,
+    NotRecoverable { message: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverFundsLeaf)]

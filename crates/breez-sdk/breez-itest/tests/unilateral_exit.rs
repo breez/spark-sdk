@@ -34,7 +34,7 @@ use breez_sdk_spark::{
     GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
     PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryFunding,
     RecoveryMethod, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkError, SdkEvent,
-    SyncWalletRequest,
+    SkippedLeaf, SkippedLeafReason, SyncWalletRequest,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -784,6 +784,11 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
         rerun_quote.leaves.is_empty(),
         "a swept leaf is left out even when named: {:?}",
         rerun_quote.leaves
+    );
+    assert!(
+        rerun_quote.skipped.is_empty(),
+        "a swept leaf is not listed as skipped: {:?}",
+        rerun_quote.skipped
     );
     assert!(
         exited_leaf_ids.iter().all(|leaf_id| {
@@ -2445,6 +2450,11 @@ async fn test_no_profitable_leaves_all(#[case] backend: SignerBackend) -> Result
     assert_eq!(quote.total_fee_sats, 0);
     assert_eq!(quote.fanout_fee_sats, 0);
     assert!(quote.funding.is_none());
+    let [skipped] = quote.skipped.as_slice() else {
+        anyhow::bail!("expected the leaf listed as skipped: {:?}", quote.skipped);
+    };
+    assert_eq!(skipped.value_sats, LEAF_SATS);
+    assert_eq!(skipped.reason, SkippedLeafReason::FeeExceedsValue);
 
     let resp = sdk
         .sdk
@@ -3598,6 +3608,7 @@ async fn test_an_exit_is_recoverable_until_swept(#[case] backend: SignerBackend)
     )
     .await?;
     assert!(after.leaves.is_empty(), "a swept exit is not quoted");
+    assert!(after.skipped.is_empty(), "nor listed as skipped");
     if restorable {
         let mut restored = rebuild_on_empty_storage(&sdk).await?;
         restored.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -3780,6 +3791,15 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         "funds that cannot pay the fee are left out of the quote"
     );
     assert_eq!(
+        unaffordable.skipped,
+        vec![SkippedLeaf {
+            leaf_id: leaf_id.clone(),
+            value_sats: leaf.value_sats,
+            reason: SkippedLeafReason::FeeExceedsValue,
+        }],
+        "and listed with the reason"
+    );
+    assert_eq!(
         get_info(&sdk).await?.recoverable_funds_sats,
         leaf.value_sats
     );
@@ -3925,6 +3945,7 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
     )
     .await?;
     assert!(after.leaves.is_empty(), "recovered funds are not quoted");
+    assert!(after.skipped.is_empty(), "nor listed as skipped");
     let response = recover(&sdk, prepared).await?;
     assert!(
         response.leaves.is_empty()
