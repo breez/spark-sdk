@@ -13,9 +13,9 @@ use spark_wallet::{
     ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
     ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
     ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, SpendInfo,
-    TreeNode, TreeNodeId, TreeNodeStatus, UnilateralExitBuild, build_unilateral_exit,
-    check_exit_chain, is_ephemeral_anchor_output, leaf_refund_addresses, scan_exit_chain,
-    scan_funding,
+    TreeNode, TreeNodeId, TreeNodeStatus, UnilateralExitBuild, UnilateralExitSkipReason,
+    UnilateralExitSkippedLeaf, build_unilateral_exit, check_exit_chain, is_ephemeral_anchor_output,
+    leaf_refund_addresses, scan_exit_chain, scan_funding,
 };
 
 use tracing::{debug, error, trace, warn};
@@ -27,7 +27,8 @@ use crate::{
         ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
         ExitChainState as ModelExitChainState, ExitLeafSelection, ExitNodeConfirmation, ExitRefund,
         ExitRefundState, ExitTransactionStatus, PerBranchFunding, RecoverFundsLeaf,
-        RecoveryFunding, RecoveryMethod, RecoveryTransaction, RecoveryTxKind,
+        RecoveryFunding, RecoveryMethod, RecoveryTransaction, RecoveryTxKind, SkippedLeaf,
+        SkippedLeafReason,
     },
     persist::{CachedExitingLeaf, ObjectCacheRepository, SeenAt},
     signer::CpfpSigner,
@@ -38,6 +39,7 @@ use super::{BreezSdk, recover_funds::run_checks};
 #[derive(Default)]
 pub(super) struct UnilateralQuote {
     pub(super) leaves: Vec<RecoverFundsLeaf>,
+    pub(super) skipped: Vec<SkippedLeaf>,
     pub(super) recoverable_value_sat: u64,
     pub(super) total_fee_sat: u64,
     pub(super) cpfp_fee_sat: u64,
@@ -106,7 +108,11 @@ impl BreezSdk {
             .await;
         // A leaf whose exit already finished is not exited again, whether named or
         // not; `exit_chain_state` still reports it as swept or stopped.
+        let before = context.leaf_ids.clone();
         context.drop_finished_leaves(&exit_chain_state);
+        let mut skipped = self
+            .skipped_dropped_leaves(&before, &context, &exit_chain_state)
+            .await;
 
         let quote = self.spark_wallet.quote_unilateral_exit(
             &context,
@@ -117,6 +123,7 @@ impl BreezSdk {
             dest_script_len,
             &exit_chain_state,
         )?;
+        skipped.extend(quote.skipped_leaves.iter().map(skipped_by_planner));
         // No selected leaves is not an error: return an empty quote.
         let recoverable_value_sat = quote
             .selected_leaves
@@ -162,6 +169,7 @@ impl BreezSdk {
 
         Ok(UnilateralQuote {
             leaves,
+            skipped,
             recoverable_value_sat,
             total_fee_sat: quote.total_fee_sat,
             cpfp_fee_sat: quote.cpfp_fee_sat,
@@ -480,6 +488,38 @@ impl BreezSdk {
         }
     }
 
+    /// The leaves of `before` that `context` dropped although their exit did not
+    /// finish in a sweep.
+    async fn skipped_dropped_leaves(
+        &self,
+        before: &[TreeNodeId],
+        context: &spark_wallet::ExitContext,
+        state: &WalletExitChainState,
+    ) -> Vec<SkippedLeaf> {
+        let repository = ObjectCacheRepository::new(self.storage.clone());
+        let mut skipped = Vec::new();
+        for leaf_id in before {
+            if context.leaf_ids.contains(leaf_id) {
+                continue;
+            }
+            let Some(leaf) = context.tree_nodes.get(leaf_id) else {
+                continue;
+            };
+            let recorded_swept = matches!(
+                repository.fetch_exiting_leaf(&leaf_id.to_string()).await,
+                Ok(Some(record)) if record.swept.is_some()
+            );
+            if let Some(reason) = dropped_leaf_reason(leaf_id, state, recorded_swept) {
+                skipped.push(SkippedLeaf {
+                    leaf_id: leaf_id.to_string(),
+                    value_sats: leaf.value,
+                    reason,
+                });
+            }
+        }
+        skipped
+    }
+
     /// `None` when the stored chain or a lookup is missing.
     async fn exit_swept(&self, leaf_id: &TreeNodeId) -> Option<bool> {
         let context = match self
@@ -570,6 +610,40 @@ pub(super) async fn check_recovery_transactions(
 
     resolve_statuses(chain, transactions).await?;
     Ok(check.diverged)
+}
+
+/// Why a quote leaves out a leaf its context dropped. `None` when the leaf's
+/// exit finished in a sweep, which the chain read or an earlier record shows.
+fn dropped_leaf_reason(
+    leaf_id: &TreeNodeId,
+    state: &WalletExitChainState,
+    recorded_swept: bool,
+) -> Option<SkippedLeafReason> {
+    if recorded_swept || is_swept(state, leaf_id) {
+        return None;
+    }
+    Some(if state.stopped_leaves.contains(leaf_id) {
+        SkippedLeafReason::NotRecoverable {
+            message: "A transaction the wallet cannot continue from took the leaf's exit \
+                      on-chain"
+                .to_string(),
+        }
+    } else {
+        SkippedLeafReason::FundsNotFound
+    })
+}
+
+fn skipped_by_planner(leaf: &UnilateralExitSkippedLeaf) -> SkippedLeaf {
+    SkippedLeaf {
+        leaf_id: leaf.id.to_string(),
+        value_sats: leaf.value,
+        reason: match &leaf.reason {
+            UnilateralExitSkipReason::Unprofitable => SkippedLeafReason::FeeExceedsValue,
+            UnilateralExitSkipReason::Unexitable(reason) => SkippedLeafReason::NotRecoverable {
+                message: format!("The leaf cannot be exited: {reason}"),
+            },
+        },
+    }
 }
 
 fn swept_record(recorded: Option<SeenAt>, swept: bool, tip: Option<u32>) -> Option<SeenAt> {
@@ -1560,6 +1634,22 @@ mod tests {
             swept_leaves(&state, &leaves),
             vec![id("swept")],
             "a stopped leaf stays recoverable"
+        );
+
+        assert_eq!(dropped_leaf_reason(&id("swept"), &state, false), None);
+        assert!(matches!(
+            dropped_leaf_reason(&id("stopped"), &state, false),
+            Some(SkippedLeafReason::NotRecoverable { .. })
+        ));
+        assert_eq!(
+            dropped_leaf_reason(&id("open"), &state, false),
+            Some(SkippedLeafReason::FundsNotFound),
+            "a leaf the chain read says nothing about"
+        );
+        assert_eq!(
+            dropped_leaf_reason(&id("open"), &state, true),
+            None,
+            "a sweep an earlier read recorded"
         );
     }
 

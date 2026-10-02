@@ -92,9 +92,11 @@ Its fields tell you how much Bitcoin to gather and how to structure it:
 
 Only a unilateral exit with steps left to broadcast needs funding. {{#name funding}} is unset when every leaf is recovered cooperatively, or when only a sweep is left, which pays its fee from the refunds it spends.
 
+{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK did not find the leaf's funds on-chain, or could not read the chain for them, and a later quote can find them. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
+
 Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found for the unilateral exit: which nodes are already on-chain, which refunds landed, and which of those have been swept. {{#name recover_funds}} builds only the steps still left, so it takes the whole {{#name PrepareRecoverFundsResponse}} unchanged. {{#name exit_chain_state}} also shows how far an exit has got.
 
-The fee rate can be zero. That builds transactions that pay no fee, which nodes do not relay: they reach a block only through a miner you hand them to, for example an accelerator service paid separately.
+The fee rate can be zero. That builds transactions that pay no fee, which nodes do not relay: they reach a block only through a miner you hand them to, for example an accelerator service paid separately. The same holds for a cooperative recovery that pays its destination less than the dust limit: the SDK builds it, and nodes do not relay it.
 
 ### The fee components, and what arrives
 
@@ -128,7 +130,7 @@ Two rules keep a recovery from ever costing more than it returns:
 
 If the single-UTXO total is not worth it, either fund per branch, or narrow the set: quote again with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
 
-If nothing is selected (no leaf is worth recovering at the given fee rate, the leaves' recoveries already finished, or there is nothing to recover) the response comes back empty rather than as an error.
+If nothing is selected (no leaf is worth recovering at the given fee rate, the leaves' recoveries already finished, or there is nothing to recover) the response comes back with no {{#name leaves}} rather than as an error. {{#name skipped}} names each leaf the quote left out and why.
 
 {{#tabs recover_funds:prepare-recover-funds}}
 
@@ -295,7 +297,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | {{#name prepare_recover_funds}} returns no {{#name leaves}} | No leaf is worth recovering at the current rate, the leaves' recoveries already finished, or there is nothing to recover | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees. A finished recovery has nothing left to recover (this is not an error) |
-| A leaf named with {{#enum ExitLeafSelection::Specific}} is missing from the quote | Its recovery finished, or it is a cooperative leaf whose funds cannot pay the fee of their own recovery at this fee rate, or whose funds the wallet has not found | Lower {{#name fee_rate_sat_per_vbyte}}, or quote again later |
+| A leaf your {{#name selection}} covers is missing from the {{#name leaves}} of the quote | Its recovery finished, or the quote left it out | A leaf the quote left out is in {{#name skipped}} with its {{#name reason}}. Lower {{#name fee_rate_sat_per_vbyte}} for {{#enum SkippedLeafReason::FeeExceedsValue}}, and quote again later for {{#enum SkippedLeafReason::FundsNotFound}} |
 | A leaf you are mid-recovery on is missing from a new {{#enum ExitLeafSelection::All}} or {{#enum ExitLeafSelection::RecoverableOnly}} quote | Those selections keep only leaves worth recovering at the new fee rate | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from the kept response |
 | A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::OperatorsUnavailable}} | The operators could not be reached to co-sign its recovery | Quote and build again once they are reachable |
 | A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::ReplacementFeeTooLow}} | An earlier recovery of it is on the network, and the new one pays too little to replace it | Quote and build again at a fee rate of at least the one the error names, or let the earlier recovery confirm |

@@ -398,6 +398,7 @@ pub struct _PrepareRecoverFundsRequest {
 #[frb(mirror(PrepareRecoverFundsResponse))]
 pub struct _PrepareRecoverFundsResponse {
     pub leaves: Vec<RecoverFundsLeaf>,
+    pub skipped: Vec<SkippedLeaf>,
     pub recoverable_value_sats: u64,
     pub total_fee_sats: u64,
     pub cooperative_fee_sats: u64,
@@ -421,6 +422,20 @@ pub struct _RecoverFundsLeaf {
     pub leaf_id: String,
     pub value_sats: u64,
     pub method: RecoveryMethod,
+}
+
+#[frb(mirror(SkippedLeaf))]
+pub struct _SkippedLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub reason: SkippedLeafReason,
+}
+
+#[frb(mirror(SkippedLeafReason))]
+pub enum _SkippedLeafReason {
+    FeeExceedsValue,
+    FundsNotFound,
+    NotRecoverable { message: String },
 }
 
 #[frb(mirror(RecoveryMethod))]

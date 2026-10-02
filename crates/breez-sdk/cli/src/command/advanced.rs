@@ -6,7 +6,7 @@ use breez_sdk_spark::{
     BreezSdk, CheckRecoverFundsRequest, CpfpFundingKind, CpfpInput, ExitLeafSelection,
     ExitTransactionStatus, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
     PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryMethod,
-    RecoveryVerdict,
+    RecoveryVerdict, SkippedLeaf, SkippedLeafReason,
 };
 use clap::{Subcommand, ValueEnum};
 use rustyline::{Editor, history::DefaultHistory};
@@ -153,10 +153,8 @@ async fn recover_funds(
 ) -> Result<bool, anyhow::Error> {
     let mut prepared = sdk.prepare_recover_funds(request.clone()).await?;
     if prepared.leaves.is_empty() {
-        println!(
-            "Nothing to recover: each selected leaf is finished, not worth recovering at this fee \
-             rate, or its funds were not found."
-        );
+        println!("Nothing to recover.");
+        print_skipped(&prepared.skipped);
         return Ok(true);
     }
     print_quote(&prepared)?;
@@ -248,7 +246,22 @@ fn print_quote(prepared: &PrepareRecoverFundsResponse) -> Result<(), anyhow::Err
         prepared.recoverable_value_sats,
         prepared.total_fee_sats,
     );
+    print_skipped(&prepared.skipped);
     Ok(())
+}
+
+fn print_skipped(skipped: &[SkippedLeaf]) {
+    for leaf in skipped {
+        let reason = match &leaf.reason {
+            SkippedLeafReason::FeeExceedsValue => "recovering it costs too much at this fee rate",
+            SkippedLeafReason::FundsNotFound => "its funds were not found on-chain",
+            SkippedLeafReason::NotRecoverable { message } => message,
+        };
+        println!(
+            "Left out: leaf {} ({} sats): {reason}",
+            leaf.leaf_id, leaf.value_sats
+        );
+    }
 }
 
 async fn check_recover_funds(
