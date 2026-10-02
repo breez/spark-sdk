@@ -222,6 +222,10 @@ impl BreezSdk {
                 false
             };
 
+            if sync_type.contains(SyncType::Wallet) {
+                self.sync_recoverable_funds().await;
+            }
+
             (wallet_synced, wallet_state_synced)
         };
 

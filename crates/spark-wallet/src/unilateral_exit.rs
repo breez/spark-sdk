@@ -19,9 +19,19 @@ use crate::SparkWalletError;
 pub enum ExitLeafSelection {
     /// Exit every available leaf whose value exceeds its marginal exit cost.
     Auto,
+    /// Exit the leaves in one of the [`EXITING_STATUSES`] whose value exceeds
+    /// their marginal exit cost.
+    Exiting,
     /// Exit exactly these leaves, regardless of profitability.
     Specific(Vec<TreeNodeId>),
 }
+
+/// The statuses of a leaf whose exit started on-chain.
+pub const EXITING_STATUSES: [TreeNodeStatus; 3] = [
+    TreeNodeStatus::OnChain,
+    TreeNodeStatus::Exited,
+    TreeNodeStatus::ParentExited,
+];
 
 /// Everything needed to unilaterally exit the wallet's leaves with the
 /// operators unreachable: each leaf paired with its ancestor chain.
@@ -281,12 +291,12 @@ struct ExitChainWalk {
 /// An index over the observations for O(1) lookup by query, built once per
 /// [`interpret_chain`] pass instead of scanning the growing observation list on
 /// every lookup. The first observation of a query wins, matching the prior scan.
-struct ObservedIndex<'a> {
+pub(crate) struct ObservedIndex<'a> {
     by_query: HashMap<&'a ChainQuery, &'a ChainResult>,
 }
 
 impl<'a> ObservedIndex<'a> {
-    fn new(observed: &'a [Observation]) -> Self {
+    pub(crate) fn new(observed: &'a [Observation]) -> Self {
         let mut by_query = HashMap::with_capacity(observed.len());
         for obs in observed {
             by_query.entry(&obs.query).or_insert(&obs.result);
@@ -294,7 +304,7 @@ impl<'a> ObservedIndex<'a> {
         Self { by_query }
     }
 
-    fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
+    pub(crate) fn get(&self, query: &ChainQuery) -> Option<&'a ChainResult> {
         self.by_query.get(query).copied()
     }
 }
@@ -1090,7 +1100,9 @@ fn walk_branch(
 /// three post-broadcast states:
 ///
 /// - unspent: [`RefundState::Adopted`], swept by the build,
-/// - spent by a confirmed tx: [`RefundState::Swept`], nothing left to do,
+/// - spent by a confirmed tx that pays the address again: that output takes the
+///   refund's place and is resolved the same way,
+/// - spent by any other confirmed tx: [`RefundState::Swept`], nothing left to do,
 /// - spent by an unconfirmed tx: still [`RefundState::Adopted`], so a sweep sitting
 ///   in the mempool is rebuilt and handed back to rebroadcast rather than dropped.
 ///
@@ -1123,34 +1135,53 @@ fn interpret_refund(
     // Only one refund variant lands, but once it has the address is public and a
     // later payment to it is listed first, so the refund is the largest confirmed
     // output. No confirmed output means the refund is not on-chain yet.
-    let Some(txo) = txos.iter().filter(|t| t.confirmed).max_by_key(|t| t.value) else {
+    let Some(mut txo) = txos.iter().filter(|t| t.confirmed).max_by_key(|t| t.value) else {
         return;
     };
+    let mut steps = 0;
+    loop {
+        // Each step moves to another listed output, so more steps than outputs
+        // means the listing contradicts itself.
+        steps += 1;
+        if steps > txos.len() {
+            unverified.insert(leaf_id.clone());
+            return;
+        }
+        let outspend_query = ChainQuery::Outspend(OutPoint {
+            txid: txo.txid,
+            vout: txo.vout,
+        });
+        let Some(spend) = observed.get(&outspend_query) else {
+            pending.push(outspend_query);
+            return;
+        };
+        let spender = match spend {
+            ChainResult::Spend(Some(info)) if info.confirmed => info.spender_txid,
+            ChainResult::Unavailable => {
+                unverified.insert(leaf_id.clone());
+                return;
+            }
+            // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep
+            // is (re)built.
+            _ => break,
+        };
+        // A child that pays the refund's fee out of its value pays the leaf's key
+        // again.
+        let Some(next) = txos
+            .iter()
+            .filter(|t| t.confirmed && t.txid == spender)
+            .max_by_key(|t| t.value)
+        else {
+            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
+            refunds.insert(leaf_id.clone(), RefundState::Swept);
+            return;
+        };
+        txo = next;
+    }
     let refund_outpoint = OutPoint {
         txid: txo.txid,
         vout: txo.vout,
     };
-
-    let outspend_query = ChainQuery::Outspend(refund_outpoint);
-    let Some(spend) = observed.get(&outspend_query) else {
-        pending.push(outspend_query);
-        return;
-    };
-    match spend {
-        // Spent by a confirmed tx: the sweep landed, nothing to drive or sweep.
-        ChainResult::Spend(Some(info)) if info.confirmed => {
-            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
-            refunds.insert(leaf_id.clone(), RefundState::Swept);
-            return;
-        }
-        ChainResult::Unavailable => {
-            unverified.insert(leaf_id.clone());
-            return;
-        }
-        // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep is
-        // (re)built.
-        _ => {}
-    }
 
     let tx_query = ChainQuery::Transaction(txo.txid);
     let Some(result) = observed.get(&tx_query) else {
@@ -3495,6 +3526,91 @@ mod interpret_tests {
             ),
             "a refund spent by a confirmed sweep is swept"
         );
+    }
+
+    /// The leaf, its refund and a child of that refund paying the leaf's address
+    /// again, with the address listing that holds both outputs.
+    fn refund_with_child() -> (
+        UnilateralExitPlan,
+        TreeNodeId,
+        Vec<Observation>,
+        OutPoint,
+        Transaction,
+    ) {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = tx_spending(deposit, 1);
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+        let leaf_parent_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf_cpfp = tx_spending(leaf_parent_out, 2);
+        let leaf_cpfp_txid = leaf_cpfp.compute_txid();
+        let leaf = treenode("leaf", Some("root"), leaf_cpfp, 0);
+        let leaf_id = leaf.id.clone();
+        let prepared = prepared_of(root, leaf);
+
+        let refund_outpoint = OutPoint {
+            txid: Txid::from_byte_array([5u8; 32]),
+            vout: 0,
+        };
+        let child_tx = tx_spending(refund_outpoint, 6);
+        let child_outpoint = OutPoint {
+            txid: child_tx.compute_txid(),
+            vout: 0,
+        };
+        let mut scan = refund_scan(&leaf_id, refund_outpoint.txid, 42_000);
+        if let ChainResult::AddressUtxos(txos) = &mut scan.result {
+            txos.push(AddressUtxo {
+                txid: child_outpoint.txid,
+                vout: 0,
+                value: 41_000,
+                confirmed: true,
+                block_height: None,
+            });
+        }
+        let observed = vec![
+            spent(deposit, root_txid),
+            spent(leaf_parent_out, leaf_cpfp_txid),
+            scan,
+            spent(refund_outpoint, child_outpoint.txid),
+        ];
+        (prepared, leaf_id, observed, child_outpoint, child_tx)
+    }
+
+    #[test]
+    fn interpret_adopts_the_output_of_a_child_paying_the_address_again() {
+        let (prepared, leaf_id, mut observed, child_outpoint, child_tx) = refund_with_child();
+        observed.push(unspent(child_outpoint));
+        observed.push(Observation {
+            query: ChainQuery::Transaction(child_outpoint.txid),
+            result: ChainResult::Transaction(child_tx),
+        });
+        let interp = interpret_chain(&prepared, &observed);
+
+        match interp.resolved.refunds.get(&leaf_id) {
+            Some(RefundState::Adopted(adopted)) => {
+                assert_eq!(adopted.outpoint, child_outpoint);
+                assert_eq!(adopted.value, 41_000);
+            }
+            other => panic!("expected the child's output adopted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interpret_marks_swept_once_the_child_output_is_spent() {
+        let (prepared, leaf_id, mut observed, child_outpoint, _) = refund_with_child();
+        observed.push(spent(child_outpoint, Txid::from_byte_array([7u8; 32])));
+        let interp = interpret_chain(&prepared, &observed);
+
+        assert!(matches!(
+            interp.resolved.refunds.get(&leaf_id),
+            Some(RefundState::Swept)
+        ));
     }
 
     #[test]

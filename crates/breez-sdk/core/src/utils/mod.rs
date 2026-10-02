@@ -7,6 +7,7 @@ pub(crate) mod expiring_cell;
 pub(crate) mod fees;
 pub(crate) mod payments;
 pub(crate) mod polling;
+pub(crate) mod replacement;
 pub mod serde_helpers;
 pub(crate) mod time;
 pub(crate) mod token;

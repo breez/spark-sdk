@@ -492,6 +492,12 @@ async fn test_get_leaves_not_available() {
 }
 
 #[wasm_bindgen_test]
+async fn test_get_leaves_with_status() {
+    let store = create_test_tree_store("mysql_tree_leaves_with_status").await;
+    breez_sdk_spark::tree_store_tests::test_get_leaves_with_status(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_get_leaves_missing_operators_filters_spent() {
     let store = create_test_tree_store("mysql_tree_missing_ops_spent").await;
     breez_sdk_spark::tree_store_tests::test_get_leaves_missing_operators_filters_spent(&store)

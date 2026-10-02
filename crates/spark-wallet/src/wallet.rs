@@ -51,6 +51,7 @@ use spark::{
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        WatchtowerRecoveryService,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -79,6 +80,7 @@ use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
+use crate::watchtower_exit::WatchtowerExitedOutput;
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest,
     MasterIdentityPublicKeyUpdate, PreimageRequest, QuerySparkInvoiceResult, TokenBalance,
@@ -86,7 +88,8 @@ use crate::{
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{
-        CpfpChangeInput, ExitLeafSelection, ExitStateExport, ExitStateImport, RefundOutput,
+        CpfpChangeInput, EXITING_STATUSES, ExitLeafSelection, ExitStateExport, ExitStateImport,
+        RefundOutput,
     },
 };
 
@@ -383,6 +386,7 @@ pub struct SparkWallet {
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
     transfer_service: Arc<TransferService>,
+    watchtower_recovery_service: Arc<WatchtowerRecoveryService>,
     swap_service: Arc<Swap>,
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
@@ -480,6 +484,12 @@ impl SparkWallet {
             config.split_secret_threshold,
             operator_pool.clone(),
             transfer_observer.clone(),
+        ));
+
+        let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
+            Arc::clone(&spark_signer),
+            config.network,
+            operator_pool.clone(),
         ));
 
         let lightning_service = Arc::new(LightningService::new(
@@ -599,6 +609,7 @@ impl SparkWallet {
             token_output_service,
             coop_exit_service,
             transfer_service,
+            watchtower_recovery_service,
             swap_service,
             lightning_service,
             ssp_client: service_provider.clone(),
@@ -974,6 +985,37 @@ impl SparkWallet {
         };
 
         Ok(refund_tx)
+    }
+
+    pub async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        Ok(self.tree_service.list_leaves_with_status(statuses).await?)
+    }
+
+    pub async fn fetch_nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
+        Ok(self
+            .tree_service
+            .fetch_nodes(leaf_ids, true)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect())
+    }
+
+    pub async fn cosign_watchtower_exit_recovery(
+        &self,
+        output: &WatchtowerExitedOutput,
+        recovery_tx: Transaction,
+    ) -> Result<Transaction, SparkWalletError> {
+        Ok(self
+            .watchtower_recovery_service
+            .cosign_recovery_tx(&output.leaf_id, recovery_tx, &output.tx_out)
+            .await?)
     }
 
     pub async fn generate_deposit_address(
@@ -1612,9 +1654,8 @@ impl SparkWallet {
     }
 
     /// Resolves an [`ExitLeafSelection`] into concrete leaf IDs and the
-    /// profitability filter. `Auto` sweeps every available leaf and keeps only
-    /// profitable ones; `Specific` exits exactly the requested leaves regardless
-    /// of profitability.
+    /// profitability filter. `Auto` and `Exiting` keep only profitable leaves;
+    /// `Specific` exits exactly the requested leaves regardless of profitability.
     async fn resolve_leaf_selection(
         &self,
         selection: ExitLeafSelection,
@@ -1640,6 +1681,17 @@ impl SparkWallet {
                 leaf_ids.dedup();
                 Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
             }
+            ExitLeafSelection::Exiting => {
+                let mut leaf_ids: Vec<TreeNodeId> = self
+                    .list_leaves_with_status(&EXITING_STATUSES)
+                    .await?
+                    .into_iter()
+                    .map(|l| l.id)
+                    .collect();
+                leaf_ids.sort();
+                leaf_ids.dedup();
+                Ok((leaf_ids, UnilateralExitLeafFilter::ProfitableOnly))
+            }
             ExitLeafSelection::Specific(mut leaf_ids) => {
                 // Dedup so a leaf listed twice is exited once, mirroring Auto. A
                 // duplicate would otherwise be re-selected with its refund uncovered
@@ -1656,7 +1708,7 @@ impl SparkWallet {
     /// Best-effort refresh so an exit plans against the latest tree state.
     /// Non-fatal: when the operators are unreachable the exit proceeds from
     /// whatever the durable store already holds.
-    async fn refresh_before_exit(&self) {
+    pub async fn refresh_before_exit(&self) {
         if let Err(e) = self.tree_service.refresh_leaves().await {
             warn!("unilateral exit: refresh failed, planning from local state: {e:?}");
         }
@@ -1817,11 +1869,32 @@ impl SparkWallet {
         selection: ExitLeafSelection,
     ) -> Result<ExitContext, SparkWalletError> {
         self.refresh_before_exit().await;
+        self.load_selected_exit_context(selection).await
+    }
+
+    /// [`Self::load_exit_context`] without the refresh.
+    pub async fn load_selected_exit_context(
+        &self,
+        selection: ExitLeafSelection,
+    ) -> Result<ExitContext, SparkWalletError> {
         let (leaf_ids, filter) = self.resolve_leaf_selection(selection).await?;
         let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
         Ok(ExitContext {
             leaf_ids,
             filter,
+            tree_nodes,
+        })
+    }
+
+    /// The context of exactly `leaf_ids`, without the refresh.
+    pub async fn load_stored_exit_context(
+        &self,
+        leaf_ids: Vec<TreeNodeId>,
+    ) -> Result<ExitContext, SparkWalletError> {
+        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
+        Ok(ExitContext {
+            leaf_ids,
+            filter: UnilateralExitLeafFilter::All,
             tree_nodes,
         })
     }
@@ -4444,5 +4517,43 @@ mod tests {
             &output_key,
         )
         .expect("the sweep signs with the key the refund pays to");
+    }
+
+    async fn wallet_holding(leaves: &[TreeNode]) -> SparkWallet {
+        let store = Arc::new(InMemoryTreeStore::new());
+        store.add_leaves(leaves).await.unwrap();
+        wallet_over(store as Arc<dyn TreeStore>).await
+    }
+
+    #[macros::async_test_all]
+    async fn an_exiting_selection_takes_only_the_leaves_whose_exit_started() {
+        let reachable: Vec<TreeNode> = [
+            TreeNodeStatus::OnChain,
+            TreeNodeStatus::Exited,
+            TreeNodeStatus::ParentExited,
+        ]
+        .into_iter()
+        .map(|status| create_test_node_with_parent(&format!("{status:?}"), None, status))
+        .collect();
+        let others = [
+            TreeNodeStatus::Available,
+            TreeNodeStatus::RenewLocked,
+            TreeNodeStatus::WatchtowerExited,
+            TreeNodeStatus::WatchtowerExitRecovered,
+        ]
+        .into_iter()
+        .map(|status| create_test_node_with_parent(&format!("{status:?}"), None, status));
+        let wallet =
+            wallet_holding(&reachable.iter().cloned().chain(others).collect::<Vec<_>>()).await;
+
+        let (leaf_ids, filter) = wallet
+            .resolve_leaf_selection(ExitLeafSelection::Exiting)
+            .await
+            .unwrap();
+
+        let mut expected: Vec<TreeNodeId> = reachable.into_iter().map(|l| l.id).collect();
+        expected.sort();
+        assert_eq!(leaf_ids, expected);
+        assert_eq!(filter, UnilateralExitLeafFilter::ProfitableOnly);
     }
 }

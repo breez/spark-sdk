@@ -6,6 +6,7 @@ mod model;
 mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
+mod watchtower_exit;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
@@ -27,8 +28,9 @@ pub use spark::{
         StaticDepositAddress, TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction,
         TokenTransactionStatus, TokenTransferInput, TransferId, TransferObserver,
         TransferObserverError, TransferStatus, TransferTokenOutput, TransferType,
-        UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo, build_cpfp_child, compute_sweep_fee,
-        csv_timelock, p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
+        UnilateralExitPlan, UnilateralExitSelectedLeaf, UnilateralExitSkipReason,
+        UnilateralExitSkippedLeaf, Utxo, build_cpfp_child, compute_sweep_fee, csv_timelock,
+        p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{
@@ -40,10 +42,12 @@ pub use spark::{
         PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
         PreparedTokenTransaction, PreparedTransfer, SecretShare, SecretSource, SecretToSplit,
         SignFrostRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-        SignedSparkInvoice, Signer, SignerError, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-        StartStaticDepositRefundRequest, StartedStaticDepositRefund, TokenTransactionKind,
-        TransferLeafInput, VerifiableSecretShare, account_master_key, default_account_number,
-        identity_master_key, identity_public_key,
+        SignWatchtowerExitRecoveryRequest, SignedSparkInvoice, Signer, SignerError,
+        SparkInvoiceKind, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
+        StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund,
+        StartedWatchtowerExitRecovery, TokenTransactionKind, TransferLeafInput,
+        VerifiableSecretShare, account_master_key, default_account_number, identity_master_key,
+        identity_public_key,
     },
     ssp::*,
     token::{
@@ -73,6 +77,11 @@ pub use spark::{
 pub use unilateral_exit::*;
 pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
+pub use watchtower_exit::{
+    ResolvedWatchtowerExits, UnsignedWatchtowerExitRecovery, WATCHTOWER_EXITED_STATUSES,
+    WatchtowerExitScan, WatchtowerExitedOutput, build_watchtower_exit_recovery,
+    is_watchtower_exited, scan_watchtower_exits,
+};
 
 #[cfg(feature = "test-utils")]
 pub use spark::session_store::tests as session_store_tests;

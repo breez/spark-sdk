@@ -198,11 +198,6 @@ pub fn plan_unilateral_exit(
     destination_script_len: usize,
     on_chain: &ExitChainState,
 ) -> Result<UnilateralExitPlan, ServiceError> {
-    if inputs.is_empty() {
-        return Err(ServiceError::ValidationError(
-            "At least one CPFP input is required".to_string(),
-        ));
-    }
     if leaf_ids.is_empty() {
         return Ok(UnilateralExitPlan {
             selected_leaves: vec![],
@@ -212,12 +207,14 @@ pub fn plan_unilateral_exit(
         });
     }
 
-    let change_script = &inputs[0].witness_utxo.script_pubkey;
-    let change_dust_limit = change_script.minimal_non_dust().to_sat();
+    // Without inputs no CPFP child is built, so the weight is not used.
+    let input_weight = Weight::from_wu(inputs.first().map_or(0, |i| i.signed_input_weight));
     let params = UnilateralExitLeafCostParams {
-        initial_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        single_cpfp_input_weight: Weight::from_wu(inputs[0].signed_input_weight),
-        change_script_len: change_script.len(),
+        initial_cpfp_input_weight: input_weight,
+        single_cpfp_input_weight: input_weight,
+        change_script_len: inputs
+            .first()
+            .map_or(0, |i| i.witness_utxo.script_pubkey.len()),
         destination_script_len,
         fee_rate_sat_per_kw,
     };
@@ -239,8 +236,15 @@ pub fn plan_unilateral_exit(
         .cloned()
         .collect();
 
+    let change_dust_limit = inputs.first().map_or(0, |i| {
+        i.witness_utxo.script_pubkey.minimal_non_dust().to_sat()
+    });
     let (assigned, fan_out_psbt) = if to_build.is_empty() {
         (Vec::new(), None)
+    } else if inputs.is_empty() {
+        return Err(ServiceError::InvalidInput(
+            "At least one funding input is required".to_string(),
+        ));
     } else if to_build.len() == 1 {
         // The single-leaf arm hands every input to the one branch, so unlike the
         // multi-branch paths it has no partition step to reject underfunding. Gate
@@ -337,7 +341,10 @@ pub fn plan_unilateral_exit(
 /// funding they need, sized from the funding kind's weight with no actual UTXOs.
 pub struct UnilateralExitQuote {
     pub selected_leaves: Vec<UnilateralExitSelectedLeaf>,
-    /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats).
+    /// The requested leaves the quote leaves out.
+    pub skipped_leaves: Vec<UnilateralExitSkippedLeaf>,
+    /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats). Only the
+    /// branches with steps left to build need any.
     pub per_branch_funding: Vec<(TreeNodeId, u64)>,
     pub single_utxo_funding_sat: u64,
     /// CPFP children's fees, paid by the funding UTXOs.
@@ -349,6 +356,20 @@ pub struct UnilateralExitQuote {
     pub sweep_fee_sat: u64,
     /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`.
     pub total_fee_sat: u64,
+}
+
+pub struct UnilateralExitSkippedLeaf {
+    pub id: TreeNodeId,
+    pub value: u64,
+    pub reason: UnilateralExitSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnilateralExitSkipReason {
+    /// Its exit costs at least its value.
+    Unprofitable,
+    /// It cannot be exited, for the reason given.
+    Unexitable(String),
 }
 
 /// Like [`plan_unilateral_exit`] but sizes fees from a funding kind's weight with no actual
@@ -375,9 +396,26 @@ pub fn quote_unilateral_exit(
 
     let selected =
         evaluate_unilateral_exit_leaf_costs(tree_nodes, leaf_ids, &params, filter, on_chain)?;
+    let skipped_leaves = leaf_ids
+        .iter()
+        .filter(|id| !selected.iter().any(|leaf| leaf.id == **id))
+        .filter_map(|id| {
+            let leaf = tree_nodes.get(id)?;
+            let reason = match exit_transactions(tree_nodes, leaf, on_chain) {
+                Ok(_) => UnilateralExitSkipReason::Unprofitable,
+                Err(reason) => UnilateralExitSkipReason::Unexitable(reason),
+            };
+            Some(UnilateralExitSkippedLeaf {
+                id: id.clone(),
+                value: leaf.value,
+                reason,
+            })
+        })
+        .collect();
     if selected.is_empty() {
         return Ok(UnilateralExitQuote {
             selected_leaves: vec![],
+            skipped_leaves,
             per_branch_funding: vec![],
             single_utxo_funding_sat: 0,
             cpfp_fee_sat: 0,
@@ -389,6 +427,7 @@ pub fn quote_unilateral_exit(
 
     let per_branch_funding: Vec<(TreeNodeId, u64)> = selected
         .iter()
+        .filter(|l| !is_complete_on_chain(on_chain, tree_nodes, &l.id))
         .map(|l| (l.id.clone(), branch_required_funding(l, change_dust_limit)))
         .collect();
     let leaves_total: u64 = per_branch_funding
@@ -406,13 +445,13 @@ pub fn quote_unilateral_exit(
         .map(|l| l.estimated_cost.saturating_sub(l.cpfp_cost))
         .fold(0u64, u64::saturating_add);
 
-    let fanout_fee_sat = if selected.len() == 1 {
+    let fanout_fee_sat = if per_branch_funding.len() <= 1 {
         0
     } else {
         fan_out_fee(
             Weight::from_wu(funding_input_weight),
             funding_output_script_len,
-            selected.len(),
+            per_branch_funding.len(),
             fee_rate_sat_per_kw,
         )
     };
@@ -423,6 +462,7 @@ pub fn quote_unilateral_exit(
             .saturating_add(fanout_fee_sat)
             .saturating_add(sweep_fee_sat),
         selected_leaves: selected,
+        skipped_leaves,
         per_branch_funding,
         cpfp_fee_sat,
         fanout_fee_sat,
@@ -625,6 +665,33 @@ pub enum UnilateralExitLeafFilter {
     ProfitableOnly,
 }
 
+fn is_unilaterally_exitable(status: TreeNodeStatus) -> bool {
+    match status {
+        // A direct tx took the leaf's funds on-chain, into an output none of its
+        // own transactions spends.
+        TreeNodeStatus::WatchtowerExited | TreeNodeStatus::WatchtowerExitRecovered => false,
+        // Any other status is the operators' label for the leaf: the chain
+        // settles whether its stored transactions still exit it.
+        TreeNodeStatus::Creating
+        | TreeNodeStatus::Available
+        | TreeNodeStatus::FrozenByIssuer
+        | TreeNodeStatus::TransferLocked
+        | TreeNodeStatus::SplitLocked
+        | TreeNodeStatus::Splitted
+        | TreeNodeStatus::Aggregated
+        | TreeNodeStatus::OnChain
+        | TreeNodeStatus::Exited
+        | TreeNodeStatus::AggregateLock
+        | TreeNodeStatus::Investigation
+        | TreeNodeStatus::Lost
+        | TreeNodeStatus::Reimbursed
+        | TreeNodeStatus::RenewLocked
+        | TreeNodeStatus::ParentExited
+        | TreeNodeStatus::Consolidated
+        | TreeNodeStatus::Unknown => true,
+    }
+}
+
 /// A leaf the caller named ([`UnilateralExitLeafFilter::All`]) that can't be exited is an
 /// error; under [`UnilateralExitLeafFilter::ProfitableOnly`] it is warned and skipped.
 fn report_unexitable(
@@ -639,6 +706,39 @@ fn report_unexitable(
     }
     warn!("Leaf {leaf_id} cannot be exited: {reason}; skipping");
     Ok(())
+}
+
+/// The refund and the chain of nodes a unilateral exit of `leaf` builds on, or
+/// why the leaf cannot be exited.
+fn exit_transactions<'a>(
+    tree_nodes: &'a HashMap<TreeNodeId, TreeNode>,
+    leaf: &'a TreeNode,
+    on_chain: &ExitChainState,
+) -> Result<(&'a Transaction, Vec<&'a TreeNode>), String> {
+    if !is_unilaterally_exitable(leaf.status) {
+        return Err(format!("a {} leaf has no unilateral exit", leaf.status));
+    }
+    let Some(refund_tx) = &leaf.refund_tx else {
+        return Err("no refund transaction".to_string());
+    };
+    // A leaf that went out through its direct tx is refunded by its
+    // `direct_refund_tx`, which pays its own fee.
+    let went_direct = on_chain
+        .nodes
+        .iter()
+        .any(|node| node.node_id == leaf.id && node.confirmed_by == ExitNodeConfirmation::Direct);
+    if !on_chain.has_refund(&leaf.id)
+        && !went_direct
+        && !refund_tx.output.iter().any(is_ephemeral_anchor_output)
+    {
+        return Err(
+            "its refund has no anchor output for a child to pay its fee through".to_string(),
+        );
+    }
+    let ancestors = walk_unilateral_exit_chain(tree_nodes, leaf).map_err(|missing| {
+        format!("incomplete ancestor chain (parent {missing} missing from the tree map)")
+    })?;
+    Ok((refund_tx, ancestors))
 }
 
 /// Selects the leaves to exit, highest value first. Greedy: a leaf is kept when
@@ -665,26 +765,10 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
 
     for (leaf_id, leaf) in &leaves {
-        // No status gate here on purpose. A leaf's status is the operators' label
-        // for it, not the state of its output: an already-exited leaf still has to
-        // be selectable so a re-run can pick up the exit where it left off, and a
-        // locked or degraded one is still perfectly exitable from its stored
-        // transactions. What can and cannot be driven is settled by the on-chain
-        // observation, which sees the real spends.
-        let Some(refund_tx) = &leaf.refund_tx else {
-            report_unexitable(filter, leaf_id, "no refund transaction")?;
-            continue;
-        };
-        let ancestors = match walk_unilateral_exit_chain(tree_nodes, leaf) {
-            Ok(ancestors) => ancestors,
-            Err(missing) => {
-                report_unexitable(
-                    filter,
-                    leaf_id,
-                    &format!(
-                        "incomplete ancestor chain (parent {missing} missing from the tree map)"
-                    ),
-                )?;
+        let (refund_tx, ancestors) = match exit_transactions(tree_nodes, leaf, on_chain) {
+            Ok(transactions) => transactions,
+            Err(reason) => {
+                report_unexitable(filter, leaf_id, &reason)?;
                 continue;
             }
         };
@@ -1971,7 +2055,124 @@ mod tests {
             assert!(sel.is_empty());
         }
 
+        #[test_all]
+        fn evaluate_takes_only_unilaterally_exitable_statuses() {
+            for status in [
+                TreeNodeStatus::WatchtowerExited,
+                TreeNodeStatus::WatchtowerExitRecovered,
+            ] {
+                let mut node = leaf_node("leaf", 1_000_000);
+                node.status = status;
+                let id = node.id.clone();
+                let nodes: HashMap<TreeNodeId, TreeNode> =
+                    [(id.clone(), node)].into_iter().collect();
+
+                assert!(
+                    evaluate_unilateral_exit_leaf_costs(
+                        &nodes,
+                        std::slice::from_ref(&id),
+                        &cost_params(),
+                        UnilateralExitLeafFilter::All,
+                        &ExitChainState::default(),
+                    )
+                    .is_err()
+                );
+                let sel = evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    &[id],
+                    &cost_params(),
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    &ExitChainState::default(),
+                )
+                .unwrap();
+                assert!(sel.is_empty());
+            }
+        }
+
+        #[test_all]
+        fn evaluate_takes_a_refund_without_an_anchor_only_once_it_is_on_chain() {
+            let mut node = leaf_node("leaf", 1_000_000);
+            node.refund_tx = Some(Transaction {
+                version: Version::non_standard(3),
+                lock_time: LockTime::ZERO,
+                input: Vec::new(),
+                output: vec![TxOut {
+                    value: Amount::from_sat(1_000_000),
+                    script_pubkey: ScriptBuf::new(),
+                }],
+            });
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+            let evaluate = |filter, on_chain: &ExitChainState| {
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    std::slice::from_ref(&id),
+                    &cost_params(),
+                    filter,
+                    on_chain,
+                )
+            };
+
+            let nothing = ExitChainState::default();
+            assert!(evaluate(UnilateralExitLeafFilter::All, &nothing).is_err());
+            let skipped = evaluate(UnilateralExitLeafFilter::ProfitableOnly, &nothing).unwrap();
+            assert!(skipped.is_empty());
+
+            let refunded = on_chain_state(std::slice::from_ref(&id), std::slice::from_ref(&id));
+            let selected = evaluate(UnilateralExitLeafFilter::All, &refunded).unwrap();
+            assert_eq!(selected.len(), 1);
+        }
+
         const DUST: u64 = 330;
+
+        #[test_all]
+        fn quote_reports_the_leaves_it_leaves_out() {
+            let worth_it = leaf_node_n("worth-it", 1_000_000, 1);
+            let too_small = leaf_node_n("too-small", 400, 2);
+            let mut no_refund = leaf_node_n("no-refund", 1_000_000, 3);
+            no_refund.refund_tx = None;
+            let ids = [
+                worth_it.id.clone(),
+                too_small.id.clone(),
+                no_refund.id.clone(),
+            ];
+            let nodes: HashMap<TreeNodeId, TreeNode> = [worth_it, too_small, no_refund]
+                .into_iter()
+                .map(|node| (node.id.clone(), node))
+                .collect();
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &ids,
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &ExitChainState::default(),
+            )
+            .unwrap();
+
+            assert_eq!(quote.selected_leaves.len(), 1);
+            assert_eq!(quote.selected_leaves[0].id, ids[0]);
+            let skipped: Vec<(TreeNodeId, u64, UnilateralExitSkipReason)> = quote
+                .skipped_leaves
+                .into_iter()
+                .map(|leaf| (leaf.id, leaf.value, leaf.reason))
+                .collect();
+            assert_eq!(
+                skipped,
+                vec![
+                    (ids[1].clone(), 400, UnilateralExitSkipReason::Unprofitable),
+                    (
+                        ids[2].clone(),
+                        1_000_000,
+                        UnilateralExitSkipReason::Unexitable("no refund transaction".to_string())
+                    ),
+                ]
+            );
+        }
 
         #[test_all]
         fn quote_single_leaf_has_no_fanout_fee() {
@@ -2373,6 +2574,87 @@ mod tests {
             assert_eq!(quote.single_utxo_funding_sat, 0);
             assert_eq!(quote.fanout_fee_sat, 0);
             assert_eq!(quote.total_fee_sat, 0);
+        }
+
+        fn refunded_leaves() -> (
+            HashMap<TreeNodeId, TreeNode>,
+            Vec<TreeNodeId>,
+            ExitChainState,
+        ) {
+            let leaves = [leaf_node_n("a", 100_000, 1), leaf_node_n("b", 100_000, 2)];
+            let ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
+            let mut on_chain = on_chain_state(&ids, &[]);
+            on_chain.refunds = leaves
+                .iter()
+                .map(|leaf| ExitRefund {
+                    leaf_id: leaf.id.clone(),
+                    state: ExitRefundState::OnChain {
+                        tx: leaf.refund_tx.clone().unwrap(),
+                        vout: 0,
+                        value: leaf.value,
+                        block_height: None,
+                    },
+                })
+                .collect();
+            let nodes = leaves
+                .into_iter()
+                .map(|leaf| (leaf.id.clone(), leaf))
+                .collect();
+            (nodes, ids, on_chain)
+        }
+
+        #[test_all]
+        fn leaves_with_only_the_sweep_left_need_no_funding() {
+            let (nodes, ids, on_chain) = refunded_leaves();
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert_eq!(quote.selected_leaves.len(), 2);
+            assert!(quote.per_branch_funding.is_empty());
+            assert_eq!(quote.fanout_fee_sat, 0);
+            assert_eq!(quote.single_utxo_funding_sat, 0);
+
+            let plan = plan_unilateral_exit(
+                nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                Vec::new(),
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert_eq!(plan.selected_leaves.len(), 2);
+            assert!(plan.fan_out_psbt.is_none());
+        }
+
+        #[test_all]
+        fn a_leaf_with_steps_left_needs_funding_to_plan() {
+            let node = leaf_node("leaf", 1_000_000);
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+
+            let result = plan_unilateral_exit(
+                nodes,
+                &[id],
+                UnilateralExitLeafFilter::All,
+                Vec::new(),
+                250,
+                22,
+                &ExitChainState::default(),
+            );
+
+            assert!(matches!(result, Err(ServiceError::InvalidInput(_))));
         }
     }
 }

@@ -10,8 +10,8 @@ import 'serialization.dart';
 
 /// Advanced subcommand names (used for help and tab completion).
 const advancedCommandNames = [
-  'advanced unilateral-exit',
-  'advanced check-unilateral-exit',
+  'advanced recover-funds',
+  'advanced check-recover-funds',
   'advanced export-unilateral-exit-state',
   'advanced import-unilateral-exit-state',
 ];
@@ -28,13 +28,13 @@ Map<String, _AdvancedEntry>? _registry;
 
 Map<String, _AdvancedEntry> _getRegistry() {
   return _registry ??= {
-    'unilateral-exit': _AdvancedEntry(
-      'Build and sign a unilateral exit (expert-only)',
-      _handleUnilateralExit,
+    'recover-funds': _AdvancedEntry(
+      'Recover the funds that left the balance, or with --all every leaf',
+      _handleRecoverFunds,
     ),
-    'check-unilateral-exit': _AdvancedEntry(
-      'Check a signed exit against the chain',
-      _handleCheckUnilateralExit,
+    'check-recover-funds': _AdvancedEntry(
+      'Read a recovery written by recover-funds back against the chain',
+      _handleCheckRecoverFunds,
     ),
     'export-unilateral-exit-state': _AdvancedEntry(
       'Export the wallet\'s unilateral exit state to a file',
@@ -71,7 +71,7 @@ Future<void> dispatchAdvancedCommand(List<String> args, BreezSdk sdk) async {
   await registry[subName]!.handler(sdk, subArgs);
 }
 
-// --- unilateral-exit ---
+// --- argument parsing ---
 
 CpfpFundingKind? _parseFundingKind(String s) {
   switch (s.toLowerCase()) {
@@ -99,77 +99,6 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
     print(parser.usage);
     print('\nError: ${e.message}');
     return null;
-  }
-}
-
-Future<void> _handleUnilateralExit(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
-        ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
-        ..addOption('destination', mandatory: true, help: 'Destination address for swept funds')
-        ..addMultiOption('leaf', help: 'Leaf id to exit (repeatable). Omit to auto-select.')
-        ..addOption('output-file', help: 'File to write the signed exit to');
-  final results = _parseArgs(
-    parser,
-    args,
-    'advanced unilateral-exit --fee-rate <rate> --destination <addr> [--funding-kind p2tr] [--leaf <id>...]',
-  );
-  if (results == null) return;
-
-  final feeRate = BigInt.parse(results.option('fee-rate')!);
-  final fundingKindStr = results.option('funding-kind')!;
-  final fundingKind = _parseFundingKind(fundingKindStr);
-  if (fundingKind == null) {
-    print('Invalid funding kind: $fundingKindStr (expected p2wpkh or p2tr)');
-    return;
-  }
-  final destination = results.option('destination')!;
-  final leafIds = results.multiOption('leaf');
-
-  final ExitLeafSelection selection =
-      leafIds.isEmpty ? const ExitLeafSelection.auto() : ExitLeafSelection.specific(leafIds: leafIds);
-
-  final prepared = await sdk.prepareUnilateralExit(
-    request: PrepareUnilateralExitRequest(
-      feeRateSatPerVbyte: feeRate,
-      fundingKind: fundingKind,
-      destination: destination,
-      selection: selection,
-    ),
-  );
-  printValue(prepared);
-
-  if (prepared.leaves.isEmpty) {
-    print('No leaves to exit.');
-    return;
-  }
-
-  final utxoLine = prompt('Funding UTXO(s) as txid:vout:value:pubkey (space-separated, blank to stop): ');
-  if (utxoLine.trim().isEmpty) {
-    print('No funding provided; showing the quote only.');
-    return;
-  }
-
-  final fundingInputs = <CpfpInput>[];
-  for (final u in utxoLine.split(RegExp(r'\s+'))) {
-    if (u.isEmpty) continue;
-    final input = _parseCpfpInput(u, fundingKindStr);
-    if (input == null) return;
-    fundingInputs.add(input);
-  }
-
-  final keyLine = prompt('Hex secret key for the funding UTXO(s): ');
-  final secretKeyBytes = _hexDecode(keyLine.trim());
-
-  final response = await sdk.unilateralExit(
-    request: UnilateralExitRequest(prepared: prepared, fundingInputs: fundingInputs),
-    signerSecretKey: secretKeyBytes,
-  );
-  _printExitTransactions(response);
-  final outputFile = results.option('output-file');
-  if (outputFile != null) {
-    _writeExit(outputFile, response);
   }
 }
 
@@ -208,82 +137,251 @@ Future<void> _handleImportUnilateralExitState(BreezSdk sdk, List<String> args) a
   );
 }
 
-// --- check-unilateral-exit ---
+// --- recover-funds ---
 
-Future<void> _handleCheckUnilateralExit(BreezSdk sdk, List<String> args) async {
+Future<void> _handleRecoverFunds(BreezSdk sdk, List<String> args) async {
+  const usage =
+      'advanced recover-funds --fee-rate <rate> --destination <addr> [--funding-kind p2tr] '
+      '[--all | --leaf <id>...] [--output-file <path>]';
   final parser =
       ArgParser(usageLineLength: 80)
-        ..addOption('input-file', mandatory: true, help: 'File the exit was written to')
-        ..addOption('output-file', help: 'File to write the updated exit to. Defaults to --input-file.');
+        ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
+        ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
+        ..addOption('destination', mandatory: true, help: 'Destination address for the recovered funds')
+        ..addFlag(
+          'all',
+          negatable: false,
+          help:
+              'Recover every leaf worth it, including the ones still in the balance. '
+              'Only for when the operators are unreachable or refuse to serve the wallet.',
+        )
+        ..addMultiOption(
+          'leaf',
+          help: 'Leaf id to recover (repeatable). Omit to recover the leaves that left the balance.',
+        )
+        ..addOption(
+          'output-file',
+          help: 'File to write the signed recovery to, for check-recover-funds to read back',
+        );
+  final results = _parseArgs(parser, args, usage);
+  if (results == null) return;
+
+  final all = results.flag('all');
+  final leafIds = results.multiOption('leaf');
+  if (all && leafIds.isNotEmpty) {
+    print('Usage: $usage');
+    print(parser.usage);
+    print('\nError: --all cannot be used with --leaf');
+    return;
+  }
+  final fundingKindStr = results.option('funding-kind')!;
+  final fundingKind = _parseFundingKind(fundingKindStr);
+  if (fundingKind == null) {
+    print('Invalid funding kind: $fundingKindStr (expected p2wpkh or p2tr)');
+    return;
+  }
+
+  final request = PrepareRecoverFundsRequest(
+    feeRateSatPerVbyte: BigInt.parse(results.option('fee-rate')!),
+    fundingKind: fundingKind,
+    destination: results.option('destination')!,
+    selection: _recoverySelection(all, leafIds),
+  );
+  await _recoverFunds(sdk, request, fundingKindStr, results.option('output-file'));
+}
+
+Future<void> _recoverFunds(
+  BreezSdk sdk,
+  PrepareRecoverFundsRequest request,
+  String fundingKindStr,
+  String? outputFile,
+) async {
+  var prepared = await sdk.prepareRecoverFunds(request: request);
+  if (prepared.leaves.isEmpty) {
+    print(
+      'Nothing to recover: each selected leaf is finished, not worth recovering at this fee rate, '
+      'or its funds were not found.',
+    );
+    return;
+  }
+  _printQuote(prepared);
+  if (outputFile == null) {
+    print('Without --output-file the recovery is only printed: check-recover-funds cannot read it back.');
+  }
+
+  final fundingInputs = <CpfpInput>[];
+  Uint8List? signerSecretKey;
+  final singleUtxoSats = prepared.funding?.singleUtxoSats;
+  if (singleUtxoSats != null) {
+    final utxoLine = prompt(
+      'Funding UTXO(s) of at least $singleUtxoSats sats, as txid:vout:value:pubkey '
+      '(space-separated; for P2TR the internal key; blank to skip the unilateral exit): ',
+    );
+    if (utxoLine.trim().isEmpty) {
+      final cooperative = [
+        for (final leaf in prepared.leaves)
+          if (leaf.method == RecoveryMethod.cooperative) leaf.leafId,
+      ];
+      if (cooperative.isEmpty) {
+        print('Nothing to recover without funding.');
+        return;
+      }
+      print('Recovering only the cooperative leaves:');
+      prepared = await sdk.prepareRecoverFunds(
+        request: PrepareRecoverFundsRequest(
+          feeRateSatPerVbyte: request.feeRateSatPerVbyte,
+          fundingKind: request.fundingKind,
+          destination: request.destination,
+          selection: ExitLeafSelection.specific(leafIds: cooperative),
+        ),
+      );
+      _printQuote(prepared);
+    } else {
+      for (final u in utxoLine.split(RegExp(r'\s+'))) {
+        if (u.isEmpty) continue;
+        final input = _parseCpfpInput(u, fundingKindStr);
+        if (input == null) return;
+        fundingInputs.add(input);
+      }
+      final keyLine = prompt('Hex secret key for the funding UTXO(s): ');
+      signerSecretKey = _hexDecode(keyLine.trim());
+    }
+  }
+
+  final answer = prompt('Sign this recovery? (y/n): ', defaultValue: 'y');
+  if (answer.toLowerCase() != 'y') return;
+
+  final response = await sdk.recoverFunds(
+    request: RecoverFundsRequest(prepared: prepared, fundingInputs: fundingInputs),
+    signerSecretKey: signerSecretKey,
+  );
+  _printRecovery(response);
+  if (outputFile != null) {
+    _writeRecovery(outputFile, response);
+    print(
+      'Next: broadcast the Ready packages. After new blocks, run check-recover-funds '
+      '--input-file $outputFile to see what is ready next.',
+    );
+  } else {
+    print('Next: broadcast the Ready packages.');
+  }
+}
+
+void _printQuote(PrepareRecoverFundsResponse prepared) {
+  printValue(prepared);
+  final cooperative = prepared.leaves.where((leaf) => leaf.method == RecoveryMethod.cooperative).length;
+  print(
+    '${prepared.leaves.length} leaf(s), $cooperative cooperative and '
+    '${prepared.leaves.length - cooperative} unilateral: '
+    'recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees',
+  );
+}
+
+ExitLeafSelection _recoverySelection(bool all, List<String> leafIds) {
+  if (all) return const ExitLeafSelection.all();
+  if (leafIds.isEmpty) return const ExitLeafSelection.recoverableOnly();
+  return ExitLeafSelection.specific(leafIds: leafIds);
+}
+
+// --- check-recover-funds ---
+
+Future<void> _handleCheckRecoverFunds(BreezSdk sdk, List<String> args) async {
+  final parser =
+      ArgParser(usageLineLength: 80)
+        ..addOption('input-file', mandatory: true, help: 'File the recovery was written to')
+        ..addOption('output-file', help: 'File to write the updated recovery to. Defaults to --input-file.');
   final results = _parseArgs(
     parser,
     args,
-    'advanced check-unilateral-exit --input-file <path> [--output-file <path>]',
+    'advanced check-recover-funds --input-file <path> [--output-file <path>]',
   );
   if (results == null) return;
 
-  final inputFile = results.option('input-file')!;
-  final outputFile = results.option('output-file') ?? inputFile;
+  await _checkRecoverFunds(sdk, results.option('input-file')!, results.option('output-file'));
+}
 
-  final exit = _readExit(inputFile);
-  final checked = await sdk.checkUnilateralExit(request: CheckUnilateralExitRequest(exit: exit));
+Future<void> _checkRecoverFunds(BreezSdk sdk, String inputFile, String? outputFile) async {
+  final recovery = _readRecovery(inputFile);
+  final checked = await sdk.checkRecoverFunds(request: CheckRecoverFundsRequest(recovery: recovery));
 
   final verdict = checked.verdict;
-  if (verdict is UnilateralExitVerdict_Redo) {
-    print('Verdict: Redo { reason: "${verdict.reason}" }');
-    print('  (this exit cannot be finished, quote and build it again)');
-  } else if (verdict is UnilateralExitVerdict_Done) {
+  if (verdict is RecoveryVerdict_Redo) {
+    final reason = verdict.reason.name;
+    print('Verdict: Redo { reason: ${reason[0].toUpperCase()}${reason.substring(1)} }');
+    print('  (this recovery cannot finish: run ${_redoCommand(checked.recovery)})');
+  } else if (verdict is RecoveryVerdict_Done) {
     print('Verdict: Done');
   } else {
     print('Verdict: Valid');
   }
-  _printExitTransactions(checked.exit);
-  _writeExit(outputFile, checked.exit);
+  _printRecovery(checked.recovery);
+  _writeRecovery(outputFile ?? inputFile, checked.recovery);
 }
 
-// --- exit file I/O ---
+String _redoCommand(RecoverFundsResponse recovery) => [
+  'recover-funds --fee-rate ${recovery.feeRateSatPerVbyte} --destination ${recovery.destination}',
+  for (final leaf in recovery.leaves) '--leaf ${leaf.leafId}',
+].join(' ');
 
-void _writeExit(String path, UnilateralExitResponse exit) {
-  File(path).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(_exitToJson(exit)));
-  print('Wrote the exit to $path');
+// --- recovery file I/O ---
+
+void _writeRecovery(String path, RecoverFundsResponse recovery) {
+  final temporary = File('$path.tmp');
+  temporary.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(_recoveryToJson(recovery)));
+  temporary.renameSync(path);
+  print('Wrote the recovery to $path');
 }
 
-UnilateralExitResponse _readExit(String path) {
-  return _exitFromJson(jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>);
+RecoverFundsResponse _readRecovery(String path) {
+  return _recoveryFromJson(jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>);
 }
 
-Map<String, dynamic> _exitToJson(UnilateralExitResponse r) => {
-  'recoverableValueSat': r.recoverableValueSat.toString(),
-  'totalFeeSat': r.totalFeeSat.toString(),
-  'cpfpFeeSat': r.cpfpFeeSat.toString(),
-  'fanoutFeeSat': r.fanoutFeeSat.toString(),
-  'sweepFeeSat': r.sweepFeeSat.toString(),
+Map<String, dynamic> _recoveryToJson(RecoverFundsResponse r) => {
+  'recoverableValueSats': r.recoverableValueSats.toString(),
+  'totalFeeSats': r.totalFeeSats.toString(),
+  'cooperativeFeeSats': r.cooperativeFeeSats.toString(),
+  'cpfpFeeSats': r.cpfpFeeSats.toString(),
+  'fanoutFeeSats': r.fanoutFeeSats.toString(),
+  'sweepFeeSats': r.sweepFeeSats.toString(),
   'leaves': [
-    for (final l in r.leaves) {'leafId': l.leafId, 'value': l.value.toString()},
+    for (final l in r.leaves)
+      {'leafId': l.leafId, 'valueSats': l.valueSats.toString(), 'method': l.method.name},
   ],
-  'transactions': [for (final t in r.transactions) _txToJson(t)],
+  'failed': [for (final f in r.failed) _failureToJson(f)],
+  'transactions': [for (final t in r.transactions) _recoveryTxToJson(t)],
   'fundingInputs': [for (final i in r.fundingInputs) _cpfpInputToJson(i)],
+  'feeRateSatPerVbyte': r.feeRateSatPerVbyte.toString(),
+  'destination': r.destination,
 };
 
-UnilateralExitResponse _exitFromJson(Map<String, dynamic> j) {
-  return UnilateralExitResponse(
-    recoverableValueSat: BigInt.parse(j['recoverableValueSat'] as String),
-    totalFeeSat: BigInt.parse(j['totalFeeSat'] as String),
-    cpfpFeeSat: BigInt.parse(j['cpfpFeeSat'] as String),
-    fanoutFeeSat: BigInt.parse(j['fanoutFeeSat'] as String),
-    sweepFeeSat: BigInt.parse(j['sweepFeeSat'] as String),
+RecoverFundsResponse _recoveryFromJson(Map<String, dynamic> j) {
+  return RecoverFundsResponse(
+    recoverableValueSats: BigInt.parse(j['recoverableValueSats'] as String),
+    totalFeeSats: BigInt.parse(j['totalFeeSats'] as String),
+    cooperativeFeeSats: BigInt.parse(j['cooperativeFeeSats'] as String),
+    cpfpFeeSats: BigInt.parse(j['cpfpFeeSats'] as String),
+    fanoutFeeSats: BigInt.parse(j['fanoutFeeSats'] as String),
+    sweepFeeSats: BigInt.parse(j['sweepFeeSats'] as String),
     leaves:
         (j['leaves'] as List).map((e) {
           final l = e as Map<String, dynamic>;
-          return UnilateralExitLeaf(leafId: l['leafId'] as String, value: BigInt.parse(l['value'] as String));
+          return RecoverFundsLeaf(
+            leafId: l['leafId'] as String,
+            valueSats: BigInt.parse(l['valueSats'] as String),
+            method: RecoveryMethod.values.byName(l['method'] as String),
+          );
         }).toList(),
-    transactions: (j['transactions'] as List).map((e) => _txFromJson(e as Map<String, dynamic>)).toList(),
+    failed: (j['failed'] as List).map((e) => _failureFromJson(e as Map<String, dynamic>)).toList(),
+    transactions:
+        (j['transactions'] as List).map((e) => _recoveryTxFromJson(e as Map<String, dynamic>)).toList(),
     fundingInputs:
         (j['fundingInputs'] as List).map((e) => _cpfpInputFromJson(e as Map<String, dynamic>)).toList(),
+    feeRateSatPerVbyte: BigInt.parse(j['feeRateSatPerVbyte'] as String),
+    destination: j['destination'] as String,
   );
 }
 
-Map<String, dynamic> _txToJson(UnilateralExitTransaction tx) => {
+Map<String, dynamic> _recoveryTxToJson(RecoveryTransaction tx) => {
   'kind': tx.kind.name,
   'nodeId': tx.nodeId,
   'txid': tx.txid,
@@ -294,8 +392,8 @@ Map<String, dynamic> _txToJson(UnilateralExitTransaction tx) => {
   'status': _statusToJson(tx.status),
 };
 
-UnilateralExitTransaction _txFromJson(Map<String, dynamic> j) => UnilateralExitTransaction(
-  kind: UnilateralExitTxKind.values.byName(j['kind'] as String),
+RecoveryTransaction _recoveryTxFromJson(Map<String, dynamic> j) => RecoveryTransaction(
+  kind: RecoveryTxKind.values.byName(j['kind'] as String),
   nodeId: j['nodeId'] as String?,
   txid: j['txid'] as String,
   txHex: j['txHex'] as String,
@@ -304,6 +402,113 @@ UnilateralExitTransaction _txFromJson(Map<String, dynamic> j) => UnilateralExitT
   dependsOn: (j['dependsOn'] as List).cast<String>(),
   status: _statusFromJson(j['status'] as Map<String, dynamic>),
 );
+
+Map<String, dynamic> _failureToJson(CooperativeRecoveryFailure f) => {
+  'leafId': f.leafId,
+  'outputTxid': f.outputTxid,
+  'outputVout': f.outputVout,
+  'error': _cooperativeRecoveryErrorToJson(f.error),
+};
+
+CooperativeRecoveryFailure _failureFromJson(Map<String, dynamic> j) => CooperativeRecoveryFailure(
+  leafId: j['leafId'] as String,
+  outputTxid: j['outputTxid'] as String,
+  outputVout: j['outputVout'] as int,
+  error: _cooperativeRecoveryErrorFromJson(j['error'] as Map<String, dynamic>),
+);
+
+Map<String, dynamic> _cooperativeRecoveryErrorToJson(CooperativeRecoveryError error) {
+  if (error is CooperativeRecoveryError_ReplacementFeeTooLow) {
+    return {
+      'type': 'ReplacementFeeTooLow',
+      'requiredFeeSats': error.requiredFeeSats.toString(),
+      'requiredFeeRateSatPerVbyte': error.requiredFeeRateSatPerVbyte.toString(),
+    };
+  } else if (error is CooperativeRecoveryError_OperatorsUnavailable) {
+    return {'type': 'OperatorsUnavailable', 'message': error.message};
+  } else if (error is CooperativeRecoveryError_Generic) {
+    return {'type': 'Generic', 'message': error.message};
+  }
+  throw StateError('Unknown CooperativeRecoveryError variant: ${error.runtimeType}');
+}
+
+CooperativeRecoveryError _cooperativeRecoveryErrorFromJson(Map<String, dynamic> j) {
+  switch (j['type'] as String) {
+    case 'ReplacementFeeTooLow':
+      return CooperativeRecoveryError.replacementFeeTooLow(
+        requiredFeeSats: BigInt.parse(j['requiredFeeSats'] as String),
+        requiredFeeRateSatPerVbyte: BigInt.parse(j['requiredFeeRateSatPerVbyte'] as String),
+      );
+    case 'OperatorsUnavailable':
+      return CooperativeRecoveryError.operatorsUnavailable(message: j['message'] as String);
+    case 'Generic':
+      return CooperativeRecoveryError.generic(message: j['message'] as String);
+    default:
+      throw StateError("Unknown CooperativeRecoveryError type: ${j['type']}");
+  }
+}
+
+String _cooperativeRecoveryErrorMessage(CooperativeRecoveryError error) {
+  if (error is CooperativeRecoveryError_ReplacementFeeTooLow) {
+    return 'A recovery of this output is already on the network: replacing it takes at least '
+        '${error.requiredFeeSats} sats or ${error.requiredFeeRateSatPerVbyte} sats/vbyte';
+  } else if (error is CooperativeRecoveryError_OperatorsUnavailable) {
+    return 'Operators unavailable: ${error.message}';
+  } else if (error is CooperativeRecoveryError_Generic) {
+    return 'Generic error: ${error.message}';
+  }
+  throw StateError('Unknown CooperativeRecoveryError variant: ${error.runtimeType}');
+}
+
+void _printRecovery(RecoverFundsResponse response) {
+  print(
+    'Recoverable ${response.recoverableValueSats} sats, '
+    'total fee ${response.totalFeeSats} sats '
+    '(cooperative ${response.cooperativeFeeSats}, cpfp ${response.cpfpFeeSats}, '
+    'fanout ${response.fanoutFeeSats}, sweep ${response.sweepFeeSats}), '
+    '${response.transactions.length} transaction(s):',
+  );
+  for (var i = 0; i < response.transactions.length; i++) {
+    final tx = response.transactions[i];
+    final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
+    final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
+    final node = tx.nodeId != null ? ' node=${tx.nodeId}' : '';
+    print('  [$i] ${tx.kind}$node status=${tx.status} txid=${tx.txid}$after$csv');
+    final status = tx.status;
+    if (status is ExitTransactionStatus_Confirmed) {
+      final height = status.blockHeight;
+      if (height != null) {
+        print('      (confirmed in block $height, nothing to broadcast)');
+      } else {
+        print('      (already confirmed, nothing to broadcast)');
+      }
+      continue;
+    } else if (status is ExitTransactionStatus_WaitingForDependencies) {
+      print('      (waiting on the transactions it depends on)');
+    } else if (status is ExitTransactionStatus_WaitingForTimelock) {
+      final height = status.spendableAtHeight;
+      if (height != null) {
+        print('      (waiting for its timelock, until block $height)');
+      } else {
+        print('      (waiting for its timelock)');
+      }
+    }
+    final package = tx.cpfpTxHex != null ? '${tx.txHex},${tx.cpfpTxHex}' : tx.txHex;
+    print('      Package: $package');
+  }
+  if (response.failed.isNotEmpty) {
+    print('Not recovered, ${response.failed.length} leaf(s):');
+  }
+  for (final failure in response.failed) {
+    print(
+      '  leaf ${failure.leafId} '
+      '(output ${failure.outputTxid}:${failure.outputVout}): '
+      '${_cooperativeRecoveryErrorMessage(failure.error)}',
+    );
+  }
+}
+
+// --- helpers ---
 
 Map<String, dynamic> _statusToJson(ExitTransactionStatus s) {
   if (s is ExitTransactionStatus_Confirmed) {
@@ -340,7 +545,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'P2tr',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
   } else if (input is CpfpInput_P2wpkh) {
@@ -348,7 +553,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'P2wpkh',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
   } else if (input is CpfpInput_Custom) {
@@ -356,7 +561,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'type': 'Custom',
       'txid': input.txid,
       'vout': input.vout,
-      'value': input.value.toString(),
+      'valueSats': input.valueSats.toString(),
       'scriptPubkeyHex': input.scriptPubkeyHex,
       'signedInputWeight': input.signedInputWeight.toString(),
     };
@@ -365,27 +570,27 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
 }
 
 CpfpInput _cpfpInputFromJson(Map<String, dynamic> j) {
-  final value = BigInt.parse(j['value'] as String);
+  final valueSats = BigInt.parse(j['valueSats'] as String);
   switch (j['type'] as String) {
     case 'P2tr':
       return CpfpInput.p2Tr(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'P2wpkh':
       return CpfpInput.p2Wpkh(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'Custom':
       return CpfpInput.custom(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
-        value: value,
+        valueSats: valueSats,
         scriptPubkeyHex: j['scriptPubkeyHex'] as String,
         signedInputWeight: BigInt.parse(j['signedInputWeight'] as String),
       );
@@ -410,49 +615,12 @@ CpfpInput? _parseCpfpInput(String s, String kindStr) {
   }
   switch (kindStr.toLowerCase()) {
     case 'p2wpkh':
-      return CpfpInput.p2Wpkh(txid: txid, vout: vout, value: value, pubkey: pubkey);
+      return CpfpInput.p2Wpkh(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     case 'p2tr':
-      return CpfpInput.p2Tr(txid: txid, vout: vout, value: value, pubkey: pubkey);
+      return CpfpInput.p2Tr(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     default:
       print('Invalid funding kind: $kindStr');
       return null;
-  }
-}
-
-void _printExitTransactions(UnilateralExitResponse response) {
-  print(
-    'Recoverable ${response.recoverableValueSat} sats, '
-    'total fee ${response.totalFeeSat} sats '
-    '(cpfp ${response.cpfpFeeSat}, fanout ${response.fanoutFeeSat}, '
-    'sweep ${response.sweepFeeSat}), '
-    '${response.transactions.length} transaction(s):',
-  );
-  for (var i = 0; i < response.transactions.length; i++) {
-    final tx = response.transactions[i];
-    final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
-    final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
-    print('  [$i] ${tx.kind} status=${tx.status} txid=${tx.txid}$after$csv');
-    final status = tx.status;
-    if (status is ExitTransactionStatus_Confirmed) {
-      final height = status.blockHeight;
-      if (height != null) {
-        print('      (confirmed in block $height, nothing to broadcast)');
-      } else {
-        print('      (already confirmed, nothing to broadcast)');
-      }
-      continue;
-    } else if (status is ExitTransactionStatus_WaitingForDependencies) {
-      print('      (waiting on the transactions it depends on)');
-    } else if (status is ExitTransactionStatus_WaitingForTimelock) {
-      final height = status.spendableAtHeight;
-      if (height != null) {
-        print('      (waiting for its timelock, until block $height)');
-      } else {
-        print('      (waiting for its timelock)');
-      }
-    }
-    final package = tx.cpfpTxHex != null ? '${tx.txHex},${tx.cpfpTxHex}' : tx.txHex;
-    print('      Package: $package');
   }
 }
 

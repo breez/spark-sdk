@@ -86,6 +86,17 @@ impl Leaves {
         ids.dedup();
         ids
     }
+
+    pub fn with_status(self, statuses: &[TreeNodeStatus]) -> Vec<TreeNode> {
+        self.available
+            .into_iter()
+            .chain(self.not_available)
+            .chain(self.available_missing_from_operators)
+            .chain(self.reserved_for_payment)
+            .chain(self.reserved_for_swap)
+            .filter(|leaf| statuses.contains(&leaf.status))
+            .collect()
+    }
 }
 
 /// The two public keys needed to confirm a stored leaf's ownership was already
@@ -182,6 +193,12 @@ pub enum TreeNodeStatus {
     /// ParentExited is the status of a tree node whose parent is exiting,
     /// making this node not valid for transfer, timelock refresh, etc.
     ParentExited,
+    /// Consolidated is the status of a tree node whose subtree was aggregated into it.
+    Consolidated,
+    /// WatchtowerExited is the status of a tree node below one whose direct tx confirmed.
+    WatchtowerExited,
+    /// WatchtowerExitRecovered is the status of a watchtower-exited node with a co-signed recovery.
+    WatchtowerExitRecovered,
     /// Unknown is a status not yet recognized by this SDK version.
     Unknown,
 }
@@ -204,6 +221,9 @@ impl std::fmt::Display for TreeNodeStatus {
             TreeNodeStatus::Reimbursed => write!(f, "Reimbursed"),
             TreeNodeStatus::RenewLocked => write!(f, "RenewLocked"),
             TreeNodeStatus::ParentExited => write!(f, "ParentExited"),
+            TreeNodeStatus::Consolidated => write!(f, "Consolidated"),
+            TreeNodeStatus::WatchtowerExited => write!(f, "WatchtowerExited"),
+            TreeNodeStatus::WatchtowerExitRecovered => write!(f, "WatchtowerExitRecovered"),
             TreeNodeStatus::Unknown => write!(f, "Unknown"),
         }
     }
@@ -227,6 +247,9 @@ impl From<&str> for TreeNodeStatus {
             "REIMBURSED" => TreeNodeStatus::Reimbursed,
             "RENEW_LOCKED" => TreeNodeStatus::RenewLocked,
             "PARENT_EXITED" => TreeNodeStatus::ParentExited,
+            "CONSOLIDATED" => TreeNodeStatus::Consolidated,
+            "WATCHTOWER_EXITED" => TreeNodeStatus::WatchtowerExited,
+            "WATCHTOWER_EXIT_RECOVERED" => TreeNodeStatus::WatchtowerExitRecovered,
             other => {
                 tracing::warn!("Unrecognized TreeNodeStatus: {other}");
                 TreeNodeStatus::Unknown
@@ -622,6 +645,16 @@ pub trait TreeStore: Send + Sync {
     /// ```
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
+    /// The leaves of [`Self::get_leaves`], reserved or not, whose status is one
+    /// of `statuses`. Storage backends override the default to filter in the
+    /// database.
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        Ok(self.get_leaves().await?.with_status(statuses))
+    }
+
     /// Returns the wallet's spendable balance: the sum of leaf values that
     /// would be included in `Leaves::balance()` (available + missing-operators
     /// + swap-reserved). Default impl falls through to `get_leaves`; storage
@@ -867,6 +900,13 @@ pub trait TreeService: Send + Sync {
     /// # }
     /// ```
     async fn list_leaves(&self) -> Result<Leaves, TreeServiceError>;
+
+    /// Lists the stored leaves whose status is one of `statuses`, reserved or
+    /// not.
+    async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError>;
 
     /// Fetches specific tree nodes by ID from the operators, optionally
     /// including each node's ancestors up to the root.

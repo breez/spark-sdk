@@ -138,7 +138,7 @@ impl Fee {
     pub fn to_sats(&self, vbytes: u64) -> u64 {
         match self {
             Fee::Fixed { amount } => *amount,
-            Fee::Rate { sat_per_vbyte } => sat_per_vbyte * vbytes,
+            Fee::Rate { sat_per_vbyte } => sat_per_vbyte.saturating_mul(vbytes),
         }
     }
 }

@@ -861,64 +861,74 @@ fn stable_balance_subcommands() {
 }
 
 #[test]
-fn advanced_unilateral_exit() {
-    let Command::Advanced(AdvancedCommand::UnilateralExit {
+fn advanced_recover_funds() {
+    let Command::Advanced(AdvancedCommand::RecoverFunds {
         fee_rate,
         funding_kind,
         destination,
+        all,
         leaf_ids,
         output_file,
-    }) = parse_ok("advanced unilateral-exit --fee-rate 5 --destination bcrt1qdest")
+    }) = parse_ok("advanced recover-funds --fee-rate 5 --destination bcrt1qdest")
     else {
-        panic!("expected Advanced UnilateralExit");
+        panic!("expected Advanced RecoverFunds");
     };
     assert_eq!(fee_rate, 5);
     assert!(matches!(funding_kind, FundingKindArg::P2tr));
     assert_eq!(destination, "bcrt1qdest");
+    assert!(!all);
     assert!(leaf_ids.is_empty());
     assert!(output_file.is_none());
 
-    let Command::Advanced(AdvancedCommand::UnilateralExit {
+    let Command::Advanced(AdvancedCommand::RecoverFunds { all, .. }) =
+        parse_ok("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --all")
+    else {
+        panic!("expected Advanced RecoverFunds");
+    };
+    assert!(all);
+
+    let Command::Advanced(AdvancedCommand::RecoverFunds {
         funding_kind,
         leaf_ids,
         output_file,
         ..
     }) = parse_ok(
-        "advanced unilateral-exit --fee-rate 1 --destination bcrt1qdest \
-         --funding-kind p2wpkh --leaf leaf-1 --leaf leaf-2 --output-file exit.json",
+        "advanced recover-funds --fee-rate 1 --destination bcrt1qdest \
+         --funding-kind p2wpkh --leaf leaf-1 --leaf leaf-2 --output-file recovery.json",
     )
     else {
-        panic!("expected Advanced UnilateralExit");
+        panic!("expected Advanced RecoverFunds");
     };
     assert!(matches!(funding_kind, FundingKindArg::P2wpkh));
     assert_eq!(leaf_ids, ["leaf-1", "leaf-2"]);
-    assert_eq!(output_file.as_deref(), Some(Path::new("exit.json")));
+    assert_eq!(output_file.as_deref(), Some(Path::new("recovery.json")));
 
-    parse_err("advanced unilateral-exit --destination bcrt1qdest");
-    parse_err("advanced unilateral-exit --fee-rate 5");
-    parse_err("advanced unilateral-exit --fee-rate 5 --destination bcrt1qdest --funding-kind p2sh");
+    parse_err("advanced recover-funds --destination bcrt1qdest");
+    parse_err("advanced recover-funds --fee-rate 5");
+    parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --funding-kind p2sh");
+    parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --all --leaf leaf-1");
 }
 
 #[test]
-fn advanced_check_unilateral_exit() {
-    let Command::Advanced(AdvancedCommand::CheckUnilateralExit {
+fn advanced_check_recover_funds() {
+    let Command::Advanced(AdvancedCommand::CheckRecoverFunds {
         input_file,
         output_file,
-    }) = parse_ok("advanced check-unilateral-exit --input-file exit.json")
+    }) = parse_ok("advanced check-recover-funds --input-file recovery.json")
     else {
-        panic!("expected Advanced CheckUnilateralExit");
+        panic!("expected Advanced CheckRecoverFunds");
     };
-    assert_eq!(input_file, Path::new("exit.json"));
+    assert_eq!(input_file, Path::new("recovery.json"));
     assert!(output_file.is_none());
 
-    let Command::Advanced(AdvancedCommand::CheckUnilateralExit { output_file, .. }) = parse_ok(
-        "advanced check-unilateral-exit --input-file exit.json --output-file checked.json",
+    let Command::Advanced(AdvancedCommand::CheckRecoverFunds { output_file, .. }) = parse_ok(
+        "advanced check-recover-funds --input-file recovery.json --output-file checked.json",
     ) else {
-        panic!("expected Advanced CheckUnilateralExit");
+        panic!("expected Advanced CheckRecoverFunds");
     };
     assert_eq!(output_file.as_deref(), Some(Path::new("checked.json")));
 
-    parse_err("advanced check-unilateral-exit");
+    parse_err("advanced check-recover-funds");
 }
 
 #[test]

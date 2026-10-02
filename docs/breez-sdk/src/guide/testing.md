@@ -37,7 +37,7 @@ The local environment is a complete Spark network on your own machine: a Bitcoin
 - **Lightning addresses**: registered with, and served by, the environment's own LNURL server
 - **Multi-device sync**: a wallet's data kept in step across its instances by the environment's data-sync service
 - **Token issuance**, using the SDK's [issuing functionality](./issuing_tokens.md)
-- **Unilateral exits**, which need the chain mined past a [timelock](./unilateral_exit.md)
+- **Unilateral exits**, which need the chain mined past a [timelock](./recover_funds.md)
 
 Alice stands in for the Lightning network outside the environment: she and the SSP's node share a 50 BTC channel, funded on both sides, so a wallet can pay her and be paid by her. A payment to any other node fails, since the environment is not connected to one.
 

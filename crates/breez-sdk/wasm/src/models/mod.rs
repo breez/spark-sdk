@@ -95,6 +95,9 @@ pub enum SdkEvent {
         error: String,
         retry_in_secs: Option<u64>,
     },
+    RecoverableFunds {
+        recoverable_funds_sats: u64,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConversionKind)]
@@ -229,6 +232,20 @@ pub struct RefundDepositRequest {
 pub struct RefundDepositResponse {
     pub tx_id: String,
     pub tx_hex: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CooperativeRecoveryError)]
+pub enum CooperativeRecoveryError {
+    ReplacementFeeTooLow {
+        required_fee_sats: u64,
+        required_fee_rate_sat_per_vbyte: u64,
+    },
+    OperatorsUnavailable {
+        message: String,
+    },
+    Generic {
+        message: String,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListUnclaimedDepositsRequest)]
@@ -871,19 +888,19 @@ pub enum CpfpInput {
     P2wpkh {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     P2tr {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     Custom {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         script_pubkey_hex: String,
         signed_input_weight: u64,
     },
@@ -901,16 +918,9 @@ pub enum CpfpFundingKind {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitLeafSelection)]
 pub enum ExitLeafSelection {
-    Auto,
+    All,
+    RecoverableOnly,
     Specific { leaf_ids: Vec<String> },
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTxKind)]
-pub enum UnilateralExitTxKind {
-    FanOut,
-    Node,
-    Refund,
-    Sweep,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitTransactionStatus)]
@@ -922,36 +932,10 @@ pub enum ExitTransactionStatus {
     Unverified,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTransaction)]
-pub struct UnilateralExitTransaction {
-    pub kind: UnilateralExitTxKind,
-    pub node_id: Option<String>,
-    pub txid: String,
-    pub tx_hex: String,
-    pub cpfp_tx_hex: Option<String>,
-    pub csv_timelock_blocks: Option<u32>,
-    pub depends_on: Vec<String>,
-    pub status: ExitTransactionStatus,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeaf)]
-pub struct UnilateralExitLeaf {
-    pub leaf_id: String,
-    pub value: u64,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PerBranchFunding)]
 pub struct PerBranchFunding {
     pub leaf_id: String,
-    pub funding_sat: u64,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
-pub struct PrepareUnilateralExitRequest {
-    pub fee_rate_sat_per_vbyte: u64,
-    pub funding_kind: CpfpFundingKind,
-    pub destination: String,
-    pub selection: ExitLeafSelection,
+    pub funding_sats: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitChainState)]
@@ -987,66 +971,10 @@ pub enum ExitRefundState {
     OnChain {
         tx_hex: String,
         vout: u32,
-        value_sat: u64,
+        value_sats: u64,
         block_height: Option<u32>,
     },
     Swept,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
-pub struct PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeaf>,
-    pub recoverable_value_sat: u64,
-    pub total_fee_sat: u64,
-    pub cpfp_fee_sat: u64,
-    pub fanout_fee_sat: u64,
-    pub sweep_fee_sat: u64,
-    pub single_utxo_funding_sat: u64,
-    pub per_branch_funding: Vec<PerBranchFunding>,
-    pub fee_rate_sat_per_vbyte: u64,
-    pub destination: String,
-    pub exit_chain_state: ExitChainState,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitRequest)]
-pub struct UnilateralExitRequest {
-    pub prepared: PrepareUnilateralExitResponse,
-    pub funding_inputs: Vec<CpfpInput>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckUnilateralExitRequest)]
-pub struct CheckUnilateralExitRequest {
-    pub exit: UnilateralExitResponse,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckUnilateralExitResponse)]
-pub struct CheckUnilateralExitResponse {
-    pub exit: UnilateralExitResponse,
-    pub verdict: UnilateralExitVerdict,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitVerdict)]
-pub enum UnilateralExitVerdict {
-    Valid,
-    Done,
-    Redo { reason: UnilateralExitRedoReason },
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitRedoReason)]
-pub enum UnilateralExitRedoReason {
-    OnChainStateDiverged,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitResponse)]
-pub struct UnilateralExitResponse {
-    pub recoverable_value_sat: u64,
-    pub total_fee_sat: u64,
-    pub cpfp_fee_sat: u64,
-    pub fanout_fee_sat: u64,
-    pub sweep_fee_sat: u64,
-    pub leaves: Vec<UnilateralExitLeaf>,
-    pub transactions: Vec<UnilateralExitTransaction>,
-    pub funding_inputs: Vec<CpfpInput>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExportUnilateralExitStateResponse)]
@@ -1067,6 +995,165 @@ pub struct ImportUnilateralExitStateResponse {
     pub skipped_chains: u32,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareRecoverFundsRequest)]
+pub struct PrepareRecoverFundsRequest {
+    pub fee_rate_sat_per_vbyte: u64,
+    pub funding_kind: Option<CpfpFundingKind>,
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareRecoverFundsResponse)]
+pub struct PrepareRecoverFundsResponse {
+    pub leaves: Vec<RecoverFundsLeaf>,
+    pub skipped: Vec<SkippedLeaf>,
+    pub recoverable_value_sats: u64,
+    pub total_fee_sats: u64,
+    pub cooperative_fee_sats: u64,
+    pub cpfp_fee_sats: u64,
+    pub fanout_fee_sats: u64,
+    pub sweep_fee_sats: u64,
+    pub funding: Option<RecoveryFunding>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+    pub exit_chain_state: ExitChainState,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryFunding)]
+pub struct RecoveryFunding {
+    pub single_utxo_sats: u64,
+    pub per_branch: Vec<PerBranchFunding>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeaf)]
+pub struct SkippedLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub reason: SkippedLeafReason,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeafReason)]
+pub enum SkippedLeafReason {
+    FeeExceedsValue,
+    FundsNotFound,
+    NotRecoverable { message: String },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverFundsLeaf)]
+pub struct RecoverFundsLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub method: RecoveryMethod,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryMethod)]
+pub enum RecoveryMethod {
+    Cooperative,
+    Unilateral,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverFundsRequest)]
+pub struct RecoverFundsRequest {
+    pub prepared: PrepareRecoverFundsResponse,
+    #[serde(default)]
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoverFundsResponse)]
+pub struct RecoverFundsResponse {
+    pub recoverable_value_sats: u64,
+    pub total_fee_sats: u64,
+    pub cooperative_fee_sats: u64,
+    pub cpfp_fee_sats: u64,
+    pub fanout_fee_sats: u64,
+    pub sweep_fee_sats: u64,
+    pub leaves: Vec<RecoverFundsLeaf>,
+    pub failed: Vec<CooperativeRecoveryFailure>,
+    pub transactions: Vec<RecoveryTransaction>,
+    pub funding_inputs: Vec<CpfpInput>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CooperativeRecoveryFailure)]
+pub struct CooperativeRecoveryFailure {
+    pub leaf_id: String,
+    pub output_txid: String,
+    pub output_vout: u32,
+    pub error: CooperativeRecoveryError,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryTransaction)]
+pub struct RecoveryTransaction {
+    pub kind: RecoveryTxKind,
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
+    pub csv_timelock_blocks: Option<u32>,
+    pub depends_on: Vec<String>,
+    pub status: ExitTransactionStatus,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryTxKind)]
+pub enum RecoveryTxKind {
+    Cooperative,
+    FanOut,
+    Node,
+    Refund,
+    Sweep,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckRecoverFundsRequest)]
+pub struct CheckRecoverFundsRequest {
+    pub recovery: RecoverFundsResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CheckRecoverFundsResponse)]
+pub struct CheckRecoverFundsResponse {
+    pub recovery: RecoverFundsResponse,
+    pub verdict: RecoveryVerdict,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryVerdict)]
+pub enum RecoveryVerdict {
+    Valid,
+    Done,
+    Redo { reason: RecoveryRedoReason },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryRedoReason)]
+pub enum RecoveryRedoReason {
+    OnChainStateDiverged,
+    UnreadableRecovery,
+}
+
+impl CheckRecoverFundsResponse {
+    /// The answer to a recovery that does not parse, such as one an earlier
+    /// version stored.
+    pub(crate) fn unreadable() -> Self {
+        Self {
+            recovery: RecoverFundsResponse {
+                recoverable_value_sats: 0,
+                total_fee_sats: 0,
+                cooperative_fee_sats: 0,
+                cpfp_fee_sats: 0,
+                fanout_fee_sats: 0,
+                sweep_fee_sats: 0,
+                leaves: Vec::new(),
+                failed: Vec::new(),
+                transactions: Vec::new(),
+                funding_inputs: Vec::new(),
+                fee_rate_sat_per_vbyte: 0,
+                destination: String::new(),
+            },
+            verdict: RecoveryVerdict::Redo {
+                reason: RecoveryRedoReason::UnreadableRecovery,
+            },
+        }
+    }
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]
 pub struct Credentials {
     pub username: String,
@@ -1083,6 +1170,7 @@ pub struct GetInfoResponse {
     pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
+    pub recoverable_funds_sats: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]

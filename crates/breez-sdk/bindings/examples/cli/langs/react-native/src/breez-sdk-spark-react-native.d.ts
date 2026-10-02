@@ -88,7 +88,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type CrossChainRoutePair = any;
   export type CrossChainAddressDetails = any;
 
-  // --- advanced / unilateral exit ---
+  // --- advanced / recover funds ---
   export const singleKeyCpfpSigner: any;
   export const CpfpFundingKind: any;
   export type CpfpFundingKind = any;
@@ -96,10 +96,32 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type CpfpInput = any;
   export const ExitLeafSelection: any;
   export type ExitLeafSelection = any;
+  export const ExitTransactionStatus: any;
   export const ExitTransactionStatus_Tags: any;
   export type ExitTransactionStatus = any;
-  export const UnilateralExitVerdict_Tags: any;
-  export type UnilateralExitVerdict = any;
+  export type CpfpSigner = any;
+  export const CpfpInput_Tags: any;
+  export type PrepareRecoverFundsRequest = any;
+  export type PrepareRecoverFundsResponse = any;
+  export const RecoverFundsLeaf: any;
+  export type RecoverFundsLeaf = any;
+  export const RecoverFundsResponse: any;
+  export type RecoverFundsResponse = any;
+  export const RecoveryMethod: any;
+  export type RecoveryMethod = any;
+  export const RecoveryTransaction: any;
+  export type RecoveryTransaction = any;
+  export const RecoveryTxKind: any;
+  export type RecoveryTxKind = any;
+  export const CooperativeRecoveryFailure: any;
+  export type CooperativeRecoveryFailure = any;
+  export const CooperativeRecoveryError: any;
+  export const CooperativeRecoveryError_Tags: any;
+  export type CooperativeRecoveryError = any;
+  export const RecoveryVerdict_Tags: any;
+  export type RecoveryVerdict = any;
+  export const RecoveryRedoReason: any;
+  export type RecoveryRedoReason = any;
 
   // --- proxy ---
   export type ProxyConfig = any;
