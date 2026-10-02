@@ -402,3 +402,145 @@ ul#searchresults span.teaser { word-wrap: break-word; overflow-wrap: anywhere; }
     .brand-header .brand-nav { display: none; }
 }
 
+
+/* ---- Key Features cards --------------------------------------------------
+   doc-cards.js turns the "Key Features" checklist into this grid. The card
+   look follows .sdk-feature-card on breez.technology/sdk. */
+.content ul.feature-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 0;
+    margin: 20px 0 32px;
+    list-style: none;
+}
+.content ul.feature-cards > li { margin: 0; }
+.content ul.feature-cards .feature-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 22px 20px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    color: inherit;
+    text-decoration: none;
+    transition: border-color 0.3s ease, transform 0.3s ease;
+}
+.content ul.feature-cards a.feature-card:hover,
+.content ul.feature-cards a.feature-card:focus-visible {
+    border-color: rgba(77, 181, 255, 0.25);
+    transform: translateY(-2px);
+    text-decoration: none;
+}
+.feature-card-icon { flex: none; margin-bottom: 16px; color: #4DB5FF; }
+.feature-card-arrow {
+    position: absolute;
+    top: 18px;
+    right: 18px;
+    color: #4DB5FF;
+    opacity: 0.35;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.content ul.feature-cards a.feature-card:hover .feature-card-arrow,
+.content ul.feature-cards a.feature-card:focus-visible .feature-card-arrow { opacity: 1; transform: translate(2px, -2px); }
+.feature-card-title {
+    font-size: 1.6rem;
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    color: var(--brz-heading, var(--fg));
+}
+.feature-card-desc {
+    margin-top: 6px;
+    font-size: 1.4rem;
+    line-height: 1.5;
+    color: var(--fg);
+    opacity: 0.6;
+}
+html.light .content ul.feature-cards .feature-card,
+html.rust .content ul.feature-cards .feature-card {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: var(--table-border-color);
+}
+html.light .feature-card-title,
+html.rust .feature-card-title { color: var(--fg); }
+html.light .feature-card-icon, html.rust .feature-card-icon,
+html.light .feature-card-arrow, html.rust .feature-card-arrow { color: var(--brz-blue, #0085FB); }
+@media (prefers-reduced-motion: reduce) {
+    .content ul.feature-cards a.feature-card:hover { transform: none; }
+}
+@media only screen and (max-width: 420px) {
+    .content ul.feature-cards { gap: 10px; }
+    .content ul.feature-cards .feature-card { padding: 16px 14px; }
+    .feature-card-arrow { top: 14px; right: 14px; }
+    .feature-card-title { font-size: 1.45rem; }
+    .feature-card-desc { font-size: 1.3rem; }
+}
+
+/* ---- Link tiles ---------------------------------------------------------
+   A list of links marked `<!-- cards: tiles -->`. */
+.content ul.doc-tiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    list-style: none;
+    padding: 0;
+    margin: 20px 0 32px;
+}
+.content ul.doc-tiles > li { margin: 0; }
+.content ul.doc-tiles > li > a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--brz-heading, var(--fg));
+    text-decoration: none;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+.content ul.doc-tiles > li > a::after {
+    content: "\2192";
+    flex: none;
+    color: #4DB5FF;
+    opacity: 0.6;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.content ul.doc-tiles > li > a:hover,
+.content ul.doc-tiles > li > a:focus-visible { border-color: rgba(77, 181, 255, 0.3); }
+.content ul.doc-tiles > li > a:hover::after,
+.content ul.doc-tiles > li > a:focus-visible::after { opacity: 1; transform: translateX(2px); }
+
+/* ---- Button link -------------------------------------------------------- */
+.content a.doc-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    background: var(--brz-blue, #0085FB);
+    color: #fff;
+    font-size: 1.5rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 0.2s ease;
+}
+.content a.doc-button::after { content: "\2192"; }
+.content a.doc-button:hover { background: #1a93ff; text-decoration: none; }
+
+html.light .content ul.doc-tiles > li > a, html.rust .content ul.doc-tiles > li > a { color: var(--fg); }
+html.light .content ul.doc-tiles > li > a,
+html.rust .content ul.doc-tiles > li > a { background: rgba(0, 0, 0, 0.02); border-color: var(--table-border-color); }
+@media only screen and (max-width: 600px) {
+    .content ul.doc-tiles > li > a { padding: 12px 14px; }
+}

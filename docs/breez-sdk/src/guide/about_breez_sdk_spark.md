@@ -1,8 +1,8 @@
 # About Breez SDK
 
-## **Overview**
+The Breez SDK is the simplest way to add instant, non‑custodial bitcoin and stablecoins to any app or service, removing third-party dependencies and enabling value to move as easily as information.
 
-The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin and stablecoins into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
+Integrate in minutes with just a few lines of code, onboard users anywhere without the licensing burden, and bring value transfer to billions around the world.
 
 ## **What is the Breez SDK?**
 
@@ -12,27 +12,24 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - Send and receive USDC or USDT on Ethereum, Base, Arbitrum, Solana, Tron, and other networks, to and from a bitcoin or USD balance
 - Issue, send, and receive Spark tokens (BTKN)
   
-**Key Features**
+## Key Features
 
-- [x] Send and receive Lightning payments
-- [x] Send and receive via LNURL-pay & Lightning addresses
-- [x] Send and receive USDC/USDT
-- [x] Send and receive Spark payments (BTC)
-- [x] Passkey login for seedless experience
-- [x] Stable Balance - hold your balance in USD
-- [x] Issue, send and receive Spark tokens (BTKN)
-- [x] On-chain interoperability
-- [x] Convert Spark tokens (BTKN) to bitcoin and vice versa
-- [x] Bindings to all popular languages & frameworks
-- [x] Keys are only held by users
-- [x] Multi-app & multi-device support via real-time sync service 
-- [x] Payments persistency including restore support
-- [x] Automatic claims
-- [x] WebAssembly support
-- [x] Compatible with external signers
-- [x] Full Turnkey integration including client-side signing
-- [x] Multi-user server deployments
-- [x] Free open-source solution
+- [x] **[Fully-featured Lightning](/guide/lnurl.md)**: Lightning addresses, invoices, LNURL-Pay, -Withdraw, -Auth, and -Verify.
+- [x] **[Languages & Frameworks](/guide/install.md)**: Kotlin, Swift, JS, React Native, Flutter, Go, Python, C#, and WASM.
+- [x] **[Passkey Login](/guide/passkey.md)**: Seedless onboarding and restore, no recovery phrase needed.
+- [x] **[USDT & USDC](/guide/cross_chain.md)**: Users can send/receive stablecoins from their BTC or stable balance.
+- [x] **[Stable Balance](/guide/stable_balance.md)**: Users can hold their balance in USD to avoid BTC price volatility.
+- [x] **[Instant Deposits](/guide/onchain_claims.md)**: Claim on-chain deposits in seconds, no confirmations needed.
+- [x] **[Multi-device/app Sync](/guide/config.md#real-time-sync-server-url)**: Users can access their balance from multiple devices and apps.
+- [x] **[Contacts API](/guide/contacts.md)**: Save and reuse Lightning addresses, synced across devices.
+- [x] **[Caching & Persistence](/guide/customizing.md#with-storage)**: Out-of-the-box caching and persistence for a smooth UX.
+- [x] **[External Signer](/guide/external_signer.md)**: Bring your own key management.
+- [x] **[Turnkey Signer](/guide/turnkey.md)**: A built-in signer for server-side, non-custodial embedded wallets.
+- [x] **[Integrated On-ramps](/guide/buy_bitcoin.md)**: Let users buy bitcoin directly via Cash App and MoonPay.
+- [x] **[Fiat Currencies](/guide/fiat_currencies.md)**: Real-time exchange rates to display value in fiat currencies.
+- [x] **[Multi-user Server Mode](/guide/server_mode.md)**: Run multiple user balances from a single backend server.
+- [x] **[Open-source](https://github.com/breez/spark-sdk)**: Free and open-source, available to any developer at any scale.
+- [x] **[Partner Portal](https://partners.breez.technology/)**: Track your volume and activity in one dashboard.
 
 ## Pricing
 

@@ -11,16 +11,37 @@ Integrating Breez SDK into your application takes just a few minutes. Follow the
 - **[Adding logging](/guide/logging.md)**
 - **[Spark status](/guide/spark_status.md)**
 
+## Languages & Frameworks
+
+The Breez SDK is available for the following languages and frameworks:
+
+<!-- cards: tiles -->
+- [iOS/Swift](/guide/install_ios_swift.md)
+- [Android/Kotlin](/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/guide/install_javascript.md)
+- [React Native/Expo](/guide/install_react_native.md)
+- [Rust](/guide/install_rust.md)
+- [Flutter](/guide/install_flutter.md)
+- [Go](/guide/install_go.md)
+- [Python](/guide/install_python.md)
+- [C#](/guide/install_csharp.md)
+
 ## API Key
 
-The Breez SDK API key must be set for the SDK to work. You can request one by <a target="_blank" href="{{api_key_form_uri}}">filling out this form</a>, or programmatically with the following request:
+The Breez SDK API key must be set for the SDK to work. The API key is sent to the provided email address.
+
+<a class="doc-button" target="_blank" href="{{api_key_form_uri}}">Request an API key</a>
+
+Or request one programmatically with the following request:
 
 ```bash
-curl -d "fullname=<full name>" -d "company=<company>" -d "email=<email>" -d "message=<message>" \
-  https://breez.technology/contact/apikey
+curl https://breez.technology/contact/apikey \
+  -d "fullname=<full name>" \
+  -d "company=<company>" \
+  -d "email=<email>" \
+  -d "message=<message>"
 ```
-
-The API key is sent to the provided email address.
 
 ## UX Guidelines
 
