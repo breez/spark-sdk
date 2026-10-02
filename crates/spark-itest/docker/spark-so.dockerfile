@@ -52,7 +52,7 @@ WORKDIR /app
 COPY --from=downloader /source/signer/ ./
 COPY --from=downloader /source/protos/ /protos/
 WORKDIR /app/spark-frost-signer
-RUN cargo install --path .
+RUN cargo install --locked --path .
 
 
 FROM debian:bookworm-20250721-slim AS final

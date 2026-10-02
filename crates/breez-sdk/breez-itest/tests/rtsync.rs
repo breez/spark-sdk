@@ -75,7 +75,9 @@ async fn create_bob_sdk(env: &Environment, lnurl: &Arc<LnurlFixture>) -> Result<
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_01_rtsync_lnurl_info_sync(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
     #[future] data_sync_fixture: DataSyncFixture,
     alice_seed: [u8; 32],
 ) -> Result<()> {
@@ -180,7 +182,9 @@ async fn test_01_rtsync_lnurl_info_sync(
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_02_rtsync_lightning_address_sync(
-    #[future] env: Result<Environment>,
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
     #[future] data_sync_fixture: DataSyncFixture,
     alice_seed: [u8; 32],
 ) -> Result<()> {

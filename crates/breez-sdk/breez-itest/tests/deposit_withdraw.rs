@@ -42,6 +42,10 @@ async fn wait_for_unclaimed_event(
 /// that window it must read as claimed rather than failed: it reaches
 /// `Claimed` once the credit lands, never carries a claim error, is never named
 /// by an `UnclaimedDeposits`, and is never deleted and re-announced.
+/// How often the loops below look again. Short: what they wait for is a local
+/// cluster answering, not a network.
+const POLL: Duration = Duration::from_millis(250);
+
 async fn assert_settled_while_reported(
     sdk: &BreezSdk,
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
@@ -95,7 +99,7 @@ async fn assert_settled_while_reported(
             // The provider spent the output and both sources stopped reporting it.
             None => went_absent = true,
         }
-        sleep(Duration::from_secs(2)).await;
+        sleep(POLL).await;
     }
     // Which branch held decides what the run proved: seeing the deposit marked
     // claimed verifies the mark, going absent only means the output was spent
@@ -772,7 +776,7 @@ async fn test_deposit_fee_refund(#[future] env: Result<Environment>) -> Result<(
             evicted = true;
             break;
         }
-        sleep(Duration::from_secs(2)).await;
+        sleep(POLL).await;
     }
     assert!(
         evicted,
@@ -1158,7 +1162,7 @@ async fn test_manual_instant_deposit_claim(#[future] env: Result<Environment>) -
                 info!("instant claim not ready yet, retrying: {e}");
                 // Poll tightly: the window closes as soon as the deposit matures
                 // (regtest mines fast), so claim as early as the SSP allows.
-                sleep(Duration::from_secs(1)).await;
+                sleep(POLL).await;
             }
             Err(e) => return Err(e.into()),
         }
@@ -1276,7 +1280,7 @@ async fn test_fetch_claim_deposit_quote(#[future] env: Result<Environment>) -> R
         {
             break quote;
         }
-        sleep(Duration::from_secs(1)).await;
+        sleep(POLL).await;
     };
     info!("Deposit claim quote: {quote:?}");
 
@@ -1349,7 +1353,7 @@ async fn test_fetch_claim_deposit_quote(#[future] env: Result<Environment>) -> R
         if tokio::time::Instant::now() >= deadline {
             break None;
         }
-        sleep(Duration::from_secs(2)).await;
+        sleep(POLL).await;
     };
 
     match matured {
@@ -1391,7 +1395,7 @@ async fn test_fetch_claim_deposit_quote(#[future] env: Result<Environment>) -> R
         if tokio::time::Instant::now() >= deadline {
             break None;
         }
-        sleep(Duration::from_secs(2)).await;
+        sleep(POLL).await;
     };
 
     match deep {

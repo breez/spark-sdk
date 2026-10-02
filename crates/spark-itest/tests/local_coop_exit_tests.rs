@@ -19,8 +19,8 @@ struct QuoteFixture {
 }
 
 async fn setup_quote_fixture() -> Result<QuoteFixture> {
-    let fixtures = TestFixtures::new().await?;
-    let sspd = fixtures.sspd().await?;
+    let fixtures = TestFixtures::builder().with_sspd().build().await?;
+    let sspd = fixtures.sspd();
     sspd.wait_for_pool(&fixtures.bitcoind, 1, Duration::from_secs(600))
         .await
         .context("waiting for the daemon to stock its pool")?;

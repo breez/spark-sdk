@@ -8,6 +8,9 @@ use tracing::info;
 
 use spark_itest::fixtures::setup::SSPD_WALLET_SEED_HEX as WALLET_SEED;
 
+/// How often a loop below looks again: a local cluster answers in milliseconds.
+const POLL: Duration = Duration::from_millis(250);
+
 #[tokio::test]
 #[test_log::test]
 async fn test_sspd_daemon_starts_against_the_local_cluster() -> Result<()> {
@@ -16,6 +19,7 @@ async fn test_sspd_daemon_starts_against_the_local_cluster() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -35,6 +39,7 @@ async fn test_sspd_stocks_its_own_leaf_pool() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -66,6 +71,7 @@ async fn test_stocked_leaves_carry_their_exit_chains() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -101,6 +107,7 @@ async fn test_claimed_leaves_gain_their_exit_chains() -> Result<()> {
         &fixtures.fixture_id,
         &fixtures.bitcoind,
         &fixtures.spark_so.operators,
+        &fixtures.database,
         WALLET_SEED,
         None,
     )
@@ -119,6 +126,6 @@ async fn test_claimed_leaves_gain_their_exit_chains() -> Result<()> {
         if std::time::Instant::now() >= deadline {
             anyhow::bail!("{} leaves still have no exit chain", missing.len());
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(POLL).await;
     }
 }

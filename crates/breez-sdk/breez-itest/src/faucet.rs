@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -7,6 +7,7 @@ use platform_utils::{
     ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
 };
 use serde::{Deserialize, Serialize};
+use spark_itest::fixtures::setup::TestFixtures;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
@@ -37,16 +38,36 @@ pub struct FaucetConfig {
     /// Optional password for basic authentication
     /// Can be set with FAUCET_PASSWORD environment variable
     pub password: Option<String>,
+    /// The chain a local stack's faucet pays on, which a test can mine itself.
+    pub miner: Option<LocalMiner>,
 }
 
 impl FaucetConfig {
-    /// The faucet an sspd serves on regtest, which takes no credentials.
-    pub fn for_ssp(ssp_base_url: &str) -> Self {
+    /// The faucet a local stack's sspd serves on regtest, which takes no
+    /// credentials.
+    pub fn for_local_stack(ssp_base_url: &str, fixtures: Arc<TestFixtures>) -> Self {
         Self {
             url: format!("{ssp_base_url}/graphql/spark/rc"),
             username: None,
             password: None,
+            miner: Some(LocalMiner(fixtures)),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct LocalMiner(Arc<TestFixtures>);
+
+impl LocalMiner {
+    pub async fn mine_block(&self) -> Result<()> {
+        self.0.bitcoind.generate_blocks(1).await?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for LocalMiner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LocalMiner({})", self.0.fixture_id)
     }
 }
 
@@ -57,6 +78,7 @@ impl Default for FaucetConfig {
                 .unwrap_or_else(|_| "https://api.lightspark.com/graphql/spark/rc".to_string()),
             username: std::env::var("FAUCET_USERNAME").ok(),
             password: std::env::var("FAUCET_PASSWORD").ok(),
+            miner: None,
         }
     }
 }
@@ -128,6 +150,7 @@ impl RegtestFaucet {
     ///
     /// # Returns
     /// The transaction hash of the funding transaction
+    #[tracing::instrument(level = "debug", name = "faucet.fund_address", skip_all)]
     pub async fn fund_address(&self, address: &str, amount_sats: u64) -> Result<String> {
         const MAX_RETRIES: u32 = 3;
 

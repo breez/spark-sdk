@@ -10,17 +10,17 @@ use spark::signer::{DefaultSigner, derive_identity_public_key};
 use testcontainers::core::{ContainerPort, Mount};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
-use testcontainers_modules::postgres::Postgres;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tonic::transport::Channel;
-use tracing::info;
+use tracing::{Instrument, debug_span, info, instrument};
 
+use crate::fixtures::Container;
 use crate::fixtures::bitcoind::BitcoindFixture;
+use crate::fixtures::database::{DatabaseFixture, SSPD_DATABASE};
 use crate::fixtures::log::{RecentLines, TracingConsumer};
 use crate::fixtures::setup::FixtureId;
 use crate::fixtures::spark_so::OperatorFixture;
-use crate::fixtures::state_snapshot;
 
 pub mod internal_api {
     #![allow(clippy::pedantic, clippy::all)]
@@ -33,11 +33,9 @@ use internal_api::{
 };
 
 const GRAPHQL_PORT: u16 = 8080;
-const INTERNAL_PORT: u16 = 59050;
-const POSTGRES_PORT: u16 = 5432;
-const POSTGRES_USER: &str = "postgres";
-const POSTGRES_PASSWORD: &str = "postgres";
-const POSTGRES_DB: &str = "postgres";
+/// Outside Linux's ephemeral port range: a daemon whose own outbound connection
+/// took this port could not then listen on it.
+const INTERNAL_PORT: u16 = 8081;
 
 pub const LEAVES_PER_DENOMINATION: u32 = 8;
 
@@ -63,8 +61,8 @@ pub struct LdkSettings {
 }
 
 pub struct SspdFixture {
-    pub container: ContainerAsync<GenericImage>,
-    pub postgres: ContainerAsync<Postgres>,
+    pub container: Container<GenericImage>,
+    database_url: String,
     pub base_url: String,
     /// [`Self::base_url`] as a container on the cluster's docker network reaches it.
     pub network_base_url: String,
@@ -88,12 +86,8 @@ impl Drop for SspdFixture {
 
 impl SspdFixture {
     pub async fn tree_store(&self) -> Result<spark_postgres::PostgresTreeStore> {
-        let port = self.postgres.get_host_port_ipv4(POSTGRES_PORT).await?;
-        let url = format!(
-            "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@127.0.0.1:{port}/{POSTGRES_DB}"
-        );
         spark_postgres::PostgresTreeStore::from_config(
-            spark_postgres::PostgresStorageConfig::with_defaults(&url),
+            spark_postgres::PostgresStorageConfig::with_defaults(&self.database_url),
             &self.identity_public_key.serialize(),
         )
         .await
@@ -103,37 +97,18 @@ impl SspdFixture {
     /// `wallet_seed_hex` has to be [`crate::fixtures::setup::SSPD_WALLET_SEED_HEX`]
     /// when a state snapshot is restored: the restored pool belongs to the
     /// identity that seed derives.
+    #[instrument(level = "debug", name = "sspd.start", skip_all)]
     pub async fn start(
         fixture_id: &FixtureId,
         bitcoind: &BitcoindFixture,
         operators: &[OperatorFixture],
+        database: &DatabaseFixture,
         wallet_seed_hex: &str,
         ldk: Option<&LdkSettings>,
     ) -> Result<Self> {
         let config_dir = fixture_id.testdir()?;
         let container_name = format!("sspd-{fixture_id}");
-
-        let postgres_container_name = format!("sspd-postgres-{fixture_id}");
-        let postgres = Postgres::default()
-            .with_network(fixture_id.to_network())
-            .with_container_name(&postgres_container_name)
-            .with_mount(state_snapshot::mount())
-            .start()
-            .await
-            .context("starting sspd's postgres")?;
-
-        let restored = state_snapshot::is_current();
-        if restored {
-            state_snapshot::restore_database(
-                &fixture_id.to_network(),
-                &postgres_container_name,
-                "sspd",
-            )
-            .await?;
-        }
-        let db_url = format!(
-            "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container_name}:{POSTGRES_PORT}/{POSTGRES_DB}"
-        );
+        let db_url = database.internal_url(SSPD_DATABASE);
 
         let mut config = String::new();
         for operator in operators {
@@ -194,6 +169,13 @@ impl SspdFixture {
             MAX_DENOMINATION_POWER.to_string(),
             "--receive-leaf-transfer-expiry-seconds".to_string(),
             RECEIVE_LEAF_TRANSFER_EXPIRY_SECS.to_string(),
+            // The default is a minute, so a test that waits for the receive
+            // worker's own check would wait that long for it.
+            "--receive-backup-interval-seconds".to_string(),
+            "1".to_string(),
+            // The receive worker says when it checks, which a test can wait for.
+            "--log-level".to_string(),
+            "info,sspd_lib::lightning::receive=debug".to_string(),
         ];
 
         if let Some(ldk) = ldk {
@@ -215,7 +197,12 @@ impl SspdFixture {
             }
         }
 
-        let container = image.with_cmd(cmd).start().await.context("starting sspd")?;
+        let container = image
+            .with_cmd(cmd)
+            .start()
+            .instrument(debug_span!("sspd.container"))
+            .await
+            .context("starting sspd")?;
 
         let (base_url, internal_url) = wait_until_answering(&container).await?;
         info!("sspd ready at {base_url} (internal {internal_url})");
@@ -224,8 +211,8 @@ impl SspdFixture {
         let identity_public_key = derive_identity_public_key(&signer).await?;
 
         Ok(Self {
-            container,
-            postgres,
+            container: Container::new(container),
+            database_url: database.host_url(SSPD_DATABASE),
             base_url,
             network_base_url: format!("http://{container_name}:{GRAPHQL_PORT}"),
             internal_url,
@@ -253,6 +240,7 @@ impl SspdFixture {
             .context("connecting to the sspd manager api")
     }
 
+    #[instrument(level = "debug", name = "sspd.fund_onchain", skip_all, fields(count))]
     pub async fn fund_onchain(
         &self,
         bitcoind: &BitcoindFixture,
@@ -260,6 +248,7 @@ impl SspdFixture {
         count: usize,
     ) -> Result<()> {
         let mut client = self.onchain_client().await?;
+        let mut addresses = Vec::with_capacity(count);
         for _ in 0..count {
             let address = client
                 .new_address(internal_api::NewAddressRequest {})
@@ -267,18 +256,23 @@ impl SspdFixture {
                 .context("asking sspd for an onchain address")?
                 .into_inner()
                 .address;
-            let address = address
-                .parse::<bitcoin::Address<NetworkUnchecked>>()?
-                .assume_checked();
-            bitcoind
-                .fund_address(&address, Amount::from_sat(sats))
-                .await?;
+            addresses.push(
+                address
+                    .parse::<bitcoin::Address<NetworkUnchecked>>()?
+                    .assume_checked(),
+            );
         }
+        // One transaction: a chain of one per UTXO outgrows bitcoind's limit on
+        // unconfirmed ancestors.
+        bitcoind
+            .fund_addresses(&addresses, Amount::from_sat(sats))
+            .await?;
         // The daemon learns of a UTXO only from a block its chain monitor has seen.
         bitcoind.generate_blocks(1).await?;
         Ok(())
     }
 
+    #[instrument(level = "debug", name = "wait.sspd_onchain_balance", skip_all)]
     pub async fn wait_for_onchain_balance(
         &self,
         bitcoind: &BitcoindFixture,
@@ -302,6 +296,22 @@ impl SspdFixture {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         anyhow::bail!("sspd onchain balance stuck at {last} sats, wanted {min_sats}")
+    }
+
+    /// Waits until the daemon has written `count` lines containing `pattern`, so a
+    /// test can carry on as soon as the work it names has run.
+    #[instrument(level = "debug", name = "wait.sspd_log", skip_all)]
+    pub async fn wait_for_log(&self, pattern: &str, count: usize, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        while self.recent_log.matches(pattern) < count {
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "sspd wrote {} of the {count} expected lines containing {pattern:?} in {timeout:?}",
+                self.recent_log.matches(pattern),
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(())
     }
 
     pub async fn pool_leaf_counts(&self) -> Result<HashMap<u64, u32>> {
@@ -331,6 +341,7 @@ impl SspdFixture {
             .swaps)
     }
 
+    #[instrument(level = "debug", name = "sspd.restart", skip_all)]
     pub async fn restart(&mut self) -> Result<()> {
         self.restart_stopped().await?;
         self.start_again().await
@@ -343,6 +354,7 @@ impl SspdFixture {
     }
 
     /// Docker can map different host ports when the container starts again.
+    #[instrument(level = "debug", name = "sspd.start_again", skip_all)]
     pub async fn start_again(&mut self) -> Result<()> {
         self.container
             .start()
@@ -367,6 +379,7 @@ impl SspdFixture {
 
     /// Mines while it waits, since a tree's leaves reach the pool only after its
     /// funding transaction confirms.
+    #[instrument(level = "debug", name = "wait.sspd_pool", skip_all)]
     pub async fn wait_for_pool(
         &self,
         bitcoind: &BitcoindFixture,
@@ -377,7 +390,6 @@ impl SspdFixture {
         let deadline = Instant::now() + timeout;
         let mut short = Vec::new();
         while Instant::now() < deadline {
-            bitcoind.generate_blocks(1).await?;
             let counts = self.pool_leaf_counts().await?;
             short = denominations
                 .iter()
@@ -388,6 +400,7 @@ impl SspdFixture {
                 info!("sspd pool stocked: {counts:?}");
                 return Ok(());
             }
+            bitcoind.generate_blocks(1).await?;
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         anyhow::bail!(
@@ -403,9 +416,20 @@ fn pool_denominations() -> Vec<u64> {
 /// Returns the daemon's GraphQL and internal URLs once both answer a real call:
 /// docker can publish a port after the container starts, and accepts connections
 /// on it before the daemon listens.
+#[instrument(level = "debug", name = "wait.sspd_answering", skip_all)]
 async fn wait_until_answering(
     container: &ContainerAsync<GenericImage>,
 ) -> Result<(String, String)> {
+    match answering_urls(container).await {
+        Ok(urls) => Ok(urls),
+        Err(e) => Err(e.context(format!(
+            "sspd's last output:\n{}",
+            crate::fixtures::last_output(container).await
+        ))),
+    }
+}
+
+async fn answering_urls(container: &ContainerAsync<GenericImage>) -> Result<(String, String)> {
     let graphql_port = crate::fixtures::published_port(container, GRAPHQL_PORT).await?;
     let internal_port = crate::fixtures::published_port(container, INTERNAL_PORT).await?;
     let base_url = format!("http://127.0.0.1:{graphql_port}");

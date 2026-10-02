@@ -70,7 +70,7 @@ fn each_backend(#[case] backend: SignerBackend) {}
 fn each_backend(#[case] backend: SignerBackend) {}
 
 async fn new_local_sdk(backend: SignerBackend) -> Result<LocalSdk> {
-    let fixtures = Arc::new(TestFixtures::new().await?);
+    let fixtures = Arc::new(TestFixtures::builder().with_sspd().build().await?);
     build_local_sdk(fixtures, backend, None).await
 }
 
@@ -1291,7 +1291,7 @@ async fn test_importing_another_wallets_state_takes_nothing(
 ) -> Result<()> {
     // Two wallets over one operator pool and bitcoind. Each `build_local_sdk`
     // derives its own identity, which is what makes them different parties.
-    let fixtures = Arc::new(TestFixtures::new().await?);
+    let fixtures = Arc::new(TestFixtures::builder().with_sspd().build().await?);
     let theirs = build_local_sdk(Arc::clone(&fixtures), backend, None).await?;
     let ours = build_local_sdk(fixtures, backend, None).await?;
     deposit_and_claim(&theirs, Amount::from_sat(LEAF_SATS)).await?;
