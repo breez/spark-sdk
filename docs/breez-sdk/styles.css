@@ -480,6 +480,40 @@ html.light .feature-card-arrow, html.rust .feature-card-arrow { color: var(--brz
     .feature-card-desc { font-size: 1.3rem; }
 }
 
+/* ---- Link list -----------------------------------------------------------
+   A list marked `<!-- cards: links -->`: a small blue arrow in place of the
+   bullet, calmer link text, blue on hover. Nested lists indent. */
+.content ul.doc-links,
+.content ul.doc-links ul {
+    list-style: none;
+    margin: 14px 0 24px;
+    padding: 0;
+}
+.content ul.doc-links ul { margin: 2px 0 0; }
+.content ul.doc-links li { position: relative; margin: 0; padding: 4px 0 4px 22px; }
+.content ul.doc-links li::before {
+    content: "\2192";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    color: #4DB5FF;
+    opacity: 0.6;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.content ul.doc-links li:has(> strong > a:hover)::before,
+.content ul.doc-links li:has(> a:hover)::before { opacity: 1; transform: translateX(2px); }
+.content ul.doc-links ul li::before { opacity: 0.35; }
+.content ul.doc-links a {
+    color: var(--links);
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+.content ul.doc-links strong { font-weight: inherit; }
+.content ul.doc-links a:hover,
+.content ul.doc-links a:focus-visible { color: #4DB5FF; text-decoration: underline; text-underline-offset: 3px; }
+.content ul.doc-links ul a { font-size: 0.94em; opacity: 0.85; }
+
 /* ---- Link tiles ---------------------------------------------------------
    A list of links marked `<!-- cards: tiles -->`. */
 .content ul.doc-tiles {
@@ -537,6 +571,15 @@ html.light .feature-card-arrow, html.rust .feature-card-arrow { color: var(--brz
 }
 .content a.doc-button::after { content: "\2192"; }
 .content a.doc-button:hover { background: #1a93ff; text-decoration: none; }
+/* Secondary: outline, matching the Demo row's outline buttons. Blue fill
+   stays reserved for the API key action. */
+.content a.doc-button.doc-button-secondary {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: var(--brz-heading, var(--fg));
+}
+.content a.doc-button.doc-button-secondary::after { color: #4DB5FF; }
+.content a.doc-button.doc-button-secondary:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(77, 181, 255, 0.45); }
 
 html.light .content ul.doc-tiles > li > a, html.rust .content ul.doc-tiles > li > a { color: var(--fg); }
 html.light .content ul.doc-tiles > li > a,
@@ -544,3 +587,36 @@ html.rust .content ul.doc-tiles > li > a { background: rgba(0, 0, 0, 0.02); bord
 @media only screen and (max-width: 600px) {
     .content ul.doc-tiles > li > a { padding: 12px 14px; }
 }
+
+/* ---- App store row ------------------------------------------------------
+   A list marked `<!-- cards: stores -->` becomes one row of buttons: store
+   badges, then outline buttons for any other link. */
+.content .doc-stores {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 20px 0 24px;
+}
+.content .doc-stores a { transition: opacity 0.2s ease, border-color 0.2s ease, background-color 0.2s ease; }
+.content a.doc-store-badge { display: block; line-height: 0; }
+.content a.doc-store-badge:hover { opacity: 0.85; }
+.content a.doc-store-badge img { height: 44px; width: auto; }
+.content a.doc-store-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    box-sizing: border-box;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--brz-heading, var(--fg));
+    text-decoration: none;
+}
+.content a.doc-store-link::after { content: "\2197"; color: #4DB5FF; }
+.content a.doc-store-link:hover { border-color: rgba(77, 181, 255, 0.45); background: rgba(255, 255, 255, 0.04); text-decoration: none; }
+html.light .content a.doc-store-link,
+html.rust .content a.doc-store-link { border-color: var(--table-border-color); color: var(--fg); }

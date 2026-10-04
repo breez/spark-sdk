@@ -1,7 +1,8 @@
 # Getting Started
 
-Integrating Breez SDK into your application takes just a few minutes. Follow these steps to get started:
+Integrating Breez SDK into your product takes just a few minutes. Follow these steps to get started:
 
+<!-- cards: links -->
 - **[Installing the SDK](/guide/install.md)**
 - **[Testing and development](/guide/testing.md)**
 - **[Initializing the SDK](/guide/initializing.md)**
@@ -47,16 +48,23 @@ curl https://breez.technology/contact/apikey \
 
 When implementing the Breez SDK, we recommend reading through our [UX Guidelines](/guide/uxguide.md) to provide a consistent and intuitive experience for your end-users.
 
-Many of the guidelines are implemented in [Glow](https://glow-app.co), which you can use as a UX reference during SDK implementation.
+Many of the guidelines are implemented in [Glow](https://breez.technology/glow), which you can use as a UX reference during SDK implementation.
 
 ## Demo
 
-Looking for a quick way to try the SDK in your browser or as PWA? Check out our demo app *Glow*:
+Glow is a bitcoin and stablecoins app, powered by the Breez SDK. Users experience the best of bitcoin UX. Developers get a production-ready reference to explore, fork, and ship.
+
+<!-- cards: stores -->
+- [Download Glow on the App Store](https://apps.apple.com/us/app/glow-lightning-fast-bitcoin/id6762465698)
+- [Get Glow on Google Play](https://play.google.com/store/apps/details?id=technology.breez.glow)
+- [Repository](https://github.com/breez/glow-app)
+
+Looking for a quick way to try the SDK in your browser or as PWA? Check out the Glow web demo:
 
 - **Live demo:** [https://glow-app.co](https://glow-app.co)
-- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
+- **Repository:** [breez/glow-web](https://github.com/breez/glow-web)
 
-> **Note:** The demo is for demonstration purposes only and not intended for production use.
+> **Note:** The web demo is for demonstration purposes only and not intended for production use.
 
 ## Support
 

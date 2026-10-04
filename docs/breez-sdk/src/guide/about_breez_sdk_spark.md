@@ -4,9 +4,9 @@ The Breez SDK is the simplest way to add instant, non‑custodial bitcoin and st
 
 Integrate in minutes with just a few lines of code, onboard users anywhere without the licensing burden, and bring value transfer to billions around the world.
 
-## **What is the Breez SDK?**
+## How the Breez SDK Works
 
-It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
+The Breez SDK offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins. It’s a nodeless integration that utilizes the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
 
 - Send and receive bitcoin via Lightning addresses, Bolt11 invoices, LNURL-Pay, bitcoin addresses, and Spark addresses
 - Send and receive USDC or USDT on Ethereum, Base, Arbitrum, Solana, Tron, and other networks, to and from a bitcoin or USD balance
@@ -28,6 +28,8 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] **[Integrated On-ramps](/guide/buy_bitcoin.md)**: Let users buy bitcoin directly via Cash App and MoonPay.
 - [x] **[Fiat Currencies](/guide/fiat_currencies.md)**: Real-time exchange rates to display value in fiat currencies.
 - [x] **[Multi-user Server Mode](/guide/server_mode.md)**: Run multiple user balances from a single backend server.
+- [x] **[Open-source](https://github.com/breez/spark-sdk)**: Free and open-source, available to any developer at any scale.
+- [x] **Partner Portal**: Track your volume and activity in one dashboard.
 
 ## Pricing
 
@@ -57,6 +59,6 @@ Head over to the <a href="https://github.com/breez/spark-sdk" target="_blank">Br
 
 
 ## Next Steps
-Follow our step-by-step guide to add the Breez SDK to your app.
+Follow our step-by-step guide to add the Breez SDK to your app or service.
 
-**→ [Getting Started](/guide/getting_started.md)** 
+<a class="doc-button doc-button-secondary" href="/guide/getting_started.html">Getting Started</a>
