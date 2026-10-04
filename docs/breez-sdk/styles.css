@@ -605,7 +605,11 @@ html.rust .content ul.doc-tiles > li > a { background: rgba(0, 0, 0, 0.02); bord
 .content a.doc-store-link {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
+    /* Same footprint as a store badge (164x48 artwork at 44px tall), so a
+       wrapped button lines up under the badges at full size. */
+    min-width: 150px;
     height: 44px;
     box-sizing: border-box;
     padding: 0 16px;
