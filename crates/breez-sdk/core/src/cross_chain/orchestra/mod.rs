@@ -4,7 +4,7 @@
 //! Handles quoting, sending (deposit + submit), and background monitoring
 //! of in-flight orders.
 
-mod affiliates;
+mod attribution;
 pub(super) mod storage_adapter;
 
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ use super::{
     CrossChainRoutePair, CrossChainSendPrepared, CrossChainService, DeliveryMethod, SparkAsset,
     derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
-use affiliates::Affiliates;
+use attribution::Attribution;
 use storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData};
 
 use crate::utils::{
@@ -206,7 +206,7 @@ fn fulfilled_invoice(payment: &Payment) -> Option<String> {
 /// Flashnet Orchestra cross-chain provider.
 pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
-    affiliates: Affiliates,
+    attribution: Attribution,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
@@ -223,7 +223,7 @@ impl OrchestraService {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
-        partner_affiliate_id: Option<String>,
+        partner_id: Option<String>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         fiat_service: Arc<dyn FiatService>,
@@ -248,7 +248,7 @@ impl OrchestraService {
 
         let service = Self {
             client,
-            affiliates: Affiliates::new(partner_affiliate_id),
+            attribution: Attribution::new(partner_id),
             spark_wallet,
             storage,
             fiat_service,
@@ -988,13 +988,15 @@ impl OrchestraService {
         Ok(())
     }
 
-    /// `/quote` with the current affiliate ids in place of `request`'s.
+    /// `/quote` with the current affiliate ids and the order tag in place of
+    /// `request`'s.
     async fn quote(&self, request: &QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
-        self.affiliates
+        self.attribution
             .run(|affiliate_ids| {
                 self.client.quote(QuoteRequest {
                     affiliate_ids,
                     affiliate_error_mode: Some(AffiliateErrorMode::Specific),
+                    tag: self.attribution.tag(),
                     ..request.clone()
                 })
             })
@@ -1003,7 +1005,7 @@ impl OrchestraService {
 
     /// `/estimate` with the current affiliate ids in place of `request`'s.
     async fn estimate(&self, request: &EstimateRequest) -> Result<EstimateResponse, FlashnetError> {
-        self.affiliates
+        self.attribution
             .run(|affiliate_ids| {
                 self.client.estimate(EstimateRequest {
                     affiliate_ids,
@@ -1819,6 +1821,7 @@ impl CrossChainService for OrchestraService {
             app_fees: Vec::new(),
             affiliate_ids: Vec::new(),
             affiliate_error_mode: None,
+            tag: None,
         };
 
         debug!(
@@ -2012,6 +2015,7 @@ impl CrossChainService for OrchestraService {
             app_fees: Vec::new(),
             affiliate_ids: Vec::new(),
             affiliate_error_mode: None,
+            tag: None,
         };
 
         debug!(

@@ -1126,10 +1126,7 @@ async fn build_cross_chain_context(
             Arc::new(
                 crate::cross_chain::OrchestraService::new(
                     config_resolver,
-                    config
-                        .api_key
-                        .as_deref()
-                        .and_then(crate::sdk::partner_affiliate_id),
+                    config.api_key.as_deref().and_then(crate::sdk::partner_id),
                     Arc::clone(spark_wallet),
                     Arc::clone(storage),
                     Arc::clone(&cached_fiat),

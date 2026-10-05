@@ -1,4 +1,5 @@
-//! Orchestra affiliate ids attached to quotes and estimates.
+//! Partner attribution on Orchestra requests: affiliate ids on quotes and
+//! estimates, and the order tag on quotes.
 
 use std::sync::Mutex;
 
@@ -8,52 +9,69 @@ use tracing::{debug, info, warn};
 use crate::utils::time::now_secs;
 
 const DEFAULT_AFFILIATE_ID: &str = "breez_sdk";
+/// The partner portal registers the partner's affiliate as `breez_<partner id>`.
+const PARTNER_AFFILIATE_PREFIX: &str = "breez_";
 
 /// How long a rejected partner affiliate id is left off requests before it is
 /// tried again, so a partner who registers mid-session starts earning.
-const PARTNER_RETRY_SECS: u64 = 60 * 60;
+const PARTNER_AFFILIATE_RETRY_SECS: u64 = 60 * 60;
 
-/// `breez_sdk`, followed by the partner's affiliate id when there is one.
+/// Affiliate ids and order tag derived from the partner id.
 ///
-/// Orchestra rejects a whole request that names an unregistered or disabled
-/// affiliate. A rejected partner id is left off for [`PARTNER_RETRY_SECS`].
-/// `breez_sdk` is always registered, so an affiliate rejection of a request
-/// carrying the partner is the partner's.
-pub(super) struct Affiliates {
-    partner: Option<String>,
-    partner_rejected_at: Mutex<Option<u64>>,
+/// The affiliate ids are `breez_sdk`, followed by `breez_<partner id>` when
+/// there is one. Orchestra rejects a whole request that names an unregistered
+/// or disabled affiliate. A rejected partner affiliate id is left off for
+/// [`PARTNER_AFFILIATE_RETRY_SECS`]. `breez_sdk` is always registered, so an
+/// affiliate rejection of a request carrying the partner's is the partner's.
+///
+/// The tag is the bare partner id, sent whether or not the partner affiliate
+/// id is left off.
+pub(super) struct Attribution {
+    partner_affiliate_id: Option<String>,
+    partner_affiliate_rejected_at: Mutex<Option<u64>>,
+    tag: Option<String>,
 }
 
-impl Affiliates {
-    pub(super) fn new(partner: Option<String>) -> Self {
-        if let Some(partner) = &partner {
-            info!("Orchestra: partner affiliate id {partner}");
+impl Attribution {
+    pub(super) fn new(partner_id: Option<String>) -> Self {
+        let partner_affiliate_id = partner_id
+            .as_ref()
+            .map(|id| format!("{PARTNER_AFFILIATE_PREFIX}{id}"));
+        if let Some(id) = &partner_affiliate_id {
+            info!("Orchestra: partner affiliate id {id}");
         } else {
             info!("Orchestra: no partner affiliate id, sending {DEFAULT_AFFILIATE_ID} only");
         }
         Self {
-            partner,
-            partner_rejected_at: Mutex::new(None),
+            partner_affiliate_id,
+            partner_affiliate_rejected_at: Mutex::new(None),
+            tag: partner_id,
         }
     }
 
-    fn partner_in_use(&self, now: u64) -> Option<&str> {
-        let partner = self.partner.as_deref()?;
-        let rejected_at = *self.partner_rejected_at.lock().unwrap();
+    /// The tag for a quote's orders.
+    pub(super) fn tag(&self) -> Option<String> {
+        self.tag.clone()
+    }
+
+    fn partner_affiliate_in_use(&self, now: u64) -> Option<&str> {
+        let partner = self.partner_affiliate_id.as_deref()?;
+        let rejected_at = *self.partner_affiliate_rejected_at.lock().unwrap();
         match rejected_at {
-            Some(at) if now.saturating_sub(at) < PARTNER_RETRY_SECS => None,
+            Some(at) if now.saturating_sub(at) < PARTNER_AFFILIATE_RETRY_SECS => None,
             _ => Some(partner),
         }
     }
 
-    fn reject_partner(&self, now: u64) {
-        *self.partner_rejected_at.lock().unwrap() = Some(now);
+    fn reject_partner_affiliate(&self, now: u64) {
+        *self.partner_affiliate_rejected_at.lock().unwrap() = Some(now);
     }
 
     /// Runs `request` with the current affiliate ids. If a request carrying the
-    /// partner id is rejected, runs it once more with `breez_sdk` only. The
-    /// partner is left off for [`PARTNER_RETRY_SECS`] only when the rejection
-    /// is an affiliate rejection or mentions its id.
+    /// partner affiliate id is rejected, runs it once more with `breez_sdk`
+    /// only. The partner affiliate id is left off for
+    /// [`PARTNER_AFFILIATE_RETRY_SECS`] only when the rejection is an affiliate
+    /// rejection or mentions it.
     pub(super) async fn run<T, F, Fut>(&self, request: F) -> Result<T, FlashnetError>
     where
         F: Fn(Vec<String>) -> Fut,
@@ -68,8 +86,8 @@ impl Affiliates {
         Fut: Future<Output = Result<T, FlashnetError>>,
     {
         let without_partner = vec![DEFAULT_AFFILIATE_ID.to_string()];
-        let Some(partner) = self.partner_in_use(now) else {
-            if let Some(partner) = &self.partner {
+        let Some(partner) = self.partner_affiliate_in_use(now) else {
+            if let Some(partner) = &self.partner_affiliate_id {
                 debug!(
                     "Orchestra: affiliate ids {without_partner:?} ({partner} left off after a \
                      rejection)"
@@ -91,9 +109,9 @@ impl Affiliates {
         if is_partner_rejection(&err, partner) {
             info!(
                 "Orchestra: affiliate {partner} was rejected ({err}), leaving it off for \
-                 {PARTNER_RETRY_SECS}s"
+                 {PARTNER_AFFILIATE_RETRY_SECS}s"
             );
-            self.reject_partner(now);
+            self.reject_partner_affiliate(now);
             let retried = request(without_partner).await;
             if let Err(e) = &retried {
                 warn!("Orchestra: request without affiliate {partner} also failed: {e}");
@@ -157,13 +175,14 @@ mod tests {
     use std::sync::Mutex;
 
     use flashnet::FlashnetError;
-    use macros::async_test_all;
+    use macros::{async_test_all, test_all};
 
-    use super::{Affiliates, DEFAULT_AFFILIATE_ID, PARTNER_RETRY_SECS};
+    use super::{Attribution, DEFAULT_AFFILIATE_ID, PARTNER_AFFILIATE_RETRY_SECS};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    const PARTNER_ID: &str = "3f0f749007e24b";
     const PARTNER: &str = "breez_3f0f749007e24b";
     const NOW: u64 = 1_000_000;
 
@@ -208,16 +227,16 @@ mod tests {
         vec![DEFAULT_AFFILIATE_ID.to_string()]
     }
 
-    /// Runs `affiliates` at `now` against scripted responses, one per call,
+    /// Runs `attribution` at `now` against scripted responses, one per call,
     /// and returns the result with the affiliate ids each call carried.
     async fn run(
-        affiliates: &Affiliates,
+        attribution: &Attribution,
         now: u64,
         responses: Vec<Result<(), FlashnetError>>,
     ) -> (Result<(), FlashnetError>, Vec<Vec<String>>) {
         let calls = Mutex::new(Vec::new());
         let responses = Mutex::new(responses.into_iter());
-        let result = affiliates
+        let result = attribution
             .run_at(now, |ids| {
                 calls.lock().unwrap().push(ids);
                 let response = responses.lock().unwrap().next().expect("unexpected call");
@@ -228,23 +247,34 @@ mod tests {
     }
 
     /// The ids the next request carries, one second after `now`.
-    async fn next_call(affiliates: &Affiliates, now: u64) -> Vec<String> {
-        let (_, calls) = run(affiliates, now.saturating_add(1), vec![Ok(())]).await;
+    async fn next_call(attribution: &Attribution, now: u64) -> Vec<String> {
+        let (_, calls) = run(attribution, now.saturating_add(1), vec![Ok(())]).await;
         calls.into_iter().next().expect("one call")
+    }
+
+    #[test_all]
+    fn the_tag_is_the_partner_id() {
+        assert_eq!(
+            Attribution::new(Some(PARTNER_ID.to_string()))
+                .tag()
+                .as_deref(),
+            Some(PARTNER_ID)
+        );
+        assert_eq!(Attribution::new(None).tag(), None);
     }
 
     #[async_test_all]
     async fn a_registered_partner_rides_along_with_breez_sdk() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
-        let (result, calls) = run(&affiliates, NOW, vec![Ok(())]).await;
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
+        let (result, calls) = run(&attribution, NOW, vec![Ok(())]).await;
         assert!(result.is_ok());
         assert_eq!(calls, vec![both()]);
     }
 
     #[async_test_all]
     async fn no_partner_sends_breez_sdk_only_and_never_retries() {
-        let affiliates = Affiliates::new(None);
-        let (result, calls) = run(&affiliates, NOW, vec![Err(invalid_request("bad"))]).await;
+        let attribution = Attribution::new(None);
+        let (result, calls) = run(&attribution, NOW, vec![Err(invalid_request("bad"))]).await;
         assert!(result.is_err());
         assert_eq!(calls, vec![default_only()]);
     }
@@ -256,9 +286,9 @@ mod tests {
             format!("Unknown affiliateId: {PARTNER}"),
             "Affiliate is disabled".to_string(),
         ] {
-            let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+            let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
             let (result, calls) = run(
-                &affiliates,
+                &attribution,
                 NOW,
                 vec![Err(affiliate_rejected(&reason)), Ok(())],
             )
@@ -266,18 +296,28 @@ mod tests {
             assert!(result.is_ok(), "{reason}");
             assert_eq!(calls, vec![both(), default_only()], "{reason}");
 
-            let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS - 1, vec![Ok(())]).await;
+            let (_, calls) = run(
+                &attribution,
+                NOW + PARTNER_AFFILIATE_RETRY_SECS - 1,
+                vec![Ok(())],
+            )
+            .await;
             assert_eq!(calls, vec![default_only()], "{reason}");
-            let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS, vec![Ok(())]).await;
+            let (_, calls) = run(
+                &attribution,
+                NOW + PARTNER_AFFILIATE_RETRY_SECS,
+                vec![Ok(())],
+            )
+            .await;
             assert_eq!(calls, vec![both()], "{reason}");
         }
     }
 
     #[async_test_all]
     async fn an_affiliate_rejection_is_remembered_when_the_retry_also_fails() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![
                 Err(affiliate_rejected("Affiliate is disabled")),
@@ -293,14 +333,14 @@ mod tests {
             })
         ));
         assert_eq!(calls, vec![both(), default_only()]);
-        assert_eq!(next_call(&affiliates, NOW).await, default_only());
+        assert_eq!(next_call(&attribution, NOW).await, default_only());
     }
 
     #[async_test_all]
     async fn an_affiliate_rejection_without_the_partner_is_returned_without_a_retry() {
-        let affiliates = Affiliates::new(None);
+        let attribution = Attribution::new(None);
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(affiliate_rejected("Affiliate is disabled"))],
         )
@@ -311,16 +351,16 @@ mod tests {
         ));
         assert_eq!(calls, vec![default_only()]);
 
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (setup, _) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(affiliate_rejected("Affiliate is disabled")), Ok(())],
         )
         .await;
         assert!(setup.is_ok());
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW + 1,
             vec![Err(affiliate_rejected("Affiliate is disabled"))],
         )
@@ -331,9 +371,9 @@ mod tests {
 
     #[async_test_all]
     async fn a_rejection_naming_the_partner_leaves_it_off_until_the_window_passes() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(unknown_affiliate(PARTNER)), Ok(())],
         )
@@ -341,9 +381,19 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(calls, vec![both(), default_only()]);
 
-        let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS - 1, vec![Ok(())]).await;
+        let (_, calls) = run(
+            &attribution,
+            NOW + PARTNER_AFFILIATE_RETRY_SECS - 1,
+            vec![Ok(())],
+        )
+        .await;
         assert_eq!(calls, vec![default_only()]);
-        let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS, vec![Ok(())]).await;
+        let (_, calls) = run(
+            &attribution,
+            NOW + PARTNER_AFFILIATE_RETRY_SECS,
+            vec![Ok(())],
+        )
+        .await;
         assert_eq!(calls, vec![both()]);
     }
 
@@ -362,19 +412,23 @@ mod tests {
         ];
         for rejection in rejections {
             let label = format!("{rejection:?}");
-            let affiliates = Affiliates::new(Some(PARTNER.to_string()));
-            let (result, calls) = run(&affiliates, NOW, vec![Err(rejection), Ok(())]).await;
+            let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
+            let (result, calls) = run(&attribution, NOW, vec![Err(rejection), Ok(())]).await;
             assert!(result.is_ok(), "{label}");
             assert_eq!(calls, vec![both(), default_only()], "{label}");
-            assert_eq!(next_call(&affiliates, NOW).await, default_only(), "{label}");
+            assert_eq!(
+                next_call(&attribution, NOW).await,
+                default_only(),
+                "{label}"
+            );
         }
     }
 
     #[async_test_all]
     async fn a_rejection_naming_the_partner_is_remembered_when_the_retry_also_fails() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![
                 Err(unknown_affiliate(PARTNER)),
@@ -390,22 +444,22 @@ mod tests {
             })
         ));
         assert_eq!(calls, vec![both(), default_only()]);
-        assert_eq!(next_call(&affiliates, NOW).await, default_only());
+        assert_eq!(next_call(&attribution, NOW).await, default_only());
     }
 
     #[async_test_all]
     async fn a_longer_id_containing_the_partner_is_not_a_mention() {
         let partner = "breez_1";
-        let affiliates = Affiliates::new(Some(partner.to_string()));
+        let attribution = Attribution::new(Some("1".to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(unknown_affiliate("breez_1a2b")), Ok(())],
         )
         .await;
         assert!(result.is_ok());
         assert_eq!(calls, vec![with_partner(partner), default_only()]);
-        assert_eq!(next_call(&affiliates, NOW).await, with_partner(partner));
+        assert_eq!(next_call(&attribution, NOW).await, with_partner(partner));
     }
 
     #[async_test_all]
@@ -420,19 +474,19 @@ mod tests {
         ];
         for rejection in rejections {
             let label = format!("{rejection:?}");
-            let affiliates = Affiliates::new(Some(PARTNER.to_string()));
-            let (result, calls) = run(&affiliates, NOW, vec![Err(rejection), Ok(())]).await;
+            let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
+            let (result, calls) = run(&attribution, NOW, vec![Err(rejection), Ok(())]).await;
             assert!(result.is_ok(), "{label}");
             assert_eq!(calls, vec![both(), default_only()], "{label}");
-            assert_eq!(next_call(&affiliates, NOW).await, both(), "{label}");
+            assert_eq!(next_call(&attribution, NOW).await, both(), "{label}");
         }
     }
 
     #[async_test_all]
     async fn an_unattributed_rejection_that_persists_returns_the_retry_error() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![
                 Err(invalid_request("recipientAddress is invalid")),
@@ -445,14 +499,14 @@ mod tests {
             Err(FlashnetError::InvalidRequest { ref reason, .. }) if reason == "still invalid"
         ));
         assert_eq!(calls, vec![both(), default_only()]);
-        assert_eq!(next_call(&affiliates, NOW).await, both());
+        assert_eq!(next_call(&attribution, NOW).await, both());
     }
 
     #[async_test_all]
     async fn a_rejection_naming_breez_sdk_surfaces_and_is_not_blamed_on_the_partner() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![
                 Err(unknown_affiliate(DEFAULT_AFFILIATE_ID)),
@@ -466,7 +520,7 @@ mod tests {
                 if *reason == format!("Unknown affiliateId: {DEFAULT_AFFILIATE_ID}")
         ));
         assert_eq!(calls, vec![both(), default_only()]);
-        assert_eq!(next_call(&affiliates, NOW).await, both());
+        assert_eq!(next_call(&attribution, NOW).await, both());
     }
 
     #[async_test_all]
@@ -492,26 +546,26 @@ mod tests {
         ];
         for error in errors {
             let label = format!("{error:?}");
-            let affiliates = Affiliates::new(Some(PARTNER.to_string()));
-            let (result, calls) = run(&affiliates, NOW, vec![Err(error)]).await;
+            let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
+            let (result, calls) = run(&attribution, NOW, vec![Err(error)]).await;
             assert!(result.is_err(), "{label}");
             assert_eq!(calls, vec![both()], "{label}");
-            assert_eq!(next_call(&affiliates, NOW).await, both(), "{label}");
+            assert_eq!(next_call(&attribution, NOW).await, both(), "{label}");
         }
     }
 
     #[async_test_all]
     async fn while_the_partner_is_left_off_a_rejection_is_returned_without_a_retry() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (setup, _) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(unknown_affiliate(PARTNER)), Ok(())],
         )
         .await;
         assert!(setup.is_ok());
         let (result, calls) = run(
-            &affiliates,
+            &attribution,
             NOW + 1,
             vec![Err(invalid_request("recipientAddress is invalid"))],
         )
@@ -522,15 +576,15 @@ mod tests {
 
     #[async_test_all]
     async fn a_clock_moving_back_keeps_the_partner_left_off() {
-        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let attribution = Attribution::new(Some(PARTNER_ID.to_string()));
         let (setup, _) = run(
-            &affiliates,
+            &attribution,
             NOW,
             vec![Err(unknown_affiliate(PARTNER)), Ok(())],
         )
         .await;
         assert!(setup.is_ok());
-        let (_, calls) = run(&affiliates, NOW - 600, vec![Ok(())]).await;
+        let (_, calls) = run(&attribution, NOW - 600, vec![Ok(())]).await;
         assert_eq!(calls, vec![default_only()]);
     }
 }
