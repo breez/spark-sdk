@@ -18,16 +18,20 @@ The Breez SDK offers a non-custodial, end-to-end solution for integrating bitcoi
 - [x] **[Languages & Frameworks](/guide/install.md)**: Kotlin, Swift, JS, React Native, Flutter, Go, Python, C#, and WASM.
 - [x] **[Passkey Login](/guide/passkey.md)**: Seedless onboarding and restore, no recovery phrase needed.
 - [x] **[USDT & USDC](/guide/cross_chain.md)**: Users can send/receive stablecoins from their BTC or stable balance.
+- [x] **[Cash App to USDC/USDT](/guide/cash_app_to_usdc_usdt.md)**: Users pay from Cash App and the recipient gets USDC or USDT on their chain.
 - [x] **[Stable Balance](/guide/stable_balance.md)**: Users can hold their balance in USD to avoid BTC price volatility.
 - [x] **[Instant Deposits](/guide/onchain_claims.md)**: Claim on-chain deposits in seconds, no confirmations needed.
+- [x] **[Automatic Claims](/guide/onchain_claims.md)**: On-chain deposits are claimed automatically within the fee limits you set.
 - [x] **[Multi-device/app Sync](/guide/config.md#real-time-sync-server-url)**: Users can access their balance from multiple devices and apps.
 - [x] **[Contacts API](/guide/contacts.md)**: Save and reuse Lightning addresses, synced across devices.
 - [x] **[Caching & Persistence](/guide/customizing.md#with-storage)**: Out-of-the-box caching and persistence for a smooth UX.
+- [x] **[Spark Tokens](/guide/tokens.md)**: Issue, send, receive, and convert Spark tokens (BTKN).
 - [x] **[External Signer](/guide/external_signer.md)**: Bring your own key management.
 - [x] **[Turnkey Signer](/guide/turnkey.md)**: A built-in signer for server-side, non-custodial embedded wallets.
 - [x] **[Integrated On-ramps](/guide/buy_bitcoin.md)**: Let users buy bitcoin directly via Cash App and MoonPay.
 - [x] **[Fiat Currencies](/guide/fiat_currencies.md)**: Real-time exchange rates to display value in fiat currencies.
 - [x] **[Multi-user Server Mode](/guide/server_mode.md)**: Run multiple user balances from a single backend server.
+- [x] **[Unilateral Exit](/guide/unilateral_exit.md)**: Users can always withdraw to the Bitcoin blockchain without the Spark operators.
 - [x] **[Open-source](https://github.com/breez/spark-sdk)**: Free and open-source, available to any developer at any scale.
 - [x] **[Partner Portal](https://partners.breez.technology/)**: Track your volume and activity in one dashboard.
 
