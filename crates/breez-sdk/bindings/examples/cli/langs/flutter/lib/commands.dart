@@ -953,7 +953,10 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
       }
       request = BuyBitcoinRequest_CashApp(amountSats: amount);
     default:
-      request = BuyBitcoinRequest_Moonpay(lockedAmountSat: amount, redirectUrl: redirectUrl);
+      request = BuyBitcoinRequest_Moonpay(
+        delivery: MoonpayDelivery_Bitcoin(amountSat: amount),
+        redirectUrl: redirectUrl,
+      );
   }
 
   final result = await sdk.buyBitcoin(request: request);

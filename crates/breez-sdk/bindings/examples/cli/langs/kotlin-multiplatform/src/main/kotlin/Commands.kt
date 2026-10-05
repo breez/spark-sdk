@@ -953,7 +953,7 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
             BuyBitcoinRequest.CashApp(amountSats = amountSat)
         }
         else -> BuyBitcoinRequest.Moonpay(
-            lockedAmountSat = amountSat,
+            delivery = MoonpayDelivery.Bitcoin(amountSat = amountSat),
             redirectUrl = redirectUrl,
         )
     }

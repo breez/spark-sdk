@@ -942,7 +942,7 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
         }
         request = .cashApp(amountSats: amountSats)
     default:
-        request = .moonpay(lockedAmountSat: amountSat, redirectUrl: redirectUrl)
+        request = .moonpay(delivery: .bitcoin(amountSat: amountSat), redirectUrl: redirectUrl)
     }
 
     let result = try await sdk.buyBitcoin(request: request)
