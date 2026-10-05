@@ -33,6 +33,7 @@ import {
   SparkMasterIdentityPublicKey,
   TokenTransactionType,
   BuyBitcoinRequest,
+  MoonpayDelivery,
   getSparkStatus,
   PaymentRequest,
   CrossChainRouteFilter,
@@ -1107,7 +1108,7 @@ async function handleListUnclaimedDeposits(sdk: BreezSdkInterface, _tokenIssuer:
 
 async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const provider = parseFlag(args, '--provider') ?? 'moonpay'
-  const amountSatStr = parseFlag(args, '--amount-sat', '--amount', '--locked-amount-sat')
+  const amountSatStr = parseFlag(args, '--amount-sat')
   const redirectUrl = parseFlag(args, '--redirect-url')
 
   const amountSat = amountSatStr !== undefined ? BigInt(amountSatStr) : undefined
@@ -1124,7 +1125,7 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
       break
     default:
       request = new BuyBitcoinRequest.Moonpay({
-        lockedAmountSat: amountSat,
+        delivery: new MoonpayDelivery.Bitcoin({ amountSat }),
         redirectUrl,
       })
       break

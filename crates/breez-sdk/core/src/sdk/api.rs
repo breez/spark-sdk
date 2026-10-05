@@ -5,13 +5,13 @@ use std::str::FromStr;
 use tracing::{debug, info};
 
 use crate::{
-    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
-    OptimizeLeavesResponse, PreparePaymentLinkRequest, PreparePaymentLinkResponse,
-    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
-    UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
+    CheckMessageRequest, CheckMessageResponse, CrossChainProvider, CrossChainRouteFilter,
+    CrossChainRoutePair, DeliveryMethod, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse, Network, OptimizationMode,
+    OptimizeLeavesRequest, OptimizeLeavesResponse, PreparePaymentLinkRequest,
+    PreparePaymentLinkResponse, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
+    UserSettings, Webhook,
     chain::RecommendedFees,
     cross_chain::{
         CrossChainProviderContext, convert_destination_amount_to_sats, fetch_btc_usd_rate,
@@ -26,12 +26,12 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
+use super::BreezSdk;
 use super::payments::validation::{
     known_token_contracts, resolve_direct_overpay_amount, resolve_slippage_bps,
     validate_address_family_against_route, validate_amount,
     validate_recipient_not_contract_address,
 };
-use super::{BreezSdk, helpers::get_deposit_address};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -402,57 +402,6 @@ impl BreezSdk {
             .await
             .map_err(|e| SdkError::Generic(format!("Failed to list webhooks: {e}")))?;
         Ok(webhooks.into_iter().map(Into::into).collect())
-    }
-
-    /// Initiates a Bitcoin purchase flow via an external provider.
-    ///
-    /// Returns a URL the user should open to complete the purchase.
-    /// The request variant determines the provider and its parameters:
-    ///
-    /// - [`BuyBitcoinRequest::Moonpay`]: Fiat-to-Bitcoin via on-chain deposit.
-    /// - [`BuyBitcoinRequest::CashApp`]: Lightning invoice + `cash.app` deep link (mainnet only).
-    pub async fn buy_bitcoin(
-        &self,
-        request: BuyBitcoinRequest,
-    ) -> Result<BuyBitcoinResponse, SdkError> {
-        let url = match request {
-            BuyBitcoinRequest::Moonpay {
-                locked_amount_sat,
-                redirect_url,
-            } => {
-                let address = get_deposit_address(&self.spark_wallet, &self.storage, true).await?;
-                self.buy_bitcoin_provider
-                    .buy_bitcoin(address, locked_amount_sat, redirect_url)
-                    .await
-                    .map_err(|e| {
-                        SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
-                    })?
-            }
-            BuyBitcoinRequest::CashApp { amount_sats } => {
-                if !matches!(self.config.network, Network::Mainnet) {
-                    return Err(SdkError::Generic(
-                        "CashApp is only available on mainnet".to_string(),
-                    ));
-                }
-                if amount_sats == 0 {
-                    return Err(SdkError::Generic(
-                        "CashApp requires a non-zero amount".to_string(),
-                    ));
-                }
-                let receive_response = self
-                    .receive_bolt11_invoice(
-                        "breez-onramp".to_string(),
-                        Some(amount_sats),
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                CashAppProvider::build_url(&receive_response.payment_request)
-            }
-        };
-
-        Ok(BuyBitcoinResponse { url })
     }
 
     /// Prepare a payment link that sends USDC/USDT to an external-chain

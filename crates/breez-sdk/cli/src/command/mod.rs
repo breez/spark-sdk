@@ -14,13 +14,14 @@ use breez_sdk_spark::{
     CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest,
-    PrepareSendBatchRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MoonpayDelivery, OnchainConfirmationSpeed,
+    PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PreparePaymentLinkRequest, PrepareSendBatchRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -401,8 +402,17 @@ pub enum Command {
         provider: String,
 
         /// Amount in satoshis (meaning depends on provider)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "amount")]
         amount_sat: Option<u64>,
+
+        /// Deliver as USDC on Solana (`MoonPay` only): USD amount in 6-decimal
+        /// base units, so `1000000` = $1
+        #[arg(long)]
+        amount: Option<u128>,
+
+        /// Deduct the conversion fee from `--amount` instead of adding it on top
+        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue, requires = "amount")]
+        fees_included: bool,
 
         /// Custom redirect URL after purchase completion (`MoonPay` only)
         #[arg(long)]
@@ -724,6 +734,8 @@ pub(crate) async fn execute_command(
         Command::BuyBitcoin {
             provider,
             amount_sat,
+            amount,
+            fees_included,
             redirect_url,
         } => {
             let request = match provider.to_lowercase().as_str() {
@@ -733,14 +745,31 @@ pub(crate) async fn execute_command(
                     })?;
                     BuyBitcoinRequest::CashApp { amount_sats }
                 }
-                _ => BuyBitcoinRequest::Moonpay {
-                    locked_amount_sat: amount_sat,
-                    redirect_url,
-                },
+                _ => {
+                    let delivery = match (amount, amount_sat) {
+                        (Some(amount), _) => Some(MoonpayDelivery::CrossChain {
+                            amount,
+                            fee_mode: fees_included
+                                .then_some(breez_sdk_spark::CrossChainFeeMode::FeesIncluded),
+                        }),
+                        (None, Some(amount_sat)) => Some(MoonpayDelivery::Bitcoin {
+                            amount_sat: Some(amount_sat),
+                        }),
+                        (None, None) => None,
+                    };
+                    BuyBitcoinRequest::Moonpay {
+                        delivery,
+                        redirect_url,
+                    }
+                }
             };
             let value = sdk.buy_bitcoin(request).await?;
             println!("Open this URL in a browser to complete the purchase:");
             println!("{}", value.url);
+            if let Some(info) = &value.cross_chain_info {
+                println!("Delivered as USDC on Solana. Quote:");
+                print_value(info)?;
+            }
             Ok(true)
         }
         Command::PreparePaymentLink {

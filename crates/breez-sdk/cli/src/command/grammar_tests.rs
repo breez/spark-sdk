@@ -497,6 +497,8 @@ fn buy_bitcoin() {
     let Command::BuyBitcoin {
         provider,
         amount_sat,
+        amount,
+        fees_included,
         redirect_url,
     } = parse_ok("buy-bitcoin")
     else {
@@ -504,12 +506,15 @@ fn buy_bitcoin() {
     };
     assert_eq!(provider, "moonpay");
     assert!(amount_sat.is_none());
+    assert!(amount.is_none());
+    assert!(!fees_included);
     assert!(redirect_url.is_none());
 
     let Command::BuyBitcoin {
         provider,
         amount_sat,
         redirect_url,
+        ..
     } = parse_ok("buy-bitcoin --provider cashapp --amount-sat 10000 --redirect-url https://x.com")
     else {
         panic!("expected BuyBitcoin");
@@ -517,6 +522,22 @@ fn buy_bitcoin() {
     assert_eq!(provider, "cashapp");
     assert_eq!(amount_sat, Some(10000));
     assert_eq!(redirect_url.as_deref(), Some("https://x.com"));
+
+    let Command::BuyBitcoin {
+        amount_sat,
+        amount,
+        fees_included,
+        ..
+    } = parse_ok("buy-bitcoin --amount 25000000 --fees-included")
+    else {
+        panic!("expected BuyBitcoin");
+    };
+    assert!(amount_sat.is_none());
+    assert_eq!(amount, Some(25_000_000));
+    assert!(fees_included);
+
+    parse_err("buy-bitcoin --amount 25000000 --amount-sat 10000");
+    parse_err("buy-bitcoin --fees-included");
 }
 
 #[test]
