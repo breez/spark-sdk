@@ -1,7 +1,6 @@
 use crate::error::SdkError;
 
-/// Pure kernel for the `FeesIncluded` fee-reconciliation shared by the Bolt11,
-/// LNURL-pay, and Boltz cross-chain send paths.
+/// Pure kernel for the `FeesIncluded` fee reconciliation.
 ///
 /// Given the fee stored at prepare time and the fee re-estimated at send time,
 /// returns the allowed overpayment (`stored - current`). Fails if the fee

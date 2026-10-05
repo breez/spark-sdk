@@ -974,10 +974,6 @@ impl Storage for PostgresStorage {
                             "pm.conversion_info::jsonb->>'type' = 'orchestra' AND \
                              pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
                         }
-                        crate::persist::ConversionFilter::BoltzPending => {
-                            "pm.conversion_info::jsonb->>'type' = 'boltz' AND \
-                             pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
-                        }
                     };
                     payment_details_clauses.push(format!(
                         "pm.conversion_info IS NOT NULL AND {status_clause}"

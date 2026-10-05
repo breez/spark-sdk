@@ -73,7 +73,7 @@ pub async fn build_mainnet_sdk_from_mnemonic(
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
     config.stable_balance_config = stable_balance_config;
-    // Required for the cross-chain providers (Orchestra/Boltz) to register;
+    // Required for the cross-chain providers (Orchestra) to register;
     // without it the registry is empty and `get_cross_chain_routes` returns none.
     config.cross_chain_config = cross_chain_config;
 
@@ -444,7 +444,7 @@ pub async fn mainnet_test_setup(
 }
 
 /// Cross-chain test preamble: gate on credentials, then build a **funded** Alice
-/// with `cross_chain_config` enabled (required for the Orchestra/Boltz providers
+/// with `cross_chain_config` enabled (required for the Orchestra provider
 /// to register; without it `get_cross_chain_routes` is empty and the tests would
 /// skip). Returns `None` to skip (logged) when creds are absent or Alice has 0
 /// sats; otherwise `(alice, token_id, mnemonic)`.

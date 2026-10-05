@@ -736,10 +736,6 @@ impl Storage for SqliteStorage {
                             "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND \
                              json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
                         }
-                        crate::persist::ConversionFilter::BoltzPending => {
-                            "json_extract(pm.conversion_info, '$.type') = 'boltz' AND \
-                             json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
-                        }
                     };
                     payment_details_clauses.push(format!(
                         "pm.conversion_info IS NOT NULL AND {status_clause}"

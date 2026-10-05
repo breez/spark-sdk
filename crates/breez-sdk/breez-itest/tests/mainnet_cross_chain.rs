@@ -2,15 +2,11 @@
 //!
 //! Exercises both directions against the funded test account ("Alice") on Spark
 //! and a **deterministic EVM wallet derived from the same test mnemonic** at
-//! `m/44'/60'/0'/0/0`. All tests target **Arbitrum One**, the only chain
-//! offering USD-stable assets on both providers.
+//! `m/44'/60'/0'/0/0`. All tests target **Arbitrum One**.
 //!
 //! ## Send tests (Alice → EVM)
 //!
-//! - `test_cross_chain_01_usdt_send_fees_excluded_evm`: BTC (sats) → USDT.
-//!   Provider is selectable via `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER`
-//!   (`orchestra` default, `boltz` alternative) so the USDT stash keeps
-//!   getting produced when one provider is temporarily down.
+//! - `test_cross_chain_01_usdt_send_fees_excluded_evm`: BTC (sats) → USDT via Orchestra.
 //! - `test_cross_chain_02_orchestra_send_fees_excluded_evm`: USDB → USDC via Orchestra.
 //!
 //! Verifies receipt independently by reading the EVM recipient's ERC-20 balance
@@ -77,11 +73,6 @@
 //! - `MAINNET_TEST_CROSS_CHAIN_RECEIVE_USDC_MAX`: cap for the fees-included
 //!   USDC sweep, in USDC base units. Unset by default (sweep the full
 //!   balance).
-//! - `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER`: selects the provider for
-//!   the BTC → USDT send in test 01. `orchestra` (default) exercises the
-//!   Spark-funded direct transfer. `boltz` exercises the Lightning-funded
-//!   reverse swap. Values are case-insensitive. Unknown values fall back to
-//!   Orchestra with a warning.
 //!
 //! # Precondition for the receive tests
 //! The EVM address at `m/44'/60'/0'/0/0` needs a small Arbitrum ETH balance for
@@ -102,9 +93,8 @@ use breez_sdk_spark::*;
 use tracing::{debug, info, warn};
 
 /// Target chain for all tests: Arbitrum One. Matched on `chain_id` (the
-/// decimal EVM chainId), since providers spell the chain *name* differently
-/// (Orchestra reports `"arbitrum"`, Boltz reports `"Arbitrum One"`). `chain_id`
-/// is the stable cross-provider key.
+/// decimal EVM chainId), since providers can spell the chain *name*
+/// differently. `chain_id` is the stable cross-provider key.
 const TARGET_CHAIN_ID: &str = "42161";
 
 /// Whether a route's destination is Arbitrum One. Prefers `chain_id`. Falls back
@@ -354,20 +344,14 @@ async fn test_cross_chain_02_orchestra_send_fees_excluded_evm() -> Result<()> {
     Ok(())
 }
 
-/// BTC (Alice's sats) → USDT on Arbitrum, fees-excluded. The provider is
-/// selectable via `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER` (`orchestra`
-/// default, `boltz` alternative) so downstream receive tests keep their USDT
-/// stash when one provider is temporarily broken. Orchestra funds over Spark
-/// (direct transfer). Boltz funds over Lightning (reverse swap).
+/// Orchestra: BTC (Alice's sats) → USDT on Arbitrum, fees-excluded, funded
+/// over Spark (direct transfer).
 #[test_log::test(tokio::test)]
 async fn test_cross_chain_01_usdt_send_fees_excluded_evm() -> Result<()> {
     let Some((mut alice, token_id, mnemonic)) = mainnet_cross_chain_setup().await? else {
         return Ok(());
     };
-    let provider = usdt_send_provider();
-    info!(
-        "=== Starting test_cross_chain_01_usdt_send_fees_excluded_evm (provider={provider:?}) ==="
-    );
+    info!("=== Starting test_cross_chain_01_usdt_send_fees_excluded_evm ===");
     let pre = alice_balances(&alice, &token_id).await?;
 
     // Source budget in SATS (BTC source). The recipient lands the fiat-equivalent
@@ -377,7 +361,7 @@ async fn test_cross_chain_01_usdt_send_fees_excluded_evm() -> Result<()> {
     run_cross_chain_evm_send(
         &mut alice,
         &recipient,
-        provider,
+        CrossChainProvider::Orchestra,
         "USDT",
         None, // BTC source
         None, // no conversion: amount is sats
@@ -387,33 +371,12 @@ async fn test_cross_chain_01_usdt_send_fees_excluded_evm() -> Result<()> {
     .await?;
 
     log_cost(
-        match provider {
-            CrossChainProvider::Orchestra => "orchestra-usdt",
-            CrossChainProvider::Boltz => "boltz-usdt",
-        },
+        "orchestra-usdt",
         &token_id,
         pre,
         alice_balances(&alice, &token_id).await?,
     );
     Ok(())
-}
-
-/// Reads `MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER` (`orchestra` default,
-/// `boltz` alternative) for the BTC → USDT send in test 01.
-/// Case-insensitive. Unknown values fall back to Orchestra with a warning.
-fn usdt_send_provider() -> CrossChainProvider {
-    match std::env::var("MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER")
-        .ok()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .as_deref()
-    {
-        None | Some("") | Some("orchestra") => CrossChainProvider::Orchestra,
-        Some("boltz") => CrossChainProvider::Boltz,
-        Some(other) => {
-            warn!("Unknown MAINNET_TEST_CROSS_CHAIN_SEND_USDT_PROVIDER={other:?}, using orchestra");
-            CrossChainProvider::Orchestra
-        }
-    }
 }
 
 /// Orchestra: USDT on Arbitrum → BTC (sats) on Spark, fees-excluded. Alice
@@ -782,14 +745,14 @@ async fn run_cross_chain_evm_send(
     // exist on the destination chain, have succeeded, and credit the recipient.
     // A balance that merely went up proves funds arrived; this proves the hash
     // the SDK handed the integrator is the transaction that delivered them.
-    match (provider, external_tx_hash.as_deref()) {
-        (CrossChainProvider::Orchestra, None) => {
+    match external_tx_hash.as_deref() {
+        None => {
             panic!(
-                "Orchestra reported Completed without an external_tx_hash; \
+                "{provider:?} reported Completed without an external_tx_hash; \
                  the settlement hash should be recorded on delivery"
             );
         }
-        (_, Some(tx_hash)) => {
+        Some(tx_hash) => {
             let credited = wait_for_evm_settlement_tx(
                 &rpc_url,
                 tx_hash,
@@ -812,8 +775,6 @@ async fn run_cross_chain_evm_send(
                 );
             }
         }
-        // Boltz does not carry a settlement hash yet; nothing to verify.
-        (CrossChainProvider::Boltz, None) => {}
     }
 
     log_evm_recovery_balance(&rpc_url, &contract, recipient, asset).await;
@@ -1334,8 +1295,7 @@ async fn wait_for_completed_conversion_event(
 /// What a terminal `Completed` conversion reported about its delivery.
 struct CompletedConversion {
     delivered_amount: Option<u128>,
-    /// Settlement transaction on the destination chain. Orchestra reports one;
-    /// Boltz does not yet carry it.
+    /// Settlement transaction on the destination chain.
     external_tx_hash: Option<String>,
 }
 
@@ -1384,16 +1344,10 @@ async fn wait_for_cross_chain_completion(
                     external_tx_hash,
                     ..
                 } => (status, *delivered_amount, external_tx_hash.clone()),
-                ConversionInfo::Boltz {
-                    status,
-                    delivered_amount,
-                    ..
-                } => (status, *delivered_amount, None),
-                // A cross-chain send should carry an Orchestra/Boltz conversion,
-                // never a plain AMM one. Fail fast rather than spin to timeout.
-                ConversionInfo::Amm { status, .. } => anyhow::bail!(
-                    "cross-chain payment {payment_id} has an unexpected AMM conversion_info \
-                     (status {status:?})"
+                // A cross-chain send should carry an Orchestra conversion. Fail
+                // fast rather than spin to timeout.
+                other => anyhow::bail!(
+                    "cross-chain payment {payment_id} has an unexpected conversion_info {other:?}"
                 ),
             };
             let status_str = format!("{status:?}");

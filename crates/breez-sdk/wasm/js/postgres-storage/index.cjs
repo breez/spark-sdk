@@ -295,8 +295,6 @@ class PostgresStorage {
               statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
               statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
-            } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
-              statusClause = "pm.conversion_info::jsonb->>'type' = 'boltz' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
               const prefix = typeCheck ? `${typeCheck} AND ` : "";

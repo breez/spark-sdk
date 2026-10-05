@@ -1671,7 +1671,6 @@ pub enum PaymentDetailsFilter {
 pub enum ConversionFilter {
     AmmRefundNeeded,
     OrchestraPending,
-    BoltzPending,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StoragePaymentDetailsFilter)]

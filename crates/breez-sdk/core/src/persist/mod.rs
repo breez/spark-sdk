@@ -183,10 +183,6 @@ pub enum ConversionFilter {
     AmmRefundNeeded,
     /// Orchestra orders that have not yet reached a terminal state.
     OrchestraPending,
-    /// Boltz reverse swaps that have not yet reached a terminal state. Lives on
-    /// the Lightning leg (the hold-invoice pay), so it is selected via the
-    /// [`StoragePaymentDetailsFilter::Lightning`] filter.
-    BoltzPending,
 }
 
 /// Storage-internal variant of [`PaymentDetailsFilter`].

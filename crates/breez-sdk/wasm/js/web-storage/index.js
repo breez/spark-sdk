@@ -2602,11 +2602,6 @@ class IndexedDBStorage {
             if (ci.type !== "orchestra" || ["completed", "failed", "refunded"].includes(ci.status)) {
               continue;
             }
-          } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
-            // Boltz conversion lives on the Lightning leg.
-            if (ci.type !== "boltz" || ["completed", "failed", "refunded"].includes(ci.status)) {
-              continue;
-            }
           }
         }
         // Filter by token transaction hash

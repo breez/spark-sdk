@@ -260,8 +260,6 @@ class SqliteStorage {
               statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
               statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
-            } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
-              statusClause = "json_extract(pm.conversion_info, '$.type') = 'boltz' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
               const prefix = typeCheck ? `${typeCheck} AND ` : "";

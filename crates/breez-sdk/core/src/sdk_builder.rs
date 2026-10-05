@@ -1811,8 +1811,7 @@ mod tests {
         }
     }
 
-    /// Both cross-chain providers honour the proxy: Orchestra on the shared
-    /// client, Boltz through its own config.
+    /// Orchestra honours the proxy through the shared client.
     #[test]
     fn validate_accepts_proxy_with_cross_chain_config() {
         use crate::{CrossChainConfig, default_config};

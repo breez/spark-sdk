@@ -842,13 +842,13 @@ pub struct Config {
     /// a disagreement would mean part of the traffic bypassed the proxy.
     pub proxy: Option<ProxyConfig>,
 
-    /// Configuration for cross-chain sends via Orchestra and Boltz.
+    /// Configuration for cross-chain sends via Orchestra.
     ///
     /// `Some(_)` enables cross-chain sends (sats to USDT on external chains).
     /// `None` (default) disables them entirely. Opt in by setting this to
     /// [`CrossChainConfig::default`] (or a customized value): the providers
-    /// run background work (e.g. web sockets), so enabling is left to the
-    /// caller. Cross-chain sends are only supported on mainnet.
+    /// run background work (e.g. a polling monitor), so enabling is left to
+    /// the caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
 }
 

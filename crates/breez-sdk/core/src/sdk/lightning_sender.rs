@@ -1,6 +1,4 @@
-//! Shared lightning-send helper used by both `BreezSdk::send_bolt11_invoice`
-//! and cross-chain providers that pay an LN invoice as part of a larger
-//! flow (e.g. Boltz reverse-swap hold invoices).
+//! Lightning-send helper.
 //!
 //! Encapsulates the "pay the invoice, build the Payment row, persist it,
 //! and poll the SSP until the status settles" sequence so callers don't
@@ -79,9 +77,6 @@ fn lock_in_flight(in_flight: &StdMutex<HashSet<String>>) -> MutexGuard<'_, HashS
 /// Reusable helper that owns the dependencies needed to pay a BOLT11
 /// invoice, persist the resulting [`Payment`] row, and reconcile its status
 /// with the SSP via background polling.
-///
-/// Held behind `Arc` and shared between `BreezSdk` and any cross-chain
-/// provider that pays LN invoices (currently: Boltz reverse swap).
 pub(crate) struct LightningSender {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,

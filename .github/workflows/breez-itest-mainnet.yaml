@@ -2,7 +2,7 @@ name: Breez mainnet conversion tests
 
 # Runs the token-conversion / stable-balance / cross-chain integration tests
 # against MAINNET, using real Flashnet pool liquidity (and, for cross-chain, real
-# Orchestra/Boltz routes to external EVM chains). Gated on the MAINNET_TEST_MNEMONIC
+# Orchestra routes to external EVM chains). Gated on the MAINNET_TEST_MNEMONIC
 # / BREEZ_API_KEY secrets; the tests skip if those are unset. Triggered manually
 # (workflow_dispatch) or by another workflow (workflow_call), e.g. on release.
 

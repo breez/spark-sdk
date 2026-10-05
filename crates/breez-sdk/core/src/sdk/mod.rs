@@ -111,10 +111,7 @@ pub struct BreezSdk {
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub(crate) cross_chain_context: crate::cross_chain::CrossChainContext,
-    /// Shared helper for paying LN invoices and persisting the resulting
-    /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
-    /// need to pay an LN invoice as part of a larger flow.
-    #[allow(dead_code)]
+    /// Pays LN invoices and persists the resulting payment rows.
     pub(crate) lightning_sender: Arc<LightningSender>,
 }
 

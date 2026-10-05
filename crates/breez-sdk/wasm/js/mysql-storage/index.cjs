@@ -313,8 +313,6 @@ class MysqlStorage {
           // Conversion filter — same enum shape as the Rust storage backend:
           //   "ammRefundNeeded"   → AMM conversion that needs a clawback
           //   "orchestraPending"  → Orchestra order not yet terminal
-          //   "boltzPending"      → Boltz reverse swap not yet terminal
-          //                         (lives on the Lightning hold-invoice leg)
           if (
             (paymentDetailsFilter.type === "spark" ||
               paymentDetailsFilter.type === "token" ||
@@ -331,12 +329,6 @@ class MysqlStorage {
             ) {
               statusClause =
                 "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'orchestra' AND \
-                 JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) NOT IN ('completed', 'failed', 'refunded')";
-            } else if (
-              paymentDetailsFilter.conversionFilter === "boltzPending"
-            ) {
-              statusClause =
-                "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'boltz' AND \
                  JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {

@@ -1087,11 +1087,6 @@ impl Storage for MysqlStorage {
                              = 'orchestra' AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, \
                              '$.status')) NOT IN ('Completed', 'Failed', 'Refunded')"
                         }
-                        crate::persist::ConversionFilter::BoltzPending => {
-                            "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) \
-                             = 'boltz' AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, \
-                             '$.status')) NOT IN ('Completed', 'Failed', 'Refunded')"
-                        }
                     };
                     payment_details_clauses.push(format!(
                         "pm.conversion_info IS NOT NULL AND {status_clause}"
