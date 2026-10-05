@@ -1,17 +1,8 @@
 //! Cross-chain payment providers.
 //!
 //! The [`CrossChainService`] trait abstracts route discovery, quoting, and
-//! sending. Each provider module (e.g. `orchestra`, `boltz`) implements it.
+//! sending. Each provider module (e.g. `orchestra`) implements it.
 
-// Boltz is not registered as a provider (see `sdk_builder`): the service is not
-// operational, and it is unclear when or whether it will be again. The modules
-// stay compiled so the wiring can be restored in one place.
-#[allow(dead_code)]
-pub(crate) mod boltz;
-#[allow(dead_code)]
-pub(crate) mod boltz_event_listener;
-#[allow(dead_code)]
-pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
 mod orchestra_storage_adapter;

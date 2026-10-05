@@ -138,23 +138,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alloy-dyn-abi"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a475bb02d9cef2dbb99065c1664ab3fe1f9352e21d6d5ed3f02cdbfc06ed1abc"
-dependencies = [
- "alloy-json-abi",
- "alloy-primitives",
- "alloy-sol-type-parser",
- "alloy-sol-types",
- "derive_more",
- "itoa",
- "serde",
- "serde_json",
- "winnow 1.0.2",
-]
-
-[[package]]
 name = "alloy-eip2124"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -394,9 +377,7 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43f447aefab0f1c0649f71edc33f590992d4e122bc35fb9cdbbf67d4421ace85"
 dependencies = [
- "alloy-dyn-abi",
  "alloy-primitives",
- "alloy-sol-types",
  "async-trait",
  "auto_impl",
  "either",
@@ -1328,25 +1309,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 
 [[package]]
-name = "bip32"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db40d3dfbeab4e031d78c844642fa0caa0b0db11ce1607ac9d2986dff1405c69"
-dependencies = [
- "bs58",
- "hmac 0.12.1",
- "k256",
- "once_cell",
- "pbkdf2",
- "rand_core 0.6.4",
- "ripemd",
- "secp256k1 0.27.0",
- "sha2 0.10.9",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "bip39"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,40 +1507,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "boltz-client"
-version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
-dependencies = [
- "alloy-primitives",
- "alloy-signer",
- "alloy-signer-local",
- "alloy-sol-types",
- "async-trait",
- "bip32",
- "bs58",
- "curve25519-dalek",
- "futures",
- "getrandom 0.2.17",
- "hex",
- "k256",
- "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tiny-keccak",
- "tokio",
- "tokio-socks",
- "tokio-tungstenite 0.28.0",
- "tokio-tungstenite-wasm",
- "tracing",
- "url",
- "zeroize",
-]
-
-[[package]]
 name = "borsh"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1639,9 +1567,9 @@ dependencies = [
  "hex",
  "http",
  "lightning",
- "macros 0.1.0",
+ "macros",
  "mockall",
- "platform-utils 0.1.0",
+ "platform-utils",
  "prost",
  "rand 0.8.6",
  "regex-lite",
@@ -1683,10 +1611,10 @@ dependencies = [
  "dotenvy",
  "futures",
  "hex",
- "macros 0.1.0",
+ "macros",
  "mysql_async",
  "nostr",
- "platform-utils 0.1.0",
+ "platform-utils",
  "rand 0.8.6",
  "reqwest",
  "rstest",
@@ -1717,7 +1645,6 @@ dependencies = [
  "bip39",
  "bitcoin",
  "bitflags 2.11.1",
- "boltz-client",
  "breez-sdk-common",
  "breez-sdk-spark",
  "built",
@@ -1729,11 +1656,11 @@ dependencies = [
  "k256",
  "lnurl-models",
  "log",
- "macros 0.1.0",
+ "macros",
  "nostr",
  "nostr-sdk",
  "p256 0.13.2",
- "platform-utils 0.1.0",
+ "platform-utils",
  "rcgen",
  "rusqlite",
  "rusqlite_migration",
@@ -1776,8 +1703,8 @@ dependencies = [
  "breez-sdk-spark",
  "console_error_panic_hook",
  "js-sys",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "macros",
+ "platform-utils",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
@@ -2132,7 +2059,7 @@ dependencies = [
  "ctap-hid-fido2",
  "dirs",
  "hex",
- "platform-utils 0.1.0",
+ "platform-utils",
  "rand 0.8.6",
  "rpassword",
  "rustyline",
@@ -2516,32 +2443,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
-]
-
-[[package]]
-name = "curve25519-dalek"
-version = "4.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "curve25519-dalek-derive",
- "fiat-crypto",
- "rustc_version 0.4.1",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "curve25519-dalek-derive"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
-dependencies = [
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -3189,12 +3090,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fiat-crypto"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
-
-[[package]]
 name = "figment"
 version = "0.10.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3258,8 +3153,8 @@ dependencies = [
  "bitcoin",
  "getrandom 0.2.17",
  "hex",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "macros",
+ "platform-utils",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -4635,8 +4530,8 @@ dependencies = [
  "dnssec-prover",
  "hashbrown 0.13.2",
  "libm",
- "lightning-invoice 0.33.2",
- "lightning-types 0.2.0",
+ "lightning-invoice",
+ "lightning-types",
  "possiblyrandom",
 ]
 
@@ -4648,18 +4543,7 @@ checksum = "11209f386879b97198b2bfc9e9c1e5d42870825c6bd4376f17f95357244d6600"
 dependencies = [
  "bech32 0.11.1",
  "bitcoin",
- "lightning-types 0.2.0",
-]
-
-[[package]]
-name = "lightning-invoice"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b85e5e14bcdb30d746e9785b04f27938292e8944f78f26517e01e91691f6b3f2"
-dependencies = [
- "bech32 0.11.1",
- "bitcoin",
- "lightning-types 0.3.1",
+ "lightning-types",
 ]
 
 [[package]]
@@ -4667,15 +4551,6 @@ name = "lightning-types"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2cd84d4e71472035903e43caded8ecc123066ce466329ccd5ae537a8d5488c7"
-dependencies = [
- "bitcoin",
-]
-
-[[package]]
-name = "lightning-types"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb1aac93f22f2c2eac8a0ee83bb1a1ea58673caa2c82847302710b83364d04e6"
 dependencies = [
  "bitcoin",
 ]
@@ -4710,11 +4585,11 @@ dependencies = [
  "clap",
  "figment",
  "hex",
- "lightning-invoice 0.33.2",
+ "lightning-invoice",
  "lnurl-models",
  "nostr",
  "nostr-sdk",
- "platform-utils 0.1.0",
+ "platform-utils",
  "rand 0.8.6",
  "regex",
  "reqwest",
@@ -4819,22 +4694,12 @@ dependencies = [
 name = "macro_test"
 version = "0.1.0"
 dependencies = [
- "macros 0.1.0",
+ "macros",
 ]
 
 [[package]]
 name = "macros"
 version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "macros"
-version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -5734,7 +5599,7 @@ dependencies = [
  "http",
  "hyper-util",
  "js-sys",
- "macros 0.1.0",
+ "macros",
  "mime",
  "reqwest",
  "serde",
@@ -5749,27 +5614,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
- "web-time",
-]
-
-[[package]]
-name = "platform-utils"
-version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "encoding_rs",
- "futures",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
- "mime",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio_with_wasm",
- "tracing",
  "web-time",
 ]
 
@@ -7009,15 +6853,6 @@ dependencies = [
 
 [[package]]
 name = "secp256k1"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25996b82292a7a57ed3508f052cfff8640d38d32018784acd714758b43da9c8f"
-dependencies = [
- "secp256k1-sys 0.8.2",
-]
-
-[[package]]
-name = "secp256k1"
 version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
@@ -7049,15 +6884,6 @@ dependencies = [
  "bitcoin_hashes",
  "rand 0.9.4",
  "secp256k1-sys 0.11.0",
-]
-
-[[package]]
-name = "secp256k1-sys"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4473013577ec77b4ee3668179ef1186df3146e2cf2d927bd200974c6fe60fd99"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -7491,9 +7317,9 @@ dependencies = [
  "http-body",
  "http-body-util",
  "k256",
- "lightning-invoice 0.33.2",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "lightning-invoice",
+ "macros",
+ "platform-utils",
  "prost",
  "prost-types",
  "rand 0.8.6",
@@ -7524,7 +7350,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "hex",
- "platform-utils 0.1.0",
+ "platform-utils",
  "qrcode-rs",
  "rand 0.8.6",
  "rustyline",
@@ -7549,7 +7375,7 @@ dependencies = [
  "bytes",
  "futures",
  "hex",
- "platform-utils 0.1.0",
+ "platform-utils",
  "prost",
  "rand 0.8.6",
  "rcgen",
@@ -7585,9 +7411,9 @@ dependencies = [
  "bitcoin",
  "chrono",
  "hex",
- "macros 0.1.0",
+ "macros",
  "mysql_async",
- "platform-utils 0.1.0",
+ "platform-utils",
  "serde",
  "serde_json",
  "spark-mysql",
@@ -7610,8 +7436,8 @@ dependencies = [
  "deadpool",
  "deadpool-postgres",
  "hex",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "macros",
+ "platform-utils",
  "rcgen",
  "rustls",
  "serde",
@@ -7652,8 +7478,8 @@ name = "spark-sqlite"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "macros",
+ "platform-utils",
  "rusqlite",
  "serde_json",
  "spark-wallet",
@@ -7670,8 +7496,8 @@ dependencies = [
  "frost-secp256k1-tr",
  "futures",
  "hex",
- "macros 0.1.0",
- "platform-utils 0.1.0",
+ "macros",
+ "platform-utils",
  "serde",
  "spark",
  "thiserror 2.0.18",
@@ -7927,7 +7753,7 @@ dependencies = [
  "futures",
  "hex",
  "lightning",
- "lightning-invoice 0.33.2",
+ "lightning-invoice",
  "prost",
  "reqwest",
  "serde",
@@ -8381,15 +8207,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiny-keccak"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
-dependencies = [
- "crunchy",
-]
-
-[[package]]
 name = "tinystr"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8581,22 +8398,6 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
-dependencies = [
- "futures-util",
- "log",
- "rustls",
- "rustls-pki-types",
- "tokio",
- "tokio-rustls",
- "tungstenite 0.28.0",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "tokio-tungstenite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
@@ -8605,26 +8406,6 @@ dependencies = [
  "log",
  "tokio",
  "tungstenite 0.29.0",
-]
-
-[[package]]
-name = "tokio-tungstenite-wasm"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccecee909c02b8863f9bda87253127eb4da0e7e1342330b2583fbc4d1795c2f8"
-dependencies = [
- "bytes",
- "futures-channel",
- "futures-util",
- "http",
- "httparse",
- "js-sys",
- "rustls",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.28.0",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -8993,25 +8774,6 @@ name = "tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.9.4",
- "rustls",
- "rustls-pki-types",
- "sha1 0.10.6",
- "thiserror 2.0.18",
- "utf-8",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
 dependencies = [
  "bytes",
  "data-encoding",

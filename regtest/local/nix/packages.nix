@@ -91,7 +91,6 @@ rec {
         cargoVendorDir = craneLib.vendorCargoDeps {
           inherit src;
           outputHashes = {
-            "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5" = "sha256-CYrCMsbJAX1vJE6OnNSsvc6aVmv2MfShZ9st2Z15TXw=";
             "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44" = "sha256-M0t6936nZhRCmUDoqfUX3kDKkf4kqLmudWDvyuU2Mjw=";
             "git+https://github.com/lightsparkdev/frost?rev=9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180#9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180" = "sha256-U8KCu1wVofNQBeN4zuIgmxN5lSKj/6YXu7J4o5oIvbQ=";
           };

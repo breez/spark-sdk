@@ -69,8 +69,7 @@ bech32.workspace = true
 # recipient from the test mnemonic (alloy-signer-local `mnemonic` feature),
 # read ERC-20 balances over JSON-RPC (reqwest), and sign+broadcast raw EIP-1559
 # transactions for the receive-side sweep (alloy-consensus + alloy-eips +
-# alloy-signer + alloy-rlp). The alloy crates are already in the workspace lock
-# via boltz-client.
+# alloy-signer + alloy-rlp).
 alloy-signer-local = { version = "1.8.3", features = ["mnemonic"] }
 alloy-signer = "1.8.3"
 alloy-consensus = "1.8.3"
