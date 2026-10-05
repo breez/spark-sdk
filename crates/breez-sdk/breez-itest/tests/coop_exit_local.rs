@@ -18,6 +18,9 @@ use sspd_lib::static_deposit::claim_fee_sats;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::info;
 
+/// How often a loop below looks again: a local cluster answers in milliseconds.
+const POLL: Duration = Duration::from_millis(250);
+
 /// The SSP's coop-exit fee for one amount leaf, at the floor rate it quotes on
 /// regtest, where bitcoind has no fee history for `estimatesmartfee`.
 fn single_leaf_fee_sats() -> u64 {
@@ -201,7 +204,7 @@ async fn test_coop_exit_withdraw_local(#[future] env: Result<Environment>) -> Re
         if Instant::now() >= deadline {
             anyhow::bail!("coop exit did not broadcast + claim within 300s");
         }
-        sleep(Duration::from_secs(3)).await;
+        sleep(POLL).await;
     };
     info!("coop exit complete: tx {coop_exit_txid}, SSP claimed the user's leaves");
 

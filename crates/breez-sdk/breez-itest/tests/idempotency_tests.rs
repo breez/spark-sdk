@@ -171,7 +171,11 @@ async fn test_01_spark_idempotency_key(#[future] env: Result<Environment>) -> Re
 /// Test 2: Send payment from Alice to Bob using Lightning with idempotency key
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_02_lightning_idempotency_key(#[future] env: Result<Environment>) -> Result<()> {
+async fn test_02_lightning_idempotency_key(
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
+) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_02_lightning_idempotency_key ===");
 

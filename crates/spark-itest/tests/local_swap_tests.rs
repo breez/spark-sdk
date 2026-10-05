@@ -22,6 +22,9 @@ use spark_wallet::{
 };
 use tracing::info;
 
+/// How often a loop below looks again: a local cluster answers in milliseconds.
+const POLL: Duration = Duration::from_millis(250);
+
 struct SwapFixture {
     pub fixtures: TestFixtures,
     pub alice_wallet: SparkWallet,
@@ -32,7 +35,7 @@ struct SwapFixture {
 
 impl SwapFixture {
     async fn swaps(&self) -> Result<Vec<internal_api::Swap>> {
-        self.fixtures.sspd().await?.swaps().await
+        self.fixtures.sspd().swaps().await
     }
 }
 
@@ -118,8 +121,8 @@ async fn client_swap_leaves(
 }
 
 async fn setup_swap_fixture() -> Result<SwapFixture> {
-    let fixtures = TestFixtures::new().await?;
-    let sspd = fixtures.sspd().await?;
+    let fixtures = TestFixtures::builder().with_sspd().build().await?;
+    let sspd = fixtures.sspd();
     sspd.wait_for_pool(&fixtures.bitcoind, 1, Duration::from_secs(600))
         .await
         .context("waiting for the daemon to stock its pool")?;
@@ -229,7 +232,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
             if let Some(swap) = swaps.iter().find(|swap| !swap.inbound.is_empty()) {
                 break 'claim swap.inbound.clone();
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(POLL).await;
         }
         panic!("the daemon did not claim Alice's leaf within the timeout");
     };
@@ -241,7 +244,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
     // A claimed leaf is admitted to the pool separately, after its refund
     // timelock is checked.
     let claimed_id: Vec<String> = inbound.iter().map(|l| l.leaf_id.clone()).collect();
-    let store = fixture.fixtures.sspd().await?.tree_store().await?;
+    let store = fixture.fixtures.sspd().tree_store().await?;
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
         let pooled = store.get_leaves().await?;
@@ -256,7 +259,7 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
             std::time::Instant::now() < deadline,
             "the leaf the daemon claimed never joined the pool"
         );
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(POLL).await;
     }
 
     Ok(())
@@ -378,7 +381,6 @@ async fn test_swap_never_hands_one_leaf_to_two_users() -> Result<()> {
     let stocked = *fixture
         .fixtures
         .sspd()
-        .await?
         .pool_leaf_counts()
         .await?
         .get(&top_denomination)
@@ -514,7 +516,7 @@ async fn test_swap_refronts_a_reclaimed_pool_leaf() -> Result<()> {
         }
         // Gives the asynchronous claim of this swap's leaves time to land before
         // the next swap.
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(POLL).await;
     }
 
     anyhow::bail!(

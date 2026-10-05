@@ -19,7 +19,39 @@ pub const ALL: [&str; 4] = [SPARK_SO, MIGRATIONS, LDK_SERVER, SSPD];
 
 /// The image a fixture runs, under the tag it is built with.
 pub fn image(name: &str) -> Result<testcontainers::GenericImage> {
-    Ok(testcontainers::GenericImage::new(name, tag(name)?.as_str()))
+    let tag = tag(name)?;
+    ensure_built(name, &tag)?;
+    Ok(testcontainers::GenericImage::new(name, tag.as_str()))
+}
+
+/// Docker is the only thing that can say whether this tree's image was ever
+/// built, and a fixture that starts a missing one fails with docker's "pull
+/// access denied" instead. Asked once per image: a build cannot happen while the
+/// tests run.
+fn ensure_built(image: &str, tag: &str) -> Result<()> {
+    static CHECKED: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+
+    let reference = format!("{image}:{tag}");
+    let mut checked = CHECKED.lock().expect("the images looked for");
+    let checked = checked.get_or_insert_with(std::collections::HashSet::new);
+    if checked.contains(&reference) {
+        return Ok(());
+    }
+    let present = std::process::Command::new("docker")
+        .args(["image", "inspect", &reference])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("running docker to look for an itest image")?
+        .success();
+    anyhow::ensure!(
+        present,
+        "{reference} is not built. Build what this tree needs with `make \
+         itest-images`, which `make itest` does for you."
+    );
+    checked.insert(reference);
+    Ok(())
 }
 
 /// `<name>:<tag>`, as `cargo xtask` builds and CI caches the image.
@@ -27,7 +59,23 @@ pub fn reference(image: &str) -> Result<String> {
     Ok(format!("{image}:{}", tag(image)?))
 }
 
+/// Hashing an image's inputs walks the workspace and shells out to cargo, and
+/// nothing they read changes while the process runs.
 pub fn tag(image: &str) -> Result<String> {
+    static TAGS: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
+        std::sync::Mutex::new(None);
+
+    let mut tags = TAGS.lock().expect("the image tags");
+    let tags = tags.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(tag) = tags.get(image) {
+        return Ok(tag.clone());
+    }
+    let tag = hash_inputs(image)?;
+    tags.insert(image.to_string(), tag.clone());
+    Ok(tag)
+}
+
+fn hash_inputs(image: &str) -> Result<String> {
     let docker = manifest_dir().join("docker");
     let mut inputs = match image {
         SPARK_SO => vec![
@@ -41,10 +89,16 @@ pub fn tag(image: &str) -> Result<String> {
         // crate it does not use leaves the daemon's image alone.
         SSPD => {
             let root = workspace_root();
+            // Everything the build reads from the repository root: the
+            // dockerfile copies the whole tree, and rustup picks the toolchain
+            // the pin names rather than the base image's.
             let mut inputs = vec![
                 docker.join("sspd.dockerfile"),
                 root.join("Cargo.toml"),
                 root.join("Cargo.lock"),
+                root.join("rust-toolchain.toml"),
+                root.join(".cargo/config.toml"),
+                root.join(".dockerignore"),
             ];
             for package in sspd_packages()? {
                 collect_sources(&package, &mut inputs)?;

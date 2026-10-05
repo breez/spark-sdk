@@ -143,7 +143,7 @@ async fn send_rejects_payment_hash_mismatch() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &committed_hash,
         &leaf,
     )
@@ -185,7 +185,7 @@ async fn send_rejects_insufficient_committed_amount() -> Result<()> {
         &stack.alice_config,
         stack.alice_signer.clone(),
         &stack.ssp_config,
-        &stack.sspd.identity_public_key,
+        &stack.sspd().identity_public_key,
         &payment_hash,
         &leaf,
     )
@@ -232,9 +232,11 @@ async fn receive_gives_no_leaves_until_htlc_held() -> Result<()> {
         .await?;
     info!("daemon issued the invoice for receive {}", request.id);
 
-    // Long enough for the daemon's receive worker to run on its timer more than
-    // once.
-    tokio::time::sleep(Duration::from_secs(25)).await;
+    // The worker has to have looked at the receive, twice, and left it alone.
+    stack
+        .sspd()
+        .wait_for_log("checking the pending receives", 2, Duration::from_secs(30))
+        .await?;
 
     let receive = stack
         .lightning_request(&request.id)

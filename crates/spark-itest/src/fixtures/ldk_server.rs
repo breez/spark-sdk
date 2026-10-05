@@ -11,7 +11,7 @@ use testcontainers::core::{ContainerPort, ExecCommand, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{Instrument, debug_span, info, instrument, warn};
 
 use crate::fixtures::bitcoind::BitcoindFixture;
 use crate::fixtures::log::TracingConsumer;
@@ -21,7 +21,7 @@ pub const GRPC_PORT: u16 = 3536;
 const LIGHTNING_PORT: u16 = 9735;
 
 pub struct LdkServerFixture {
-    pub container: ContainerAsync<GenericImage>,
+    pub container: crate::fixtures::Container<GenericImage>,
     pub container_name: String,
     /// Host address of the gRPC service: `127.0.0.1:<mapped port>`.
     pub base_url: String,
@@ -32,6 +32,7 @@ pub struct LdkServerFixture {
 }
 
 impl LdkServerFixture {
+    #[instrument(level = "debug", name = "ldk.start", skip(fixture_id, bitcoind))]
     pub async fn start(
         fixture_id: &FixtureId,
         bitcoind: &BitcoindFixture,
@@ -77,8 +78,9 @@ rpc_password = "{}"
         fs::write(&tls_key_path, &tls_key_pem)?;
 
         let container = crate::images::image(crate::images::LDK_SERVER)?
+            // The lightning port stays unpublished: peers reach it by container
+            // name on the cluster's network.
             .with_exposed_port(ContainerPort::Tcp(GRPC_PORT))
-            .with_exposed_port(ContainerPort::Tcp(LIGHTNING_PORT))
             .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
                 "gRPC service listening on",
             )))
@@ -99,6 +101,7 @@ rpc_password = "{}"
             ))
             .with_cmd(["/config/ldk-server.toml"])
             .start()
+            .instrument(debug_span!("ldk.container"))
             .await?;
 
         let host_grpc_port = crate::fixtures::published_port(&container, GRPC_PORT).await?;
@@ -113,7 +116,7 @@ rpc_password = "{}"
 
         info!("ldk-server '{name}' ready at {base_url} (peer {container_name}:{LIGHTNING_PORT})");
         Ok(Self {
-            container,
+            container: crate::fixtures::Container::new(container),
             container_name,
             base_url,
             api_key,
@@ -135,6 +138,7 @@ rpc_password = "{}"
 /// Searched for by name, since ldk-server namespaces some storage files by
 /// network and not others. Missing entropy only costs re-signing invoices as
 /// this node, so it is not an error.
+#[instrument(level = "debug", name = "ldk.read_node_secret_key", skip_all)]
 async fn read_node_secret_key(
     container: &ContainerAsync<GenericImage>,
 ) -> Result<Option<SecretKey>> {
@@ -184,6 +188,7 @@ fn derive_node_secret_key(seed: &[u8]) -> Result<SecretKey> {
         .private_key)
 }
 
+#[instrument(level = "debug", name = "ldk.read_in_container", skip(container))]
 async fn read_in_container(
     container: &ContainerAsync<GenericImage>,
     path: &str,

@@ -11,6 +11,7 @@ bitcoin = { workspace = true, features = ["serde"] }
 bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
+libc.workspace = true
 rand.workspace = true
 rcgen.workspace = true
 platform-utils.workspace = true

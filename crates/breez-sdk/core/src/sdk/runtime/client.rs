@@ -137,7 +137,8 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
     let mut wallet_events = sdk.spark_wallet.subscribe_events();
     let mut sync_requests = sdk.sync_coordinator.subscribe();
     let mut last_sync_time = SystemTime::now();
-    let sync_interval = u64::from(sdk.config.sync_interval_secs);
+    // At least a second, so a zero interval cannot spin the loop.
+    let sync_interval = Duration::from_secs(u64::from(sdk.config.sync_interval_secs).max(1));
     let span = tracing::Span::current();
 
     tokio::spawn(
@@ -173,11 +174,14 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
                         }
                     }
 
-                    () = tokio::time::sleep(Duration::from_secs(10)) => {
-                        let now = SystemTime::now();
-                        if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
-                            sdk.sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
-                        }
+                    () = tokio::time::sleep(
+                        last_sync_time
+                            .checked_add(sync_interval)
+                            .and_then(|next| next.duration_since(SystemTime::now()).ok())
+                            .unwrap_or_default(),
+                    ) => {
+                        last_sync_time = SystemTime::now();
+                        sdk.sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
                     }
                 }
             }

@@ -122,6 +122,11 @@ struct Args {
     #[arg(long, default_value = "600")]
     pub replenish_interval_seconds: u64,
 
+    /// Interval in seconds between lightning receive checks. Paid invoices and the
+    /// coordinator's events start one sooner.
+    #[arg(long, default_value = "60")]
+    pub receive_backup_interval_seconds: u64,
+
     /// How long, in seconds, the SSP's leaves stay fronted to a user who has not
     /// revealed a HODL preimage before the operators return them. Hold invoices
     /// demand enough CLTV to outlast it.
@@ -874,6 +879,7 @@ struct LightningConfig {
     send_base_fee_sats: u64,
     send_fee_ppm: u64,
     receive_leaf_transfer_expiry: Duration,
+    receive_backup_interval: Duration,
     largest_denomination: u64,
 }
 
@@ -890,6 +896,7 @@ impl LightningConfig {
             receive_leaf_transfer_expiry: Duration::from_secs(
                 args.receive_leaf_transfer_expiry_seconds,
             ),
+            receive_backup_interval: Duration::from_secs(args.receive_backup_interval_seconds),
             largest_denomination,
         }
     }
@@ -1070,6 +1077,7 @@ fn build_lightning(
         key_resolver: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
         network: ssp_wallet.spark.network,
         wakeup: receive_wakeup.clone(),
+        backup_interval: config.receive_backup_interval,
         leaf_transfer_expiry: config.receive_leaf_transfer_expiry,
         largest_denomination: config.largest_denomination,
     };

@@ -54,11 +54,13 @@ impl LogConsumer for TracingConsumer {
                 LogFrame::StdOut(bytes) => {
                     let text = String::from_utf8_lossy(bytes);
                     let message = self.format_message(&text);
-                    // Only log stdout if SPARK_ITEST_VERBOSE is set
+                    // Only log stdout if SPARK_ITEST_VERBOSE is set, but keep the
+                    // lines either way: a test can wait on one.
+                    if let Some(recent) = &self.recent {
+                        recent.push(message.clone().into_owned());
+                    }
                     if std::env::var("SPARK_ITEST_VERBOSE").is_ok() {
                         tracing::info!("{message}");
-                    } else if let Some(recent) = &self.recent {
-                        recent.push(message.into_owned());
                     }
                 }
                 LogFrame::StdErr(bytes) => {
@@ -84,6 +86,16 @@ impl RecentLines {
             lines.pop_front();
         }
         lines.push_back(line);
+    }
+
+    /// How many of the lines kept so far contain `pattern`.
+    pub fn matches(&self, pattern: &str) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|line| line.contains(pattern))
+            .count()
     }
 
     pub fn take(&self) -> Vec<String> {

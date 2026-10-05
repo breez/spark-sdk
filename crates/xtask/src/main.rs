@@ -182,7 +182,14 @@ enum Commands {
     },
 
     /// Run integration tests (containers etc.)
-    Itest {},
+    Itest {
+        /// Run one group of the suites. All of them by default.
+        #[arg(long)]
+        group: Option<String>,
+    },
+
+    /// Run the suites that reach the deployed regtest rather than a local cluster.
+    DeployedItest {},
 
     /// Rebuild the state snapshot that local operator clusters restore from.
     CaptureItestState {},
@@ -249,7 +256,8 @@ fn main() -> Result<()> {
             package,
             skip_build,
         } => check_doc_snippets_cmd(package, skip_build),
-        Commands::Itest {} => itest_cmd(),
+        Commands::Itest { group } => itest_cmd(group.as_deref()),
+        Commands::DeployedItest {} => deployed_itest_cmd(),
         Commands::CaptureItestState {} => capture_itest_state_cmd(),
         Commands::ItestBootstrapSnapshotKey {} => itest_bootstrap_snapshot_key_cmd(),
         Commands::ItestImages { images } => itest_images_cmd(&images),
@@ -1028,55 +1036,227 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn itest_cmd() -> Result<()> {
-    let sh = prepare_itest_images(ITEST_IMAGES)?;
+/// A test binary a local cluster runs, and the group it runs with. The groups
+/// are what a run is split into, so a machine runs suites that test one thing.
+struct Suite {
+    package: &'static str,
+    name: &'static str,
+    group: &'static str,
+}
+
+const SPARK_ITEST: &str = "spark-itest";
+const BREEZ_ITEST: &str = "breez-sdk-itest";
+
+/// Unilateral exit is a group of its own: it is far the longest, and the exits
+/// it broadcasts have nothing to do with the rest. So is the timelock suite,
+/// whose 400 transfers walk the refund timelock down to a renewal twenty times.
+pub const GROUPS: [&str; 6] = [
+    "unilateral-exit",
+    "timelocks",
+    "exits",
+    "lightning",
+    "tokens",
+    "wallets",
+];
+
+/// The suites that run against a local cluster. The rest of breez-itest reaches
+/// the deployed regtest and runs in `make breez-itest`, `lnurl` among them: most
+/// of its tests build their wallets against that deployment rather than taking an
+/// `Environment`.
+const LOCAL_SUITES: &[Suite] = &[
+    Suite {
+        package: BREEZ_ITEST,
+        name: "unilateral_exit",
+        group: "unilateral-exit",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "exit_state_events",
+        group: "exits",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "coop_exit_local",
+        group: "exits",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_coop_exit_tests",
+        group: "exits",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_timelock_tests",
+        group: "timelocks",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "breez_sdk_tests",
+        group: "lightning",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "lightning_hodl",
+        group: "lightning",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "lightning_send_server_mode",
+        group: "lightning",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_ldk_server_tests",
+        group: "lightning",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_lightning_adversarial_tests",
+        group: "lightning",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "tokens",
+        group: "tokens",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "optimization",
+        group: "tokens",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_swap_tests",
+        group: "tokens",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_tree_tests",
+        group: "tokens",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "deposit_withdraw",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "static_deposit_instant",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "idempotency_tests",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "message_signing",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "external_signer",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "rtsync",
+        group: "wallets",
+    },
+    Suite {
+        package: BREEZ_ITEST,
+        name: "spark_htlcs",
+        group: "wallets",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_wallet_tests",
+        group: "wallets",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "local_sspd_daemon_tests",
+        group: "wallets",
+    },
+];
+
+/// The suites that reach the deployed regtest, which needs no local cluster.
+const DEPLOYED_SUITES: &[Suite] = &[
+    Suite {
+        package: SPARK_ITEST,
+        name: "deployed_token_tests",
+        group: "deployed",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "deployed_wallet_settings_tests",
+        group: "deployed",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "deployed_deposit_tests",
+        group: "deployed",
+    },
+    Suite {
+        package: SPARK_ITEST,
+        name: "deployed_session_tests",
+        group: "deployed",
+    },
+];
+
+fn itest_cmd(group: Option<&str>) -> Result<()> {
+    let suites = group_of(LOCAL_SUITES, group)?;
+    let sh = prepare_itest_images(images_of(group))?;
     ensure_itest_state(&sh)?;
+    run_suites(&sh, &suites)
+}
 
-    // Two threads, since each local-cluster test stands up a bitcoind and operator
-    // cluster of its own.
-    cmd!(
-        sh,
-        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
-    )
-    .run()?;
+fn deployed_itest_cmd() -> Result<()> {
+    let sh = Shell::new()?;
+    run_suites(&sh, &DEPLOYED_SUITES.iter().collect::<Vec<_>>())
+}
 
-    // The breez-itest suites that take an `Environment` and pass on a local stack.
-    // Left out: lnurl, whose payment flows need a second Lightning node to pay
-    // from. The rest of breez-itest reaches the deployed regtest and runs in
-    // `make breez-itest`.
-    let local_suites = [
-        "breez_sdk_tests",
-        "coop_exit_local",
-        "deposit_withdraw",
-        "exit_state_events",
-        "external_signer",
-        "idempotency_tests",
-        "lightning_hodl",
-        "lightning_send_server_mode",
-        "message_signing",
-        "optimization",
-        "rtsync",
-        "spark_htlcs",
-        "static_deposit_instant",
-        "tokens",
-        "unilateral_exit",
-    ];
-    let mut args = vec![
-        "test".to_string(),
-        "-p".to_string(),
-        "breez-sdk-itest".to_string(),
-        "--features".to_string(),
-        "local-itest".to_string(),
-    ];
-    for suite in local_suites {
-        args.push("--test".to_string());
-        args.push(suite.to_string());
+/// The suites of one group, or all of them when no group is named.
+fn group_of<'a>(suites: &'a [Suite], group: Option<&str>) -> Result<Vec<&'a Suite>> {
+    let Some(group) = group else {
+        return Ok(suites.iter().collect());
+    };
+    if !GROUPS.contains(&group) {
+        bail!(
+            "no such group: {group}. The groups are {}",
+            GROUPS.join(", ")
+        );
     }
-    args.push("--no-fail-fast".to_string());
-    args.push("--".to_string());
-    args.push("--test-threads=2".to_string());
-    cmd!(sh, "cargo {args...}").run()?;
+    Ok(suites.iter().filter(|suite| suite.group == group).collect())
+}
 
+/// Runs each package's suites in one `cargo test`, two at a time: every test
+/// stands up a bitcoind and operator cluster of its own.
+fn run_suites(sh: &Shell, suites: &[&Suite]) -> Result<()> {
+    for package in [SPARK_ITEST, BREEZ_ITEST] {
+        let names: Vec<&str> = suites
+            .iter()
+            .filter(|suite| suite.package == package)
+            .map(|suite| suite.name)
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        let mut args = vec!["test".to_string(), "-p".to_string(), package.to_string()];
+        if package == BREEZ_ITEST {
+            args.push("--features".to_string());
+            args.push("local-itest".to_string());
+        }
+        for name in names {
+            args.push("--test".to_string());
+            args.push(name.to_string());
+        }
+        args.push("--no-fail-fast".to_string());
+        args.push("--".to_string());
+        args.push("--test-threads=2".to_string());
+        cmd!(sh, "cargo {args...}").run()?;
+    }
     Ok(())
 }
 
@@ -1092,14 +1272,31 @@ fn itest_bootstrap_snapshot_key_cmd() -> Result<()> {
 }
 
 fn capture_itest_state_cmd() -> Result<()> {
-    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    let sh = prepare_itest_images(CLUSTER_IMAGES)?;
     capture_itest_state(&sh)
 }
 
 fn ensure_itest_state(sh: &Shell) -> Result<()> {
+    if state_snapshot_is_ready(sh).is_ok() {
+        return Ok(());
+    }
+    // Capturing takes a cluster of its own and a full DKG, so a test run never
+    // does it: in CI the state-snapshot job owns the snapshot every other job
+    // downloads.
+    if std::env::var_os("CI").is_some() {
+        bail!(
+            "the state snapshot is missing or stale. Rerun the state-snapshot job, which \
+             captures it and hands it to the jobs that run clusters."
+        );
+    }
+    capture_itest_state(sh)?;
+    state_snapshot_is_ready(sh)
+}
+
+fn state_snapshot_is_ready(sh: &Shell) -> Result<()> {
     cmd!(
         sh,
-        "cargo test -p spark-itest --test capture_state_snapshot ensure_state_snapshot -- --ignored --nocapture"
+        "cargo test -p spark-itest --test capture_state_snapshot state_snapshot_is_ready -- --ignored --nocapture"
     )
     .run()?;
     Ok(())
@@ -1119,7 +1316,7 @@ fn capture_itest_state(sh: &Shell) -> Result<()> {
 fn compat_itest_cmd() -> Result<()> {
     // The tests start no daemon: its image is for `ensure_itest_state`, which
     // rebuilds a stale snapshot.
-    let sh = prepare_itest_images(SNAPSHOT_IMAGES)?;
+    let sh = prepare_itest_images(CLUSTER_IMAGES)?;
     ensure_itest_state(&sh)?;
 
     // The compat crate is a standalone workspace (it links the previous SDK
@@ -1135,8 +1332,21 @@ fn compat_itest_cmd() -> Result<()> {
 /// Every image a local cluster can run.
 const ITEST_IMAGES: &[&str] = &["spark-so", "spark-migrations", "ldk-server", "sspd"];
 
-/// What building the state snapshot runs: the operators and the daemon.
-const SNAPSHOT_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+/// What a cluster with no lightning node runs: the operators and the daemon.
+/// Building the state snapshot runs one, as do the groups below.
+const CLUSTER_IMAGES: &[&str] = &["spark-so", "spark-migrations", "sspd"];
+
+/// The groups with a suite that runs a lightning node: the lightning suites, and
+/// the two wallet suites that sync or pay a lightning address.
+const LIGHTNING_GROUPS: [&str; 2] = ["lightning", "wallets"];
+
+/// The images the suites of `group` run, every one when no group is named.
+fn images_of(group: Option<&str>) -> &'static [&'static str] {
+    match group {
+        Some(group) if !LIGHTNING_GROUPS.contains(&group) => CLUSTER_IMAGES,
+        _ => ITEST_IMAGES,
+    }
+}
 
 fn itest_images_cmd(images: &[String]) -> Result<()> {
     let named: Vec<&str> = images.iter().map(String::as_str).collect();
@@ -1259,4 +1469,27 @@ fn flutter_check_cmd() -> Result<()> {
 
     println!("Flutter check completed successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod itest_group_tests {
+    use super::{GROUPS, LOCAL_SUITES, group_of};
+
+    #[test]
+    fn every_suite_is_in_exactly_one_group() {
+        let mut grouped: Vec<&str> = GROUPS
+            .iter()
+            .flat_map(|group| group_of(LOCAL_SUITES, Some(group)).unwrap())
+            .map(|suite| suite.name)
+            .collect();
+        grouped.sort_unstable();
+        let mut expected: Vec<&str> = LOCAL_SUITES.iter().map(|suite| suite.name).collect();
+        expected.sort_unstable();
+        assert_eq!(grouped, expected);
+    }
+
+    #[test]
+    fn a_group_nobody_named_is_refused() {
+        assert!(group_of(LOCAL_SUITES, Some("nonesuch")).is_err());
+    }
 }

@@ -9,13 +9,11 @@ use breez_sdk_spark::*;
 use rstest::*;
 use tracing::info;
 
-/// Silence required before the send, so the events counted after it cannot be
-/// leftovers from funding.
-const QUIET_WINDOW_SECS: u64 = 20;
-
-/// How long to keep counting after the send. Long enough to cover several
-/// 5-second background syncs, each of which wakes the exit chain downloader.
-const COUNT_WINDOW_SECS: u64 = 60;
+/// How long a change gets to reach the listener after the sync that made it
+/// returned: the SDK's own background task forwards it, and that task can be
+/// busy with a sync. A further change gets the same window, so a count of one is
+/// one change rather than the first of several.
+const REPORTING_WINDOW_SECS: u64 = 2;
 
 const FUNDING_SATS: u64 = 10_000;
 
@@ -99,20 +97,29 @@ fn amount_matching_one_leaf(values: &[u64]) -> Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("wallet holds no leaves"))
 }
 
-/// Settles the wallet and proves it settled: one full sync, which also collects
-/// every outstanding exit chain, then a window that must stay silent.
-async fn quiesce(instance: &mut SdkInstance) -> Result<()> {
+/// The exit state changes one full sync reports. The sync collects every
+/// outstanding exit chain, so a change the wallet has pending is reported by it.
+async fn exit_state_changes(instance: &mut SdkInstance) -> Result<usize> {
     instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    clear_event_receiver(&mut instance.events).await;
+    Ok(
+        count_unilateral_exit_state_changed_events(&mut instance.events, REPORTING_WINDOW_SECS)
+            .await,
+    )
+}
 
-    let stragglers =
-        count_unilateral_exit_state_changed_events(&mut instance.events, QUIET_WINDOW_SECS).await;
-    anyhow::ensure!(
-        stragglers == 0,
-        "wallet is not quiescent: {stragglers} UnilateralExitStateChanged events \
-         arrived in the {QUIET_WINDOW_SECS}s before the send"
-    );
-    Ok(())
+/// Enough syncs for a wallet that funding left work for, few enough that a
+/// wallet reporting a change every time fails the test rather than hanging it.
+const QUIESCE_SYNCS: usize = 5;
+
+/// Leaves the wallet with nothing left to report, so the changes counted after a
+/// send cannot be leftovers from funding.
+async fn quiesce(instance: &mut SdkInstance) -> Result<()> {
+    for _ in 0..QUIESCE_SYNCS {
+        if exit_state_changes(instance).await? == 0 {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("the wallet still reported exit state changes after {QUIESCE_SYNCS} syncs")
 }
 
 async fn send_sats(alice: &SdkInstance, destination: &str, amount_sats: u64) -> Result<Payment> {
@@ -174,8 +181,7 @@ async fn test_exit_state_events_for_a_send_that_swaps(
     let payment = send_sats(&alice, &spark_address(&bob).await?, amount).await?;
     info!("Alice send status: {:?}", payment.status);
 
-    let events =
-        count_unilateral_exit_state_changed_events(&mut alice.events, COUNT_WINDOW_SECS).await;
+    let events = exit_state_changes(&mut alice).await?;
 
     let after = leaves(&alice.sdk).await?;
     let minted = minted(&before, &after);
@@ -220,8 +226,7 @@ async fn test_exit_state_events_for_a_send_without_a_swap(
     let payment = send_sats(&alice, &spark_address(&bob).await?, amount).await?;
     info!("Alice send status: {:?}", payment.status);
 
-    let events =
-        count_unilateral_exit_state_changed_events(&mut alice.events, COUNT_WINDOW_SECS).await;
+    let events = exit_state_changes(&mut alice).await?;
 
     let after = leaves(&alice.sdk).await?;
     let minted = minted(&before, &after);

@@ -5,6 +5,7 @@
 //! runs against.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Result;
 use bitcoin::{Transaction, Txid};
@@ -22,10 +23,20 @@ use crate::helpers::regtest::{
 };
 use crate::local_sdk::{BlockHold, LocalIdentity, LocalStack};
 
-/// The environment this build's tests run against.
+/// What a test needs its environment to run besides the operators, the daemon
+/// and bitcoind. Each one costs time to start, so a test asks for what it uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Needs {
+    /// The lightning node the SSP pays through, for a test that pays or receives
+    /// over lightning.
+    Lightning,
+}
+
+/// The environment this build's tests run against, running what `needs` names.
+/// A test asks for more with `#[with(&[Needs::Lightning])]` on the argument.
 #[fixture]
-pub async fn env() -> Result<Environment> {
-    Environment::new().await
+pub async fn env(#[default(&[])] needs: &'static [Needs]) -> Result<Environment> {
+    Environment::new(needs).await
 }
 
 pub enum Environment {
@@ -36,15 +47,17 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// The environment this build runs against: a local stack under `local-itest`,
-    /// the deployed regtest otherwise.
-    pub async fn new() -> Result<Self> {
+    /// The environment this build runs against: a local stack running what
+    /// `needs` names under `local-itest`, the deployed regtest otherwise, which
+    /// runs everything already.
+    pub async fn new(needs: &[Needs]) -> Result<Self> {
         #[cfg(feature = "local-itest")]
         {
-            Ok(Self::Local(Box::new(LocalStack::start().await?)))
+            Ok(Self::Local(Box::new(LocalStack::start(needs).await?)))
         }
         #[cfg(not(feature = "local-itest"))]
         {
+            let _ = needs;
             Ok(Self::Deployed)
         }
     }
@@ -77,7 +90,9 @@ impl Environment {
     fn faucet_config(&self) -> FaucetConfig {
         match self {
             Environment::Deployed => FaucetConfig::default(),
-            Environment::Local(stack) => FaucetConfig::for_ssp(&stack.ssp_base_url()),
+            Environment::Local(stack) => {
+                FaucetConfig::for_local_stack(&stack.ssp_base_url(), Arc::clone(stack.fixtures()))
+            }
         }
     }
 

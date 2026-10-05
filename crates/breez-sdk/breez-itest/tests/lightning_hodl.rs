@@ -10,7 +10,11 @@ use tracing::info;
 /// Test 1: Create a Lightning HODL invoice, pay it, and claim with preimage
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> Result<()> {
+async fn test_01_lightning_hodl_success(
+    #[future]
+    #[with(&[Needs::Lightning])]
+    env: Result<Environment>,
+) -> Result<()> {
     let env = env.await?;
     info!("=== Starting test_01_lightning_hodl_success ===");
 

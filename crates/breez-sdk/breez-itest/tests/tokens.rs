@@ -22,8 +22,7 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
 
     info!("Minted 1,000,000 tokens");
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    wait_for_token_balance(&instance.sdk, &token_metadata.identifier, 1_000_000, 30).await?;
     Ok(token_metadata)
 }
 
@@ -157,18 +156,14 @@ async fn test_01_token_transfer(#[future] env: Result<Environment>) -> Result<()
         "Alice should have token payment details with correct metadata"
     );
 
-    // Sync Bob's wallet to receive the payment
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    // Confirm payment is now completed for Bob
-    let bob_payment = bob
-        .sdk
-        .get_payment(GetPaymentRequest {
-            payment_id: send_resp.payment.id.clone(),
-        })
-        .await?
-        .payment;
+    // Bob learns of the payment from a sync, and it is complete when he does.
+    let bob_payment = wait_for_payment_status(
+        &bob.sdk,
+        &send_resp.payment.id,
+        PaymentStatus::Completed,
+        30,
+    )
+    .await?;
 
     assert_eq!(
         bob_payment.status,
@@ -354,17 +349,8 @@ async fn test_02_token_invoice(#[future] env: Result<Environment>) -> Result<()>
         "Alice should have token payment details with correct metadata"
     );
 
-    // Sync Bob's wallet
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let bob_payment = bob
-        .sdk
-        .get_payment(GetPaymentRequest {
-            payment_id: alice_payment.id.clone(),
-        })
-        .await?
-        .payment;
+    let bob_payment =
+        wait_for_payment_status(&bob.sdk, &alice_payment.id, PaymentStatus::Completed, 30).await?;
 
     info!("Bob's payment: {:?}", bob_payment);
 
@@ -491,7 +477,6 @@ async fn test_03_token_burning(#[future] env: Result<Environment>) -> Result<()>
     );
 
     // Verify token balance after burning
-    //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let after_burn_balance = alice
@@ -532,6 +517,10 @@ async fn test_03_token_burning(#[future] env: Result<Environment>) -> Result<()>
 }
 
 /// Test 4: Token freezing and unfreezing functionality
+///
+/// Each half has a holder of its own. A send the operators reject as frozen keeps
+/// its inputs locked until the transaction's validity window runs out, so the
+/// holder who is unfrozen never attempts one while frozen.
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_04_token_freeze_unfreeze(#[future] env: Result<Environment>) -> Result<()> {
@@ -540,8 +529,8 @@ async fn test_04_token_freeze_unfreeze(#[future] env: Result<Environment>) -> Re
 
     let alice = env.create_wallet().await?;
     let bob = env.create_wallet().await?;
+    let carol = env.create_wallet().await?;
 
-    // Create a freezable token for this test
     let token_metadata = alice
         .sdk
         .get_token_issuer()
@@ -549,204 +538,122 @@ async fn test_04_token_freeze_unfreeze(#[future] env: Result<Environment>) -> Re
             name: "Freezable Token".to_string(),
             ticker: "FREEZE".to_string(),
             decimals: 2,
-            is_freezable: true, // Make it freezable
+            is_freezable: true,
             max_supply: 1_000_000,
         })
         .await?;
-
     alice
         .sdk
         .get_token_issuer()
         .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
+    wait_for_token_balance(&alice.sdk, &token_metadata.identifier, 1_000_000, 30).await?;
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let token = &token_metadata.identifier;
+    let bob_address = spark_address(&bob).await?;
+    let carol_address = spark_address(&carol).await?;
+    let alice_address = spark_address(&alice).await?;
+    send_tokens(&alice, &bob_address, token, 100).await?;
+    send_tokens(&alice, &carol_address, token, 100).await?;
+    wait_for_token_balance(&bob.sdk, token, 100, 30).await?;
+    wait_for_token_balance(&carol.sdk, token, 100, 30).await?;
 
-    info!(
-        "Created freezable token: {} ({})",
-        token_metadata.name, token_metadata.identifier
-    );
+    let issuer = alice.sdk.get_token_issuer();
+    for address in [&bob_address, &carol_address] {
+        let frozen = issuer
+            .freeze_issuer_token(FreezeIssuerTokenRequest {
+                address: address.clone(),
+            })
+            .await?;
+        assert_eq!(
+            frozen.impacted_token_amount, 100,
+            "the freeze should cover all 100 of {address}'s tokens"
+        );
+    }
 
-    // Alice sends some tokens to Bob
-    let bob_address = bob
-        .sdk
-        .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::SparkAddress,
-        })
-        .await?
-        .payment_request;
-
-    let prepare_send = alice
-        .sdk
-        .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input { input: bob_address },
-            amount: Some(100),
-            token_identifier: Some(token_metadata.identifier.clone()),
-            conversion_options: None,
-            fee_policy: None,
-        })
-        .await?;
-
-    alice
-        .sdk
-        .send_payment(SendPaymentRequest {
-            prepare_response: prepare_send,
-            options: None,
-            idempotency_key: None,
-        })
-        .await?;
-
-    // Sync and verify Bob received tokens
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let bob_balance = bob
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .token_balances
-        .get(&token_metadata.identifier)
-        .unwrap()
-        .balance;
-    assert_eq!(bob_balance, 100, "Bob should have 100 tokens");
-
-    // Get Bob's Spark address for freezing
-    let bob_spark_address = bob
-        .sdk
-        .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::SparkAddress,
-        })
-        .await?
-        .payment_request;
-
-    // Alice freezes Bob's tokens
-    let freeze_response = alice
-        .sdk
-        .get_token_issuer()
-        .freeze_issuer_token(FreezeIssuerTokenRequest {
-            address: bob_spark_address.clone(),
-        })
-        .await?;
-
-    info!(
-        "Froze tokens at address {}: {} tokens affected, {} outputs impacted",
-        bob_spark_address,
-        freeze_response.impacted_token_amount,
-        freeze_response.impacted_output_ids.len()
-    );
-
-    // Verify the freeze affected the expected amount
-    assert_eq!(
-        freeze_response.impacted_token_amount, 100,
-        "Should freeze all 100 of Bob's tokens"
-    );
-
-    // Wait for freeze operation to complete
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    // Now Bob tries to send tokens - should fail because frozen tokens cannot be sent
-    let alice_address = alice
-        .sdk
-        .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::SparkAddress,
-        })
-        .await?
-        .payment_request;
-
-    let bob_prepare_result = bob
-        .sdk
-        .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input {
-                input: alice_address.clone(),
-            },
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
-            conversion_options: None,
-            fee_policy: None,
-        })
-        .await;
-
-    // Preparation might succeed, but sending should fail
-    if let Ok(bob_prepare) = bob_prepare_result {
-        let bob_send_result = bob
+    // Preparing may already fail; if it does not, sending must.
+    let bob_send = match prepare_token_send(&bob, &alice_address, token, 50).await {
+        Ok(prepare_response) => bob
             .sdk
             .send_payment(SendPaymentRequest {
-                prepare_response: bob_prepare,
+                prepare_response,
                 options: None,
                 idempotency_key: None,
             })
-            .await;
+            .await
+            .map(|_| ()),
+        Err(e) => Err(e),
+    };
+    assert!(
+        bob_send.is_err(),
+        "Bob should not be able to send frozen tokens"
+    );
 
-        // This should fail because Bob's tokens are frozen
-        assert!(
-            bob_send_result.is_err(),
-            "Bob should not be able to send frozen tokens"
-        );
-        info!("Bob correctly failed to send frozen tokens");
-    } else {
-        // If preparation already fails, that's also acceptable
-        info!("Bob correctly failed to prepare sending frozen tokens");
-    }
-
-    // Alice unfreezes Bob's tokens
-    let unfreeze_response = alice
-        .sdk
-        .get_token_issuer()
+    let unfrozen = issuer
         .unfreeze_issuer_token(UnfreezeIssuerTokenRequest {
-            address: bob_spark_address,
+            address: carol_address,
         })
         .await?;
-
-    info!(
-        "Unfroze tokens: {} tokens affected, {} outputs impacted",
-        unfreeze_response.impacted_token_amount,
-        unfreeze_response.impacted_output_ids.len()
+    assert_eq!(
+        unfrozen.impacted_token_amount, 100,
+        "the unfreeze should cover Carol's 100 tokens"
     );
 
-    // Verify unfreeze affected the frozen tokens
+    let carol_send = send_tokens(&carol, &alice_address, token, 50).await?;
     assert_eq!(
-        unfreeze_response.impacted_token_amount, 100,
-        "Should unfreeze the 100 frozen tokens"
-    );
-
-    // When attempting to send tokens, the SO temporarily locks outputs
-    // (~3 minutes) even when they are frozen (low priority issue on SO side)
-    // TODO: remove this sleep if/when the issue is fixed
-    tokio::time::sleep(std::time::Duration::from_secs(60 * 3 + 30)).await;
-
-    // Now Bob should be able to send tokens
-    let bob_prepare_after_unfreeze = bob
-        .sdk
-        .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input {
-                input: alice_address,
-            },
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
-            conversion_options: None,
-            fee_policy: None,
-        })
-        .await?;
-
-    let bob_send_after_unfreeze = bob
-        .sdk
-        .send_payment(SendPaymentRequest {
-            prepare_response: bob_prepare_after_unfreeze,
-            options: None,
-            idempotency_key: None,
-        })
-        .await?;
-
-    assert_eq!(
-        bob_send_after_unfreeze.payment.amount, 50,
-        "Bob should be able to send tokens after unfreeze"
+        carol_send.payment.amount, 50,
+        "Carol should be able to send tokens after the unfreeze"
     );
 
     info!("=== Test test_04_token_freeze_unfreeze PASSED ===");
     Ok(())
+}
+
+async fn spark_address(instance: &SdkInstance) -> Result<String> {
+    Ok(instance
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request)
+}
+
+async fn prepare_token_send(
+    instance: &SdkInstance,
+    address: &str,
+    token_identifier: &str,
+    amount: u128,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    instance
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: address.to_string(),
+            },
+            amount: Some(amount),
+            token_identifier: Some(token_identifier.to_string()),
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await
+}
+
+async fn send_tokens(
+    instance: &SdkInstance,
+    address: &str,
+    token_identifier: &str,
+    amount: u128,
+) -> Result<SendPaymentResponse> {
+    let prepare_response = prepare_token_send(instance, address, token_identifier, amount).await?;
+    Ok(instance
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?)
 }
 
 /// Test 5: Token invoice expiry functionality
@@ -851,7 +758,6 @@ async fn test_05_invoice_expiry(#[future] env: Result<Environment>) -> Result<()
             );
             // If it succeeded, verify it was processed
             if send_resp.payment.status == PaymentStatus::Completed {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
                 let bob_balance = bob
@@ -911,20 +817,8 @@ async fn test_06_supply_limits(#[future] env: Result<Environment>) -> Result<()>
         .mint_issuer_token(MintIssuerTokenRequest { amount: max_supply })
         .await?;
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .token_balances
-        .get(&token_metadata.identifier)
-        .unwrap()
-        .balance;
-
+    let balance =
+        wait_for_token_balance(&alice.sdk, &token_metadata.identifier, max_supply, 30).await?;
     assert_eq!(balance, max_supply, "Should have minted up to max supply");
 
     // Try to mint more - should fail
@@ -1306,18 +1200,7 @@ async fn test_08_token_batch(#[future] env: Result<Environment>) -> Result<()> {
         .payments;
     assert_eq!(listed.len(), 2, "the batch is listable by transaction hash");
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_balance = bob
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .token_balances
-        .get(&token)
-        .map(|b| b.balance)
-        .unwrap_or(0);
+    let bob_balance = wait_for_token_balance(&bob.sdk, &token, 100, 30).await?;
     assert_eq!(bob_balance, 100, "Bob receives both outputs");
 
     info!("=== Test test_08_token_batch PASSED ===");
@@ -1612,21 +1495,37 @@ async fn test_10_token_batch_invoice_attribution(#[future] env: Result<Environme
 
     // Receiver side: attribution is reconstructed from the synced transaction
     // alone, so it must land on the same invoice per amount.
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let bob_payments = bob
-        .sdk
-        .list_payments(ListPaymentsRequest {
-            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
-                tx_hash: Some(tx_hash),
-                tx_type: None,
-            }]),
-            ..Default::default()
-        })
-        .await?
-        .payments;
-    assert_eq!(bob_payments.len(), 3, "the receiver records every output");
+    let filter = || {
+        Some(vec![PaymentDetailsFilter::Token {
+            conversion_refund_needed: None,
+            tx_hash: Some(tx_hash.clone()),
+            tx_type: None,
+        }])
+    };
+    let bob_payments = wait_for(
+        || {
+            let sdk = bob.sdk.clone();
+            let filter = filter();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let payments = sdk
+                    .list_payments(ListPaymentsRequest {
+                        payment_details_filter: filter,
+                        ..Default::default()
+                    })
+                    .await?
+                    .payments;
+                anyhow::ensure!(
+                    payments.len() == 3,
+                    "the receiver records {} of the 3 outputs",
+                    payments.len()
+                );
+                Ok(payments)
+            }
+        },
+        30,
+    )
+    .await?;
 
     let mut receiver_attribution: Vec<(u128, String, Option<String>)> = bob_payments
         .iter()
@@ -1712,7 +1611,6 @@ async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -
             idempotency_key: None,
         })
         .await?;
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let bob_address = bob
@@ -1777,8 +1675,7 @@ async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -
         "both tokens move in the one transaction"
     );
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    wait_for_token_balance(&bob.sdk, &token_a, 70, 30).await?;
     let balances = bob
         .sdk
         .get_info(GetInfoRequest {

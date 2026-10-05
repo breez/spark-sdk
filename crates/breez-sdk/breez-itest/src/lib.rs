@@ -16,7 +16,7 @@ pub use chain_service::LocalBitcoindChainService;
 pub use concurrent_scenarios::{
     RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
-pub use environment::{Environment, env};
+pub use environment::{Environment, Needs, env};
 pub use faucet::{FaucetConfig, RegtestFaucet};
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
