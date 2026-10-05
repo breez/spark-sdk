@@ -707,9 +707,10 @@ impl OrchestraService {
         if is_past_quote_expiry(&data) && !is_probe_due(probe_clock, &quote_id) && !invoice_paid {
             return None;
         }
-        let (row, data) = match data.read_token.clone() {
-            Some(read_token) => {
-                match Self::quote_status_probe(swap_storage, client, row, data, &read_token).await {
+        let (row, data) = match data.quote_read_token.clone() {
+            Some(quote_token) => {
+                match Self::quote_status_probe(swap_storage, client, row, data, &quote_token).await
+                {
                     Ok(QuoteStatusProbe::Ordered(handle, status)) => {
                         record_probe(probe_clock, &quote_id);
                         return Some((handle, Some(*status)));
@@ -764,9 +765,8 @@ impl OrchestraService {
                     resp.order.id
                 );
                 let order_id = resp.order.id.clone();
-                let token = Some(read_token.to_string());
                 let (row, data) = swap_storage
-                    .attach_order_handle(row, data, order_id.clone(), token)
+                    .attach_order_handle(row, data, order_id.clone(), None)
                     .await?;
                 Ok(QuoteStatusProbe::Ordered(
                     (row, data, order_id),
@@ -1353,20 +1353,16 @@ fn is_expected_no_deposit_error(err: &FlashnetError) -> bool {
     )
 }
 
-/// Reads `/status` for a funded receive row. A token from `/quote` only
-/// answers by quote id and one from `/submit` only by order id, so a 403 by
-/// quote id is retried by order id before the token counts as rejected.
+/// Reads `/status` for a funded receive row: by order id with the token
+/// `/submit` issued, otherwise by quote id with the token `/quote` issued.
 async fn fetch_receive_status(
     client: &OrchestraClient,
     data: &OrchestraSwapData,
     order_id: &str,
 ) -> Result<StatusResponse, FlashnetError> {
-    let Some(token) = data.read_token.as_deref() else {
-        return client.status_by_id(order_id, None).await;
-    };
-    match client.status_by_quote_id(&data.quote_id, token).await {
-        Err(e) if is_invalid_read_token(&e) => client.status_by_id(order_id, Some(token)).await,
-        result => result,
+    match (&data.read_token, &data.quote_read_token) {
+        (None, Some(quote_token)) => client.status_by_quote_id(&data.quote_id, quote_token).await,
+        (order_token, _) => client.status_by_id(order_id, order_token.as_deref()).await,
     }
 }
 
@@ -2027,7 +2023,8 @@ impl CrossChainService for OrchestraService {
         let data = OrchestraSwapData {
             quote_id: quote.quote_id.clone(),
             order_id: None,
-            read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
+            read_token: None,
+            quote_read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
             recipient_address: recipient_address.to_string(),
             spark_invoice: Some(spark_invoice),
             source_chain: route.chain.clone(),
@@ -2937,6 +2934,7 @@ mod tests {
             quote_id: "q_xyz".to_string(),
             order_id: Some("ord_xyz".to_string()),
             read_token: Some("rt_xyz".to_string()),
+            quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
             source_chain: "ethereum".to_string(),
@@ -3044,6 +3042,7 @@ mod tests {
             quote_id: "q_usdb".to_string(),
             order_id: Some("ord_usdb".to_string()),
             read_token: Some("rt_usdb".to_string()),
+            quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
             source_chain: "arbitrum".to_string(),
@@ -4148,6 +4147,7 @@ mod tests {
             quote_id: "q_xyz".to_string(),
             order_id: None,
             read_token: None,
+            quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
             source_chain: "ethereum".to_string(),

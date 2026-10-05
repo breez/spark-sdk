@@ -23,13 +23,14 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 /// the row through two states:
 ///
 /// * **Pre-order** (`order_id` absent): look the quote up on
-///   `GET /status?quoteId=` with `read_token`. Orchestra picks the deposit up
-///   on its own, and an order in the response gives `order_id`. A row without
-///   a usable token probes `POST /submit` instead, whose 200 returns
-///   `{ orderId, readToken }` for the adapter to write.
+///   `GET /status?quoteId=` with `quote_read_token`. Orchestra picks the
+///   deposit up on its own, and an order in the response gives `order_id`. A
+///   row without a usable quote token probes `POST /submit` instead, whose
+///   200 returns `{ orderId, readToken }` for the adapter to write.
 /// * **Order in flight** (`order_id` set): poll `/status` until terminal, by
-///   quote id, or by order id when the token is one `/submit` issued.
-///   `/submit` is idempotent, so a rejected token is replaced by probing it.
+///   order id with `read_token` when `/submit` issued one, otherwise by quote
+///   id with `quote_read_token`. `/submit` is idempotent, so a rejected token
+///   is replaced by probing it.
 ///
 /// Live status / `sparkTxHash` / `amountOut` / refund tx are always read
 /// off the poll response, never cached here.
@@ -41,12 +42,15 @@ pub(crate) struct OrchestraSwapData {
     /// returns the order, then stable.
     #[serde(default)]
     pub order_id: Option<String>,
-    /// `X-Read-Token` for `/status`. Issued by `/quote`, which binds it to the
-    /// quote id for 24h from quote creation, or by `/submit`, which binds it
-    /// to `order_id`. Absent on a row written before quote tokens were stored
-    /// until `/submit` returns its order.
+    /// `X-Read-Token` for `/status?id=`, issued by `/submit` and bound to
+    /// `order_id`.
     #[serde(default)]
     pub read_token: Option<String>,
+    /// `X-Read-Token` for `/status?quoteId=`, issued by `/quote` and bound to
+    /// `quote_id` for 24h from quote creation. Absent on rows written before
+    /// quote tokens were stored.
+    #[serde(default)]
+    pub quote_read_token: Option<String>,
     /// Wallet's Spark address (the receive destination).
     pub recipient_address: String,
     /// Amountless Spark invoice the provider fulfils on delivery, which ties
@@ -216,6 +220,7 @@ mod tests {
             quote_id: "q_abc".to_string(),
             order_id: None,
             read_token: None,
+            quote_read_token: None,
             recipient_address: "sp1...".to_string(),
             spark_invoice: Some("spark1inv...".to_string()),
             source_chain: "base".to_string(),
@@ -241,6 +246,7 @@ mod tests {
             quote_id: "q_usdb".to_string(),
             order_id: Some("o_usdb".to_string()),
             read_token: Some("rt_usdb".to_string()),
+            quote_read_token: None,
             recipient_address: "sp1...".to_string(),
             spark_invoice: None,
             source_chain: "arbitrum".to_string(),
@@ -295,6 +301,23 @@ mod tests {
         let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
         assert_eq!(decoded.fee_asset, None);
         assert_eq!(decoded.fee_asset_decimals, None);
+    }
+
+    /// Rows written before quote tokens were stored decode without one.
+    #[test]
+    fn data_written_without_a_quote_read_token_decodes() {
+        let mut data = sample_data();
+        data.quote_read_token = Some("qrt_abc".to_string());
+        let json = serde_json::to_string(&data).unwrap();
+        assert_eq!(
+            serde_json::from_str::<OrchestraSwapData>(&json).unwrap(),
+            data
+        );
+
+        let mut json: serde_json::Value = serde_json::to_value(&data).unwrap();
+        json.as_object_mut().unwrap().remove("quoteReadToken");
+        let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.quote_read_token, None);
     }
 
     /// Forward compatibility: future fields added by the server must not

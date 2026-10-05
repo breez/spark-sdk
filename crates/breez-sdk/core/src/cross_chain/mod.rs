@@ -1421,6 +1421,7 @@ mod tests {
                 quote_id: "q_match".to_string(),
                 order_id: None,
                 read_token: None,
+                quote_read_token: None,
                 recipient_address: "sp1rcv".to_string(),
                 spark_invoice: Some(invoice.to_string()),
                 source_chain: "arbitrum".to_string(),
