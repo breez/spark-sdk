@@ -560,7 +560,6 @@ class SqliteStorage {
       return Promise.resolve(this._rowToPayment(row));
     } catch (error) {
       if (error instanceof StorageError) return Promise.reject(error);
-      const paymentId = id || "unknown";
       return Promise.reject(
         new StorageError(
           `Failed to get payment by invoice '${invoice}': ${error.message}`,
