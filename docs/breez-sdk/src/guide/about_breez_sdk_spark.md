@@ -20,7 +20,7 @@ The Breez SDK offers a non-custodial, end-to-end solution for integrating bitcoi
 - [x] **[USDT & USDC](/guide/cross_chain.md)**: Users can send/receive stablecoins from their BTC or stable balance.
 - [x] **[Cash App to USDC/USDT](/guide/cash_app_to_usdc_usdt.md)**: Users pay from Cash App and the recipient gets USDC or USDT on their chain.
 - [x] **[Stable Balance](/guide/stable_balance.md)**: Users can hold their balance in USD to avoid BTC price volatility.
-- [x] **[Instant Deposits](/guide/onchain_claims.md)**: Claim on-chain deposits in seconds, no confirmations needed.
+- [x] **[Instant Deposits](/guide/onchain_claims.md#instant-expedited-claims)**: Claim on-chain deposits in seconds, no confirmations needed.
 - [x] **[Automatic Claims](/guide/onchain_claims.md)**: On-chain deposits are claimed automatically within the fee limits you set.
 - [x] **[Multi-device/app Sync](/guide/config.md#real-time-sync-server-url)**: Users can access their balance from multiple devices and apps.
 - [x] **[Contacts API](/guide/contacts.md)**: Save and reuse Lightning addresses, synced across devices.
