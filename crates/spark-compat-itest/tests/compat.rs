@@ -17,7 +17,7 @@ use spark_compat_itest::{FUND_SATS, TestFixtures, random_seed, vnew, vold};
 #[test_log::test(tokio::test)]
 async fn key_derivation_equivalence() -> Result<()> {
     use spark_wallet::SparkSigner as _;
-    use spark_wallet_old::Signer as _;
+    use spark_wallet_old::SparkSigner as _;
 
     let networks = [
         (
@@ -33,7 +33,9 @@ async fn key_derivation_equivalence() -> Result<()> {
     for (old_network, new_network) in networks {
         for seed_byte in [1u8, 42, 255] {
             let seed = [seed_byte; 32];
-            let old_signer = spark_wallet_old::DefaultSigner::new(&seed, old_network)?;
+            let old_signer = spark_wallet_old::SparkSignerAdapter::new(Arc::new(
+                spark_wallet_old::DefaultSigner::new(&seed, old_network)?,
+            ));
             let new_signer = spark_wallet::SparkSignerAdapter::new(Arc::new(
                 spark_wallet::DefaultSigner::new(&seed, new_network)?,
             ));
@@ -53,7 +55,7 @@ async fn key_derivation_equivalence() -> Result<()> {
                 let old_id: spark_wallet_old::TreeNodeId = leaf.parse().expect("old leaf id");
                 let new_id: spark_wallet::TreeNodeId = leaf.parse().expect("new leaf id");
                 assert_eq!(
-                    old_signer.get_public_key_for_node(&old_id).await?,
+                    old_signer.get_public_key_for_leaf(&old_id).await?,
                     new_signer.get_public_key_for_leaf(&new_id).await?,
                     "leaf signing key diverged for leaf id {leaf:?} (network {new_network:?}, seed byte {seed_byte})",
                 );
@@ -61,7 +63,7 @@ async fn key_derivation_equivalence() -> Result<()> {
 
             for index in [0u32, 1, 2, 7, 100] {
                 assert_eq!(
-                    old_signer.static_deposit_signing_key(index).await?,
+                    old_signer.get_static_deposit_public_key(index).await?,
                     new_signer.get_static_deposit_public_key(index).await?,
                     "static deposit key diverged at index {index} (network {new_network:?}, seed byte {seed_byte})",
                 );
