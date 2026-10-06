@@ -4,6 +4,7 @@ mod contacts;
 mod grammar_tests;
 mod issuer;
 mod stable_balance;
+mod token_allowances;
 mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
@@ -16,11 +17,12 @@ use breez_sdk_spark::{
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
     PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest,
-    PrepareSendBatchRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    PreparePullPaymentRequest, PrepareSendBatchRequest, PrepareSendPaymentRequest, PullReceiver,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -37,6 +39,7 @@ use crate::command::advanced::AdvancedCommand;
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
+use crate::command::token_allowances::TokenAllowanceCommand;
 use crate::command::webhooks::WebhookCommand;
 
 /// A batch recipient parsed from `payment_request`, `payment_request:amount` or
@@ -88,6 +91,39 @@ impl From<BatchRecipientArg> for BatchRecipient {
             payment_request: arg.payment_request,
             amount: arg.amount,
             token_identifier: arg.token_identifier,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PullReceiverArg {
+    receiver_public_key: Option<String>,
+    amount: u128,
+}
+
+impl std::str::FromStr for PullReceiverArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (receiver_public_key, amount) = match s.split_once(':') {
+            Some((key, amount)) => (Some(key.to_string()), amount),
+            None => (None, s),
+        };
+        let amount = amount
+            .parse::<u128>()
+            .map_err(|_| format!("Invalid amount in receiver '{s}'"))?;
+        Ok(Self {
+            receiver_public_key,
+            amount,
+        })
+    }
+}
+
+impl From<PullReceiverArg> for PullReceiver {
+    fn from(arg: PullReceiverArg) -> Self {
+        PullReceiver {
+            amount: arg.amount,
+            receiver_public_key: arg.receiver_public_key,
         }
     }
 }
@@ -285,6 +321,17 @@ pub enum Command {
         /// only for an invoice that carries them. Repeat for each recipient.
         #[arg(short = 'r', long = "recipient", required = true)]
         recipients: Vec<BatchRecipientArg>,
+    },
+
+    /// Pull a payment from a wallet that granted this wallet an allowance
+    PullPayment {
+        /// Identity public key of the payer
+        payer_public_key: String,
+        /// Identifier of the token
+        token_identifier: String,
+        /// A receiver as `amount` (this wallet) or `public_key:amount`. Repeat for each receiver.
+        #[arg(short = 'r', long = "receiver", required = true)]
+        receivers: Vec<PullReceiverArg>,
     },
 
     /// Pay using LNURL
@@ -528,6 +575,10 @@ pub enum Command {
     /// Contacts related commands
     #[command(subcommand)]
     Contacts(ContactCommand),
+
+    /// Token allowance related commands
+    #[command(subcommand)]
+    TokenAllowances(TokenAllowanceCommand),
 
     /// Webhook related commands
     #[command(subcommand)]
@@ -1065,6 +1116,44 @@ pub(crate) async fn execute_command(
             print_value(&response.payments)?;
             Ok(true)
         }
+        Command::PullPayment {
+            payer_public_key,
+            token_identifier,
+            receivers,
+        } => {
+            let prepare_response = sdk
+                .prepare_pull_payment(PreparePullPaymentRequest {
+                    payer_public_key,
+                    token_identifier,
+                    receivers: receivers.into_iter().map(Into::into).collect(),
+                })
+                .await?;
+            println!(
+                "Pulling {} base units of {} from {}",
+                prepare_response.amount,
+                prepare_response.token_identifier,
+                prepare_response.payer_public_key
+            );
+            for receiver in &prepare_response.receivers {
+                println!(
+                    "  {} to {}",
+                    receiver.amount,
+                    receiver
+                        .receiver_public_key
+                        .as_deref()
+                        .unwrap_or("this wallet")
+                );
+            }
+            let line = rl
+                .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                .to_lowercase();
+            if line != "y" {
+                return Err(anyhow::anyhow!("Pull cancelled"));
+            }
+            let response = token_allowances::pull_until_settled(sdk, prepare_response).await?;
+            print_value(&response)?;
+            Ok(true)
+        }
         Command::LnurlPay {
             lnurl,
             comment,
@@ -1359,6 +1448,9 @@ pub(crate) async fn execute_command(
             issuer::handle_command(token_issuer, issuer_command).await
         }
         Command::Contacts(contact_command) => contacts::handle_command(sdk, contact_command).await,
+        Command::TokenAllowances(token_allowance_command) => {
+            token_allowances::handle_command(sdk, token_allowance_command).await
+        }
         Command::Webhooks(webhook_command) => webhooks::handle_command(sdk, webhook_command).await,
         Command::StableBalance(sb_command) => stable_balance::handle_command(sdk, sb_command).await,
     }

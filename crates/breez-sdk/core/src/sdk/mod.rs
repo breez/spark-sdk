@@ -11,6 +11,7 @@ mod payments;
 mod runtime;
 mod sync;
 mod sync_coordinator;
+mod token_allowances;
 mod unilateral_exit;
 mod unilateral_exit_backup;
 

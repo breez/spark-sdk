@@ -1462,6 +1462,17 @@ pub enum UnsignedTransferPackage {
         totals: Vec<BatchTotal>,
         is_swap: bool,
     },
+    TokenPull {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        pull_context: Vec<u8>,
+        payer_public_key: String,
+        token_identifier: String,
+        receivers: Vec<PullReceiver>,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount: u128,
+        expiry_time: u64,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TransferTarget)]
@@ -2319,6 +2330,129 @@ pub struct UpdateContactRequest {
 pub struct ListContactsRequest {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowanceLimit)]
+pub enum TokenAllowanceLimit {
+    Unlimited,
+    Amount {
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount: u128,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateTokenAllowanceRequest)]
+pub struct CreateTokenAllowanceRequest {
+    pub spender_public_key: String,
+    pub token_identifier: String,
+    pub max_per_payment: TokenAllowanceLimit,
+    pub max_total: TokenAllowanceLimit,
+    pub expiry_time: u64,
+    pub allowed_recipients: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateTokenAllowanceResponse)]
+pub struct CreateTokenAllowanceResponse {
+    pub allowance: TokenAllowance,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RevokeTokenAllowanceRequest)]
+pub struct RevokeTokenAllowanceRequest {
+    pub allowance_id: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowanceRole)]
+pub enum TokenAllowanceRole {
+    Owner,
+    Spender,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListTokenAllowancesRequest)]
+pub struct ListTokenAllowancesRequest {
+    pub role: TokenAllowanceRole,
+    pub counterparty_public_key: Option<String>,
+    pub token_identifier: Option<String>,
+    pub include_inactive: Option<bool>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListTokenAllowancesResponse)]
+pub struct ListTokenAllowancesResponse {
+    pub allowances: Vec<TokenAllowance>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowanceStatus)]
+pub enum TokenAllowanceStatus {
+    Active,
+    Exhausted,
+    Expired,
+    Revoked,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowance)]
+pub struct TokenAllowance {
+    pub id: String,
+    pub owner_public_key: String,
+    pub spender_public_key: String,
+    pub token_identifier: String,
+    pub max_per_payment: TokenAllowanceLimit,
+    pub max_total: TokenAllowanceLimit,
+    pub spent_amount: u128,
+    pub allowed_recipients: Vec<String>,
+    pub expiry_time: u64,
+    pub created_at: u64,
+    pub revoked_at: Option<u64>,
+    pub status: TokenAllowanceStatus,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PullReceiver)]
+pub struct PullReceiver {
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
+    pub amount: u128,
+    pub receiver_public_key: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePullPaymentRequest)]
+pub struct PreparePullPaymentRequest {
+    pub payer_public_key: String,
+    pub token_identifier: String,
+    pub receivers: Vec<PullReceiver>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePullPaymentResponse)]
+pub struct PreparePullPaymentResponse {
+    pub payer_public_key: String,
+    pub token_identifier: String,
+    pub receivers: Vec<PullReceiver>,
+    pub amount: u128,
+    pub allowance_id: String,
+    pub expiry_time: u64,
+    pub pull_context: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PullPaymentRequest)]
+pub struct PullPaymentRequest {
+    pub prepare_response: PreparePullPaymentResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PullPaymentResponse)]
+pub struct PullPaymentResponse {
+    pub tx_hash: String,
+    pub status: PaymentStatus,
+    pub payment: Option<Payment>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuildUnsignedPullPackageRequest)]
+pub struct BuildUnsignedPullPackageRequest {
+    pub prepare_response: PreparePullPaymentResponse,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PublishSignedPullPackageRequest)]
+pub struct PublishSignedPullPackageRequest {
+    pub signed_package: SignedTransferPackage,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StoredCrossChainSwap)]

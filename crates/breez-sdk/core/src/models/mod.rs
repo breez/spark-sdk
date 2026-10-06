@@ -1,6 +1,8 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
 pub use payment_observer::*;
+pub mod token_allowance;
+pub use token_allowance::*;
 
 // Re-export public conversion types from the conversion module
 pub use crate::token_conversion::{
@@ -2139,6 +2141,17 @@ pub enum UnsignedTransferPackage {
         /// sending a payment. Publishing it returns `SwapCompleted`: rebuild the
         /// original send from the same prepare response and submit again.
         is_swap: bool,
+    },
+    /// A pull from a token allowance, signed through its `prepare_token_transaction` like a Token package.
+    TokenPull {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        pull_context: Vec<u8>,
+        payer_public_key: String,
+        token_identifier: String,
+        receivers: Vec<PullReceiver>,
+        amount: u128,
+        /// When the pull stops being publishable, in Unix seconds.
+        expiry_time: u64,
     },
 }
 

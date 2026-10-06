@@ -24,7 +24,7 @@ rustyline = { workspace = true, features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

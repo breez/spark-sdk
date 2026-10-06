@@ -7,12 +7,13 @@ use crate::{
     RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
-        BuildUnsignedBatchPackageRequest, BuildUnsignedTransferPackageRequest, ListPaymentsRequest,
-        ListPaymentsResponse, Payment, PaymentRequest, PrepareSendBatchRequest,
-        PrepareSendBatchResponse, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
+        BuildUnsignedBatchPackageRequest, BuildUnsignedPullPackageRequest,
+        BuildUnsignedTransferPackageRequest, ListPaymentsRequest, ListPaymentsResponse, Payment,
+        PaymentRequest, PrepareSendBatchRequest, PrepareSendBatchResponse,
+        PrepareSendPaymentRequest, PrepareSendPaymentResponse, PublishSignedPullPackageRequest,
         PublishSignedTransferPackageRequest, PublishSignedTransferPackageResponse,
-        ReceivePaymentRequest, ReceivePaymentResponse, SendBatchRequest, SendBatchResponse,
-        SendPaymentRequest, SendPaymentResponse, UnsignedTransferPackage,
+        PullPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse, SendBatchRequest,
+        SendBatchResponse, SendPaymentRequest, SendPaymentResponse, UnsignedTransferPackage,
     },
     utils::payments::get_payment_with_conversion_details,
 };
@@ -157,6 +158,15 @@ impl BreezSdk {
         .await
     }
 
+    /// Builds the package a client signs to approve a prepared pull.
+    #[allow(clippy::unused_async)]
+    pub async fn build_unsigned_pull_package(
+        &self,
+        request: BuildUnsignedPullPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        client_signing::build_unsigned_pull_package(&request)
+    }
+
     #[instrument(
         level = "info",
         target = "breez_sdk_core::publish_signed_transfer_package",
@@ -168,6 +178,24 @@ impl BreezSdk {
     ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
         Box::pin(send::publish_signed_transfer_package(
+            self,
+            &request.signed_package,
+        ))
+        .await
+    }
+
+    /// Broadcasts a pull signed by a client, returning the same result when the same package is published again.
+    #[instrument(
+        level = "info",
+        target = "breez_sdk_core::publish_signed_pull_package",
+        skip_all
+    )]
+    pub async fn publish_signed_pull_package(
+        &self,
+        request: PublishSignedPullPackageRequest,
+    ) -> Result<PullPaymentResponse, SdkError> {
+        self.maybe_ensure_spark_private_mode_initialized().await?;
+        Box::pin(client_signing::publish_signed_pull_package(
             self,
             &request.signed_package,
         ))

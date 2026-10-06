@@ -916,6 +916,15 @@ pub enum _UnsignedTransferPackage {
         totals: Vec<BatchTotal>,
         is_swap: bool,
     },
+    TokenPull {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
+        pull_context: Vec<u8>,
+        payer_public_key: String,
+        token_identifier: String,
+        receivers: Vec<PullReceiver>,
+        amount: u128,
+        expiry_time: u64,
+    },
 }
 
 #[frb(mirror(TransferTarget))]
@@ -2130,6 +2139,123 @@ pub struct _UpdateContactRequest {
 pub struct _ListContactsRequest {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+}
+
+#[frb(mirror(TokenAllowanceLimit))]
+pub enum _TokenAllowanceLimit {
+    Unlimited,
+    Amount { amount: u128 },
+}
+
+#[frb(mirror(CreateTokenAllowanceRequest))]
+pub struct _CreateTokenAllowanceRequest {
+    pub spender_public_key: String,
+    pub token_identifier: String,
+    pub max_per_payment: TokenAllowanceLimit,
+    pub max_total: TokenAllowanceLimit,
+    pub expiry_time: u64,
+    pub allowed_recipients: Vec<String>,
+}
+
+#[frb(mirror(CreateTokenAllowanceResponse))]
+pub struct _CreateTokenAllowanceResponse {
+    pub allowance: TokenAllowance,
+}
+
+#[frb(mirror(RevokeTokenAllowanceRequest))]
+pub struct _RevokeTokenAllowanceRequest {
+    pub allowance_id: String,
+}
+
+#[frb(mirror(TokenAllowanceRole))]
+pub enum _TokenAllowanceRole {
+    Owner,
+    Spender,
+}
+
+#[frb(mirror(ListTokenAllowancesRequest))]
+pub struct _ListTokenAllowancesRequest {
+    pub role: TokenAllowanceRole,
+    pub counterparty_public_key: Option<String>,
+    pub token_identifier: Option<String>,
+    pub include_inactive: Option<bool>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[frb(mirror(ListTokenAllowancesResponse))]
+pub struct _ListTokenAllowancesResponse {
+    pub allowances: Vec<TokenAllowance>,
+}
+
+#[frb(mirror(TokenAllowanceStatus))]
+pub enum _TokenAllowanceStatus {
+    Active,
+    Exhausted,
+    Expired,
+    Revoked,
+}
+
+#[frb(mirror(TokenAllowance))]
+pub struct _TokenAllowance {
+    pub id: String,
+    pub owner_public_key: String,
+    pub spender_public_key: String,
+    pub token_identifier: String,
+    pub max_per_payment: TokenAllowanceLimit,
+    pub max_total: TokenAllowanceLimit,
+    pub spent_amount: u128,
+    pub allowed_recipients: Vec<String>,
+    pub expiry_time: u64,
+    pub created_at: u64,
+    pub revoked_at: Option<u64>,
+    pub status: TokenAllowanceStatus,
+}
+
+#[frb(mirror(PullReceiver))]
+pub struct _PullReceiver {
+    pub amount: u128,
+    pub receiver_public_key: Option<String>,
+}
+
+#[frb(mirror(PreparePullPaymentRequest))]
+pub struct _PreparePullPaymentRequest {
+    pub payer_public_key: String,
+    pub token_identifier: String,
+    pub receivers: Vec<PullReceiver>,
+}
+
+#[frb(mirror(PreparePullPaymentResponse))]
+pub struct _PreparePullPaymentResponse {
+    pub payer_public_key: String,
+    pub token_identifier: String,
+    pub receivers: Vec<PullReceiver>,
+    pub amount: u128,
+    pub allowance_id: String,
+    pub expiry_time: u64,
+    pub pull_context: Vec<u8>,
+}
+
+#[frb(mirror(PullPaymentRequest))]
+pub struct _PullPaymentRequest {
+    pub prepare_response: PreparePullPaymentResponse,
+}
+
+#[frb(mirror(PullPaymentResponse))]
+pub struct _PullPaymentResponse {
+    pub tx_hash: String,
+    pub status: PaymentStatus,
+    pub payment: Option<Payment>,
+}
+
+#[frb(mirror(BuildUnsignedPullPackageRequest))]
+pub struct _BuildUnsignedPullPackageRequest {
+    pub prepare_response: PreparePullPaymentResponse,
+}
+
+#[frb(mirror(PublishSignedPullPackageRequest))]
+pub struct _PublishSignedPullPackageRequest {
+    pub signed_package: SignedTransferPackage,
 }
 
 #[frb(mirror(WebhookEventType))]

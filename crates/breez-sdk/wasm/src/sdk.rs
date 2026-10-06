@@ -438,6 +438,74 @@ impl BreezSdk {
             .into())
     }
 
+    #[wasm_bindgen(js_name = "createTokenAllowance")]
+    pub async fn create_token_allowance(
+        &self,
+        request: CreateTokenAllowanceRequest,
+    ) -> WasmResult<CreateTokenAllowanceResponse> {
+        Ok(self
+            .sdk
+            .create_token_allowance(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "revokeTokenAllowance")]
+    pub async fn revoke_token_allowance(
+        &self,
+        request: RevokeTokenAllowanceRequest,
+    ) -> WasmResult<()> {
+        Ok(self.sdk.revoke_token_allowance(request.into()).await?)
+    }
+
+    #[wasm_bindgen(js_name = "listTokenAllowances")]
+    pub async fn list_token_allowances(
+        &self,
+        request: ListTokenAllowancesRequest,
+    ) -> WasmResult<ListTokenAllowancesResponse> {
+        Ok(self.sdk.list_token_allowances(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "preparePullPayment")]
+    pub async fn prepare_pull_payment(
+        &self,
+        request: PreparePullPaymentRequest,
+    ) -> WasmResult<PreparePullPaymentResponse> {
+        Ok(self.sdk.prepare_pull_payment(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "pullPayment")]
+    pub async fn pull_payment(
+        &self,
+        request: PullPaymentRequest,
+    ) -> WasmResult<PullPaymentResponse> {
+        Ok(self.sdk.pull_payment(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "buildUnsignedPullPackage")]
+    pub async fn build_unsigned_pull_package(
+        &self,
+        request: BuildUnsignedPullPackageRequest,
+    ) -> WasmResult<UnsignedTransferPackage> {
+        Ok(self
+            .sdk
+            .build_unsigned_pull_package(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "publishSignedPullPackage")]
+    pub async fn publish_signed_pull_package(
+        &self,
+        request: PublishSignedPullPackageRequest,
+    ) -> WasmResult<PullPaymentResponse> {
+        Ok(self
+            .sdk
+            .publish_signed_pull_package(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "syncWallet")]
     pub async fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
         Ok(self.sdk.sync_wallet(request.into()).await?.into())

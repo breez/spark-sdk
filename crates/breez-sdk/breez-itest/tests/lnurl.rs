@@ -160,7 +160,9 @@ async fn client_sign_lnurl_pay(
             } => TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
             },
-            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
+            UnsignedTransferPackage::Token { .. }
+            | UnsignedTransferPackage::TokenBatch { .. }
+            | UnsignedTransferPackage::TokenPull { .. } => {
                 panic!("unexpected token package for an LNURL pay")
             }
         };

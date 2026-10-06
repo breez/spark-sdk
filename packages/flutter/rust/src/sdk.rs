@@ -465,4 +465,53 @@ impl BreezSdk {
     ) -> Result<Vec<Contact>, SdkError> {
         self.inner.list_contacts(request).await
     }
+
+    pub async fn create_token_allowance(
+        &self,
+        request: CreateTokenAllowanceRequest,
+    ) -> Result<CreateTokenAllowanceResponse, SdkError> {
+        self.inner.create_token_allowance(request).await
+    }
+
+    pub async fn revoke_token_allowance(
+        &self,
+        request: RevokeTokenAllowanceRequest,
+    ) -> Result<(), SdkError> {
+        self.inner.revoke_token_allowance(request).await
+    }
+
+    pub async fn list_token_allowances(
+        &self,
+        request: ListTokenAllowancesRequest,
+    ) -> Result<ListTokenAllowancesResponse, SdkError> {
+        self.inner.list_token_allowances(request).await
+    }
+
+    pub async fn prepare_pull_payment(
+        &self,
+        request: PreparePullPaymentRequest,
+    ) -> Result<PreparePullPaymentResponse, SdkError> {
+        self.inner.prepare_pull_payment(request).await
+    }
+
+    pub async fn pull_payment(
+        &self,
+        request: PullPaymentRequest,
+    ) -> Result<PullPaymentResponse, SdkError> {
+        self.inner.pull_payment(request).await
+    }
+
+    pub async fn build_unsigned_pull_package(
+        &self,
+        request: BuildUnsignedPullPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        self.inner.build_unsigned_pull_package(request).await
+    }
+
+    pub async fn publish_signed_pull_package(
+        &self,
+        request: PublishSignedPullPackageRequest,
+    ) -> Result<PullPaymentResponse, SdkError> {
+        self.inner.publish_signed_pull_package(request).await
+    }
 }
