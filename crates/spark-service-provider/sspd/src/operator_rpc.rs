@@ -167,17 +167,32 @@ pub async fn sign_static_deposit_sweep_tx(
 }
 
 /// Unlike the public query, returns nodes regardless of their wallet's privacy
-/// setting.
+/// setting. Operators that serve the service provider's query serve their own
+/// internal one to other operators only, and those built from the public code
+/// (regtest/local's) serve only the internal one.
 pub async fn query_nodes_internal(
     client: &SparkRpcClient,
     req: QueryNodesRequest,
 ) -> Result<QueryNodesResponse> {
+    let response = with_auth_retry(client, |interceptor| {
+        let mut c = ssp_client(client, interceptor);
+        let req = req.clone();
+        async move { c.query_nodes(req).await }
+    })
+    .await;
+    if !is_unimplemented(&response) {
+        return response;
+    }
     with_auth_retry(client, |interceptor| {
         let mut c = internal_client(client, interceptor);
         let req = req.clone();
         async move { c.query_nodes(req).await }
     })
     .await
+}
+
+fn is_unimplemented<T>(response: &Result<T>) -> bool {
+    matches!(response, Err(OperatorRpcError::Connection(status)) if status.code() == tonic::Code::Unimplemented)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,7 +259,26 @@ pub async fn get_utxos_for_address(
     .await
 }
 
-pub async fn finalize_node_signatures_v2(
+/// Completes the nodes of a tree `create_tree` started. Operators that serve this
+/// call disable the public `finalize_node_signatures_v2`, and those built from
+/// the public code (regtest/local's) serve only that.
+pub async fn finalize_node_signatures(
+    client: &SparkRpcClient,
+    req: FinalizeNodeSignaturesRequest,
+) -> Result<FinalizeNodeSignaturesResponse> {
+    let response = with_auth_retry(client, |interceptor| {
+        let mut c = ssp_client(client, interceptor);
+        let req = req.clone();
+        async move { c.finalize_node_signatures(req).await }
+    })
+    .await;
+    if is_unimplemented(&response) {
+        return finalize_node_signatures_v2(client, req).await;
+    }
+    response
+}
+
+async fn finalize_node_signatures_v2(
     client: &SparkRpcClient,
     req: FinalizeNodeSignaturesRequest,
 ) -> Result<FinalizeNodeSignaturesResponse> {
