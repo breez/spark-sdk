@@ -30,9 +30,7 @@ pub const KIND_TEXT_NOTE: u16 = 1;
 pub const KIND_RELAY_LIST: u16 = 10002;
 const KIND_AUTHENTICATION: u16 = 22242;
 
-/// Bound on a relay acknowledging a published event.
 const WAIT_FOR_OK_TIMEOUT: Duration = Duration::from_secs(10);
-/// Bound on completing NIP-42 authentication once a relay asked for it.
 const WAIT_FOR_AUTH_TIMEOUT: Duration = Duration::from_secs(7);
 
 static SECP: LazyLock<Secp256k1<All>> = LazyLock::new(Secp256k1::new);
@@ -41,7 +39,6 @@ pub fn keypair(secret_key: &bitcoin::secp256k1::SecretKey) -> Keypair {
     Keypair::from_secret_key(&SECP, secret_key)
 }
 
-/// A signed NIP-01 event.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Event {
     pub id: sha256::Hash,
@@ -121,7 +118,6 @@ fn event_id(
     sha256::Hash::hash(serialized.as_bytes())
 }
 
-/// A `REQ` filter for the events of one author and kind.
 #[derive(Clone, Debug, Serialize)]
 pub struct Filter {
     authors: [XOnlyPublicKey; 1],
@@ -189,7 +185,6 @@ pub fn relay_list_urls(event: &Event) -> Vec<String> {
         .collect()
 }
 
-/// How relays are reached.
 #[derive(Clone)]
 pub struct RelayOptions {
     /// Answers the NIP-42 challenges of relays requiring authentication.
@@ -261,7 +256,6 @@ impl Relay {
         }
     }
 
-    /// Publishes `event`, succeeding once the relay accepts it.
     async fn publish(&mut self, event: &Event) -> Result<(), String> {
         let message = json!(["EVENT", event]);
         let id = event.id.to_string();

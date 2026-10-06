@@ -93,8 +93,6 @@ p256 = { workspace = true, optional = true }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-# Passkey relay websockets. The same versions and TLS setup as boltz-client's,
-# so the stack is linked once.
 tokio-socks = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
