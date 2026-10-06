@@ -3204,7 +3204,8 @@ pub struct PrepareRecoverFundsResponse {
     pub skipped: Vec<SkippedLeaf>,
     /// Total value of the selected leaves, in satoshis.
     pub recoverable_value_sats: u64,
-    /// `cooperative_fee_sats + cpfp_fee_sats + fanout_fee_sats + sweep_fee_sats`.
+    /// `cooperative_fee_sats + cpfp_fee_sats + fanout_fee_sats + refund_fee_sats +
+    /// sweep_fee_sats`.
     pub total_fee_sats: u64,
     /// Paid from the cooperative leaves' own value. Each leaf has two fees: the
     /// one of the transaction the operators broadcast to move it on-chain, which
@@ -3215,6 +3216,9 @@ pub struct PrepareRecoverFundsResponse {
     /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per branch
     /// (`funding.per_branch`) avoids it.
     pub fanout_fee_sats: u64,
+    /// Paid by refunds that pay their own fee, off the value of their leaves.
+    /// These are the refunds of leaves received with a watchtower fee ladder.
+    pub refund_fee_sats: u64,
     /// Paid by the final sweep, off the value it moves.
     pub sweep_fee_sats: u64,
     /// What to fund the unilateral exit with. Unset when nothing needs funding:
@@ -3309,6 +3313,7 @@ pub struct RecoverFundsResponse {
     pub cooperative_fee_sats: u64,
     pub cpfp_fee_sats: u64,
     pub fanout_fee_sats: u64,
+    pub refund_fee_sats: u64,
     pub sweep_fee_sats: u64,
     pub leaves: Vec<RecoverFundsLeaf>,
     /// Cooperative leaves whose recovery could not be produced, and why. No

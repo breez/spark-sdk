@@ -1971,6 +1971,31 @@ impl SparkWallet {
         Ok(plan)
     }
 
+    /// Signs the child that pays an anchorless refund's fee (an exit's
+    /// [`ExitTx::refund_child`](crate::ExitTx::refund_child)) with the key of the
+    /// leaf the refund pays.
+    pub async fn sign_refund_child(
+        &self,
+        leaf_id: &TreeNodeId,
+        refund_tx: &Transaction,
+        mut child: Transaction,
+    ) -> Result<Transaction, SparkWalletError> {
+        let prevout = refund_tx.output.first().ok_or_else(|| {
+            SparkWalletError::Generic(format!("refund tx for leaf {leaf_id} has no outputs"))
+        })?;
+        let sighash = sighash_from_multi_input_tx(&child, 0, std::slice::from_ref(prevout))
+            .map_err(|e| SparkWalletError::Generic(format!("Failed to compute sighash: {e}")))?;
+        let sig = self
+            .spark_signer
+            .sign_leaf_refund_spend(leaf_id, &sighash.to_byte_array())
+            .await?;
+        let input = child.input.first_mut().ok_or_else(|| {
+            SparkWalletError::Generic(format!("refund child for leaf {leaf_id} has no inputs"))
+        })?;
+        input.witness = Witness::from_slice(&[sig.serialize()]);
+        Ok(child)
+    }
+
     /// Builds a sweep PSBT that pulls every leaf's refund output and every
     /// leaf's terminal CPFP-change output into a single payment to
     /// `destination`. Refund inputs are signed internally; CPFP-change inputs

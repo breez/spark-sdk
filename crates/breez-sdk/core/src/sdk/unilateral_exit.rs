@@ -48,6 +48,7 @@ pub(super) struct UnilateralQuote {
     pub(super) total_fee_sats: u64,
     pub(super) cpfp_fee_sats: u64,
     pub(super) fanout_fee_sats: u64,
+    pub(super) refund_fee_sats: u64,
     pub(super) sweep_fee_sats: u64,
     pub(super) funding: Option<RecoveryFunding>,
     pub(super) exit_chain_state: ModelExitChainState,
@@ -60,6 +61,7 @@ pub(super) struct UnilateralBuild {
     pub(super) total_fee_sats: u64,
     pub(super) cpfp_fee_sats: u64,
     pub(super) fanout_fee_sats: u64,
+    pub(super) refund_fee_sats: u64,
     pub(super) sweep_fee_sats: u64,
     pub(super) transactions: Vec<RecoveryTransaction>,
 }
@@ -166,6 +168,7 @@ impl BreezSdk {
             total_fee_sat = quote.total_fee_sat,
             cpfp_fee_sat = quote.cpfp_fee_sat,
             fanout_fee_sat = quote.fanout_fee_sat,
+            refund_fee_sat = quote.refund_fee_sat,
             sweep_fee_sat = quote.sweep_fee_sat,
             single_utxo_funding_sat = quote.single_utxo_funding_sat,
             branches = per_branch.len(),
@@ -179,6 +182,7 @@ impl BreezSdk {
             total_fee_sats: quote.total_fee_sat,
             cpfp_fee_sats: quote.cpfp_fee_sat,
             fanout_fee_sats: quote.fanout_fee_sat,
+            refund_fee_sats: quote.refund_fee_sat,
             sweep_fee_sats: quote.sweep_fee_sat,
             funding: (!per_branch.is_empty()).then_some(RecoveryFunding {
                 single_utxo_sats: quote.single_utxo_funding_sat,
@@ -266,9 +270,21 @@ impl BreezSdk {
         let recoverable_value_sats = build.recoverable_value_sat;
         let cpfp_fee_sats = build.cpfp_fee_sat;
         let fanout_fee_sats = build.fanout_fee_sat;
-        let build_fee_sats = cpfp_fee_sats.saturating_add(fanout_fee_sats);
+        let refund_fee_sats = build.refund_child_fee_sat;
+        let build_fee_sats = cpfp_fee_sats
+            .saturating_add(fanout_fee_sats)
+            .saturating_add(refund_fee_sats);
         // Captured before the loop below consumes `build.branches`.
         let sweep_status = sweep_initial_status(&build);
+        // The sweep waits on the refunds as broadcast, not on the child an
+        // anchorless refund's output moves on to.
+        let refund_txids: Vec<String> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter(|tx| tx.kind == ExitTxKind::Refund)
+            .map(|tx| tx.txid.to_string())
+            .collect();
         debug!(
             has_fan_out = build.fan_out.is_some(),
             branches = build.branches.len(),
@@ -324,9 +340,15 @@ impl BreezSdk {
                     depends_on = tx.depends_on.len(),
                     "build_unilateral_exit: exit tx"
                 );
-                let cpfp_tx_hex = match tx.to_sign {
-                    Some(child) => Some(sign_psbt_via(child, signer).await?),
-                    None => None,
+                let cpfp_tx_hex = match (tx.to_sign, tx.refund_child, &tx.node_id) {
+                    (Some(child), _, _) => Some(sign_psbt_via(child, signer).await?),
+                    (None, Some(child), Some(leaf_id)) => Some(serialize_hex(
+                        &self
+                            .spark_wallet
+                            .sign_refund_child(leaf_id, &tx.base_tx, child)
+                            .await?,
+                    )),
+                    _ => None,
                 };
                 transactions.push(RecoveryTransaction {
                     kind,
@@ -352,16 +374,12 @@ impl BreezSdk {
                 total_fee_sats: build_fee_sats,
                 cpfp_fee_sats,
                 fanout_fee_sats,
+                refund_fee_sats,
                 sweep_fee_sats: 0,
                 transactions,
             });
         }
 
-        let refund_txids: Vec<String> = build
-            .refund_outputs
-            .iter()
-            .map(|r| r.outpoint.txid.to_string())
-            .collect();
         let sweep_psbt = self
             .spark_wallet
             .create_refund_sweep_transaction(
@@ -406,6 +424,7 @@ impl BreezSdk {
             total_fee_sats,
             cpfp_fee_sats,
             fanout_fee_sats,
+            refund_fee_sats,
             sweep_fee_sats,
             transactions,
         })
@@ -1269,6 +1288,7 @@ mod tests {
                 output: vec![],
             },
             to_sign: None,
+            refund_child: None,
             csv_timelock_blocks: None,
             depends_on: vec![],
             status,
@@ -1287,6 +1307,7 @@ mod tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            refund_child_fee_sat: 0,
         }
     }
 
