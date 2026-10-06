@@ -2,7 +2,6 @@
 //! NIP-01 events and relay protocol, NIP-42 authentication and NIP-65 relay
 //! lists.
 
-use std::net::SocketAddr;
 use std::sync::LazyLock;
 
 use bitcoin::hashes::{Hash, sha256};
@@ -190,7 +189,7 @@ pub struct RelayOptions {
     /// Answers the NIP-42 challenges of relays requiring authentication.
     pub auth_keys: Keypair,
     /// SOCKS5 proxy carrying the connections. Native only.
-    pub proxy: Option<SocketAddr>,
+    pub proxy: Option<platform_utils::ProxyConfig>,
 }
 
 /// An open connection to one relay. NIP-42 challenges are answered whenever
@@ -208,7 +207,7 @@ impl Relay {
     async fn connect(url: &str, options: &RelayOptions) -> Result<Self, String> {
         Ok(Self {
             url: url.to_string(),
-            socket: open_websocket(url, options.proxy).await?,
+            socket: open_websocket(url, options.proxy.as_ref()).await?,
             auth_keys: options.auth_keys,
             auth_event: None,
             authenticated: None,
@@ -366,7 +365,10 @@ impl Relay {
 /// given. The relay hostname is sent to the proxy as a name, so the proxy
 /// resolves it.
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-async fn open_websocket(url: &str, proxy: Option<SocketAddr>) -> Result<WebSocket, String> {
+async fn open_websocket(
+    url: &str,
+    proxy: Option<&platform_utils::ProxyConfig>,
+) -> Result<WebSocket, String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("invalid relay url: {e}"))?;
     let host = match parsed.host() {
         Some(url::Host::Domain(domain)) => domain.to_string(),
@@ -381,10 +383,24 @@ async fn open_websocket(url: &str, proxy: Option<SocketAddr>) -> Result<WebSocke
         None => tokio::net::TcpStream::connect((host.as_str(), port))
             .await
             .map_err(|e| e.to_string())?,
-        Some(proxy) => tokio_socks::tcp::Socks5Stream::connect(proxy, (host, port))
-            .await
-            .map_err(|e| format!("SOCKS5 via {proxy} failed: {e}"))?
-            .into_inner(),
+        Some(proxy) => {
+            let address = proxy.address();
+            let target = (host, port);
+            match proxy.credentials() {
+                Some((username, password)) => {
+                    tokio_socks::tcp::Socks5Stream::connect_with_password(
+                        address.as_str(),
+                        target,
+                        username,
+                        password,
+                    )
+                    .await
+                }
+                None => tokio_socks::tcp::Socks5Stream::connect(address.as_str(), target).await,
+            }
+            .map_err(|e| format!("SOCKS5 via {address} failed: {e}"))?
+            .into_inner()
+        }
     };
     let (socket, _response) = tokio_tungstenite::client_async_tls_with_config(url, tcp, None, None)
         .await
@@ -394,7 +410,10 @@ async fn open_websocket(url: &str, proxy: Option<SocketAddr>) -> Result<WebSocke
 
 /// Opens `url` on the browser's `WebSocket`, which cannot be proxied.
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-async fn open_websocket(url: &str, proxy: Option<SocketAddr>) -> Result<WebSocket, String> {
+async fn open_websocket(
+    url: &str,
+    proxy: Option<&platform_utils::ProxyConfig>,
+) -> Result<WebSocket, String> {
     if proxy.is_some() {
         return Err("a SOCKS5 proxy cannot be honoured on WASM".to_string());
     }

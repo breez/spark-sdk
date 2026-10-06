@@ -886,24 +886,26 @@ mod tests {
         assert!(credential.backup_eligible.is_none());
     }
 
-    fn sdk_config_with_proxy(username: Option<&str>, password: Option<&str>) -> crate::Config {
+    /// An SDK config whose proxy fails validation (port 0), so a passkey
+    /// client that picks it up is rejected.
+    fn sdk_config_with_invalid_proxy() -> crate::Config {
         let mut config = crate::default_config(crate::Network::Mainnet);
         config.proxy = Some(crate::ProxyConfig {
             host: "127.0.0.1".to_string(),
-            port: 9050,
-            username: username.map(ToString::to_string),
-            password: password.map(ToString::to_string),
+            port: 0,
+            username: None,
+            password: None,
         });
         config
     }
 
     /// The relays would otherwise connect direct while the rest of the SDK is
-    /// tunnelled. Observed through the credentialed-proxy reject, which only
-    /// fires if the SDK proxy was read at all.
+    /// tunnelled. Observed through the invalid-proxy reject, which only fires
+    /// if the SDK proxy was read at all.
     #[macros::test_all]
     fn from_config_inherits_the_sdk_proxy() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let config = sdk_config_with_proxy(Some("user"), Some("pass"));
+        let config = sdk_config_with_invalid_proxy();
 
         match PasskeyClient::from_config(provider, &config, None).err() {
             Some(PasskeyError::InvalidConfig(_)) => {}
@@ -915,7 +917,7 @@ mod tests {
     #[macros::test_all]
     fn from_config_keeps_an_explicit_passkey_proxy() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let config = sdk_config_with_proxy(Some("user"), Some("pass"));
+        let config = sdk_config_with_invalid_proxy();
         let passkey_config = PasskeyConfig {
             proxy: Some(crate::ProxyConfig {
                 host: "127.0.0.1".to_string(),
@@ -931,10 +933,7 @@ mod tests {
         if cfg!(all(target_family = "wasm", target_os = "unknown")) {
             assert!(matches!(result.err(), Some(PasskeyError::InvalidConfig(_))));
         } else {
-            assert!(
-                result.is_ok(),
-                "the uncredentialed passkey proxy should have won"
-            );
+            assert!(result.is_ok(), "the valid passkey proxy should have won");
         }
     }
 

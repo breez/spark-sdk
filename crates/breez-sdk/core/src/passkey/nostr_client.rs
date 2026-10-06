@@ -15,35 +15,6 @@ use super::nostr::{
     relay_list_tags, relay_list_urls,
 };
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-/// Resolves the proxy to the socket address the relay transport needs.
-///
-/// Only the proxy's own host is looked up here, which is the one name that
-/// cannot be resolved through the proxy. Relay hostnames still go to the proxy.
-///
-/// Relay connections speak plain SOCKS5 with no authentication. Credentials
-/// are already rejected when the client is built; this is the backstop that
-/// keeps them from being silently dropped on the way to the proxy.
-async fn resolve_proxy_addr(
-    proxy: &crate::ProxyConfig,
-) -> Result<std::net::SocketAddr, PasskeyError> {
-    if proxy.username.is_some() || proxy.password.is_some() {
-        return Err(PasskeyError::Generic(
-            "Nostr relay connections do not support proxy authentication".to_string(),
-        ));
-    }
-    // Via `platform_utils` so the one place that knows how to render an
-    // authority (bracketing a bare IPv6 literal) stays the only one.
-    let address = platform_utils::ProxyConfig::from(proxy).address();
-    tokio::net::lookup_host(&address)
-        .await
-        .map_err(|e| PasskeyError::Generic(format!("Failed to resolve proxy address: {e}")))?
-        .next()
-        .ok_or_else(|| {
-            PasskeyError::Generic(format!("Proxy address {address} resolved to nothing"))
-        })
-}
-
 /// Public relays used as fallback when NIP-65 lists cannot be fetched.
 /// The first entry doubles as the preferred read relay for non-API-key users.
 const STATIC_RELAYS: &[&str] = &[
@@ -144,7 +115,7 @@ impl NostrSaltClient {
         let relays = self.read_relay_candidates();
         let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
         let filter = Filter::new(self.public_key(), KIND_TEXT_NOTE, None);
-        let options = self.relay_options().await?;
+        let options = self.relay_options()?;
 
         // Sign once and broadcast the same event to every batch missing the
         // label, so all relays converge on a single event id.
@@ -394,7 +365,7 @@ impl NostrSaltClient {
         filter: &Filter,
     ) -> Result<Vec<Event>, PasskeyError> {
         let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
-        let options = self.relay_options().await?;
+        let options = self.relay_options()?;
         let mut last_err = None;
 
         for chunk in relays.chunks(2) {
@@ -423,7 +394,7 @@ impl NostrSaltClient {
 
     /// Connect to the write relays, keeping those that could be reached.
     async fn connect_write_relays(&self) -> Result<Vec<Relay>, PasskeyError> {
-        let options = self.relay_options().await?;
+        let options = self.relay_options()?;
         let write_relays = self.ensure_server_relays().await;
         let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
         nostr::connect(&write_relays, &options, timeout)
@@ -436,22 +407,13 @@ impl NostrSaltClient {
     /// When an API key is configured, uses API key-derived keys for NIP-42
     /// authentication. Content events are signed separately with the owned
     /// passkey-derived keys.
-    // Only the native proxy path awaits, so on WASM this is async purely to
-    // keep one signature across targets.
-    #[cfg_attr(
-        all(target_family = "wasm", target_os = "unknown"),
-        allow(clippy::unused_async)
-    )]
-    async fn relay_options(&self) -> Result<RelayOptions, PasskeyError> {
+    fn relay_options(&self) -> Result<RelayOptions, PasskeyError> {
         let auth_keys = match &self.breez_api_key {
             Some(api_key) => derive_nip42_keypair(api_key)?,
             None => self.keys,
         };
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        let proxy = match &self.proxy {
-            Some(proxy) => Some(resolve_proxy_addr(proxy).await?),
-            None => None,
-        };
+        let proxy = self.proxy.as_ref().map(platform_utils::ProxyConfig::from);
         // Relay connections run on browser WebSockets here, which cannot be
         // proxied. Refuse rather than connect directly behind the caller's back.
         #[cfg(all(target_family = "wasm", target_os = "unknown"))]
