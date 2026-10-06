@@ -392,8 +392,9 @@ pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
 /// `{"error":{"code":"...","message":"..."}}`.
 ///
 /// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`], the
-/// route refusals [`FlashnetError::RouteUnavailable`] and `invalid_request`
-/// [`FlashnetError::InvalidRequest`], so callers can react to them without
+/// route refusals [`FlashnetError::RouteUnavailable`], `invalid_request`
+/// [`FlashnetError::InvalidRequest`] and the affiliate codes
+/// [`FlashnetError::AffiliateRejected`], so callers can react to them without
 /// matching on prose. Orchestra does not include the bound it applied, so the
 /// amount error carries the direction only. Anything else keeps its message
 /// and the HTTP status.
@@ -431,6 +432,10 @@ fn error_from_body(body: &str, status: u16) -> FlashnetError {
             temporary: false,
         },
         Some("invalid_request") => FlashnetError::InvalidRequest {
+            reason,
+            code: status,
+        },
+        Some("affiliate_not_found" | "affiliate_disabled") => FlashnetError::AffiliateRejected {
             reason,
             code: status,
         },
@@ -497,6 +502,21 @@ mod error_body_tests {
                 ref reason
             } if reason == "Unsupported route"
         ));
+    }
+
+    #[test]
+    fn affiliate_rejections_become_typed_errors() {
+        for code in ["affiliate_not_found", "affiliate_disabled"] {
+            let body = format!(r#"{{"error":{{"code":"{code}","message":"Affiliate rejected"}}}}"#);
+            assert!(
+                matches!(
+                    error_from_body(&body, 400),
+                    FlashnetError::AffiliateRejected { code: 400, ref reason }
+                        if reason == "Affiliate rejected"
+                ),
+                "{code}"
+            );
+        }
     }
 
     #[test]

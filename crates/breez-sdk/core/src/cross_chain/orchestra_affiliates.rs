@@ -15,10 +15,10 @@ const PARTNER_RETRY_SECS: u64 = 60 * 60;
 
 /// `breez_sdk`, followed by the partner's affiliate id when there is one.
 ///
-/// Orchestra rejects a whole request that names an unregistered affiliate, and
-/// most partners never register one. A rejected partner id is left off for
-/// [`PARTNER_RETRY_SECS`]. `breez_sdk` stays first: Orchestra names only the
-/// first unknown id, so a `breez_sdk` problem is never read as the partner's.
+/// Orchestra rejects a whole request that names an unregistered or disabled
+/// affiliate. A rejected partner id is left off for [`PARTNER_RETRY_SECS`].
+/// `breez_sdk` is always registered, so an affiliate rejection of a request
+/// carrying the partner is the partner's.
 pub(super) struct Affiliates {
     partner: Option<String>,
     partner_rejected_at: Mutex<Option<u64>>,
@@ -53,7 +53,7 @@ impl Affiliates {
     /// Runs `request` with the current affiliate ids. If a request carrying the
     /// partner id is rejected, runs it once more with `breez_sdk` only. The
     /// partner is left off for [`PARTNER_RETRY_SECS`] only when the rejection
-    /// mentions its id.
+    /// is an affiliate rejection or mentions its id.
     pub(super) async fn run<T, F, Fut>(&self, request: F) -> Result<T, FlashnetError>
     where
         F: Fn(Vec<String>) -> Fut,
@@ -88,7 +88,7 @@ impl Affiliates {
         if !is_rejection(&err) {
             return Err(err);
         }
-        if mentions(&err, partner) {
+        if is_partner_rejection(&err, partner) {
             info!(
                 "Orchestra: affiliate {partner} was rejected ({err}), leaving it off for \
                  {PARTNER_RETRY_SECS}s"
@@ -125,12 +125,18 @@ impl Affiliates {
 /// route errors are not.
 fn is_rejection(err: &FlashnetError) -> bool {
     match err {
-        FlashnetError::InvalidRequest { .. } => true,
+        FlashnetError::InvalidRequest { .. } | FlashnetError::AffiliateRejected { .. } => true,
         FlashnetError::Network {
             code: Some(code), ..
         } => (400..500).contains(code) && !matches!(code, 401 | 403 | 429),
         _ => false,
     }
+}
+
+/// Whether `err` is the partner's rejection: an affiliate rejection, which can
+/// only be the partner's, or one that mentions its id.
+fn is_partner_rejection(err: &FlashnetError, partner: &str) -> bool {
+    matches!(err, FlashnetError::AffiliateRejected { .. }) || mentions(err, partner)
 }
 
 /// Whether the rejection's message contains `id` as a whole affiliate id, not
@@ -161,13 +167,23 @@ mod tests {
     const PARTNER: &str = "breez_3f0f749007e24b";
     const NOW: u64 = 1_000_000;
 
-    /// The rejection Orchestra returns for an unknown or disabled affiliate.
+    /// The rejection Orchestra returns for an unknown or disabled affiliate
+    /// without specific affiliate errors.
     fn unknown_affiliate(id: &str) -> FlashnetError {
         invalid_request(&format!("Unknown affiliateId: {id}"))
     }
 
     fn invalid_request(reason: &str) -> FlashnetError {
         FlashnetError::InvalidRequest {
+            reason: reason.to_string(),
+            code: 400,
+        }
+    }
+
+    /// The rejection Orchestra returns for an unusable affiliate with specific
+    /// affiliate errors. `reason` doesn't have to name the affiliate.
+    fn affiliate_rejected(reason: &str) -> FlashnetError {
+        FlashnetError::AffiliateRejected {
             reason: reason.to_string(),
             code: 400,
         }
@@ -229,6 +245,86 @@ mod tests {
     async fn no_partner_sends_breez_sdk_only_and_never_retries() {
         let affiliates = Affiliates::new(None);
         let (result, calls) = run(&affiliates, NOW, vec![Err(invalid_request("bad"))]).await;
+        assert!(result.is_err());
+        assert_eq!(calls, vec![default_only()]);
+    }
+
+    #[async_test_all]
+    async fn an_affiliate_rejection_leaves_the_partner_off_until_the_window_passes() {
+        // The messages Orchestra sent live for an unknown and a disabled affiliate.
+        for reason in [
+            format!("Unknown affiliateId: {PARTNER}"),
+            "Affiliate is disabled".to_string(),
+        ] {
+            let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+            let (result, calls) = run(
+                &affiliates,
+                NOW,
+                vec![Err(affiliate_rejected(&reason)), Ok(())],
+            )
+            .await;
+            assert!(result.is_ok(), "{reason}");
+            assert_eq!(calls, vec![both(), default_only()], "{reason}");
+
+            let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS - 1, vec![Ok(())]).await;
+            assert_eq!(calls, vec![default_only()], "{reason}");
+            let (_, calls) = run(&affiliates, NOW + PARTNER_RETRY_SECS, vec![Ok(())]).await;
+            assert_eq!(calls, vec![both()], "{reason}");
+        }
+    }
+
+    #[async_test_all]
+    async fn an_affiliate_rejection_is_remembered_when_the_retry_also_fails() {
+        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let (result, calls) = run(
+            &affiliates,
+            NOW,
+            vec![
+                Err(affiliate_rejected("Affiliate is disabled")),
+                Err(client_error(503, "down")),
+            ],
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(FlashnetError::Network {
+                code: Some(503),
+                ..
+            })
+        ));
+        assert_eq!(calls, vec![both(), default_only()]);
+        assert_eq!(next_call(&affiliates, NOW).await, default_only());
+    }
+
+    #[async_test_all]
+    async fn an_affiliate_rejection_without_the_partner_is_returned_without_a_retry() {
+        let affiliates = Affiliates::new(None);
+        let (result, calls) = run(
+            &affiliates,
+            NOW,
+            vec![Err(affiliate_rejected("Affiliate is disabled"))],
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(FlashnetError::AffiliateRejected { .. })
+        ));
+        assert_eq!(calls, vec![default_only()]);
+
+        let affiliates = Affiliates::new(Some(PARTNER.to_string()));
+        let (setup, _) = run(
+            &affiliates,
+            NOW,
+            vec![Err(affiliate_rejected("Affiliate is disabled")), Ok(())],
+        )
+        .await;
+        assert!(setup.is_ok());
+        let (result, calls) = run(
+            &affiliates,
+            NOW + 1,
+            vec![Err(affiliate_rejected("Affiliate is disabled"))],
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(calls, vec![default_only()]);
     }

@@ -13,6 +13,11 @@ pub enum FlashnetError {
     #[error("{reason}")]
     InvalidRequest { reason: String, code: u16 },
 
+    /// The provider can't use an affiliate on the request, because it is
+    /// unknown or disabled.
+    #[error("{reason}")]
+    AffiliateRejected { reason: String, code: u16 },
+
     /// A pool execution failed after the outbound asset transfer was already
     /// made. `outbound_asset_transfer` carries the rich wallet-side object
     /// so the SDK can persist a `Payment` row + `ConversionInfo` for the

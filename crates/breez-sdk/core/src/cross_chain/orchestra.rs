@@ -13,8 +13,9 @@ use breez_sdk_common::fiat::FiatService;
 use breez_sdk_common::input::CrossChainAddressFamily;
 use chrono::DateTime;
 use flashnet::orchestra::{
-    AmountMode, EstimateRequest, EstimateResponse, Order, OrderStatus, QuoteRequest, QuoteResponse,
-    Route, RouteAsset, RouteLimits, RouteWithLimits, StatusResponse, SubmitResponse,
+    AffiliateErrorMode, AmountMode, EstimateRequest, EstimateResponse, Order, OrderStatus,
+    QuoteRequest, QuoteResponse, Route, RouteAsset, RouteLimits, RouteWithLimits, StatusResponse,
+    SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::Duration;
@@ -991,6 +992,7 @@ impl OrchestraService {
             .run(|affiliate_ids| {
                 self.client.quote(QuoteRequest {
                     affiliate_ids,
+                    affiliate_error_mode: Some(AffiliateErrorMode::Specific),
                     ..request.clone()
                 })
             })
@@ -1003,6 +1005,7 @@ impl OrchestraService {
             .run(|affiliate_ids| {
                 self.client.estimate(EstimateRequest {
                     affiliate_ids,
+                    affiliate_error_mode: Some(AffiliateErrorMode::Specific),
                     ..request.clone()
                 })
             })
@@ -1108,6 +1111,7 @@ impl OrchestraService {
             amount: source_amount.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
             affiliate_ids: Vec::new(),
+            affiliate_error_mode: None,
         };
         debug!(
             "Orchestra: estimating delivery ratio: {}/{} -> {}/{} source={}",
@@ -1812,6 +1816,7 @@ impl CrossChainService for OrchestraService {
             zeroconf_enabled: None,
             app_fees: Vec::new(),
             affiliate_ids: Vec::new(),
+            affiliate_error_mode: None,
         };
 
         debug!(
@@ -2004,6 +2009,7 @@ impl CrossChainService for OrchestraService {
             zeroconf_enabled: None,
             app_fees: Vec::new(),
             affiliate_ids: Vec::new(),
+            affiliate_error_mode: None,
         };
 
         debug!(
