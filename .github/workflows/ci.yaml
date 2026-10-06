@@ -125,9 +125,13 @@ jobs:
             exit 1
           fi
 
+  # The local cluster runs an operator whose code is not public, from a private
+  # image a pull request from a fork has no token for. So the jobs that run it
+  # skip those pull requests.
   state-snapshot:
     name: Itest state snapshot
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     steps:
       - uses: actions/checkout@v4
 
@@ -164,6 +168,7 @@ jobs:
         with:
           images: spark-so spark-migrations sspd
           build: 'true'
+          registry-token: ${{ secrets.ITEST_REGISTRY_TOKEN }}
 
       - name: Build the snapshot
         if: steps.cache.outputs.cache-hit != 'true'
@@ -188,6 +193,7 @@ jobs:
   itest-images:
     name: Itest images
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     steps:
       - uses: actions/checkout@v4
 
@@ -200,15 +206,18 @@ jobs:
           rust-cache-shared-key: itest
           rust-cache-save: 'false'
 
+      # The operator images are not cached, so each job builds its own.
       - name: Build and cache the images
         uses: ./.github/actions/itest-images
         with:
+          images: ldk-server sspd
           build: 'true'
 
   itest:
     name: Integration test (${{ matrix.backend.name }})
     runs-on: ubuntu-latest
     needs: [state-snapshot, itest-images]
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     continue-on-error: ${{ matrix.backend.allow-failure }}
     strategy:
       fail-fast: false
@@ -236,6 +245,8 @@ jobs:
 
       - name: Load the itest images
         uses: ./.github/actions/itest-images
+        with:
+          registry-token: ${{ secrets.ITEST_REGISTRY_TOKEN }}
 
       - name: Run Tests
         run: make ${{ matrix.backend.target }}
@@ -244,6 +255,7 @@ jobs:
     name: Signer compatibility tests
     runs-on: ubuntu-latest
     needs: [state-snapshot, itest-images]
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     steps:
       - uses: actions/checkout@v4
 
@@ -264,6 +276,7 @@ jobs:
         uses: ./.github/actions/itest-images
         with:
           images: spark-so spark-migrations sspd
+          registry-token: ${{ secrets.ITEST_REGISTRY_TOKEN }}
 
       - name: Run cross-version signer tests
         run: make compat-itest
