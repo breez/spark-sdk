@@ -107,7 +107,7 @@ impl NostrSaltClient {
     /// first: the read path early-exits on the first batch that responds
     /// (even empty), so a single-batch write could be missed after a
     /// relay flap. Skips batches that already carry the label and avoids
-    /// the cold NIP-65 fetch `create_write_client` would otherwise trigger.
+    /// the cold NIP-65 fetch `connect_write_relays` would otherwise trigger.
     ///
     /// Triggers the one-time background NIP-65 relay sync (same as
     /// `list_labels`), keyed off the first batch's events.

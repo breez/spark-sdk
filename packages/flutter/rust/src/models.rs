@@ -2175,8 +2175,7 @@ pub struct _PasskeyConfig {
     pub default_label: Option<String>,
     pub provider_options: Option<PasskeyProviderOptions>,
     /// Routes the Nostr relay connections that store wallet labels through a
-    /// SOCKS5 proxy. Relay connections cannot authenticate to a proxy, so one
-    /// carrying credentials is rejected when the client is built.
+    /// SOCKS5 proxy.
     pub proxy: Option<ProxyConfig>,
 }
 

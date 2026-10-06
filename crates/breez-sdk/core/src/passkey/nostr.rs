@@ -472,29 +472,11 @@ pub async fn connect(
     collect(urls, results)
 }
 
-/// Publishes `event` to every relay. Relays that did not accept it are
-/// closed and removed. Fails when none accepted it.
-pub async fn publish(relays: &mut Vec<Relay>, event: &Event) -> Result<(), String> {
+/// Publishes `event` to every relay. Fails when none accepted it.
+pub async fn publish(relays: &mut [Relay], event: &Event) -> Result<(), String> {
     let results = join_all(relays.iter_mut().map(|relay| relay.publish(event))).await;
-    let mut errors = Vec::new();
-    let mut kept = Vec::new();
-    for (relay, result) in relays.drain(..).zip(results) {
-        match result {
-            Ok(()) => kept.push(relay),
-            Err(e) => {
-                errors.push(format!("{}: {e}", relay.url));
-                relay.close().await;
-            }
-        }
-    }
-    *relays = kept;
-    if relays.is_empty() {
-        return Err(errors.join("; "));
-    }
-    for error in errors {
-        warn!("Relay failed: {error}");
-    }
-    Ok(())
+    let urls: Vec<String> = relays.iter().map(|relay| relay.url.clone()).collect();
+    collect(&urls, results).map(|_| ())
 }
 
 pub async fn close(relays: Vec<Relay>) {
@@ -695,6 +677,7 @@ mod tests {
 
     /// Serves one connection the way the Breez relay does: a NIP-42
     /// challenge on connect, and `REQ`/`EVENT` refused until it is answered.
+    /// Events with content `spam` are rejected.
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     async fn spawn_auth_relay() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -719,6 +702,9 @@ mod tests {
                     }
                     "REQ" if authenticated => json!(["EOSE", message[1]]),
                     "REQ" => json!(["CLOSED", message[1], "auth-required: sign in"]),
+                    "EVENT" if authenticated && message[1]["content"] == "spam" => {
+                        json!(["OK", message[1]["id"], false, "blocked: spam"])
+                    }
                     "EVENT" if authenticated => json!(["OK", message[1]["id"], true, ""]),
                     "EVENT" => json!(["OK", message[1]["id"], false, "auth-required: sign in"]),
                     _ => continue,
@@ -745,6 +731,12 @@ mod tests {
             .unwrap();
         assert!(events.is_empty());
         let event = Event::sign(&keys, KIND_TEXT_NOTE, vec![], "label");
+        publish(&mut relays, &event).await.unwrap();
+
+        // A rejected event leaves the relay in place for the next one.
+        let spam = Event::sign(&keys, KIND_TEXT_NOTE, vec![], "spam");
+        assert!(publish(&mut relays, &spam).await.is_err());
+        let event = Event::sign(&keys, KIND_TEXT_NOTE, vec![], "another label");
         publish(&mut relays, &event).await.unwrap();
         close(relays).await;
     }
