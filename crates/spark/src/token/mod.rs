@@ -1,3 +1,4 @@
+mod allowance;
 mod error;
 mod service;
 mod store;
@@ -8,6 +9,10 @@ pub mod tests;
 
 use std::collections::HashSet;
 
+pub use allowance::{
+    NewTokenAllowance, PreparedTokenPull, PullReceiver, TokenAllowance, TokenAllowanceFailure,
+    TokenAllowanceQuery, TokenAllowanceRole, TokenAllowanceService, TokenAllowanceStatus,
+};
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;
 pub use store::InMemoryTokenOutputStore;

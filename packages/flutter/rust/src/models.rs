@@ -872,6 +872,9 @@ pub enum _ExternalTokenTransactionKind {
     Freeze,
     Partial,
     Final,
+    AllowanceGrant,
+    AllowanceRevoke,
+    AllowanceSpend,
 }
 
 #[frb(mirror(ExternalPrepareTokenTransactionRequest))]

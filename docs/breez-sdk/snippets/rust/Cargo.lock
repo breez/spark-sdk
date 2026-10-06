@@ -5144,6 +5144,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+ "tonic-types",
  "tonic-web-wasm-client",
  "tower-service",
  "tracing",

@@ -321,6 +321,12 @@ pub enum TokenTransactionKind {
     /// Owner-side signature on a finalized token transaction
     /// (`SHA256(SHA256(tx_hash) || SHA256(operator_pubkey))`).
     Final,
+    /// Owner-side signature on a token allowance grant.
+    AllowanceGrant,
+    /// Owner-side signature on a token allowance revocation.
+    AllowanceRevoke,
+    /// Spender-side signature on a pull from a token allowance.
+    AllowanceSpend,
 }
 
 #[derive(Debug, Clone)]
@@ -459,8 +465,8 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: SignSparkInvoiceRequest,
     ) -> Result<SignedSparkInvoice, SignerError>;
 
-    /// Prepare a token transaction (freeze / partial / final). Returns the
-    /// identity-key signature over the request digest (see
+    /// Sign the digest of a token transaction or allowance statement of any
+    /// [`TokenTransactionKind`] with the identity key (see
     /// [`PreparedTokenTransaction`]).
     async fn prepare_token_transaction(
         &self,

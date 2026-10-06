@@ -1,3 +1,4 @@
+mod allowances;
 mod external_signing;
 
 use std::{
@@ -60,8 +61,8 @@ use spark::{
     },
     token::{
         InMemoryTokenOutputStore, PreparedTokenPackage, PreparedTokenTransfer, SelectionStrategy,
-        SynchronousTokenOutputService, TokenMetadata, TokenOutputService, TokenOutputStore,
-        TokenOutputWithPrevOut, TokenService,
+        SynchronousTokenOutputService, TokenAllowanceService, TokenMetadata, TokenOutputService,
+        TokenOutputStore, TokenOutputWithPrevOut, TokenService,
     },
     tree::{
         AutoOptimizationEvent, AutoOptimizationEventHandler, ExitChainResolver, InMemoryTreeStore,
@@ -387,6 +388,7 @@ pub struct SparkWallet {
     lightning_service: Arc<LightningService>,
     ssp_client: Arc<ServiceProvider>,
     token_service: Arc<TokenService>,
+    token_allowance_service: Arc<TokenAllowanceService>,
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
@@ -552,6 +554,13 @@ impl SparkWallet {
             transfer_observer.clone(),
         ));
 
+        let token_allowance_service = Arc::new(TokenAllowanceService::new(
+            Arc::clone(&spark_signer),
+            operator_pool.clone(),
+            config.network,
+            config.tokens_config.clone(),
+        ));
+
         let htlc_service = Arc::new(HtlcService::new(
             operator_pool.clone(),
             config.network,
@@ -603,6 +612,7 @@ impl SparkWallet {
             lightning_service,
             ssp_client: service_provider.clone(),
             token_service,
+            token_allowance_service,
             operator_pool,
             htlc_service,
             leaf_optimizer,
