@@ -72,6 +72,8 @@ Build {{#enum PaymentRequest::CrossChain}} with the recipient address, the chose
 
 The prepare response carries a quote {{#name expires_at}} timestamp. Re-prepare and pick a fresh route if it lapses before send.
 
+The provider's fee is in {{#name service_fee_amount}} and includes your [partner fee](./cross_chain_partner_fees.md) if you set one.
+
 {{#tabs cross_chain:cross-chain-prepare}}
 
 ## Fee Policy

@@ -248,7 +248,7 @@ pub enum ConversionInfo {
         /// Prepare-time estimate while pending, realized fee when Completed.
         #[serde(default, with = "serde_option_u128_as_string")]
         fee_amount: Option<u128>,
-        /// Orchestra service fee.
+        /// Orchestra service fee, including the partner fee when one is set.
         #[serde(
             default,
             alias = "fee",

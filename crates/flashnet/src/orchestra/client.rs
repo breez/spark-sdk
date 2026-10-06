@@ -322,6 +322,10 @@ impl OrchestraClient {
 
         let response = self.http_client.get(url, Some(headers)).await?;
         if !response.is_success() {
+            debug!(
+                "Orchestra: {endpoint} returned {}: {}",
+                response.status, response.body
+            );
             return Err(error_from_body(&response.body, response.status));
         }
         response
@@ -364,6 +368,10 @@ impl OrchestraClient {
             .await?;
 
         if !response.is_success() {
+            debug!(
+                "Orchestra: {endpoint} returned {}: {}",
+                response.status, response.body
+            );
             return Err(error_from_body(&response.body, response.status));
         }
 
@@ -383,11 +391,13 @@ pub fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
 /// Classify an Orchestra error body, which has the shape
 /// `{"error":{"code":"...","message":"..."}}`.
 ///
-/// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`] and
-/// the route refusals [`FlashnetError::RouteUnavailable`], so callers can
-/// react to them without matching on prose. Orchestra does not include the
-/// bound it applied, so the amount error carries the direction only.
-/// Anything else keeps its message and the HTTP status.
+/// The amount-rejection codes become [`FlashnetError::AmountOutOfRange`], the
+/// route refusals [`FlashnetError::RouteUnavailable`], `invalid_request`
+/// [`FlashnetError::InvalidRequest`] and the affiliate codes
+/// [`FlashnetError::AffiliateRejected`], so callers can react to them without
+/// matching on prose. Orchestra does not include the bound it applied, so the
+/// amount error carries the direction only. Anything else keeps its message
+/// and the HTTP status.
 fn error_from_body(body: &str, status: u16) -> FlashnetError {
     let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
     let field = |name: &str| {
@@ -420,6 +430,14 @@ fn error_from_body(body: &str, status: u16) -> FlashnetError {
         Some("unsupported_route" | "route_disabled") => FlashnetError::RouteUnavailable {
             reason,
             temporary: false,
+        },
+        Some("invalid_request") => FlashnetError::InvalidRequest {
+            reason,
+            code: status,
+        },
+        Some("affiliate_not_found" | "affiliate_disabled") => FlashnetError::AffiliateRejected {
+            reason,
+            code: status,
         },
         _ => FlashnetError::Network {
             reason,
@@ -484,6 +502,35 @@ mod error_body_tests {
                 ref reason
             } if reason == "Unsupported route"
         ));
+    }
+
+    #[test]
+    fn affiliate_rejections_become_typed_errors() {
+        for code in ["affiliate_not_found", "affiliate_disabled"] {
+            let body = format!(r#"{{"error":{{"code":"{code}","message":"Affiliate rejected"}}}}"#);
+            assert!(
+                matches!(
+                    error_from_body(&body, 400),
+                    FlashnetError::AffiliateRejected { code: 400, ref reason }
+                        if reason == "Affiliate rejected"
+                ),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_requests_keep_the_message_and_status() {
+        for message in [
+            "Unknown affiliateId: breez_3f0f749007e24b",
+            "recipientAddress is required",
+        ] {
+            let body = format!(r#"{{"error":{{"code":"invalid_request","message":"{message}"}}}}"#);
+            assert!(matches!(
+                error_from_body(&body, 400),
+                FlashnetError::InvalidRequest { code: 400, ref reason } if reason == message
+            ));
+        }
     }
 
     #[test]

@@ -3,8 +3,11 @@
 //! Implements [`CrossChainService`] for Boltz's sats → USDT reverse swap.
 //! Routing/quoting happens via the inner [`boltz_client::BoltzService`];
 //! payment rows are written at send time only (after the lightning leg
-//! succeeds) and updated silently by [`super::boltz_event_listener`] as the
+//! succeeds) and updated silently by [`event_listener`] as the
 //! WebSocket drives the swap to a terminal state.
+
+pub(crate) mod event_listener;
+pub(crate) mod storage_adapter;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +28,7 @@ use tracing::{debug, error, info, warn};
 use super::{
     CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendPrepared, CrossChainService,
-    DeliveryMethod, SparkAsset, boltz_storage_adapter::PROVIDER_TAG_BOLTZ,
-    derive_btc_leg_transfer_id, payment_with_conversion_info,
+    DeliveryMethod, SparkAsset, derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
@@ -39,6 +41,7 @@ use crate::{
         time::try_now_secs,
     },
 };
+use storage_adapter::PROVIDER_TAG_BOLTZ;
 
 // Polling cadence for the outbound LN payment leg waiting for terminal status
 // after `lightning_sender::pay_and_persist_lightning_invoice` returns and its
@@ -107,10 +110,9 @@ impl BoltzService {
         };
 
         let adapter: Arc<dyn BoltzStorage> = Arc::new(
-            super::boltz_storage_adapter::BoltzStorageAdapter::new(Arc::clone(&storage), ecies)
-                .map_err(|e| {
-                    SdkError::Generic(format!("Failed to build Boltz storage adapter: {e}"))
-                })?,
+            storage_adapter::BoltzStorageAdapter::new(Arc::clone(&storage), ecies).map_err(
+                |e| SdkError::Generic(format!("Failed to build Boltz storage adapter: {e}")),
+            )?,
         );
 
         let service = Arc::new(Self {
@@ -176,9 +178,9 @@ impl BoltzService {
                         })?,
                 );
 
-                let listener = Box::new(super::boltz_event_listener::BoltzSdkEventListener::new(
-                    Arc::clone(&self.storage),
-                ));
+                let listener = Box::new(event_listener::BoltzSdkEventListener::new(Arc::clone(
+                    &self.storage,
+                )));
                 client.add_event_listener(listener).await;
 
                 if let Err(e) = client.resume_swaps().await {
@@ -193,10 +195,8 @@ impl BoltzService {
                     let client = Arc::clone(&client);
                     let storage = Arc::clone(&self.storage);
                     async move {
-                        super::boltz_event_listener::reconcile_pending_boltz_conversions(
-                            &client, &storage,
-                        )
-                        .await;
+                        event_listener::reconcile_pending_boltz_conversions(&client, &storage)
+                            .await;
                     }
                 });
 
@@ -773,10 +773,9 @@ impl CrossChainService for BoltzService {
         // write and the WS event finds the `ConversionInfo`.
         match self.client().await?.get_swap(swap_id).await {
             Ok(Some(swap)) if swap.status.is_terminal() => {
-                if let Some(updated) = super::boltz_event_listener::boltz_metadata_from_swap(
-                    conversion_info.clone(),
-                    &swap,
-                ) {
+                if let Some(updated) =
+                    event_listener::boltz_metadata_from_swap(conversion_info.clone(), &swap)
+                {
                     match self
                         .storage
                         .insert_payment_metadata(payment_id.clone(), updated)

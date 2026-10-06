@@ -112,8 +112,31 @@ pub struct EstimateRequest {
     pub amount: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_mode: Option<AmountMode>,
+    /// Sent as one comma-joined value. Orchestra keeps only the last of
+    /// repeated keys and ignores `affiliateIds[]`, both without an error.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_comma_joined"
+    )]
+    pub affiliate_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub affiliate_id: Option<String>,
+    pub affiliate_error_mode: Option<AffiliateErrorMode>,
+}
+
+/// How Orchestra reports an affiliate it can't use. `Specific` returns the
+/// `affiliate_not_found` and `affiliate_disabled` codes instead of a generic
+/// `invalid_request`.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AffiliateErrorMode {
+    Specific,
+}
+
+fn serialize_comma_joined<S: serde::Serializer>(
+    values: &[String],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&values.join(","))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,8 +220,14 @@ pub struct QuoteRequest {
     pub zeroconf_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub app_fees: Vec<AppFeeRequest>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub affiliate_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub affiliate_id: Option<String>,
+    pub affiliate_error_mode: Option<AffiliateErrorMode>,
+    /// Label carried by every order from this quote. Up to 64 letters,
+    /// digits and `.`, `_`, `:`, `-`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -569,5 +598,104 @@ mod quote_response_tests {
         );
         let rendered = format!("{quote:?}");
         assert!(!rendered.contains("eyJ2"), "token leaked: {rendered}");
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    fn estimate(affiliate_ids: Vec<String>) -> EstimateRequest {
+        EstimateRequest {
+            source_chain: "spark".to_string(),
+            source_asset: "USDB".to_string(),
+            destination_chain: "base".to_string(),
+            destination_asset: "USDC".to_string(),
+            amount: "1000000".to_string(),
+            amount_mode: None,
+            affiliate_ids,
+            affiliate_error_mode: Some(AffiliateErrorMode::Specific),
+        }
+    }
+
+    #[test]
+    fn estimate_query_joins_affiliate_ids_with_a_comma() {
+        let query = serde_urlencoded::to_string(estimate(vec![
+            "breez_sdk".to_string(),
+            "breez_ff".to_string(),
+        ]))
+        .expect("serializes");
+        assert_eq!(
+            query,
+            "sourceChain=spark&sourceAsset=USDB&destinationChain=base\
+             &destinationAsset=USDC&amount=1000000&affiliateIds=breez_sdk%2Cbreez_ff\
+             &affiliateErrorMode=specific"
+        );
+    }
+
+    #[test]
+    fn estimate_query_omits_empty_affiliate_ids() {
+        let query = serde_urlencoded::to_string(estimate(Vec::new())).expect("serializes");
+        assert!(!query.contains("affiliateIds"), "{query}");
+    }
+
+    #[test]
+    fn an_unset_affiliate_error_mode_is_left_out() {
+        let query = serde_urlencoded::to_string(EstimateRequest {
+            affiliate_error_mode: None,
+            ..estimate(vec!["breez_sdk".to_string()])
+        })
+        .expect("serializes");
+        assert!(!query.contains("affiliateErrorMode"), "{query}");
+
+        let body = serde_json::to_value(QuoteRequest {
+            affiliate_error_mode: None,
+            ..quote(vec!["breez_sdk".to_string()], None)
+        })
+        .expect("serializes");
+        assert!(body.get("affiliateErrorMode").is_none(), "{body}");
+    }
+
+    fn quote(affiliate_ids: Vec<String>, tag: Option<&str>) -> QuoteRequest {
+        QuoteRequest {
+            source_chain: "spark".to_string(),
+            source_asset: "USDB".to_string(),
+            destination_chain: "base".to_string(),
+            destination_asset: "USDC".to_string(),
+            amount: "1000000".to_string(),
+            recipient_address: "0xabc".to_string(),
+            amount_mode: None,
+            refund_address: None,
+            slippage_bps: None,
+            zeroconf_enabled: None,
+            app_fees: Vec::new(),
+            affiliate_ids,
+            affiliate_error_mode: Some(AffiliateErrorMode::Specific),
+            tag: tag.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn quote_body_carries_affiliate_ids_as_a_list() {
+        let request = quote(vec!["breez_sdk".to_string(), "breez_ff".to_string()], None);
+        let body = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(
+            body["affiliateIds"],
+            serde_json::json!(["breez_sdk", "breez_ff"])
+        );
+        assert_eq!(body["affiliateErrorMode"], "specific");
+        assert!(body.get("affiliateId").is_none());
+    }
+
+    #[test]
+    fn quote_body_carries_the_tag() {
+        let body = serde_json::to_value(quote(Vec::new(), Some("ff"))).expect("serializes");
+        assert_eq!(body["tag"], "ff");
+    }
+
+    #[test]
+    fn quote_body_omits_an_unset_tag() {
+        let body = serde_json::to_value(quote(Vec::new(), None)).expect("serializes");
+        assert!(body.get("tag").is_none(), "{body}");
     }
 }

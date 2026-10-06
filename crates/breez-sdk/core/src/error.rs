@@ -182,6 +182,10 @@ impl From<flashnet::FlashnetError> for SdkError {
                 };
                 SdkError::NetworkError(format!("{reason}{code}"))
             }
+            flashnet::FlashnetError::InvalidRequest { reason, code }
+            | flashnet::FlashnetError::AffiliateRejected { reason, code, .. } => {
+                SdkError::NetworkError(format!("{reason} (code: {code})"))
+            }
             _ => SdkError::Generic(e.to_string()),
         }
     }
@@ -565,5 +569,42 @@ mod route_unavailable_tests {
             from_provider(false, "Unsupported route").to_string(),
             "Cross-chain route not supported: Unsupported route"
         );
+    }
+}
+
+#[cfg(test)]
+mod invalid_request_tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_same_as_a_plain_provider_error() {
+        let invalid: SdkError = flashnet::FlashnetError::InvalidRequest {
+            reason: "Unknown affiliateId: breez_ff".to_string(),
+            code: 400,
+        }
+        .into();
+        let plain: SdkError = flashnet::FlashnetError::Network {
+            reason: "Unknown affiliateId: breez_ff".to_string(),
+            code: Some(400),
+        }
+        .into();
+        assert!(matches!(invalid, SdkError::NetworkError(_)));
+        assert_eq!(invalid.to_string(), plain.to_string());
+    }
+
+    #[test]
+    fn an_affiliate_rejection_reads_the_same_as_a_plain_provider_error() {
+        let rejected: SdkError = flashnet::FlashnetError::AffiliateRejected {
+            reason: "Affiliate is disabled".to_string(),
+            code: 400,
+        }
+        .into();
+        let plain: SdkError = flashnet::FlashnetError::Network {
+            reason: "Affiliate is disabled".to_string(),
+            code: Some(400),
+        }
+        .into();
+        assert!(matches!(rejected, SdkError::NetworkError(_)));
+        assert_eq!(rejected.to_string(), plain.to_string());
     }
 }

@@ -98,6 +98,10 @@ Resolution at prepare/receive time:
 
 Values outside 0 to 500 are rejected at both config validation and per-request validation. {{#enum CrossChainFeeMode::FeesIncluded}} requests ignore this field.
 
+## Partner fees
+
+You can add your own fee to these payments from the [Breez partner portal](https://partners.breez.technology/). See [Earning fees on USDC/USDT payments](./cross_chain_partner_fees.md).
+
 ## Status lifecycle
 
 The Spark-side transfer and the external cross-chain leg have distinct status fields. They are tracked separately on the persisted {{#name Payment}} row so each can settle independently.

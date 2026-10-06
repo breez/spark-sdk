@@ -8,13 +8,8 @@
 // stay compiled so the wiring can be restored in one place.
 #[allow(dead_code)]
 pub(crate) mod boltz;
-#[allow(dead_code)]
-pub(crate) mod boltz_event_listener;
-#[allow(dead_code)]
-pub(crate) mod boltz_storage_adapter;
 mod cached_fiat;
 mod orchestra;
-mod orchestra_storage_adapter;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
 pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService};
@@ -486,8 +481,8 @@ pub struct CrossChainReceiveInfo {
     /// Spark token identifier when the destination is a token. Absent when
     /// the destination is BTC and the receiver will see sats.
     pub token_identifier: Option<String>,
-    /// Provider-quoted total fee for this receive, in `service_fee_asset`
-    /// units.
+    /// Provider-quoted total fee for this receive, including the partner fee
+    /// when one is set, in `service_fee_asset` units.
     pub service_fee_amount: u128,
     /// Ticker for `service_fee_amount`. Absent when the fee is denominated
     /// in sats.
@@ -516,7 +511,8 @@ pub(crate) struct CrossChainSendPrepared {
     /// lives separately in `source_transfer_fee_sats`. The dispatcher
     /// overrides this on the conversion path to reflect the token-side debit.
     pub fee_amount: u128,
-    /// Provider's own service fee/spread, in its native denomination.
+    /// Provider service fee, including the partner fee when one is set, in
+    /// `service_fee_asset` base units.
     pub service_fee_amount: u128,
     /// Asset that the service fee is denominated in. Unset means BTC sats.
     pub service_fee_asset: Option<String>,
@@ -1417,7 +1413,7 @@ mod tests {
 
         async fn storage_with_open_receive(invoice: &str) -> Arc<dyn crate::Storage> {
             let storage = sqlite_storage();
-            let data = orchestra_storage_adapter::OrchestraSwapData {
+            let data = orchestra::storage_adapter::OrchestraSwapData {
                 quote_id: "q_match".to_string(),
                 order_id: None,
                 read_token: None,
@@ -1440,7 +1436,7 @@ mod tests {
                 fee_asset_decimals: Some(6),
                 expires_at: 1_700_000_120,
             };
-            orchestra_storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
+            orchestra::storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
                 .upsert(&data)
                 .await
                 .unwrap();
