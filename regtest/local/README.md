@@ -103,5 +103,6 @@ regtest network alone. It also pins `DATA_SYNC_VERSION`, the commit of
 | [nix/](nix) | The same environment, built and run by Nix |
 
 The operator, the SSP and the Lightning nodes are built from the dockerfiles in
-`crates/spark-itest/docker/`, which the integration tests build their own images
-from, at the commits pinned there.
+`crates/spark-itest/docker/`, at the commits pinned there. The integration tests
+build their images from the same directory, except for the operator's, which
+come from the `-private` dockerfiles.

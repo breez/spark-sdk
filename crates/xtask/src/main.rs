@@ -1192,8 +1192,8 @@ fn prepare_itest_images(images: &[&str]) -> Result<Shell> {
 
         // sspd builds from the working tree, with the repository root as context.
         let (dockerfile, context) = match image.as_str() {
-            "spark-so" => ("spark-so.dockerfile", docker_dir_str.as_str()),
-            "spark-migrations" => ("migrations.dockerfile", docker_dir_str.as_str()),
+            "spark-so" => ("spark-so-private.dockerfile", docker_dir_str.as_str()),
+            "spark-migrations" => ("migrations-private.dockerfile", docker_dir_str.as_str()),
             "ldk-server" => ("ldk-server.dockerfile", docker_dir_str.as_str()),
             "sspd" => ("sspd.dockerfile", "."),
             other => bail!("no build for itest image {other}"),
@@ -1203,7 +1203,17 @@ fn prepare_itest_images(images: &[&str]) -> Result<Shell> {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid dockerfile path"))?
             .to_string();
-        cmd!(sh, "docker build -t {reference} -f {dockerfile} {context}").run()?;
+        let built = cmd!(sh, "docker build -t {reference} -f {dockerfile} {context}").run();
+        if matches!(image.as_str(), "spark-so" | "spark-migrations") {
+            built.context(
+                "the operator images start from ghcr.io/breez/spark-operator, which is private. \
+                 Build it locally with `breez/publish-image.sh --local` from \
+                 github.com/breez/spark-breez at the commit spark-so-private.dockerfile pins, \
+                 or `docker login ghcr.io` to pull it",
+            )?;
+        } else {
+            built?;
+        }
     }
 
     Ok(sh)

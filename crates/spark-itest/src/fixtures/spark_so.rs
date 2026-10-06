@@ -33,6 +33,8 @@ const POSTGRES_PORT: u16 = 5432;
 
 // Default ports for operators - starting from 8535
 const OPERATOR_PORT: u16 = 8535;
+/// Where the operators serve each other, as spark-so-private.dockerfile sets.
+const OPERATOR_INTERNAL_PORT: u16 = 8537;
 pub const NUM_OPERATORS: usize = 3; // Using 3 operators by default
 pub const MIN_SIGNERS: usize = 2; // Threshold for signing
 
@@ -337,6 +339,8 @@ impl SparkSoFixture {
             let operator_entry = json!({
                 "id": operator.index,
                 "address": format!("{}:{}", operator.host_name, operator.internal_port),
+                "internal_address": format!("{}:{OPERATOR_INTERNAL_PORT}", operator.host_name),
+                "internal_address_dkg": format!("{}:{OPERATOR_INTERNAL_PORT}", operator.host_name),
                 "external_address": format!("localhost:{}", operator.host_port),
                 "identity_public_key": operator.public_key.to_string(),
                 "cert_path": "/data/server.crt"   // Path to the mounted certificate inside container
