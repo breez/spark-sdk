@@ -79,6 +79,27 @@ async fn sign_package(
                     .await?,
             }
         }
+        UnsignedTransferPackage::TokenPull {
+            prepare_token_transaction,
+            payer_public_key,
+            token_identifier,
+            receivers,
+            amount,
+            expiry_time,
+            ..
+        } => {
+            info!("Approve pulling {amount} of token {token_identifier} from {payer_public_key}");
+            for receiver in receivers {
+                let key = receiver.receiver_public_key.as_deref().unwrap_or_default();
+                info!("  {} to {key}", receiver.amount);
+            }
+            info!("Expires at {expiry_time}");
+            TransferSignature::Token {
+                signed: signer
+                    .prepare_token_transaction(prepare_token_transaction.clone())
+                    .await?,
+            }
+        }
     };
 
     let signed_package = SignedTransferPackage {
@@ -202,4 +223,21 @@ async fn lnurl_pay_with_client_signing(
         }
     }
     // ANCHOR_END: client-signing-lnurl-pay
+}
+
+async fn pull_with_client_signing(
+    sdk: &BreezSdk,
+    signer: &Arc<dyn ExternalSparkSigner>,
+    prepare_response: PreparePullPaymentResponse,
+) -> Result<PullPaymentResponse> {
+    // ANCHOR: client-signing-pull
+    let unsigned = sdk
+        .build_unsigned_pull_package(BuildUnsignedPullPackageRequest { prepare_response })
+        .await?;
+    let signed_package = sign_package(signer, unsigned).await?;
+    let response = sdk
+        .publish_signed_pull_package(PublishSignedPullPackageRequest { signed_package })
+        .await?;
+    // ANCHOR_END: client-signing-pull
+    Ok(response)
 }

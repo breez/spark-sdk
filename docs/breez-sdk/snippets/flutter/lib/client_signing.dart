@@ -53,6 +53,16 @@ Future<SignedTransferPackage> signPackage(
     signature = TransferSignature.token(
         signed: await signer
             .prepareTokenTransaction(unsigned.prepareTokenTransaction));
+  } else if (unsigned is UnsignedTransferPackage_TokenPull) {
+    print("Approve pulling ${unsigned.amount} of token"
+        " ${unsigned.tokenIdentifier} from ${unsigned.payerPublicKey}");
+    for (final receiver in unsigned.receivers) {
+      print("  ${receiver.amount} to ${receiver.receiverPublicKey}");
+    }
+    print("Expires at ${unsigned.expiryTime}");
+    signature = TransferSignature.token(
+        signed: await signer
+            .prepareTokenTransaction(unsigned.prepareTokenTransaction));
   } else {
     throw Exception("Unknown transfer package variant");
   }
@@ -147,4 +157,17 @@ Future<LnurlPayResponse> lnurlPayWithClientSigning(BreezSdk sdk,
     }
   }
   // ANCHOR_END: client-signing-lnurl-pay
+}
+
+Future<PullPaymentResponse> pullWithClientSigning(BreezSdk sdk,
+    PackageSigner signer, PreparePullPaymentResponse prepareResponse) async {
+  // ANCHOR: client-signing-pull
+  final unsigned = await sdk.buildUnsignedPullPackage(
+      request:
+          BuildUnsignedPullPackageRequest(prepareResponse: prepareResponse));
+  final signedPackage = await signPackage(signer, unsigned);
+  final response = await sdk.publishSignedPullPackage(
+      request: PublishSignedPullPackageRequest(signedPackage: signedPackage));
+  // ANCHOR_END: client-signing-pull
+  return response;
 }

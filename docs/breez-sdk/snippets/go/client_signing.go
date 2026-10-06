@@ -90,6 +90,22 @@ func SignPackage(
 			return breez_sdk_spark.SignedTransferPackage{}, err
 		}
 		signature = breez_sdk_spark.TransferSignatureToken{Signed: signed}
+	case breez_sdk_spark.UnsignedTransferPackageTokenPull:
+		log.Printf(
+			"Approve pulling %v of token %v from %v",
+			pkg.Amount,
+			pkg.TokenIdentifier,
+			pkg.PayerPublicKey,
+		)
+		for _, receiver := range pkg.Receivers {
+			log.Printf("  %v to %v", receiver.Amount, *receiver.ReceiverPublicKey)
+		}
+		log.Printf("Expires at %v", pkg.ExpiryTime)
+		signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)
+		if err != nil {
+			return breez_sdk_spark.SignedTransferPackage{}, err
+		}
+		signature = breez_sdk_spark.TransferSignatureToken{Signed: signed}
 	}
 
 	signedPackage := breez_sdk_spark.SignedTransferPackage{
@@ -243,4 +259,36 @@ func LnurlPayWithClientSigning(
 		}
 	}
 	// ANCHOR_END: client-signing-lnurl-pay
+}
+
+func PullWithClientSigning(
+	sdk *breez_sdk_spark.BreezSdk,
+	signer breez_sdk_spark.ExternalSparkSigner,
+	prepareResponse breez_sdk_spark.PreparePullPaymentResponse,
+) (*breez_sdk_spark.PullPaymentResponse, error) {
+	// ANCHOR: client-signing-pull
+	unsigned, err := sdk.BuildUnsignedPullPackage(
+		breez_sdk_spark.BuildUnsignedPullPackageRequest{
+			PrepareResponse: prepareResponse,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	signedPackage, err := SignPackage(signer, unsigned)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := sdk.PublishSignedPullPackage(
+		breez_sdk_spark.PublishSignedPullPackageRequest{
+			SignedPackage: signedPackage,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: client-signing-pull
+	return &response, nil
 }

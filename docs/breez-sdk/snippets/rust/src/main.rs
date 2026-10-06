@@ -22,6 +22,7 @@ mod receive_payment;
 mod refunding_payments;
 mod sdk_building;
 mod send_payment;
+mod token_allowances;
 mod tokens;
 mod turnkey;
 mod unilateral_exit;

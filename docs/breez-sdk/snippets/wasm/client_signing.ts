@@ -4,7 +4,9 @@ import {
   type LnurlPayResponse,
   type Payment,
   type PrepareLnurlPayResponse,
+  type PreparePullPaymentResponse,
   type PrepareSendPaymentResponse,
+  type PullPaymentResponse,
   type SignedTransferPackage,
   type TransferSignature,
   type UnsignedTransferPackage
@@ -59,6 +61,26 @@ const signPackage = async (
           console.log(`Approve sending ${total.amount} of token ${total.tokenIdentifier}`)
         }
       }
+      signature = {
+        type: 'token',
+        signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
+      }
+      break
+    }
+    case 'tokenPull': {
+      const {
+        prepareTokenTransaction,
+        payerPublicKey,
+        tokenIdentifier,
+        receivers,
+        amount,
+        expiryTime
+      } = unsigned
+      console.log(`Approve pulling ${amount} of token ${tokenIdentifier} from ${payerPublicKey}`)
+      for (const receiver of receivers) {
+        console.log(`  ${receiver.amount} to ${receiver.receiverPublicKey ?? ''}`)
+      }
+      console.log(`Expires at ${expiryTime}`)
       signature = {
         type: 'token',
         signed: await signer.prepareTokenTransaction(prepareTokenTransaction)
@@ -163,4 +185,17 @@ const lnurlPayWithClientSigning = async (
     return publishResponse.response
   }
   // ANCHOR_END: client-signing-lnurl-pay
+}
+
+const pullWithClientSigning = async (
+  sdk: BreezSdk,
+  signer: ExternalSparkSigner,
+  prepareResponse: PreparePullPaymentResponse
+): Promise<PullPaymentResponse> => {
+  // ANCHOR: client-signing-pull
+  const unsigned = await sdk.buildUnsignedPullPackage({ prepareResponse })
+  const signedPackage = await signPackage(signer, unsigned)
+  const response = await sdk.publishSignedPullPackage({ signedPackage })
+  // ANCHOR_END: client-signing-pull
+  return response
 }

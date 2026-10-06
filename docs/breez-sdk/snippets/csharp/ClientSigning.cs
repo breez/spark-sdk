@@ -68,6 +68,19 @@ namespace BreezSdkSnippets
                             tokenBatch.prepareTokenTransaction)
                     );
                     break;
+                case UnsignedTransferPackage.TokenPull tokenPull:
+                    Console.WriteLine($"Approve pulling {tokenPull.amount} of token " +
+                        $"{tokenPull.tokenIdentifier} from {tokenPull.payerPublicKey}");
+                    foreach (var receiver in tokenPull.receivers)
+                    {
+                        Console.WriteLine($"  {receiver.amount} to {receiver.receiverPublicKey}");
+                    }
+                    Console.WriteLine($"Expires at {tokenPull.expiryTime}");
+                    signature = new TransferSignature.Token(
+                        signed: await signer.PrepareTokenTransaction(
+                            tokenPull.prepareTokenTransaction)
+                    );
+                    break;
                 default:
                     throw new Exception("Unknown transfer package");
             }
@@ -183,6 +196,23 @@ namespace BreezSdkSnippets
                 }
             }
             // ANCHOR_END: client-signing-lnurl-pay
+        }
+
+        async Task<PullPaymentResponse> PullWithClientSigning(
+            BreezSdk sdk,
+            ExternalSparkSigner signer,
+            PreparePullPaymentResponse prepareResponse)
+        {
+            // ANCHOR: client-signing-pull
+            var unsigned = await sdk.BuildUnsignedPullPackage(
+                request: new BuildUnsignedPullPackageRequest(prepareResponse: prepareResponse)
+            );
+            var signedPackage = await SignPackage(signer, unsigned);
+            var response = await sdk.PublishSignedPullPackage(
+                request: new PublishSignedPullPackageRequest(signedPackage: signedPackage)
+            );
+            // ANCHOR_END: client-signing-pull
+            return response;
         }
     }
 }
