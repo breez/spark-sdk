@@ -17,7 +17,9 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import androidx.credentials.exceptions.domerrors.InvalidStateError
+import androidx.credentials.exceptions.domerrors.NotAllowedError
 import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
+import androidx.credentials.exceptions.publickeycredential.GetPublicKeyCredentialDomException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -830,6 +832,21 @@ public class CredentialManagerPrfCore(
                 )
             }
 
+        // Credential Manager raises a NotAllowedError when the user backs
+        // out of a step inside the provider's own flow: a cancellation, not
+        // a failure. Must precede the generic GetCredentialException case
+        // (this is a subclass).
+        is GetPublicKeyCredentialDomException ->
+            if (domError is NotAllowedError) {
+                CredentialManagerPrfCoreException(classifyCancellation(elapsedMs), cause = this)
+            } else {
+                CredentialManagerPrfCoreException(
+                    Kind.AuthenticationFailed,
+                    "${type}: ${message ?: toString()}",
+                    this,
+                )
+            }
+
         is GetCredentialException ->
             CredentialManagerPrfCoreException(
                 Kind.AuthenticationFailed,
@@ -863,9 +880,9 @@ public class CredentialManagerPrfCore(
 
     /**
      * Tell a user-dismissed prompt from the biometric inactivity timeout:
-     * AndroidX surfaces both as the same `*CancellationException`, so the
-     * ceremony's elapsed time is the only signal. The prompt is torn down
-     * at ~55s+, so anything beyond that is [Kind.UserTimedOut].
+     * AndroidX surfaces both as the same exception, so the ceremony's
+     * elapsed time is the only signal. The prompt is torn down at ~55s+,
+     * so anything beyond that is [Kind.UserTimedOut].
      */
     private fun classifyCancellation(elapsedMs: Long?): Kind {
         if (elapsedMs != null && elapsedMs >= 55_000L) {
