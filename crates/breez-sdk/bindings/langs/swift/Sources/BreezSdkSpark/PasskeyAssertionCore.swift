@@ -536,8 +536,8 @@ public final class PasskeyAssertionCore {
             DispatchQueue.main.async {
                 // Capture start time inside the closure so the wait for
                 // the main-thread dispatch doesn't count as ceremony time
-                // (a busy main thread can push a sub-300ms fast-fail past
-                // the no-credential threshold and misclassify it).
+                // (a busy main thread can push a fast-fail past
+                // `noCredFastFailMs` and misclassify it).
                 delegate.ceremonyStartedAt = Date()
                 Self.performAssertionRequest(
                     controller,
@@ -827,7 +827,7 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
 /// matching credential (fast-fail before any UI), user-dismissed prompt,
 /// and the biometric inactivity timeout. Elapsed wall-clock time
 /// separates them:
-///   - `< 300ms`               -> `.credentialNotFound`
+///   - `< noCredFastFailMs`    -> `.credentialNotFound`
 ///   - `>= biometricTimeoutMs` -> `.userTimedOut`
 ///   - in between              -> `.userCancelled`
 @available(iOS 18.0, macOS 15.0, *)
@@ -864,6 +864,9 @@ public func mapPasskeyError(
     return .generic(error.localizedDescription)
 }
 
+/// The OS rejects a no-credential request this fast, before showing any UI.
+private let noCredFastFailMs: Double = 300
+
 /// The OS tears the biometric sheet down after about this much inactivity.
 private let biometricTimeoutMs: Double = 55_000
 
@@ -874,7 +877,7 @@ private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
         // No timing context: default to userCancelled.
         return .userCancelled
     }
-    if elapsed < 300 {
+    if elapsed < noCredFastFailMs {
         return .credentialNotFound("Credential not found")
     }
     if elapsed >= biometricTimeoutMs {
