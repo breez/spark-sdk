@@ -79,6 +79,9 @@ public data class PasskeyCredential(
 
 private const val CORE_TAG = "PasskeyPrfCore"
 
+/** The OS tears the biometric prompt down after about this much inactivity. */
+private const val BIOMETRIC_TIMEOUT_MS = 55_000L
+
 // =====================================================================
 // Post-create grace
 // =====================================================================
@@ -794,10 +797,10 @@ public class CredentialManagerPrfCore(
 
     /**
      * Map a Credential Manager exception into the typed core exception.
-     * `elapsedMs` is the ceremony's wall-clock duration: a cancellation
-     * beyond ~55s reclassifies to [Kind.UserTimedOut] (biometric
-     * inactivity timeout) instead of [Kind.UserCancelled]. Pass `null`
-     * when timing is unknown to default to `UserCancelled`.
+     * `elapsedMs` is the ceremony's wall-clock duration: at or past
+     * [BIOMETRIC_TIMEOUT_MS], a cancellation becomes [Kind.UserTimedOut]
+     * instead of [Kind.UserCancelled]. Pass `null` when timing is unknown
+     * to default to `UserCancelled`.
      */
     private fun Exception.toCoreException(
         elapsedMs: Long? = null,
@@ -881,11 +884,10 @@ public class CredentialManagerPrfCore(
     /**
      * Tell a user-dismissed prompt from the biometric inactivity timeout:
      * AndroidX surfaces both as the same exception, so the ceremony's
-     * elapsed time is the only signal. The prompt is torn down at ~55s+,
-     * so anything beyond that is [Kind.UserTimedOut].
+     * elapsed time is the only signal.
      */
     private fun classifyCancellation(elapsedMs: Long?): Kind {
-        if (elapsedMs != null && elapsedMs >= 55_000L) {
+        if (elapsedMs != null && elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
             return Kind.UserTimedOut
         }
         return Kind.UserCancelled
