@@ -1420,12 +1420,15 @@ pub struct Utxo {
     pub network: Network,
     pub txid: Txid,
     pub is_mature: bool,
+    /// On-chain output value, not the amount credited on claim.
+    pub amount_sats: u64,
 }
 
 impl Utxo {
     pub fn from_proto(
         utxo: operator_rpc::spark::Utxo,
         is_mature: bool,
+        amount_sats: u64,
     ) -> Result<Self, ServiceError> {
         let network = Network::from_proto_network(utxo.network)
             .map_err(|_| ServiceError::InvalidNetwork(utxo.network))?;
@@ -1440,6 +1443,7 @@ impl Utxo {
             txid: Txid::from_str(&hex::encode(utxo.txid))
                 .map_err(|_| ServiceError::InvalidTransaction)?,
             is_mature,
+            amount_sats,
         })
     }
 }

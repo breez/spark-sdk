@@ -431,7 +431,7 @@ impl LocalStack {
         server_mode: bool,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
-        self.build_wallet(identity, server_mode, false, configure)
+        self.build_wallet(identity, server_mode, false, |chain| chain, configure)
             .await
     }
 
@@ -442,7 +442,20 @@ impl LocalStack {
         identity: LocalIdentity,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
-        self.build_wallet(identity, false, true, configure).await
+        self.build_wallet(identity, false, true, |chain| chain, configure)
+            .await
+    }
+
+    /// [`Self::create_wallet`] with its chain service passed through `wrap`, for a
+    /// test that controls what the chain service answers.
+    pub async fn create_wallet_with_chain_service(
+        &self,
+        identity: LocalIdentity,
+        wrap: impl FnOnce(Arc<dyn BitcoinChainService>) -> Arc<dyn BitcoinChainService> + Send,
+        configure: impl FnOnce(&mut Config) + Send,
+    ) -> Result<SdkInstance> {
+        self.build_wallet(identity, false, false, wrap, configure)
+            .await
     }
 
     async fn build_wallet(
@@ -450,6 +463,7 @@ impl LocalStack {
         identity: LocalIdentity,
         server_mode: bool,
         sees_mempool: bool,
+        wrap_chain: impl FnOnce(Arc<dyn BitcoinChainService>) -> Arc<dyn BitcoinChainService> + Send,
         configure: impl FnOnce(&mut Config) + Send,
     ) -> Result<SdkInstance> {
         let stack = self;
@@ -469,11 +483,11 @@ impl LocalStack {
 
         let storage_dir = tempfile::tempdir()?;
         let storage_path = storage_dir.path().to_string_lossy().into_owned();
-        let chain_service: Arc<dyn BitcoinChainService> = Arc::new(if sees_mempool {
+        let chain_service: Arc<dyn BitcoinChainService> = wrap_chain(Arc::new(if sees_mempool {
             LocalBitcoindChainService::seeing_mempool(&stack.fixtures.bitcoind)
         } else {
             LocalBitcoindChainService::new(&stack.fixtures.bitcoind)
-        });
+        }));
 
         let sdk = match identity {
             LocalIdentity::Seed(seed) => {

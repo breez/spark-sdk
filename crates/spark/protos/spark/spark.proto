@@ -317,6 +317,8 @@ message AddressedUtxo {
     string address = 1;
     UTXO utxo = 2;
     bool is_confirmed = 3;
+    // On-chain output value in satoshis; not the amount credited on claim.
+    uint64 amount_sats = 4;
 }
 
 /**

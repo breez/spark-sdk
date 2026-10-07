@@ -362,7 +362,11 @@ impl DepositService {
             .into_iter()
             .map(|au| {
                 au.utxo.ok_or(ServiceError::MissingUtxo).and_then(|u| {
-                    Utxo::from_proto(u, au.is_confirmed /* proto field maps to is_mature */)
+                    Utxo::from_proto(
+                        u,
+                        au.is_confirmed, /* proto field maps to is_mature */
+                        au.amount_sats,
+                    )
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
