@@ -88,7 +88,8 @@ export type DomainAssociation =
  * programmatic handling: `userCancelled`, `userTimedOut`, `prfNotSupported`,
  * `noCredential`, `configuration`, `credentialAlreadyExists`, `unknown`.
  * `userTimedOut` is the OS biometric inactivity timeout (distinct from the
- * user dismissing the prompt), so hosts may safely auto-retry it.
+ * user dismissing the prompt), so hosts can show timeout-specific copy.
+ * Do not auto-retry it.
  */
 export class PasskeyPrfException extends Error {
   readonly code: string;

@@ -901,8 +901,8 @@ public class CredentialManagerPrfCore(
         UserCancelled,
         /**
          * The biometric prompt timed out without user interaction (~55s+).
-         * Distinct from [UserCancelled] (active dismissal): hosts may
-         * auto-retry or re-prompt rather than treating it as abandonment.
+         * Distinct from [UserCancelled] (active dismissal), so hosts can
+         * show timeout-specific copy. Do not auto-retry.
          */
         UserTimedOut,
         /** No credential exists for the RP and auto-registration was not attempted. */

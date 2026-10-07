@@ -46,7 +46,7 @@ class PasskeyPrfException implements Exception {
   /// `prfNotSupported`, `noCredential`, `configuration`,
   /// `credentialAlreadyExists`, `unknown`. `userTimedOut` is the OS biometric
   /// inactivity timeout (distinct from the user dismissing the prompt), so
-  /// hosts may safely auto-retry it.
+  /// hosts can show timeout-specific copy. Do not auto-retry it.
   final String code;
   final String message;
 

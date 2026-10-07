@@ -21,7 +21,7 @@ pub enum ErrorKind {
     /// An existing credential matched. Route the user to sign-in.
     AlreadyExists,
     /// The prompt closed on the platform inactivity timeout with no user
-    /// action. Unlike `Cancel`, safe to auto-retry or re-prompt.
+    /// action. Show a retry with timeout-specific copy. Do not auto-retry.
     Timeout,
     /// The ceremony failed for a security or state reason. Offer a retry;
     /// if it persists, the credential or RP setup may be at fault.
@@ -43,7 +43,7 @@ pub enum PrfProviderError {
     UserCancelled,
 
     /// The prompt closed on the platform inactivity timeout, with no
-    /// user action. Unlike `UserCancelled`, safe to auto-retry.
+    /// user action. Show a retry with timeout-specific copy. Do not auto-retry.
     #[error("Authenticator timed out")]
     UserTimedOut,
 

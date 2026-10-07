@@ -37,8 +37,8 @@ export declare class PasskeyAlreadyExistsError extends Error {
 
 /**
  * Thrown when the OS biometric prompt times out (around 55s) before
- * any user interaction. Distinct from a cancel: hosts may auto-retry
- * since the user did not deliberately abandon the flow.
+ * any user interaction. Distinct from a cancel, so hosts can show
+ * timeout-specific copy. Do not auto-retry.
  */
 export declare class PasskeyTimedOutError extends Error {
     constructor(message?: string);
@@ -54,8 +54,7 @@ export declare class PasskeyCredentialNotFoundError extends Error {
 
 /**
  * Thrown when the user actively dismisses the OS passkey prompt.
- * Distinct from `PasskeyTimedOutError`: hosts should not auto-retry a
- * deliberate cancel.
+ * Do not auto-retry a deliberate cancel.
  */
 export declare class PasskeyUserCancelledError extends Error {
     constructor(message?: string);
