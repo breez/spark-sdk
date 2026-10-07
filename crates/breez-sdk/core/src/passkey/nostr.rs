@@ -31,6 +31,9 @@ const KIND_AUTHENTICATION: u16 = 22242;
 
 const WAIT_FOR_OK_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_FOR_AUTH_TIMEOUT: Duration = Duration::from_secs(7);
+/// Largest relay message accepted. The events the label store reads are a few
+/// KB, so anything near this is a misbehaving relay.
+const MAX_MESSAGE_SIZE: usize = 512 * 1024;
 
 static SECP: LazyLock<Secp256k1<All>> = LazyLock::new(Secp256k1::new);
 
@@ -305,6 +308,12 @@ impl Relay {
                 // Natively, tungstenite answers pings itself.
                 Some(Ok(_)) => continue,
             };
+            // Natively tungstenite enforces this while reading; the browser does not.
+            if text.len() > MAX_MESSAGE_SIZE {
+                return Err(format!(
+                    "relay message larger than {MAX_MESSAGE_SIZE} bytes"
+                ));
+            }
             let Ok(message) = serde_json::from_str::<Value>(text.as_str()) else {
                 continue;
             };
@@ -380,9 +389,7 @@ async fn open_websocket(
         .port_or_known_default()
         .ok_or("relay url has no port")?;
     let tcp = match proxy {
-        None => tokio::net::TcpStream::connect((host.as_str(), port))
-            .await
-            .map_err(|e| e.to_string())?,
+        None => connect_tcp(&host, port).await?,
         Some(proxy) => {
             let address = proxy.address();
             let target = (host, port);
@@ -402,10 +409,32 @@ async fn open_websocket(
             .into_inner()
         }
     };
-    let (socket, _response) = tokio_tungstenite::client_async_tls_with_config(url, tcp, None, None)
-        .await
-        .map_err(|e| e.to_string())?;
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_SIZE))
+        .max_frame_size(Some(MAX_MESSAGE_SIZE));
+    let (socket, _response) =
+        tokio_tungstenite::client_async_tls_with_config(url, tcp, Some(config), None)
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(socket)
+}
+
+/// Connects to whichever of `host`'s addresses answers first. Trying them in
+/// turn would let an unreachable IPv6 route stall the relay until it times out.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, String> {
+    let attempts: Vec<_> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|address| Box::pin(tokio::net::TcpStream::connect(address)))
+        .collect();
+    if attempts.is_empty() {
+        return Err(format!("{host} resolved to no address"));
+    }
+    futures::future::select_ok(attempts)
+        .await
+        .map(|(tcp, _pending)| tcp)
+        .map_err(|e| e.to_string())
 }
 
 /// Opens `url` on the browser's `WebSocket`, which cannot be proxied.
@@ -739,6 +768,46 @@ mod tests {
         let event = Event::sign(&keys, KIND_TEXT_NOTE, vec![], "another label");
         publish(&mut relays, &event).await.unwrap();
         close(relays).await;
+    }
+
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    #[tokio::test]
+    async fn test_rejects_oversized_messages() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            // Without the cap the oversized notice is skipped and EOSE ends
+            // the fetch successfully.
+            while let Some(Ok(WsMessage::Text(text))) = ws.next().await {
+                let message: Value = serde_json::from_str(text.as_str()).unwrap();
+                if message[0] == "REQ" {
+                    let notice = json!(["NOTICE", "x".repeat(MAX_MESSAGE_SIZE)]);
+                    let _ = ws.send(WsMessage::text(notice.to_string())).await;
+                    let eose = json!(["EOSE", message[1]]);
+                    let _ = ws.send(WsMessage::text(eose.to_string())).await;
+                }
+            }
+        });
+        let keys = fixed_keys();
+        let options = RelayOptions {
+            auth_keys: keys,
+            proxy: None,
+        };
+        let filter = Filter::new(keys.x_only_public_key().0, KIND_TEXT_NOTE, None);
+
+        let result = fetch(&[url], &options, &filter, Duration::from_secs(5)).await;
+        assert!(result.is_err());
+    }
+
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    #[tokio::test]
+    async fn test_connect_tcp_reaches_an_ipv4_only_listener() {
+        // `localhost` usually resolves to `::1` as well, which refuses here.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        connect_tcp("localhost", port).await.unwrap();
     }
 
     #[macros::test_all]
