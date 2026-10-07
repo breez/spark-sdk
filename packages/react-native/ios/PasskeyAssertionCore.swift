@@ -825,11 +825,11 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
 /// The OS collapses three distinct `.canceled` cases into one code (the
 /// suppressed QR sheet leaves no in-process signal to disambiguate): no
 /// matching credential (fast-fail before any UI), user-dismissed prompt,
-/// and the biometric inactivity timeout (sheet torn down at ~55s).
-/// Elapsed wall-clock time separates them:
-///   - `< 300ms`     -> `.credentialNotFound`
-///   - `>= 55_000ms` -> `.userTimedOut`
-///   - in between    -> `.userCancelled`
+/// and the biometric inactivity timeout. Elapsed wall-clock time
+/// separates them:
+///   - `< 300ms`               -> `.credentialNotFound`
+///   - `>= biometricTimeoutMs` -> `.userTimedOut`
+///   - in between              -> `.userCancelled`
 @available(iOS 18.0, macOS 15.0, *)
 public func mapPasskeyError(
     _ error: Error,
@@ -864,6 +864,9 @@ public func mapPasskeyError(
     return .generic(error.localizedDescription)
 }
 
+/// The OS tears the biometric sheet down after about this much inactivity.
+private let biometricTimeoutMs: Double = 55_000
+
 /// Apply the `.canceled` timing thresholds (see `mapPasskeyError`).
 @available(iOS 18.0, macOS 15.0, *)
 private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
@@ -874,7 +877,7 @@ private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
     if elapsed < 300 {
         return .credentialNotFound("Credential not found")
     }
-    if elapsed >= 55_000 {
+    if elapsed >= biometricTimeoutMs {
         return .userTimedOut
     }
     return .userCancelled
