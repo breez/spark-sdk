@@ -8,12 +8,14 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use lightning::routing::gossip::RoutingFees;
 use lightning::routing::router::{DEFAULT_MAX_TOTAL_CLTV_EXPIRY_DELTA, RouteHint, RouteHintHop};
 use lightning_invoice::{Bolt11Invoice, PrivateRoute, RawTaggedField, TaggedField};
+use spark::address::{SparkAddress, SparkAddressPaymentType};
 use spark::events::{SparkEvent, subscribe_server_events};
 use spark::operator::OperatorPool;
 use spark::operator::rpc::spark::PreimageRequestRole;
 use spark::services::{
-    HtlcService, LeafKeyTweak, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
-    QueryHtlcFilter, Transfer, TransferId, TransferStatus, TransferType,
+    HtlcService, LeafKeyTweak, LightningReceiveFallback, Preimage, PreimageRequestStatus,
+    PreimageRequestWithTransfer, QueryHtlcFilter, Transfer, TransferId, TransferStatus,
+    TransferType,
 };
 use spark::signer::LeafSigningKey;
 use spark::signer::Signer;
@@ -21,6 +23,7 @@ use spark::tree::{
     LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId,
     TreeNodeStatus, TreeService, TreeStore,
 };
+use spark::utils::bolt11_fallback::spark_invoice_fallback_field;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -122,6 +125,7 @@ pub struct LightningReceiveService {
     store: Arc<dyn LightningStore>,
     invoice_signing_key: Option<SecretKey>,
     cltv_delta: u16,
+    network: spark::Network,
 }
 
 impl LightningReceiveService {
@@ -130,12 +134,14 @@ impl LightningReceiveService {
         store: Arc<dyn LightningStore>,
         invoice_signing_key: Option<SecretKey>,
         cltv_delta: u16,
+        network: spark::Network,
     ) -> Self {
         Self {
             node,
             store,
             invoice_signing_key,
             cltv_delta,
+            network,
         }
     }
 
@@ -148,7 +154,7 @@ impl LightningReceiveService {
         receiver: &PublicKey,
         description: &InvoiceDescription,
         invoice_expiry_secs: u32,
-        include_spark_address: bool,
+        fallback: &LightningReceiveFallback,
     ) -> Result<LightningReceiveRecord, LightningReceiveError> {
         let payment_hash_hash = sha256::Hash::from_byte_array(payment_hash);
 
@@ -171,10 +177,22 @@ impl LightningReceiveService {
         let expires_at = now
             .checked_add_signed(chrono::Duration::seconds(i64::from(invoice_expiry_secs)))
             .ok_or_else(|| LightningReceiveError::InvalidInput("expiry overflows".to_string()))?;
-        if include_spark_address && self.invoice_signing_key.is_none() {
+        // Built before the node mints anything, so a request that cannot be met
+        // leaves no hold invoice behind.
+        let fallback_field = match fallback {
+            LightningReceiveFallback::None => None,
+            LightningReceiveFallback::Address => Some(spark_address_hint_field(receiver)?),
+            LightningReceiveFallback::Invoice(spark_invoice) => Some(spark_invoice_field(
+                spark_invoice,
+                receiver,
+                amount_sats,
+                self.network,
+            )?),
+        };
+        if fallback_field.is_some() && self.invoice_signing_key.is_none() {
             return Err(LightningReceiveError::InvalidInput(
                 "this SSP has no invoice signing key configured, so it cannot advertise a spark \
-                 address on an invoice"
+                 destination on an invoice"
                     .to_string(),
             ));
         }
@@ -197,10 +215,10 @@ impl LightningReceiveService {
             )
             .await?;
 
-        // The node's hold invoice API takes no route hints, so the hint is added by
-        // signing the invoice again as the node.
-        let encoded_invoice = match (&self.invoice_signing_key, include_spark_address) {
-            (Some(key), true) => add_spark_address_hint(&encoded_invoice, receiver, key)?,
+        // The node's hold invoice API takes no extra fields, so the Spark
+        // destination is added by signing the invoice again as the node.
+        let encoded_invoice = match (&self.invoice_signing_key, fallback_field) {
+            (Some(key), Some(field)) => add_field_and_resign(&encoded_invoice, field, key)?,
             _ => encoded_invoice,
         };
 
@@ -237,18 +255,10 @@ impl LightningReceiveService {
 /// is the receiver's Spark identity key.
 const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17_592_187_092_992_000_001;
 
-/// `signing_key` must be the node's key, since an invoice's payee is the key that
-/// signs it.
-pub fn add_spark_address_hint(
-    encoded: &str,
-    spark_pubkey: &PublicKey,
-    signing_key: &SecretKey,
-) -> Result<String, LightningReceiveError> {
-    let invoice = Bolt11Invoice::from_str(encoded)
-        .map_err(|e| LightningReceiveError::InvalidInput(format!("undecodable invoice: {e}")))?;
-    let (mut raw, _, _) = invoice.into_signed_raw().into_parts();
+/// The route hint advertising the receiver's Spark address.
+fn spark_address_hint_field(receiver: &PublicKey) -> Result<RawTaggedField, LightningReceiveError> {
     let hint = RouteHint(vec![RouteHintHop {
-        src_node_id: *spark_pubkey,
+        src_node_id: *receiver,
         short_channel_id: RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID,
         fees: RoutingFees {
             base_msat: 0,
@@ -261,11 +271,69 @@ pub fn add_spark_address_hint(
     let private_route = PrivateRoute::new(hint).map_err(|e| {
         LightningReceiveError::InvalidInput(format!("invalid spark route hint: {e:?}"))
     })?;
-    raw.data
-        .tagged_fields
-        .push(RawTaggedField::KnownSemantics(TaggedField::PrivateRoute(
-            private_route,
-        )));
+    Ok(RawTaggedField::KnownSemantics(TaggedField::PrivateRoute(
+        private_route,
+    )))
+}
+
+/// The fallback field carrying the Spark invoice a receiver asked to embed.
+///
+/// A payer settling over it pays whoever it names, with nothing on the invoice
+/// able to show otherwise, so it has to name the receiver the invoice is minted
+/// for, and ask for what the invoice asks.
+fn spark_invoice_field(
+    spark_invoice: &str,
+    receiver: &PublicKey,
+    amount_sats: u64,
+    network: spark::Network,
+) -> Result<RawTaggedField, LightningReceiveError> {
+    let invalid = |reason: String| LightningReceiveError::InvalidInput(reason);
+    let address: SparkAddress = spark_invoice
+        .parse()
+        .map_err(|e| invalid(format!("invalid spark_invoice: {e}")))?;
+    let Some(fields) = &address.spark_invoice_fields else {
+        return Err(invalid(
+            "spark_invoice is an address, not an invoice".to_string(),
+        ));
+    };
+    if address.network != network {
+        return Err(invalid(
+            "spark_invoice is for a different network".to_string(),
+        ));
+    }
+    if address.identity_public_key != *receiver {
+        return Err(invalid(
+            "spark_invoice does not name the receiver".to_string(),
+        ));
+    }
+    match &fields.payment_type {
+        // Unset means the invoice is paid for whatever the BOLT11 asks.
+        Some(SparkAddressPaymentType::SatsPayment(payment)) => match payment.amount {
+            Some(amount) if amount != amount_sats => {
+                return Err(invalid(format!(
+                    "spark_invoice asks for {amount} sats, the invoice for {amount_sats}"
+                )));
+            }
+            _ => {}
+        },
+        _ => {
+            return Err(invalid("spark_invoice is not a sats payment".to_string()));
+        }
+    }
+    spark_invoice_fallback_field(spark_invoice).map_err(|e| invalid(e.to_string()))
+}
+
+/// `encoded` with `field` added, signed again with `signing_key`. That must be
+/// the node's key, since an invoice's payee is the key that signs it.
+pub fn add_field_and_resign(
+    encoded: &str,
+    field: RawTaggedField,
+    signing_key: &SecretKey,
+) -> Result<String, LightningReceiveError> {
+    let invoice = Bolt11Invoice::from_str(encoded)
+        .map_err(|e| LightningReceiveError::InvalidInput(format!("undecodable invoice: {e}")))?;
+    let (mut raw, _, _) = invoice.into_signed_raw().into_parts();
+    raw.data.tagged_fields.push(field);
 
     let secp = Secp256k1::signing_only();
     let signed = raw
@@ -937,6 +1005,163 @@ mod tests {
         assert!(delta(7 * 24 * 60 * 60).is_err());
     }
 
+    /// A real Spark invoice, signed by the wallet that created it: an unsigned
+    /// one does not encode.
+    const SPARK_INVOICE: &str = "sparkrt1pgssyaql38ytyzp3hxjyxumfrhr53397rm0x39rzeu5hzv08kv358psvzgnssqgjzqqem593tse8w74taudh8wvanqjr5rqgnxcdm5qxzzqwm794qg3qxz8gqudypturv74l0lpde8m5dcrfdum54wfrxf2llkngs4uwpyshsl5j7cyrkn3n5a20r5qd8ta9jslgj5sz09nf70qn6v0zw6kq3c0kl76w6susrd9z8j";
+
+    /// The receiver `SPARK_INVOICE` names and the sats it asks for.
+    fn spark_invoice_terms() -> (PublicKey, u64) {
+        let address: SparkAddress = SPARK_INVOICE.parse().expect("spark invoice");
+        let Some(SparkAddressPaymentType::SatsPayment(payment)) = address
+            .spark_invoice_fields
+            .expect("invoice fields")
+            .payment_type
+        else {
+            panic!("expected a sats invoice");
+        };
+        (
+            address.identity_public_key,
+            payment.amount.expect("an amount"),
+        )
+    }
+
+    #[test]
+    fn embeds_a_spark_invoice_the_payer_reads_back() {
+        use lightning_invoice::{Currency, InvoiceBuilder};
+        let secp = Secp256k1::new();
+        let node_key = SecretKey::from_slice(&[9u8; 32]).expect("key");
+        let payment_hash = sha256::Hash::from_byte_array([7u8; 32]);
+        let (receiver, amount_sats) = spark_invoice_terms();
+        let minted = InvoiceBuilder::new(Currency::Regtest)
+            .description("test".to_string())
+            .payment_hash(payment_hash)
+            .payment_secret(lightning_invoice::PaymentSecret([0u8; 32]))
+            .duration_since_epoch(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("clock"),
+            )
+            .min_final_cltv_expiry_delta(144)
+            .amount_milli_satoshis(amount_sats * 1000)
+            .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &node_key))
+            .expect("invoice")
+            .to_string();
+        let spark_invoice = SPARK_INVOICE.to_string();
+
+        let field = spark_invoice_field(
+            &spark_invoice,
+            &receiver,
+            amount_sats,
+            spark::Network::Regtest,
+        )
+        .expect("field");
+        let embedded = add_field_and_resign(&minted, field, &node_key).expect("embedded");
+
+        let invoice = Bolt11Invoice::from_str(&embedded).expect("decodable");
+        let fallback =
+            spark::utils::bolt11_fallback::extract_spark_fallback(&invoice).expect("fallback");
+        assert_eq!(fallback.encoded, spark_invoice);
+        assert!(fallback.is_invoice());
+        // Still the node's invoice, for the same payment.
+        assert_eq!(
+            invoice.recover_payee_pub_key(),
+            PublicKey::from_secret_key(&secp, &node_key)
+        );
+        assert_eq!(*invoice.payment_hash(), payment_hash);
+        assert_eq!(invoice.amount_milli_satoshis(), Some(amount_sats * 1000));
+    }
+
+    /// Each refusal comes before the node mints anything, so none leaves a hold
+    /// invoice behind.
+    #[tokio::test]
+    async fn refuses_a_spark_invoice_it_cannot_embed() {
+        let store: Arc<dyn LightningStore> = Arc::new(InMemoryLightningStore::default());
+        let service = LightningReceiveService::new(
+            Arc::new(MockLightningNode),
+            Arc::clone(&store),
+            Some(SecretKey::from_slice(&[9u8; 32]).expect("key")),
+            hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            spark::Network::Regtest,
+        );
+        let (receiver, amount_sats) = spark_invoice_terms();
+        let bare_address = SparkAddress::new(receiver, spark::Network::Regtest, None)
+            .to_address_string()
+            .expect("address");
+        let other_receiver = pubkey(4);
+        let other_amount = amount_sats + 1;
+        for (spark_invoice, receiver, amount_sats, reason) in [
+            (
+                SPARK_INVOICE,
+                &other_receiver,
+                amount_sats,
+                "does not name the receiver",
+            ),
+            (
+                SPARK_INVOICE,
+                &receiver,
+                other_amount,
+                &*format!("asks for {amount_sats} sats, the invoice for {other_amount}"),
+            ),
+            (
+                bare_address.as_str(),
+                &receiver,
+                amount_sats,
+                "an address, not an invoice",
+            ),
+        ] {
+            let result = service
+                .request_lightning_receive(
+                    [7u8; 32],
+                    amount_sats,
+                    receiver,
+                    receiver,
+                    &InvoiceDescription::Memo("test".into()),
+                    3600,
+                    &LightningReceiveFallback::Invoice(spark_invoice.to_string()),
+                )
+                .await;
+            assert!(
+                matches!(&result, Err(LightningReceiveError::InvalidInput(message)) if message.contains(reason)),
+                "expected a refusal because the spark invoice {reason}"
+            );
+        }
+        // Checked on its own: the service's network is fixed at construction.
+        assert!(matches!(
+            spark_invoice_field(SPARK_INVOICE, &receiver, amount_sats, spark::Network::Mainnet),
+            Err(LightningReceiveError::InvalidInput(message)) if message.contains("different network")
+        ));
+        assert!(store.pending_receives().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn refuses_a_spark_invoice_without_a_signing_key() {
+        let store: Arc<dyn LightningStore> = Arc::new(InMemoryLightningStore::default());
+        let service = LightningReceiveService::new(
+            Arc::new(MockLightningNode),
+            Arc::clone(&store),
+            None,
+            hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            spark::Network::Regtest,
+        );
+        let (receiver, amount_sats) = spark_invoice_terms();
+        let result = service
+            .request_lightning_receive(
+                [7u8; 32],
+                amount_sats,
+                &receiver,
+                &receiver,
+                &InvoiceDescription::Memo("test".into()),
+                3600,
+                &LightningReceiveFallback::Invoice(SPARK_INVOICE.to_string()),
+            )
+            .await;
+        assert!(matches!(
+            &result,
+            Err(LightningReceiveError::InvalidInput(message)) if message.contains("no invoice signing key")
+        ));
+        assert!(store.pending_receives().await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn request_creates_invoice_and_is_idempotent() {
         let node: Arc<dyn LightningNode> = Arc::new(MockLightningNode);
@@ -946,6 +1171,7 @@ mod tests {
             Arc::clone(&store),
             None,
             hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            spark::Network::Regtest,
         );
 
         let payment_hash = [7u8; 32];
@@ -958,7 +1184,7 @@ mod tests {
                 &user,
                 &InvoiceDescription::Memo("test".into()),
                 3600,
-                false,
+                &LightningReceiveFallback::None,
             )
             .await
             .expect("request");
@@ -974,7 +1200,7 @@ mod tests {
                 &user,
                 &InvoiceDescription::Memo("test".into()),
                 3600,
-                false,
+                &LightningReceiveFallback::None,
             )
             .await
             .expect("request");
@@ -991,6 +1217,7 @@ mod tests {
             Arc::clone(&store),
             None,
             hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            spark::Network::Regtest,
         );
 
         let payment_hash = [8u8; 32];
@@ -1003,7 +1230,7 @@ mod tests {
                 &alice,
                 &InvoiceDescription::Memo("test".into()),
                 3600,
-                false,
+                &LightningReceiveFallback::None,
             )
             .await
             .expect("alice's request");
@@ -1017,7 +1244,7 @@ mod tests {
                 &bob,
                 &InvoiceDescription::Memo("test".into()),
                 3600,
-                false,
+                &LightningReceiveFallback::None,
             )
             .await;
         assert!(matches!(
@@ -1033,7 +1260,7 @@ mod tests {
                 &alice,
                 &InvoiceDescription::Memo("test".into()),
                 3600,
-                false,
+                &LightningReceiveFallback::None,
             )
             .await;
         assert!(matches!(

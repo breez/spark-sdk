@@ -22,8 +22,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError, events::EventEmitter,
-    persist::ObjectCacheRepository, utils::payments::record_payment_update,
+    Payment, PaymentDetails, PaymentStatus, Storage,
+    error::SdkError,
+    events::EventEmitter,
+    persist::ObjectCacheRepository,
+    utils::payments::{record_payment_update, record_spark_settled_bolt11_send},
 };
 
 /// A Lightning send that has been recorded but not yet handed to the SSP.
@@ -151,6 +154,19 @@ impl LightningSender {
                 displayed_amount,
             })
             .await;
+        // A send settling over Spark is tied to its Bolt11 only by this row, so it
+        // is written before the transfer can land: a crash after would otherwise
+        // leave the send reported as a bare Spark transfer. A send that then fails
+        // leaves a row no payment ever matches.
+        if prefer_spark
+            && matches!(
+                self.spark_wallet.extract_spark_fallback(invoice),
+                Ok(Some(_))
+            )
+        {
+            record_spark_settled_bolt11_send(&self.storage, &transfer_id.to_string(), invoice)
+                .await;
+        }
 
         let payment_response = Box::pin(self.spark_wallet.pay_lightning_invoice(
             invoice,
@@ -295,14 +311,20 @@ impl LightningSender {
                 }
             }
             // Spark-routed Lightning sends complete synchronously inside
-            // `pay_lightning_invoice` — there is no SSP-side state to poll,
-            // so `completion_timeout_secs` is ignored for this branch and
-            // the payment is returned with whatever status the transfer
-            // already has.
+            // `pay_lightning_invoice`: there is no SSP-side state to poll, so
+            // `completion_timeout_secs` is ignored for this branch and the
+            // payment is returned with whatever status the transfer already
+            // has.
             None => payment_response.transfer.try_into()?,
         };
         self.storage.apply_payment_update(payment.clone()).await?;
-        Ok(payment)
+        // Read back, so a send that settled a Bolt11 over Spark is returned as
+        // that invoice: the row naming it is applied when a payment is read.
+        Ok(self
+            .storage
+            .get_payment_by_id(payment.id.clone())
+            .await
+            .unwrap_or(payment))
     }
 
     /// Spawns the background poll that watches an outgoing Lightning send to
@@ -316,7 +338,7 @@ impl LightningSender {
         info!("Polling lightning send payment {}", payment_id);
 
         let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
+            PaymentDetails::Lightning { htlc_details, .. } => htlc_details.clone(),
             _ => None,
         }) else {
             error!(

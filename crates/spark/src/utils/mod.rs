@@ -1,3 +1,4 @@
+pub mod bolt11_fallback;
 pub mod byte_padding;
 pub mod frost;
 pub mod htlc_transactions;

@@ -17,6 +17,7 @@ use crate::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
         ExternalTokenTransactionKind,
     },
+    utils::payments::record_spark_settled_bolt11_send,
 };
 
 fn to_unsigned_package(
@@ -104,25 +105,51 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 _ => (sdk.config.prefer_spark_over_lightning, None),
             };
             if prefers_bolt11_spark_route(prefer_spark, prepare_response) {
-                let spark_address = sdk
+                let fallback = sdk
                     .spark_wallet
-                    .extract_spark_address(&invoice_details.invoice.bolt11)?
+                    .extract_spark_fallback(&invoice_details.invoice.bolt11)?
                     .ok_or_else(|| {
-                        SdkError::Generic("invoice expected to carry a spark address".to_string())
+                        SdkError::Generic(
+                            "invoice expected to carry a spark destination".to_string(),
+                        )
                     })?;
-                let receiver = spark_address
+                // The transfer goes to the receiver either way; an advertised
+                // invoice rides along so they can tell which Bolt11 it settled.
+                let spark_invoice = fallback.is_invoice().then(|| fallback.encoded.clone());
+                let receiver = fallback
+                    .receiver_address()
                     .to_address_string()
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
+                let mut to_send = prepare_response.clone();
                 if prepare_response.fee_policy == FeePolicy::FeesIncluded
                     && invoice_details.amount_msat.is_none()
                 {
-                    let mut adjusted = prepare_response.clone();
-                    adjusted.amount = adjusted
+                    to_send.amount = to_send
                         .amount
                         .saturating_sub(u128::from(spark_transfer_fee_sats.unwrap_or(0)));
-                    return build_spark_package(sdk, &adjusted, &receiver, None).await;
                 }
-                return build_spark_package(sdk, prepare_response, &receiver, None).await;
+                // The check a send the SDK signs itself gets inside
+                // `validate_payment`, which building a package for an external
+                // signer never reaches.
+                sdk.spark_wallet
+                    .validate_spark_fallback(&fallback, to_send.amount.try_into()?)?;
+                let package = build_spark_package(sdk, &to_send, &receiver, spark_invoice).await?;
+                // The package drops the Bolt11 on its way to the signer, so the
+                // link is recorded against the transfer id it already carries.
+                // A swap package is not the send: its transfer id belongs to the
+                // swap, and the send is built again once the swap completes.
+                if let UnsignedTransferPackage::Transfer {
+                    prepare_transfer, ..
+                } = &package
+                {
+                    record_spark_settled_bolt11_send(
+                        &sdk.storage,
+                        &prepare_transfer.transfer_id,
+                        &invoice_details.invoice.bolt11,
+                    )
+                    .await;
+                }
+                return Ok(package);
             }
             build_lightning_package(
                 sdk,
