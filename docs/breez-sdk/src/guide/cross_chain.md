@@ -100,7 +100,7 @@ Values outside 0 to 500 are rejected at both config validation and per-request v
 
 ## Partner fees
 
-You can add your own fee to these payments from the [Breez partner portal](https://partners.breez.technology/). See [Earning fees on USDC/USDT payments](./cross_chain_partner_fees.md).
+You can add your own fee to these payments from the [partner portal](https://partners.breez.technology/). See [Earning fees on USDC/USDT payments](./cross_chain_partner_fees.md).
 
 ## Status lifecycle
 
