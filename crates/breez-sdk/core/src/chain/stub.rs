@@ -14,17 +14,11 @@ pub(crate) struct ChainStub {
     pub(crate) heights: HashMap<String, u32>,
     pub(crate) outspends: HashMap<(String, u32), Outspend>,
     pub(crate) transactions: HashMap<String, String>,
+    /// Every output paid to an address, by address.
+    pub(crate) address_txos: HashMap<String, Vec<Utxo>>,
 }
 
 impl ChainStub {
-    pub(crate) fn spending(outpoint: OutPoint, outspend: Outspend) -> Self {
-        let mut chain = Self::default();
-        chain
-            .outspends
-            .insert((outpoint.txid.to_string(), outpoint.vout), outspend);
-        chain
-    }
-
     pub(crate) fn spent(txid: &str, confirmed: bool, block_height: Option<u32>) -> Outspend {
         Outspend::Spent {
             txid: txid.to_string(),
@@ -63,8 +57,11 @@ impl BitcoinChainService for ChainStub {
         Err(unreachable_chain())
     }
 
-    async fn get_address_txos(&self, _address: String) -> Result<Vec<Utxo>, ChainServiceError> {
-        Err(unreachable_chain())
+    async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.address_txos
+            .get(&address)
+            .cloned()
+            .ok_or_else(unreachable_chain)
     }
 
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError> {

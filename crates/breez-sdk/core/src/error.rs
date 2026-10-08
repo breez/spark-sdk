@@ -502,8 +502,7 @@ pub enum CooperativeRecoveryError {
     #[error("Operators unavailable: {message}")]
     OperatorsUnavailable { message: String },
 
-    /// Any other reason, such as the operators refusing, or a recovery of the
-    /// output already confirmed.
+    /// Any other reason, such as the operators refusing to co-sign.
     #[error("Generic error: {message}")]
     Generic { message: String },
 }
