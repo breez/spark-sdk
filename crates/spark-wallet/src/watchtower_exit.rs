@@ -249,9 +249,8 @@ pub fn build_watchtower_exit_recovery(
     fee: Fee,
 ) -> Option<UnsignedWatchtowerExitRecovery> {
     let mut recovery_tx = Transaction {
-        // A version 3 parent only accepts a version 3 child, so version 2 lets
-        // the recipient bump the fee with an ordinary one.
-        version: Version::TWO,
+        // The version of the recovery the operators' own SDK builds.
+        version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
             previous_output: output.outpoint,
@@ -761,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn the_recovery_pays_the_value_less_the_fee_in_a_replaceable_version_2_tx() {
+    fn the_recovery_pays_the_value_less_the_fee_in_a_replaceable_version_3_tx() {
         let output = output_of(10_000);
         let destination = regtest_address();
 
@@ -770,7 +769,7 @@ mod tests {
                 .unwrap();
 
         let tx = &recovery.tx;
-        assert_eq!(tx.version, Version::TWO);
+        assert_eq!(tx.version, Version::non_standard(3));
         assert_eq!(tx.input.len(), 1);
         assert_eq!(tx.input[0].previous_output, output.outpoint);
         assert_eq!(tx.input[0].sequence, Sequence::ENABLE_RBF_NO_LOCKTIME);
