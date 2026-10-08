@@ -30,7 +30,7 @@ use crate::{
 };
 
 use super::{
-    error::{classify_allowance_error, classify_pull_error},
+    error::{classify_allowance_error, classify_pull_error, classify_revoke_error},
     hash::{hash_create_statement, hash_revoke_statement},
     model::{
         NewTokenAllowance, TokenAllowance, TokenAllowanceQuery, TokenAllowanceRole, revoke_payload,
@@ -196,7 +196,7 @@ impl TokenAllowanceService {
                 owner_signature,
             })
             .await
-            .map_err(|e| classify_allowance_error(e.into()))?;
+            .map_err(|e| classify_revoke_error(e.into()))?;
         Ok(())
     }
 

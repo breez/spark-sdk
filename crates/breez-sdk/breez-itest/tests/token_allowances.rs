@@ -459,6 +459,20 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
         })
     ));
 
+    let foreign = spender
+        .sdk
+        .revoke_token_allowance(RevokeTokenAllowanceRequest {
+            allowance_id: allowance.id.clone(),
+        })
+        .await;
+    assert!(matches!(
+        foreign,
+        Err(SdkError::TokenAllowance {
+            reason: TokenAllowanceErrorReason::NotFound,
+            ..
+        })
+    ));
+
     owner
         .sdk
         .revoke_token_allowance(RevokeTokenAllowanceRequest {
@@ -470,6 +484,20 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
         after_revoke,
         Err(SdkError::TokenAllowance {
             reason: TokenAllowanceErrorReason::Revoked,
+            ..
+        })
+    ));
+
+    let unknown = owner
+        .sdk
+        .revoke_token_allowance(RevokeTokenAllowanceRequest {
+            allowance_id: "00000000-0000-7000-8000-000000000000".to_string(),
+        })
+        .await;
+    assert!(matches!(
+        unknown,
+        Err(SdkError::TokenAllowance {
+            reason: TokenAllowanceErrorReason::NotFound,
             ..
         })
     ));

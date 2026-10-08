@@ -115,6 +115,26 @@ pub(crate) fn classify_pull_error(error: ServiceError, window_passed: bool) -> S
     }
 }
 
+const PUBLIC_KEY_MISMATCH: &str = "PUBLIC_KEY_MISMATCH";
+
+fn revoke_target_missing(status: &Status) -> bool {
+    let reason = status.get_details_error_info().map(|info| info.reason);
+    matches!(
+        (status.code(), reason.as_deref()),
+        (Code::NotFound, _) | (Code::InvalidArgument, Some(PUBLIC_KEY_MISMATCH))
+    )
+}
+
+pub(crate) fn classify_revoke_error(error: ServiceError) -> ServiceError {
+    let missing = operator_status(&error)
+        .filter(|status| revoke_target_missing(status))
+        .map(|status| status.message().to_string());
+    match missing {
+        Some(message) => TokenAllowanceFailure::NotFound.into_error(message),
+        None => classify_allowance_error(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -123,7 +143,9 @@ mod tests {
     use tonic::{Code, Status};
     use tonic_types::{ErrorDetails, StatusExt};
 
-    use super::{TokenAllowanceFailure, classify_allowance_error, classify_pull_error};
+    use super::{
+        TokenAllowanceFailure, classify_allowance_error, classify_pull_error, classify_revoke_error,
+    };
     use crate::{operator::rpc::OperatorRpcError, services::ServiceError};
 
     #[cfg(feature = "browser-tests")]
@@ -263,5 +285,24 @@ mod tests {
                 ServiceError::ServiceConnectionError(_)
             ));
         }
+    }
+
+    #[test_all]
+    fn revoking_an_unknown_or_foreign_allowance_is_not_found() {
+        let missing = [
+            error_with_reason(Code::NotFound, "MISSING_ENTITY"),
+            rpc_error(Code::NotFound, "allowance 0190 not found"),
+            error_with_reason(Code::InvalidArgument, "PUBLIC_KEY_MISMATCH"),
+        ];
+        for error in missing {
+            assert_eq!(
+                failure(classify_revoke_error(error)),
+                Some(TokenAllowanceFailure::NotFound)
+            );
+        }
+        assert!(matches!(
+            classify_revoke_error(error_with_reason(Code::InvalidArgument, "OUT_OF_RANGE")),
+            ServiceError::ServiceConnectionError(_)
+        ));
     }
 }
