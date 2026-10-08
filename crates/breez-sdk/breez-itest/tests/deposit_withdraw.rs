@@ -710,6 +710,7 @@ async fn test_deposit_fee_refund(#[future] env: Result<Environment>) -> Result<(
         Err(SdkError::RefundReplacementFeeTooLow {
             pending_fee_sats,
             required_fee_sats,
+            ..
         }) => {
             assert_eq!(pending_fee_sats, 500);
             assert!(

@@ -204,6 +204,7 @@ mod tests {
         SdkError::TokenAllowance {
             reason,
             details: reason.to_string(),
+            docs_url: String::new(),
         }
     }
 

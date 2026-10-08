@@ -809,12 +809,12 @@ impl BreezSdk {
         let within_limit =
             max_fee_sats.is_some_and(|max_fee_sats| spark_requested_fee_sats <= max_fee_sats);
         if !within_limit {
-            return Err(SdkError::MaxDepositClaimFeeExceeded {
-                tx: detailed_utxo.txid.to_string(),
-                vout: detailed_utxo.vout,
+            return Err(SdkError::max_deposit_claim_fee_exceeded(
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
                 max_fee_sats,
-                required_fee_sats: spark_requested_fee_sats,
-            });
+                spark_requested_fee_sats,
+            ));
         }
 
         info!(
