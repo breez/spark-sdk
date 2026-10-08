@@ -78,6 +78,8 @@ pub struct PendingZapReceipt {
 #[derive(Debug, Clone)]
 pub struct DomainConfig {
     pub domain: String,
+    /// The domain whose group this domain is in, if set.
+    pub domain_group: Option<String>,
     /// The domain's own Breez API key, if set.
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
@@ -346,8 +348,8 @@ pub struct WebhookPayloadData {
 #[cfg(test)]
 pub mod shared_tests {
     use super::{
-        LnurlRepository, LnurlRepositoryError, NameStatus, RegistrationLimit, StatementClaim,
-        TransferRequest,
+        DomainConfig, LnurlRepository, LnurlRepositoryError, NameStatus, RegistrationLimit,
+        StatementClaim, TransferRequest,
     };
     use crate::domains::DomainGroup;
     use crate::user::User;
@@ -873,6 +875,31 @@ pub mod shared_tests {
                 .as_deref(),
             Some("tok")
         );
+    }
+
+    async fn domain_config<DB>(db: &DB, domain: &str) -> DomainConfig
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.list_domains()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|d| d.domain == domain)
+            .expect("an allowed domain")
+    }
+
+    /// `list_domains` reports the group a domain is configured with. The
+    /// caller allows `group.com` and puts `joined.com` in its group first, since
+    /// setting a group is a direct row write with no trait method.
+    pub async fn list_domains_surfaces_groups<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let joined = domain_config(db, "joined.com").await;
+        assert_eq!(joined.domain_group.as_deref(), Some("group.com"));
+        let group = domain_config(db, "group.com").await;
+        assert_eq!(group.domain_group, None);
     }
 
     /// A limit inside a window that never expires during the test.

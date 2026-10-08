@@ -406,6 +406,13 @@ fn migrations() -> Vec<Vec<String>> {
                  ON address_registrations (created_at)"
                 .to_string(),
         ],
+        vec![
+            // A domain serves the users of the domain its domain_group names.
+            // With NULL it serves users of its own.
+            "ALTER TABLE allowed_domains
+                 ADD COLUMN domain_group VARCHAR(255) REFERENCES allowed_domains (domain)"
+                .to_string(),
+        ],
     ]
 }
 

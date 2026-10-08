@@ -638,7 +638,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT d.domain, a.api_key, a.jwt \
+                "SELECT d.domain, a.api_key, a.jwt, d.domain_group \
                  FROM allowed_domains d \
                  LEFT JOIN domain_attribution a ON a.domain = d.domain",
             )
@@ -652,6 +652,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     domain: row.try_get(0)?,
                     api_key: row.try_get(1)?,
                     jwt: row.try_get(2)?,
+                    domain_group: row.try_get(3)?,
                 })
             })
             .collect::<Result<Vec<DomainConfig>, tokio_postgres::Error>>()?;
@@ -1188,6 +1189,53 @@ mod postgres_tests {
             )
             .await
             .unwrap();
+    }
+
+    /// Allow `group.com` and put `joined.com` in its group the way admins do.
+    async fn seed_domain_group(pool: &Pool) {
+        let client = pool.get().await.unwrap();
+        client
+            .execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('group.com')",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO allowed_domains (domain, domain_group)
+                 VALUES ('joined.com', 'group.com')",
+                &[],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_domains_surfaces_groups() {
+        let (_pg, pool) = test_pool().await;
+        seed_domain_group(&pool).await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_groups(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_domain_group_has_to_be_an_allowed_domain() {
+        let (_pg, pool) = test_pool().await;
+        let inserted = pool
+            .get()
+            .await
+            .unwrap()
+            .execute(
+                "INSERT INTO allowed_domains (domain, domain_group)
+                 VALUES ('joined.com', 'missing.com')",
+                &[],
+            )
+            .await;
+        assert!(
+            inserted.is_err(),
+            "a group named after a domain that is not allowed must be refused"
+        );
     }
 
     #[tokio::test]

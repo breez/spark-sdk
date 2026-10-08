@@ -32,9 +32,9 @@ const MAX_JWT_RESPONSE_BYTES: usize = 64 * 1024;
 /// Cap on the per-target fetch backoff.
 const BACKOFF_MAX_SECS: u64 = 5 * 60;
 
-/// Shared map of allowed domains to their own Breez API key, or `None` when
-/// the domain has none and falls back to the default. Kept in sync with the
-/// DB by the `domains` refresher.
+/// Shared map of the allowed domains, each with its own Breez API key, or
+/// `None` when the domain has none and falls back to the default. Kept in sync
+/// with the DB by the `domains` refresher.
 pub type DomainKeys = Arc<RwLock<crate::domains::DomainMap>>;
 
 /// Persistence for per-domain JWTs, so restarts and sibling instances start
@@ -162,7 +162,7 @@ impl JwtCache {
         let now = now_secs();
         let domains = self.domains.read().await.clone();
         for (domain, token) in store.load_all().await {
-            let Some(Some(api_key)) = domains.get(&domain) else {
+            let Some(api_key) = domains.get(&domain).and_then(|d| d.api_key.as_ref()) else {
                 continue;
             };
             if let Ok(exp) = jwt_exp(&token)
@@ -228,13 +228,13 @@ impl JwtCache {
         self.cache
             .write()
             .await
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
+            .retain(|d, _| domains.get(d).is_some_and(|d| d.api_key.is_some()));
         state
             .per_domain
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
+            .retain(|d, _| domains.get(d).is_some_and(|d| d.api_key.is_some()));
 
-        for (domain, key) in &domains {
-            let Some(api_key) = key else {
+        for (domain, config) in &domains {
+            let Some(api_key) = &config.api_key else {
                 continue;
             };
             let current_exp = self.cache.read().await.get(domain).and_then(|t| {
@@ -415,10 +415,7 @@ mod tests {
         default: Option<&str>,
         store: Option<Arc<dyn JwtStore>>,
     ) -> Arc<JwtCache> {
-        let map: HashMap<String, Option<String>> = domains
-            .iter()
-            .map(|(d, k)| ((*d).to_string(), k.map(str::to_string)))
-            .collect();
+        let map = domains.iter().map(|(d, k)| entry(d, *k)).collect();
         Arc::new(JwtCache {
             domains: Arc::new(RwLock::new(map)),
             default_key: default.map(str::to_string),
@@ -431,14 +428,22 @@ mod tests {
         })
     }
 
+    /// The shared map's entry for an allowed domain in its own group.
+    fn entry(domain: &str, api_key: Option<&str>) -> (String, crate::domains::Domain) {
+        let allowed = crate::domains::Domain {
+            group: Some(crate::domains::DomainGroup::new(domain)),
+            api_key: api_key.map(str::to_string),
+        };
+        (domain.to_string(), allowed)
+    }
+
     async fn seed(cache: &JwtCache, domain: &str, exp: u64) {
         let api_key = cache
             .domains
             .read()
             .await
             .get(domain)
-            .cloned()
-            .flatten()
+            .and_then(|d| d.api_key.clone())
             .unwrap_or_default();
         cache.cache.write().await.insert(
             domain.to_string(),
@@ -594,7 +599,7 @@ mod tests {
             .domains
             .write()
             .await
-            .insert("a.com".to_string(), Some("key-b".to_string()));
+            .extend([entry("a.com", Some("key-b"))]);
         cache.hydrate_once(&mut state).await;
         assert!(
             state.per_domain["a.com"].attempt > 0,
@@ -631,10 +636,7 @@ mod tests {
 
         let store: Arc<dyn JwtStore> = Arc::new(MapStore::default());
         let cache = Arc::new(JwtCache {
-            domains: Arc::new(RwLock::new(HashMap::from([(
-                "a.com".to_string(),
-                Some("key-a".to_string()),
-            )]))),
+            domains: Arc::new(RwLock::new(HashMap::from([entry("a.com", Some("key-a"))]))),
             default_key: None,
             cache: RwLock::new(HashMap::new()),
             default_token: RwLock::new(None),

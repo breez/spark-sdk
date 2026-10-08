@@ -111,7 +111,7 @@ struct Args {
     pub max_sendable: u64,
 
     /// Maximum successful address registrations one pubkey may perform per
-    /// domain in a rolling 24h window. 0 disables the limit.
+    /// domain group in a rolling 24h window. 0 disables the limit.
     #[arg(long, default_value = "5")]
     pub max_registrations_per_day: u32,
 
@@ -354,7 +354,8 @@ where
     ));
 
     // Ensure config-provided domains exist, then start the domain refresher
-    // (domain -> Breez API key). The partner JWT provider shares this map.
+    // (domain -> group and Breez API key). The partner JWT provider shares
+    // this map.
     let config_domains: Vec<String> = args
         .domains
         .split(',')
