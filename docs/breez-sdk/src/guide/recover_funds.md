@@ -3,7 +3,7 @@
 Your Spark balance is held in a tree of pre-signed Bitcoin transactions, so its funds can always be moved onto the Bitcoin blockchain. Recovering funds does that, in two situations:
 
 - **Funds that left your balance.** Some of your funds can end up on-chain, where Spark can no longer move them and only an on-chain transaction to an address of yours recovers them.
-- **An emergency exit.** If the Spark operators stop cooperating with normal [withdrawals](send_payment.md), because they are unreachable or refuse to serve your wallet, you can move your balance on-chain without them.
+- **A unilateral exit of your balance.** If the Spark operators stop cooperating with normal [withdrawals](send_payment.md), because they are unreachable or refuse to serve your wallet, you can move your balance on-chain without them.
 
 The balance is split into leaves, and each leaf is recovered in one of two ways, which the SDK picks from the leaf's state:
 
@@ -12,9 +12,9 @@ The balance is split into leaves, and each leaf is recovered in one of two ways,
 
 ## Recoverable funds
 
-Funds that left your balance are not part of {{#name balance_sats}}. {{#name get_info}} reports them separately, as {{#name recoverable_funds_sats}}. A sync adds a leaf's value to that total when it sees the leaf leave your balance. The value leaves the total once the SDK has seen the recovery pay the funds out on-chain: a cooperative recovery in a block, or a unilateral exit's sweep in a block. {{#name check_recover_funds}} records that when it reads the recovery back, and the next sync leaves the leaf out. The total also counts funds too small to be worth recovering at the fee rate you pick.
+Funds that left your balance are not part of {{#name balance_sats}}. {{#name get_info}} reports them separately, as {{#name recoverable_funds_sats}}. A sync adds a leaf's value to that total when it sees the leaf leave your balance. The value leaves the total once the SDK has seen the recovery pay the funds out on-chain: a cooperative recovery in a block, or a unilateral exit's sweep in a block. {{#name prepare_recover_funds}}, {{#name recover_funds}} and {{#name check_recover_funds}} record that when they find it on-chain, and the next sync leaves the leaf out. The total also counts funds too small to be worth recovering at the fee rate you pick.
 
-A wallet restored on another device has no such record. On its first sync the SDK asks the chain about each leaf whose recovery may already have finished, and leaves that leaf out of the total until the chain has answered.
+A wallet restored on another device has no such record. For each leaf whose recovery may already have finished, the SDK checks the chain during a sync, and leaves the leaf out of the total until it has the result. From then on the leaf is in the total unless the SDK found its recovery in a block. The SDK does not check a leaf whose funds are too small to send on-chain at the lowest fee rate nodes relay, so such a leaf stays in the total.
 
 The SDK emits {{#enum SdkEvent::RecoverableFunds}} when a sync finds new recoverable funds, carrying the new total. Funds leaving the total emit nothing, so {{#name get_info}} is where the current total is read.
 
@@ -79,7 +79,7 @@ Every selection leaves out a leaf whose recovery already finished. It also leave
 
 Every leaf is exited by its own chain of transactions, so it carries its own on-chain fee whatever its value. The more leaves your balance is spread across, and the smaller they are, the more of it goes to fees on the way out, and the more low-value leaves an {{#enum ExitLeafSelection::All}} exit abandons as uneconomical dust.
 
-How the balance is split into leaves is governed by the SDK's leaf optimization, which balances everyday payment experience against unilateral exit value. More, smaller denominations let payments go out without leaf swaps, while fewer, larger denominations cost less to exit. The default leans toward payment experience, which suits most wallets, since an emergency exit is a rare last resort. See [Custom leaf optimization](optimize.md) to understand this tradeoff and adjust it if your use case calls for it.
+How the balance is split into leaves is governed by the SDK's leaf optimization, which balances everyday payment experience against unilateral exit value. More, smaller denominations let payments go out without leaf swaps, while fewer, larger denominations cost less to exit. The default leans toward payment experience, which suits most wallets, since a unilateral exit is a rare last resort. See [Custom leaf optimization](optimize.md) to understand this tradeoff and adjust it if your use case calls for it.
 
 ## Quote the recovery
 
@@ -92,7 +92,7 @@ Its fields tell you how much Bitcoin to gather and how to structure it:
 
 Only a unilateral exit with steps left to broadcast needs funding. {{#name funding}} is unset when every leaf is recovered cooperatively, or when only a sweep is left, which pays its fee from the refunds it spends.
 
-{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK did not find the leaf's funds on-chain, or could not read the chain for them, and a later quote can find them. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
+{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK read the chain and found no output holding the leaf's funds. {{#enum SkippedLeafReason::Unverified}} means the SDK could not look up where the leaf's funds are, and it looks again on the next quote. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
 
 Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found for the unilateral exit: which nodes are already on-chain, which refunds landed, and which of those have been swept. {{#name recover_funds}} builds only the steps still left, so it takes the whole {{#name PrepareRecoverFundsResponse}} unchanged. {{#name exit_chain_state}} also shows how far an exit has got.
 
@@ -104,7 +104,7 @@ A recovery pays its mining fees from two different places, so {{#name total_fee_
 
 | Component | Paid by |
 |---|---|
-| {{#name cooperative_fee_sats}} | The value being recovered: the fee of the transaction that took each cooperative leaf on-chain, which is already paid, and the fee of its recovery. Zero when there are none |
+| {{#name cooperative_fee_sats}} | The value being recovered. Each cooperative leaf has two fees: the one of the transaction the operators broadcast to move it on-chain, which is already paid, and the one of its recovery transaction. Zero when there are none |
 | {{#name cpfp_fee_sats}} | The funding UTXOs, through the CPFP children that fee-bump the tree transactions |
 | {{#name fanout_fee_sats}} | The funding UTXO, by the fan-out transaction. Zero when there is no fan-out |
 | {{#name sweep_fee_sats}} | The value being recovered, by the final sweep |
@@ -297,7 +297,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | {{#name prepare_recover_funds}} returns no {{#name leaves}} | No leaf is worth recovering at the current rate, the leaves' recoveries already finished, or there is nothing to recover | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees. A finished recovery has nothing left to recover (this is not an error) |
-| A leaf your {{#name selection}} covers is missing from the {{#name leaves}} of the quote | Its recovery finished, or the quote left it out | A leaf the quote left out is in {{#name skipped}} with its {{#name reason}}. Lower {{#name fee_rate_sat_per_vbyte}} for {{#enum SkippedLeafReason::FeeExceedsValue}}, and quote again later for {{#enum SkippedLeafReason::FundsNotFound}} |
+| A leaf your {{#name selection}} covers is missing from the {{#name leaves}} of the quote | Its recovery finished, or the quote left it out | A leaf the quote left out is in {{#name skipped}} with its {{#name reason}}. Lower {{#name fee_rate_sat_per_vbyte}} for {{#enum SkippedLeafReason::FeeExceedsValue}}, and quote again later for {{#enum SkippedLeafReason::Unverified}} |
 | A leaf you are mid-recovery on is missing from a new {{#enum ExitLeafSelection::All}} or {{#enum ExitLeafSelection::RecoverableOnly}} quote | Those selections keep only leaves worth recovering at the new fee rate | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from the kept response |
 | A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::OperatorsUnavailable}} | The operators could not be reached to co-sign its recovery | Quote and build again once they are reachable |
 | A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::ReplacementFeeTooLow}} | An earlier recovery of it is on the network, and the new one pays too little to replace it | Quote and build again at a fee rate of at least the one the error names, or let the earlier recovery confirm |
