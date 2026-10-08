@@ -1,5 +1,5 @@
-//! A chain for tests: it answers from what a test put in it, and fails every
-//! other lookup.
+//! A chain service for tests: it returns what a test put in it, and fails
+//! every other lookup.
 
 use std::collections::HashMap;
 
