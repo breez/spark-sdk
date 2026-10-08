@@ -4,13 +4,14 @@ use std::{
 };
 
 use bitcoin::{
-    Address, OutPoint, Transaction,
+    Address, Amount, FeeRate, OutPoint, ScriptBuf, Transaction, WPubkeyHash,
     address::NetworkUnchecked,
     consensus::encode::{deserialize_hex, serialize_hex},
+    hashes::Hash,
 };
 use spark_wallet::{
-    ChainQuery, EXITING_STATUSES, TreeNode, TreeNodeStatus, WATCHTOWER_EXITED_STATUSES,
-    WatchtowerExitLookup,
+    ChainQuery, EXITING_STATUSES, Fee, TreeNode, TreeNodeStatus, WATCHTOWER_EXITED_STATUSES,
+    WatchtowerExitLookup, refund_sweep_input_fee, watchtower_exit_recovery_payout,
 };
 use tracing::{debug, error, info};
 
@@ -318,7 +319,7 @@ impl BreezSdk {
     /// funds to recover, and emits `RecoverableFunds` when it stored a leaf with
     /// funds still to recover. It stores a recovered or exited leaf once it knows
     /// from the chain service whether a recovery or sweep of the leaf's funds is
-    /// in a block.
+    /// in a block, or at once when the leaf is too small to send out.
     pub(super) async fn sync_recoverable_funds(&self) {
         let statuses = [EXITING_STATUSES.as_slice(), &WATCHTOWER_EXITED_STATUSES].concat();
         let leaves = match self.spark_wallet.list_leaves_with_status(&statuses).await {
@@ -639,6 +640,11 @@ fn new_leaves(leaves: &[TreeNode], stored: &HashMap<String, LeafRecovery>) -> Ne
             continue;
         }
         match leaf.status {
+            // The SDK sends no chain request for funds too small to send out.
+            _ if !can_be_sent_out(leaf) => new.to_recover.push(UpdateLeafRecovery {
+                leaf_id,
+                ..Default::default()
+            }),
             TreeNodeStatus::WatchtowerExitRecovered => new.recovered.push(leaf.clone()),
             TreeNodeStatus::Exited => new.exited.push(leaf.clone()),
             _ => new.to_recover.push(UpdateLeafRecovery {
@@ -648,6 +654,29 @@ fn new_leaves(leaves: &[TreeNode], stored: &HashMap<String, LeafRecovery>) -> Ne
         }
     }
     new
+}
+
+/// Whether the funds of a recovered or exited `leaf` can be sent out at the
+/// lowest fee rate nodes relay. The leaf's value is the most its on-chain
+/// output holds.
+fn can_be_sent_out(leaf: &TreeNode) -> bool {
+    let value = Amount::from_sat(leaf.value);
+    let fee_rate = FeeRate::BROADCAST_MIN;
+    match leaf.status {
+        // A recovery is a transaction of its own. Of the outputs wallets
+        // receive on, P2WPKH is the smallest and has the lowest dust limit.
+        TreeNodeStatus::WatchtowerExitRecovered => {
+            let output = ScriptBuf::new_p2wpkh(&WPubkeyHash::all_zeros());
+            let fee = Fee::Rate {
+                sat_per_vbyte: fee_rate.to_sat_per_vb_ceil(),
+            };
+            watchtower_exit_recovery_payout(value, &output, fee).is_some()
+        }
+        // One sweep has the refunds of several leaves as inputs, so a refund
+        // only has to hold more than the fee of its own input.
+        TreeNodeStatus::Exited => refund_sweep_input_fee(fee_rate).is_some_and(|fee| value > fee),
+        _ => true,
+    }
 }
 
 /// The value of the leaves whose stored recovery holds neither a watchtower exit
@@ -900,6 +929,44 @@ mod tests {
         );
         assert_eq!(ids(&new.recovered), vec![id(4)]);
         assert_eq!(ids(&new.exited), vec![id(5)]);
+    }
+
+    #[test]
+    fn a_leaf_too_small_to_send_out_is_stored_without_a_chain_check() {
+        let leaf = |id: &str, status, value| {
+            let mut leaf = create_test_node_with_parent(id, None, status);
+            leaf.value = value;
+            leaf
+        };
+        let recovered = |value| leaf(LEAF_ID, TreeNodeStatus::WatchtowerExitRecovered, value);
+        let exited = |value| leaf(OTHER_LEAF_ID, TreeNodeStatus::Exited, value);
+
+        // A recovery to a P2WPKH output is 99 vbytes, and the dust limit of
+        // that output is 294 sats.
+        assert!(can_be_sent_out(&recovered(393)));
+        assert!(!can_be_sent_out(&recovered(392)));
+        // A taproot key-path input is 57.5 vbytes.
+        assert!(can_be_sent_out(&exited(59)));
+        assert!(!can_be_sent_out(&exited(58)));
+        // A leaf in another status gets no chain check to begin with.
+        assert!(can_be_sent_out(&leaf(
+            LEAF_ID,
+            TreeNodeStatus::WatchtowerExited,
+            1
+        )));
+
+        let new = new_leaves(&[recovered(392), exited(58)], &HashMap::new());
+        assert!(new.recovered.is_empty() && new.exited.is_empty());
+        assert_eq!(
+            new.to_recover
+                .iter()
+                .map(|update| update.leaf_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![LEAF_ID, OTHER_LEAF_ID]
+        );
+        let new = new_leaves(&[recovered(393), exited(59)], &HashMap::new());
+        assert!(new.to_recover.is_empty());
+        assert_eq!((new.recovered.len(), new.exited.len()), (1, 1));
     }
 
     #[test]
