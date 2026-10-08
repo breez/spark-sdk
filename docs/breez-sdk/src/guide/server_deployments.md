@@ -1,4 +1,4 @@
-# Server-side configuration
+# Running on a server
 
 How the SDK is configured on a server depends on whose wallets it holds and where their keys live.
 
