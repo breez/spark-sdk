@@ -128,6 +128,7 @@ async fn receive_cross_chain(
     max_slippage_bps: Option<u32>,
     target_overpay_bps: Option<u32>,
 ) -> Result<ReceivePaymentResponse, SdkError> {
+    sdk.cross_chain_context.ensure_enabled()?;
     if amount == 0 {
         return Err(SdkError::InvalidInput(
             "Cross-chain receive amount must be greater than zero.".to_string(),

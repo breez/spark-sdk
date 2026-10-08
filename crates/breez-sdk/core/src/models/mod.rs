@@ -842,20 +842,18 @@ pub struct Config {
     /// a disagreement would mean part of the traffic bypassed the proxy.
     pub proxy: Option<ProxyConfig>,
 
-    /// Configuration for cross-chain sends via Orchestra and Boltz.
+    /// Enables cross-chain payments: sending and receiving USDC/USDT on other
+    /// chains. Set it to a default `CrossChainConfig`, or one with your own
+    /// defaults, to turn the feature on. Unset (the default) leaves it off, and
+    /// the cross-chain calls fail with a `CrossChainDisabled` error.
     ///
-    /// `Some(_)` enables cross-chain sends (sats to USDT on external chains).
-    /// `None` (default) disables them entirely. Opt in by setting this to
-    /// [`CrossChainConfig::default`] (or a customized value): the providers
-    /// run background work (e.g. web sockets), so enabling is left to the
-    /// caller. Cross-chain sends are only supported on mainnet.
+    /// Off by default because the providers run background work such as web
+    /// sockets. Only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
 }
 
-/// Configuration for cross-chain sends.
-///
-/// The presence of this struct on [`Config::cross_chain_config`] enables
-/// cross-chain providers; `None` disables them.
+/// Configuration for cross-chain payments. Setting it on the config turns the
+/// feature on.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CrossChainConfig {
