@@ -125,6 +125,10 @@ pub enum SdkError {
         temporary: bool,
     },
 
+    /// Cross-chain payments are not enabled on this SDK instance.
+    #[error("Cross-chain payments are disabled: set the cross-chain config to enable them")]
+    CrossChainDisabled,
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),

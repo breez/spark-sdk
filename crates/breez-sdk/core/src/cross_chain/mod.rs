@@ -399,11 +399,21 @@ impl CrossChainContext {
         self.providers.insert(key, service);
     }
 
+    /// Fails with [`SdkError::CrossChainDisabled`] when no provider is
+    /// registered, which happens only when `cross_chain_config` is unset.
+    pub fn ensure_enabled(&self) -> Result<(), SdkError> {
+        if self.providers.is_empty() {
+            return Err(SdkError::CrossChainDisabled);
+        }
+        Ok(())
+    }
+
     /// Look up a provider, returning a friendly error if missing.
     pub fn get(
         &self,
         provider: CrossChainProvider,
     ) -> Result<&Arc<dyn CrossChainService>, SdkError> {
+        self.ensure_enabled()?;
         self.providers.get(&provider).ok_or_else(|| {
             SdkError::InvalidInput(format!("Cross-chain provider {provider} is not available."))
         })
@@ -842,6 +852,100 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    struct NoFiat;
+
+    #[macros::async_trait]
+    impl FiatService for NoFiat {
+        async fn fetch_fiat_currencies(
+            &self,
+        ) -> Result<
+            Vec<breez_sdk_common::fiat::FiatCurrency>,
+            breez_sdk_common::error::ServiceConnectivityError,
+        > {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_fiat_rates(
+            &self,
+        ) -> Result<
+            Vec<breez_sdk_common::fiat::Rate>,
+            breez_sdk_common::error::ServiceConnectivityError,
+        > {
+            Ok(Vec::new())
+        }
+    }
+
+    struct StubProvider;
+
+    #[macros::async_trait]
+    impl CrossChainService for StubProvider {
+        async fn get_routes(
+            &self,
+            _filter: &CrossChainRouteFilter,
+        ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+            unimplemented!()
+        }
+
+        async fn prepare_send(
+            &self,
+            _recipient_address: &str,
+            _route: &CrossChainRoutePair,
+            _amount: u128,
+            _delivery_method: Option<DeliveryMethod>,
+            _source_token_identifier: Option<String>,
+            _max_slippage_bps: u32,
+            _fee_mode: CrossChainFeeMode,
+        ) -> Result<CrossChainSendPrepared, SdkError> {
+            unimplemented!()
+        }
+
+        async fn prepare_receive(
+            &self,
+            _route: &CrossChainRoutePair,
+            _recipient_address: &str,
+            _amount: u128,
+            _max_slippage_bps: u32,
+            _destination: &SparkAsset,
+            _fee_mode: CrossChainFeeMode,
+            _target_overpay_bps: u32,
+        ) -> Result<CrossChainReceivePrepared, SdkError> {
+            unimplemented!()
+        }
+
+        async fn send(
+            &self,
+            _prepared: &CrossChainSendPrepared,
+            _idempotency_key: Option<String>,
+        ) -> Result<crate::Payment, SdkError> {
+            unimplemented!()
+        }
+    }
+
+    #[test_all]
+    fn empty_context_reports_cross_chain_disabled() {
+        let context = CrossChainContext::new(Arc::new(NoFiat));
+        assert!(matches!(
+            context.ensure_enabled(),
+            Err(SdkError::CrossChainDisabled)
+        ));
+        assert!(matches!(
+            context.get(CrossChainProvider::Orchestra),
+            Err(SdkError::CrossChainDisabled)
+        ));
+    }
+
+    #[test_all]
+    fn enabled_context_reports_missing_provider() {
+        let mut context = CrossChainContext::new(Arc::new(NoFiat));
+        context.insert(CrossChainProvider::Orchestra, Arc::new(StubProvider));
+        assert!(context.ensure_enabled().is_ok());
+        assert!(context.get(CrossChainProvider::Orchestra).is_ok());
+        assert!(matches!(
+            context.get(CrossChainProvider::Boltz),
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
 
     #[test_all]
     fn delivery_method_display_is_human_readable() {

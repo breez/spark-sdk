@@ -167,7 +167,7 @@ Routes the connections the SDK opens through a SOCKS5 proxy, such as a local Tor
     <a class="header" href="#usdc-usdt">USDC/USDT</a>
 </h2>
 
-USDC/USDT (send and receive) requires explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
+USDC/USDT (send and receive) requires explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. While it is unset, the cross-chain calls fail with {{#enum SdkError::CrossChainDisabled}}. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
 
 Constraints:
 
