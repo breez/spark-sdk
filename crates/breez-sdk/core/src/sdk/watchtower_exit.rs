@@ -13,7 +13,7 @@ use spark_wallet::{
 use tracing::warn;
 
 use crate::{
-    ChainTransaction, CooperativeRecoveryError, LeafRecovery, StoredWatchtowerExitOutput,
+    ChainTransaction, CooperativeRecoveryError, LeafRecovery, Storage, StoredWatchtowerExitOutput,
     UpdateLeafRecovery, WatchtowerExitRecovery,
     error::SdkError,
     utils::{replacement::Replaced, time::now_secs},
@@ -21,7 +21,8 @@ use crate::{
 
 use super::{
     BreezSdk,
-    chain_queries::{ChainQueries, result_of, without_result},
+    chain_queries::{ChainQueries, batches, result_of, without_result},
+    recover_funds::store_checks,
 };
 
 /// A leaf whose funds are in an on-chain output, with the recoveries stored
@@ -72,6 +73,19 @@ impl OutputSpend {
             _ => None,
         }
     }
+
+    /// Whether this completes the check of the output: the chain service
+    /// returned a result, and for a spend in a block also the block.
+    pub(super) fn is_known(&self) -> bool {
+        !matches!(
+            self,
+            Self::Unknown
+                | Self::InBlock {
+                    block_height: None,
+                    ..
+                }
+        )
+    }
 }
 
 /// What spent `outpoint`, read from `observed`.
@@ -90,32 +104,38 @@ pub(super) fn output_spend(observed: &[Observation], outpoint: OutPoint) -> Outp
 impl BreezSdk {
     /// Checks with the chain service where the funds of each recovered leaf are,
     /// and whether a recovery of them is in a block. The operators report a
-    /// recovered leaf the same either way. Returns what to store for the leaves
-    /// it has every result for.
+    /// recovered leaf the same either way. Stores what it finds, and returns
+    /// the leaves whose check is complete.
     pub(super) async fn check_recovered_leaves(
         &self,
         leaves: &[TreeNode],
+        stored: &HashMap<String, LeafRecovery>,
         queries: &mut ChainQueries,
-    ) -> Vec<UpdateLeafRecovery> {
-        if leaves.is_empty() {
-            return Vec::new();
-        }
-        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
-        let nodes = match self
-            .spark_wallet
-            .fetch_nodes_with_ancestors(&leaf_ids)
-            .await
-        {
-            Ok(nodes) => nodes,
-            Err(e) => {
-                warn!("Failed to fetch the ancestors of recovered leaves: {e}");
-                return Vec::new();
+    ) -> Vec<String> {
+        // A leaf with a stored output needs no lookup, so no ancestors either.
+        let (with_output, without_output): (Vec<TreeNode>, Vec<TreeNode>) = leaves
+            .iter()
+            .cloned()
+            .partition(|leaf| stored_outpoint(stored, leaf).is_some());
+        let mut checkable = with_output;
+        let mut nodes = HashMap::new();
+        if !without_output.is_empty() {
+            let leaf_ids: Vec<TreeNodeId> =
+                without_output.iter().map(|leaf| leaf.id.clone()).collect();
+            match self
+                .spark_wallet
+                .fetch_nodes_with_ancestors(&leaf_ids)
+                .await
+            {
+                Ok(ancestors) => {
+                    nodes = ancestors;
+                    checkable.extend(without_output);
+                }
+                Err(e) => warn!("Failed to fetch the ancestors of recovered leaves: {e}"),
             }
-        };
-        queries
-            .resolve(|observed| ((), scan_outputs(leaves, &nodes, observed).1))
-            .await;
-        recovered_leaf_checks(leaves, &nodes, &queries.fetched(), now_secs())
+        }
+        store_recovered_leaf_checks(&checkable, &nodes, stored, queries, self.storage.as_ref())
+            .await
     }
 
     /// Looks up the output each of `leaves` is recovered from and whether a
@@ -436,8 +456,13 @@ fn looked_up_exit(
                 || update
                     .watchtower_exit_spend
                     .as_ref()
-                    .is_some_and(|spend| stored_spend != Some(spend));
-            (output, spend, new.then_some(update))
+                    .is_some_and(|spend| stored_spend != Some(spend))
+                || unchecked_output(stored, &output);
+            // A quote stores what it found only once its check of the leaf is
+            // complete, so a stored output without a check time is one a sync
+            // has yet to finish checking.
+            let complete = spend.is_known();
+            (output, spend, (new && complete).then_some(update))
         }
         // An output the chain service reported earlier takes precedence over
         // the one of the direct tx the node holds.
@@ -462,18 +487,77 @@ fn looked_up_exit(
     })
 }
 
-/// What to store for each recovered leaf, from the queries with a result:
-/// nothing for a leaf with a query still pending, and a check without an output
-/// for a leaf whose funds the results show in no block. The funds of such a
-/// leaf stay in the total until the chain service shows a recovery of them in
-/// a block.
+/// Checks `leaves` batch by batch. It stores what a batch established before
+/// it starts the next one, and starts none after a failed request. Returns the
+/// leaves whose check is complete.
+pub(super) async fn store_recovered_leaf_checks(
+    leaves: &[TreeNode],
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+    stored: &HashMap<String, LeafRecovery>,
+    queries: &mut ChainQueries,
+    storage: &dyn Storage,
+) -> Vec<String> {
+    let mut complete = Vec::new();
+    for batch in batches(leaves) {
+        if queries.failed() {
+            break;
+        }
+        queries
+            .resolve(|observed| ((), recovered_leaf_queries(batch, nodes, stored, observed)))
+            .await;
+        let checks = recovered_leaf_checks(batch, nodes, stored, &queries.fetched(), now_secs());
+        complete.extend(store_checks(storage, checks).await);
+    }
+    complete
+}
+
+/// The outpoint of the output stored for `leaf`.
+fn stored_outpoint(stored: &HashMap<String, LeafRecovery>, leaf: &TreeNode) -> Option<OutPoint> {
+    let leaf_id = leaf.id.to_string();
+    let output = stored.get(&leaf_id)?.watchtower_exit_output.as_ref()?;
+    Some(exited_output(&leaf_id, output).ok()?.outpoint)
+}
+
+/// The queries the check of `leaves` has yet to execute. For a leaf with a
+/// stored output that is only whether the output is spent.
+fn recovered_leaf_queries(
+    leaves: &[TreeNode],
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+    stored: &HashMap<String, LeafRecovery>,
+    observed: &[Observation],
+) -> Vec<ChainQuery> {
+    let (with_output, without_output): (Vec<TreeNode>, Vec<TreeNode>) = leaves
+        .iter()
+        .cloned()
+        .partition(|leaf| stored_outpoint(stored, leaf).is_some());
+    let outspends = with_output
+        .iter()
+        .filter_map(|leaf| stored_outpoint(stored, leaf))
+        .map(ChainQuery::Outspend)
+        .collect();
+    let mut pending = scan_outputs(&without_output, nodes, observed).1;
+    pending.extend(without_result(outspends, observed));
+    pending
+}
+
+/// What to store for each recovered leaf, from the queries with a result. An
+/// output found in a block is stored as soon as it is found, also while the
+/// query for its spend has no result, so that the next sync starts from it. The
+/// check time is stored once the check is complete: the SDK knows whether the
+/// output is spent, or the results show the leaf's funds in no block.
 fn recovered_leaf_checks(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
+    stored: &HashMap<String, LeafRecovery>,
     fetched: &[Observation],
     now: u64,
 ) -> Vec<UpdateLeafRecovery> {
-    let (lookups, _) = scan_outputs(leaves, nodes, fetched);
+    let without_output: Vec<TreeNode> = leaves
+        .iter()
+        .filter(|leaf| stored_outpoint(stored, leaf).is_none())
+        .cloned()
+        .collect();
+    let (lookups, _) = scan_outputs(&without_output, nodes, fetched);
     let mut checks = Vec::new();
     for leaf in leaves {
         let checked = UpdateLeafRecovery {
@@ -481,6 +565,16 @@ fn recovered_leaf_checks(
             chain_checked_at: Some(now),
             ..Default::default()
         };
+        if let Some(outpoint) = stored_outpoint(stored, leaf) {
+            let spend = output_spend(fetched, outpoint);
+            if spend.is_known() {
+                checks.push(UpdateLeafRecovery {
+                    watchtower_exit_spend: spend.in_block(),
+                    ..checked
+                });
+            }
+            continue;
+        }
         match lookups.get(&leaf.id) {
             None | Some(WatchtowerExitLookup::Pending) => {}
             Some(WatchtowerExitLookup::Found {
@@ -491,23 +585,38 @@ fn recovered_leaf_checks(
                 let Some(block_height) = block_height else {
                     continue;
                 };
-                let spend = match output_spend(fetched, output.outpoint) {
-                    OutputSpend::Unknown
-                    | OutputSpend::InBlock {
-                        block_height: None, ..
-                    } => continue,
-                    spend => spend.in_block(),
-                };
-                checks.push(UpdateLeafRecovery {
-                    watchtower_exit_output: Some(stored_output_of(output, *block_height)),
-                    watchtower_exit_spend: spend,
-                    ..checked
+                let found = Some(stored_output_of(output, *block_height));
+                let spend = output_spend(fetched, output.outpoint);
+                checks.push(if spend.is_known() {
+                    UpdateLeafRecovery {
+                        watchtower_exit_output: found,
+                        watchtower_exit_spend: spend.in_block(),
+                        ..checked
+                    }
+                } else {
+                    UpdateLeafRecovery {
+                        leaf_id: leaf.id.to_string(),
+                        watchtower_exit_output: found,
+                        ..Default::default()
+                    }
                 });
             }
             Some(_) => checks.push(checked),
         }
     }
     checks
+}
+
+/// Whether storage holds `output` for the leaf without a check time: a sync
+/// found the output and has yet to learn whether it is spent.
+fn unchecked_output(stored: Option<&LeafRecovery>, output: &WatchtowerExitOutput) -> bool {
+    stored.is_some_and(|stored| {
+        stored.chain_checked_at.is_none()
+            && stored
+                .watchtower_exit_output
+                .as_ref()
+                .is_some_and(|stored| same_outpoint(stored, output))
+    })
 }
 
 fn same_outpoint(stored: &StoredWatchtowerExitOutput, output: &WatchtowerExitOutput) -> bool {
@@ -943,14 +1052,19 @@ mod tests {
     }
 
     fn exited_leaf(status: TreeNodeStatus) -> ExitedLeaf {
-        let mut leaf = create_test_node_with_parent(LEAF_ID, None, status);
+        exited_leaf_at(LEAF_ID, "03", status)
+    }
+
+    /// The leaf `leaf_id`, with the output of `parent_txid` as its input.
+    fn exited_leaf_at(leaf_id: &str, parent_txid: &str, status: TreeNodeStatus) -> ExitedLeaf {
+        let mut leaf = create_test_node_with_parent(leaf_id, None, status);
         let leaf_script = ScriptBuf::new_p2tr(
             &bitcoin::secp256k1::Secp256k1::verification_only(),
             leaf.verifying_public_key.x_only_public_key().0,
             None,
         );
         let parent_output = OutPoint {
-            txid: Txid::from_str(&"03".repeat(32)).unwrap(),
+            txid: Txid::from_str(&parent_txid.repeat(32)).unwrap(),
             vout: 0,
         };
         let mut held = tx_paying(parent_output, 9_800);
@@ -1060,12 +1174,21 @@ mod tests {
 
         // The SDK does not store again what storage already holds.
         let stored = LeafRecovery {
+            chain_checked_at: Some(900),
             watchtower_exit_spend: Some(recovery),
             ..stored_with(Some(in_block_output.clone()))
         };
         let same = looked_up(Some(&stored), &[spent(&exited.found, true, Some(101))]);
         assert_eq!(same.update, None);
         assert!(same.exit.unwrap().recovered);
+
+        // An output a sync stored without a check time gets its check time.
+        let unchecked = stored_with(Some(in_block_output.clone()));
+        let checked = looked_up(Some(&unchecked), &[unspent(&exited.found)]);
+        assert_eq!(checked.update, Some(update(None)));
+        // The SDK stores nothing while it does not know whether the output is
+        // spent.
+        assert_eq!(looked_up(None, &[]).update, None);
 
         // The SDK replaces the stored output with another one it finds.
         let other = stored_with(Some(stored_output_of(&output(), 90)));
@@ -1182,6 +1305,7 @@ mod tests {
         recovered_leaf_checks(
             std::slice::from_ref(&exited.leaf),
             &HashMap::new(),
+            &HashMap::new(),
             fetched,
             1_000,
         )
@@ -1220,18 +1344,234 @@ mod tests {
     }
 
     #[test]
-    fn a_recovered_leaf_without_every_result_is_left_for_the_next_sync() {
+    fn a_recovered_leaf_without_a_found_output_is_left_for_the_next_sync() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+
+        for fetched in [Vec::new(), vec![exited.parent_spent.clone()]] {
+            assert!(check_of(&exited, &fetched).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_found_output_is_stored_before_its_spend_is_known() {
         let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
         let found = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
+        let output_alone = vec![UpdateLeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+            ..Default::default()
+        }];
 
-        for fetched in [
-            Vec::new(),
-            vec![exited.parent_spent.clone()],
-            found.clone(),
-            // The SDK stores a transaction only with the height of its block.
-            [found.clone(), vec![spent(&exited.found, true, None)]].concat(),
-        ] {
-            assert!(check_of(&exited, &fetched).is_empty());
+        assert_eq!(check_of(&exited, &found), output_alone);
+        // The SDK stores a transaction only with the height of its block.
+        let unnamed_block = [found, vec![spent(&exited.found, true, None)]].concat();
+        assert_eq!(check_of(&exited, &unnamed_block), output_alone);
+    }
+
+    #[test]
+    fn a_leaf_with_a_stored_output_needs_only_the_spend_of_that_output() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+        let leaves = [exited.leaf.clone()];
+        let nodes = HashMap::new();
+        let stored = HashMap::from([(
+            LEAF_ID.to_string(),
+            LeafRecovery {
+                watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+                ..stored_leaf(&[])
+            },
+        )]);
+        let checked = |spend| UpdateLeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            chain_checked_at: Some(1_000),
+            watchtower_exit_spend: spend,
+            ..Default::default()
+        };
+        let check = |fetched: &[Observation]| {
+            recovered_leaf_checks(&leaves, &nodes, &stored, fetched, 1_000)
+        };
+
+        assert_eq!(
+            recovered_leaf_queries(&leaves, &nodes, &stored, &[]),
+            vec![ChainQuery::Outspend(exited.found.outpoint)]
+        );
+        assert!(check(&[]).is_empty());
+        assert_eq!(check(&[unspent(&exited.found)]), vec![checked(None)]);
+        assert_eq!(
+            check(&[spent(&exited.found, true, Some(101))]),
+            vec![checked(Some(ChainTransaction {
+                txid: spender().to_string(),
+                block_height: 101,
+            }))]
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    mod stored_checks {
+        use std::sync::{Arc, atomic::Ordering};
+
+        use crate::{
+            chain::{Outspend, stub::ChainStub},
+            persist::sqlite::SqliteStorage,
+        };
+
+        use super::*;
+
+        fn temp_storage() -> SqliteStorage {
+            let mut dir = std::env::temp_dir();
+            dir.push(format!("breez-recovered-leaves-{}", uuid::Uuid::new_v4()));
+            SqliteStorage::new(&dir).expect("create sqlite storage")
+        }
+
+        /// A chain service that returns `known` and fails every other request.
+        fn chain_knowing(known: &[Observation]) -> Arc<ChainStub> {
+            let mut chain = ChainStub::default();
+            for observation in known {
+                match (&observation.query, &observation.result) {
+                    (ChainQuery::Outspend(outpoint), ChainResult::Spend(spend)) => {
+                        let outspend = spend.as_ref().map_or(Outspend::Unspent, |spend| {
+                            ChainStub::spent(
+                                &spend.spender_txid.to_string(),
+                                spend.confirmed,
+                                spend.block_height,
+                            )
+                        });
+                        chain
+                            .outspends
+                            .insert((outpoint.txid.to_string(), outpoint.vout), outspend);
+                    }
+                    (ChainQuery::Transaction(txid), ChainResult::Transaction(tx)) => {
+                        chain
+                            .transactions
+                            .insert(txid.to_string(), serialize_hex(tx));
+                    }
+                    other => panic!("the stub cannot return {other:?}"),
+                }
+            }
+            Arc::new(chain)
+        }
+
+        /// The observations that complete the check of `leaf`, with its output
+        /// unspent.
+        fn all_of(leaf: &ExitedLeaf) -> Vec<Observation> {
+            vec![
+                leaf.parent_spent.clone(),
+                leaf.direct_tx.clone(),
+                unspent(&leaf.found),
+            ]
+        }
+
+        async fn stored_in(storage: &SqliteStorage) -> HashMap<String, LeafRecovery> {
+            storage
+                .list_leaf_recoveries()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|leaf| (leaf.leaf_id.clone(), leaf))
+                .collect()
+        }
+
+        fn leaf_number(number: u8) -> ExitedLeaf {
+            exited_leaf_at(
+                &format!("00000000-0000-0000-0000-0000000000{number:02}"),
+                &format!("{:02x}", number.saturating_add(0x10)),
+                TreeNodeStatus::WatchtowerExitRecovered,
+            )
+        }
+
+        #[tokio::test]
+        async fn a_failed_request_keeps_the_found_output_and_the_next_sync_continues_from_it() {
+            let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+            let leaves = [exited.leaf.clone()];
+            let storage = temp_storage();
+
+            // The chain service fails the request for the spend of the output.
+            let chain = chain_knowing(&[exited.parent_spent.clone(), exited.direct_tx.clone()]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let complete = store_recovered_leaf_checks(
+                &leaves,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut queries,
+                &storage,
+            )
+            .await;
+
+            let stored = stored_in(&storage).await;
+            assert!(complete.is_empty());
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 3);
+            assert_eq!(
+                stored[LEAF_ID].watchtower_exit_output,
+                Some(stored_output_of(&exited.found, 100))
+            );
+            assert_eq!(stored[LEAF_ID].chain_checked_at, None);
+
+            let chain = chain_knowing(&[spent(&exited.found, true, Some(101))]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let complete = store_recovered_leaf_checks(
+                &leaves,
+                &HashMap::new(),
+                &stored,
+                &mut queries,
+                &storage,
+            )
+            .await;
+
+            let stored = stored_in(&storage).await;
+            assert_eq!(complete, vec![LEAF_ID.to_string()]);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+            assert!(stored[LEAF_ID].chain_checked_at.is_some());
+            assert_eq!(
+                stored[LEAF_ID].watchtower_exit_spend,
+                Some(ChainTransaction {
+                    txid: spender().to_string(),
+                    block_height: 101,
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn a_sync_stores_the_batches_it_finished_and_the_next_one_checks_the_rest() {
+            let exited: Vec<ExitedLeaf> = (0..12).map(leaf_number).collect();
+            let leaves: Vec<TreeNode> = exited.iter().map(|exited| exited.leaf.clone()).collect();
+            let storage = temp_storage();
+
+            // The chain service fails every request for the last two leaves, which
+            // are in the second batch.
+            let known: Vec<Observation> = exited.iter().take(10).flat_map(all_of).collect();
+            let chain = chain_knowing(&known);
+            let mut queries = ChainQueries::new(chain.clone());
+            let complete = store_recovered_leaf_checks(
+                &leaves,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut queries,
+                &storage,
+            )
+            .await;
+
+            let stored = stored_in(&storage).await;
+            assert_eq!(complete.len(), 10);
+            assert_eq!(stored.len(), 10);
+            assert!(stored.values().all(|leaf| leaf.chain_checked_at.is_some()));
+            // Three requests for each leaf of the first batch, and the one that
+            // failed.
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 31);
+
+            let known: Vec<Observation> = exited.iter().skip(10).flat_map(all_of).collect();
+            let chain = chain_knowing(&known);
+            let mut queries = ChainQueries::new(chain.clone());
+            let complete = store_recovered_leaf_checks(
+                &leaves[10..],
+                &HashMap::new(),
+                &stored,
+                &mut queries,
+                &storage,
+            )
+            .await;
+
+            assert_eq!(complete.len(), 2);
+            assert_eq!(stored_in(&storage).await.len(), 12);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 6);
         }
     }
 

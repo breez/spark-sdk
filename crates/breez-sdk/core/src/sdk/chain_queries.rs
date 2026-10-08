@@ -10,6 +10,13 @@ use crate::chain::{BitcoinChainService, ChainServiceError, Outspend, Utxo};
 /// How many requests the SDK has open at the chain service at the same time.
 const CONCURRENT_CHAIN_REQUESTS: usize = 10;
 
+/// The batches in which a sync checks `leaves`, one after the other: as many
+/// leaves per batch as the SDK has requests open. A failed request then costs
+/// the unfinished results of that many leaves at most.
+pub(crate) fn batches<T>(leaves: &[T]) -> std::slice::Chunks<'_, T> {
+    leaves.chunks(CONCURRENT_CHAIN_REQUESTS)
+}
+
 /// The chain queries of one call and their results. The scans of a call share
 /// it, so the SDK sends no query twice.
 pub(crate) struct ChainQueries {
@@ -38,6 +45,11 @@ impl ChainQueries {
 
     pub(crate) fn observed(&self) -> &[Observation] {
         &self.observed
+    }
+
+    /// Whether the chain service failed a request of this call.
+    pub(crate) fn failed(&self) -> bool {
+        self.failed
     }
 
     /// The queries the chain service returned a result for.
@@ -374,7 +386,18 @@ mod tests {
         assert_eq!(rounds, 3);
         assert_eq!(state, 2);
         assert_eq!(queries.fetched().len(), 2);
+        assert!(!queries.failed());
         assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_batch_holds_as_many_leaves_as_the_sdk_has_requests_open() {
+        let leaves: Vec<u8> = (0..25).collect();
+
+        let sizes: Vec<usize> = batches(&leaves).map(<[u8]>::len).collect();
+
+        assert_eq!(sizes, vec![10, 10, 5]);
+        assert_eq!(batches::<u8>(&[]).count(), 0);
     }
 
     #[macros::async_test_all]
@@ -431,6 +454,7 @@ mod tests {
         let fetched = queries.fetched().len();
         assert!(requests <= fetched.saturating_add(CONCURRENT_CHAIN_REQUESTS));
         assert!(requests < 30);
+        assert!(queries.failed());
         assert_eq!(queries.observed().len(), 30);
         assert_eq!(
             result_of(queries.observed(), &query(0)),

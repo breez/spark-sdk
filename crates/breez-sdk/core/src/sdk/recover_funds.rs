@@ -21,7 +21,7 @@ use crate::{
     LeafRecovery, Network, PrepareRecoverFundsRequest, PrepareRecoverFundsResponse,
     RecoverFundsLeaf, RecoverFundsRequest, RecoverFundsResponse, RecoveryMethod,
     RecoveryRedoReason, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkEvent,
-    SkippedLeaf, SkippedLeafReason, UpdateLeafRecovery, error::SdkError,
+    SkippedLeaf, SkippedLeafReason, Storage, UpdateLeafRecovery, error::SdkError,
     persist::ObjectCacheRepository, signer::CpfpSigner, utils::time::now_secs,
 };
 
@@ -269,17 +269,19 @@ struct RecoverySelection {
     not_unilateral: HashSet<String>,
 }
 
-/// The leaves without a stored recovery, by what the SDK does with each in a sync.
+/// The leaves a sync has work for, by what the SDK does with each.
 #[derive(Default)]
 struct NewLeaves {
-    /// The SDK stores these as they are, without a chain check.
+    /// Leaves without a stored recovery. The SDK stores these as they are,
+    /// without a chain check.
     to_recover: Vec<UpdateLeafRecovery>,
-    /// The SDK checks these with the chain service first: the operators report
-    /// a recovered leaf the same whether or not its recovery is in a block.
+    /// Leaves whose check is not complete. The SDK checks these with the chain
+    /// service first: the operators report a recovered leaf the same whether
+    /// or not its recovery is in a block.
     recovered: Vec<TreeNode>,
-    /// The SDK checks these with the chain service first: the operators report
-    /// an exited leaf the same whether or not a sweep of its refund is in a
-    /// block.
+    /// Leaves without a stored recovery. The SDK checks these with the chain
+    /// service first: the operators report an exited leaf the same whether or
+    /// not a sweep of its refund is in a block.
     exited: Vec<TreeNode>,
 }
 
@@ -301,25 +303,18 @@ impl BreezSdk {
             .collect())
     }
 
-    /// Returns whether storing `update` succeeded. The SDK only logs a failure:
-    /// it can get what the update holds again, from the chain service or the
-    /// operators.
     pub(super) async fn store_leaf_recovery(&self, update: UpdateLeafRecovery) -> bool {
-        let leaf_id = update.leaf_id.clone();
-        match self.storage.update_leaf_recovery(update).await {
-            Ok(()) => true,
-            Err(e) => {
-                error!("Failed to store the recovery of leaf {leaf_id}: {e}");
-                false
-            }
-        }
+        store_update(self.storage.as_ref(), update).await
     }
 
     /// Stores the recovery of each leaf that has none stored, then the total of the
     /// funds to recover, and emits `RecoverableFunds` when it stored a leaf with
-    /// funds still to recover. It stores a recovered or exited leaf once it knows
-    /// from the chain service whether a recovery or sweep of the leaf's funds is
-    /// in a block, or at once when the leaf is too small to send out.
+    /// funds still to recover. A recovered or exited leaf counts once the SDK
+    /// knows from the chain service whether a recovery or sweep of the leaf's
+    /// funds is in a block, or at once when the leaf is too small to send out.
+    /// The SDK checks such leaves in batches and stores what each batch
+    /// established, so a later sync continues where a failed request stopped
+    /// this one.
     pub(super) async fn sync_recoverable_funds(&self) {
         let statuses = [EXITING_STATUSES.as_slice(), &WATCHTOWER_EXITED_STATUSES].concat();
         let leaves = match self.spark_wallet.list_leaves_with_status(&statuses).await {
@@ -341,20 +336,19 @@ impl BreezSdk {
             }
         };
         let new = new_leaves(&leaves, &stored);
-        let mut queries = ChainQueries::new(self.chain_service.clone());
-        let recovered = self
-            .check_recovered_leaves(&new.recovered, &mut queries)
-            .await;
-        let exited = self.check_exited_leaves(&new.exited, &mut queries).await;
-
         let mut new_leaf_ids: HashSet<String> = HashSet::new();
-        let updates = new.to_recover.into_iter().chain(recovered).chain(exited);
-        for update in updates {
+        for update in new.to_recover {
             let leaf_id = update.leaf_id.clone();
             if self.store_leaf_recovery(update).await {
                 new_leaf_ids.insert(leaf_id);
             }
         }
+        let mut queries = ChainQueries::new(self.chain_service.clone());
+        new_leaf_ids.extend(
+            self.check_recovered_leaves(&new.recovered, &stored, &mut queries)
+                .await,
+        );
+        new_leaf_ids.extend(self.check_exited_leaves(&new.exited, &mut queries).await);
         if !new_leaf_ids.is_empty() {
             stored = match self.leaf_recoveries().await {
                 Ok(stored) => stored,
@@ -640,6 +634,36 @@ impl BreezSdk {
     }
 }
 
+/// Returns whether storing `update` succeeded. The SDK only logs a failure: it
+/// can get what the update holds again, from the chain service or the
+/// operators.
+pub(super) async fn store_update(storage: &dyn Storage, update: UpdateLeafRecovery) -> bool {
+    let leaf_id = update.leaf_id.clone();
+    match storage.update_leaf_recovery(update).await {
+        Ok(()) => true,
+        Err(e) => {
+            error!("Failed to store the recovery of leaf {leaf_id}: {e}");
+            false
+        }
+    }
+}
+
+/// Stores `checks` and returns the leaves among them whose check is complete.
+pub(super) async fn store_checks(
+    storage: &dyn Storage,
+    checks: Vec<UpdateLeafRecovery>,
+) -> Vec<String> {
+    let mut complete = Vec::new();
+    for check in checks {
+        let leaf_id = check.leaf_id.clone();
+        let is_complete = check.chain_checked_at.is_some();
+        if store_update(storage, check).await && is_complete {
+            complete.push(leaf_id);
+        }
+    }
+    complete
+}
+
 /// Whether storage holds the recovery or the sweep of the leaf's funds in a
 /// block.
 fn is_finished(stored: &LeafRecovery) -> bool {
@@ -657,11 +681,20 @@ fn finished_and_open(
         .partition(|leaf| stored.get(&leaf.id.to_string()).is_some_and(is_finished))
 }
 
+/// Whether a sync found the leaf's output and has yet to learn whether that
+/// output is spent.
+fn check_incomplete(stored: &LeafRecovery) -> bool {
+    stored.chain_checked_at.is_none() && stored.watchtower_exit_output.is_some()
+}
+
 fn new_leaves(leaves: &[TreeNode], stored: &HashMap<String, LeafRecovery>) -> NewLeaves {
     let mut new = NewLeaves::default();
     for leaf in leaves {
         let leaf_id = leaf.id.to_string();
-        if stored.contains_key(&leaf_id) {
+        if let Some(stored) = stored.get(&leaf_id) {
+            if check_incomplete(stored) {
+                new.recovered.push(leaf.clone());
+            }
             continue;
         }
         match leaf.status {
@@ -705,7 +738,8 @@ fn can_be_sent_out(leaf: &TreeNode) -> bool {
 }
 
 /// The value of the leaves whose stored recovery holds neither a watchtower exit
-/// spend nor a sweep, and how many of them are among `new_leaf_ids`.
+/// spend nor a sweep, and how many of them are among `new_leaf_ids`. A leaf
+/// whose check is not complete is left out.
 fn recoverable_funds(
     leaves: &[TreeNode],
     stored: &HashMap<String, LeafRecovery>,
@@ -715,9 +749,9 @@ fn recoverable_funds(
     let mut found: usize = 0;
     for leaf in leaves {
         let leaf_id = leaf.id.to_string();
-        let unfinished = stored.get(&leaf_id).is_some_and(|leaf| {
-            leaf.watchtower_exit_spend.is_none() && leaf.unilateral_exit_sweep.is_none()
-        });
+        let unfinished = stored
+            .get(&leaf_id)
+            .is_some_and(|leaf| !is_finished(leaf) && !check_incomplete(leaf));
         if !unfinished {
             continue;
         }
@@ -1041,6 +1075,35 @@ mod tests {
             script_pubkey: "5120".to_string(),
             block_height: 100,
         }
+    }
+
+    #[test]
+    fn a_leaf_with_a_stored_output_and_no_check_time_is_checked_again_and_not_counted() {
+        let leaf =
+            create_test_node_with_parent(LEAF_ID, None, TreeNodeStatus::WatchtowerExitRecovered);
+        let leaves = std::slice::from_ref(&leaf);
+        let incomplete = LeafRecovery {
+            watchtower_exit_output: Some(stored_output()),
+            ..stored_leaf(LEAF_ID)
+        };
+        let complete = LeafRecovery {
+            chain_checked_at: Some(1_000),
+            ..incomplete.clone()
+        };
+
+        let stored = by_leaf_id(vec![incomplete]);
+        let new = new_leaves(leaves, &stored);
+        assert_eq!(new.recovered.len(), 1);
+        assert!(new.to_recover.is_empty() && new.exited.is_empty());
+        assert_eq!(recoverable_funds(leaves, &stored, &HashSet::new()).0, 0);
+
+        let stored = by_leaf_id(vec![complete]);
+        let new = new_leaves(leaves, &stored);
+        assert!(new.recovered.is_empty());
+        assert_eq!(
+            recoverable_funds(leaves, &stored, &HashSet::new()).0,
+            leaf.value
+        );
     }
 
     #[test]
