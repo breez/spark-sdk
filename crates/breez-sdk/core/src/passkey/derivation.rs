@@ -1,10 +1,11 @@
 use super::error::PasskeyError;
+use super::nostr::keypair;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::{
     Network,
     bip32::{DerivationPath, Xpriv},
     hashes::{Hash, sha256},
-    secp256k1::Secp256k1,
+    secp256k1::{Keypair, Secp256k1, SecretKey},
 };
 
 /// The magic salt for deriving the account master.
@@ -28,9 +29,9 @@ const NOSTR_SALT_DERIVATION_PATH: &str = "m/44'/1237'/55'/0/0";
 /// * `account_master` - The 32-byte PRF output from the magic salt
 ///
 /// # Returns
-/// * `Ok(nostr::Keys)` - The Nostr keypair for signing salt events
+/// * `Ok(Keypair)` - The Nostr keypair for signing salt events
 /// * `Err(PasskeyError)` - If derivation fails
-pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, PasskeyError> {
+pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<Keypair, PasskeyError> {
     if account_master.len() != 32 {
         return Err(PasskeyError::InvalidPrfOutput(format!(
             "Account master must be 32 bytes, got {}",
@@ -50,11 +51,7 @@ pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, Passke
 
     let derived = master.derive_priv(&secp, &path)?;
 
-    // Convert to nostr secret key
-    let secret_key = nostr::SecretKey::from_slice(&derived.private_key.secret_bytes())
-        .map_err(|e| PasskeyError::KeyDerivationError(e.to_string()))?;
-
-    Ok(nostr::Keys::new(secret_key))
+    Ok(keypair(&derived.private_key))
 }
 
 /// Derives a Nostr keypair for NIP-42 authentication from a Breez API key.
@@ -66,9 +63,9 @@ pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, Passke
 /// * `api_key` - The Breez API key (base64 encoded)
 ///
 /// # Returns
-/// * `Ok(nostr::Keys)` - The Nostr keypair for NIP-42 authentication
+/// * `Ok(Keypair)` - The Nostr keypair for NIP-42 authentication
 /// * `Err(PasskeyError)` - If the API key is invalid base64 or derivation fails
-pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, PasskeyError> {
+pub fn derive_nip42_keypair(api_key: &str) -> Result<Keypair, PasskeyError> {
     // 1. Base64 decode the API key
     let decoded = STANDARD
         .decode(api_key)
@@ -78,10 +75,10 @@ pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, PasskeyError> 
     let hash = sha256::Hash::hash(&decoded);
 
     // 3. Create Nostr keypair from hash
-    let secret_key = nostr::SecretKey::from_slice(hash.as_byte_array())
+    let secret_key = SecretKey::from_slice(hash.as_byte_array())
         .map_err(|e| PasskeyError::KeyDerivationError(e.to_string()))?;
 
-    Ok(nostr::Keys::new(secret_key))
+    Ok(keypair(&secret_key))
 }
 
 /// Converts PRF output to a BIP39 mnemonic.
@@ -126,6 +123,27 @@ mod tests {
         // Verify we get a valid public key
         let pubkey = keys.public_key();
         assert!(!pubkey.to_string().is_empty());
+    }
+
+    #[macros::test_all]
+    fn test_derived_identities_are_stable() {
+        // Public keys rust-nostr derived for the same inputs: existing users'
+        // labels live under these identities.
+        let keys = derive_nostr_keypair(&[0u8; 32]).unwrap();
+        assert_eq!(
+            keys.x_only_public_key().0.to_string(),
+            "d4ab48e5e32905f68d8a7bc4551d51b6ff400edc2191e22c2623b87302908097"
+        );
+        let keys = derive_nostr_keypair(&[42u8; 32]).unwrap();
+        assert_eq!(
+            keys.x_only_public_key().0.to_string(),
+            "511d49fdbd5af6abf8f925314a081954226c0634c33db1f064af1131915200e7"
+        );
+        let keys = derive_nip42_keypair("dGVzdC1hcGkta2V5").unwrap();
+        assert_eq!(
+            keys.x_only_public_key().0.to_string(),
+            "ed4e6cd37886596d43b430cfd1da43dbe25c4b7a550603f55a5cc5518dc1df11"
+        );
     }
 
     #[macros::test_all]

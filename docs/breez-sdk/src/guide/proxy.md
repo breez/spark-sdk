@@ -24,7 +24,6 @@ A configuration the SDK cannot honour is rejected where it is supplied, rather t
 |---|---|
 | A proxy on WASM | The browser owns connection setup and exposes no proxy control. |
 | {{#name proxy}} with {{#name connections_per_operator}} above 1 | Balanced operator connections build their own connectors and cannot be routed. |
-| A proxy carrying credentials on {{#name PasskeyConfig}} | Nostr relay connections cannot authenticate to a proxy. Wallet labels live on those relays and are one of the salts a wallet seed derives from, so a label that cannot be published cannot be recovered: this fails before a wallet exists rather than after one is funded. |
 
 ## Shared SDK Context
 
@@ -37,7 +36,7 @@ A few APIs run without an SDK instance, so they cannot pick the setting up on th
 - {{#name get_spark_status}}, via {{#name GetSparkStatusRequest}}
 - {{#name new_rest_chain_service}}, via {{#name NewRestChainServiceRequest}}
 - The Turnkey signer, via {{#name TurnkeyConfig}}
-- The passkey client, via {{#name PasskeyConfig}}. A proxy carrying credentials is rejected when the client is constructed (see above).
+- The passkey client, via {{#name PasskeyConfig}}
 
 A service you supply yourself through {{#name with_chain_service}}, {{#name with_fiat_service}}, {{#name with_lnurl_client}} or {{#name with_lnurl_server_client}} already owns its transport, which the SDK cannot inspect or re-route. Make it connect through the proxy yourself; the SDK logs a warning when it sees one alongside a proxy. {{#name with_rest_chain_service}} is built on the SDK's own client and is proxied automatically.
 

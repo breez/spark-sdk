@@ -151,10 +151,6 @@ pub struct PasskeyConfig {
     /// SOCKS5 proxy. Pass the same value as [`Config::proxy`](crate::Config::proxy):
     /// the passkey client is built before the SDK, so it cannot pick the setting
     /// up on its own.
-    ///
-    /// Relay connections do not support proxy authentication, so a proxy
-    /// carrying a username and password is rejected when the client is
-    /// built.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub proxy: Option<crate::ProxyConfig>,
 }
@@ -173,14 +169,6 @@ impl PasskeyConfig {
         };
         proxy
             .validate()
-            .map_err(|e| super::PasskeyError::InvalidConfig(e.to_string()))?;
-        if proxy.username.is_some() || proxy.password.is_some() {
-            return Err(super::PasskeyError::InvalidConfig(
-                "Nostr relay connections do not support proxy authentication: \
-                 async-wsocket's ConnectionMode::Proxy carries only an address"
-                    .to_string(),
-            ));
-        }
-        Ok(())
+            .map_err(|e| super::PasskeyError::InvalidConfig(e.to_string()))
     }
 }

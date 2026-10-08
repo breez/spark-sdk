@@ -265,6 +265,8 @@ tonic-web-wasm-client = "0.6"
 tower-service = "0.3.3"
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 tokio-socks = "0.5.2"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite-wasm = { version = "0.8", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 tsify-next = {version = "0.5.5", default-features = false}

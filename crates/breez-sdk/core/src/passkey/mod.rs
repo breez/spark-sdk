@@ -48,6 +48,7 @@
 mod derivation;
 mod error;
 mod models;
+mod nostr;
 mod nostr_client;
 mod passkey_client;
 mod passkey_prf_provider;
@@ -80,7 +81,7 @@ use nostr_client::{LabelStore, NostrSaltClient};
 /// network-backed [`NostrSaltClient`]; tests inject an in-memory double so
 /// unit tests never reach the relays.
 type LabelStoreBuilder =
-    Arc<dyn Fn(nostr::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
+    Arc<dyn Fn(bitcoin::secp256k1::Keypair, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
 
 /// Default store builder: a network-backed [`NostrSaltClient`] reaching the
 /// relays through `proxy`, when one is configured.
@@ -183,7 +184,7 @@ impl Passkey {
     /// cache the runtime path goes through; production code reads via
     /// [`Self::nostr_client`].
     #[cfg(test)]
-    async fn derive_keys(&self) -> Result<nostr::Keys, PasskeyError> {
+    async fn derive_keys(&self) -> Result<bitcoin::secp256k1::Keypair, PasskeyError> {
         let client = self.nostr_client().await?;
         Ok(client.signing_keys())
     }
@@ -455,31 +456,6 @@ mod tests {
         }
     }
 
-    /// The label is a PRF salt the wallet seed derives from, and the relay
-    /// directory is the only copy of it, so an unpublishable label has to
-    /// fail before a wallet exists rather than at the first label op.
-    #[macros::test_all]
-    fn test_passkey_new_rejects_authenticated_proxy() {
-        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let config = PasskeyConfig {
-            proxy: Some(passkey_proxy(Some("user"), Some("pass"))),
-            ..PasskeyConfig::default()
-        };
-
-        match Passkey::new(prf_provider, None, Some(config)).err() {
-            Some(PasskeyError::InvalidConfig(m)) => {
-                // WASM rejects any proxy before the credentials are looked at.
-                let expected = if cfg!(all(target_family = "wasm", target_os = "unknown")) {
-                    "not supported on WASM"
-                } else {
-                    "proxy authentication"
-                };
-                assert!(m.contains(expected), "expected {expected:?}, got: {m}");
-            }
-            other => panic!("expected an authenticated proxy to be rejected, got {other:?}"),
-        }
-    }
-
     /// A permanent misconfiguration, not a transient failure: hosts branch
     /// on `kind()` to decide whether a retry is worth offering.
     #[macros::test_all]
@@ -491,19 +467,24 @@ mod tests {
     }
 
     #[macros::test_all]
-    fn test_passkey_new_accepts_unauthenticated_proxy() {
-        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let config = PasskeyConfig {
-            proxy: Some(passkey_proxy(None, None)),
-            ..PasskeyConfig::default()
-        };
+    fn test_passkey_new_accepts_proxy() {
+        for proxy in [
+            passkey_proxy(None, None),
+            passkey_proxy(Some("user"), Some("pass")),
+        ] {
+            let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
+            let config = PasskeyConfig {
+                proxy: Some(proxy),
+                ..PasskeyConfig::default()
+            };
 
-        // WASM cannot honour any proxy, so the accept case is native-only.
-        let result = Passkey::new(prf_provider, None, Some(config));
-        if cfg!(all(target_family = "wasm", target_os = "unknown")) {
-            assert!(matches!(result, Err(PasskeyError::InvalidConfig(_))));
-        } else {
-            assert!(result.is_ok());
+            // WASM cannot honour any proxy, so the accept case is native-only.
+            let result = Passkey::new(prf_provider, None, Some(config));
+            if cfg!(all(target_family = "wasm", target_os = "unknown")) {
+                assert!(matches!(result, Err(PasskeyError::InvalidConfig(_))));
+            } else {
+                assert!(result.is_ok());
+            }
         }
     }
 
