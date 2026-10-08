@@ -2,10 +2,8 @@ import {
   defaultConfig,
   Network,
   MaxFee,
-  parseSparkConfig,
   StableBalanceConfig
 } from '@breeztech/breez-sdk-spark-react-native'
-import RNFS from 'react-native-fs'
 
 const exampleConfigureSdk = () => {
   // ANCHOR: max-deposit-claim-fee
@@ -156,27 +154,6 @@ const exampleConfigureProxy = async () => {
   console.debug('Config:', config)
 }
 
-const exampleConfigureLocalEnvironment = async () => {
-  // ANCHOR: local-spark-config
-  const config = defaultConfig(Network.Regtest)
-
-  // The local environment writes this file when it starts
-  config.sparkConfig = parseSparkConfig(
-    await RNFS.readFile(`${RNFS.DocumentDirectoryPath}/spark-config.json`, 'utf8')
-  )
-
-  // Its SSP charges more than the default ceiling to claim a deposit
-  config.maxDepositClaimFee = new MaxFee.Rate({ satPerVbyte: BigInt(5) })
-
-  // Its LNURL server serves the lightning addresses wallets register
-  config.lnurlDomain = 'http://127.0.0.1:8080'
-
-  // Its data-sync service keeps this wallet's instances in step
-  config.realTimeSyncServerUrl = 'http://127.0.0.1:8081'
-  // ANCHOR_END: local-spark-config
-  console.log('Config:', config)
-}
-
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
@@ -185,6 +162,5 @@ export {
   exampleConfigureSparkConfig,
   exampleConfigureBackgroundTasks,
   exampleConfigureCrossChain,
-  exampleConfigureProxy,
-  exampleConfigureLocalEnvironment
+  exampleConfigureProxy
 }

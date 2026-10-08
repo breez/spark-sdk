@@ -69,8 +69,7 @@ nvm use 22 || nvm install 22  # then re-run the make target
 `regtest/local/` runs the services the local itests use, for integrators rather
 than for tests: `docker compose up` (also `make local-env-up`) and, natively,
 `nix run .#local-env`. Both take the scripts in `regtest/local/scripts/`, so a
-change there reaches both. It is documented in
-`docs/breez-sdk/src/guide/testing.md`.
+change there reaches both. It is documented in `regtest/local/README.md`.
 
 Keep both setups in step when changing:
 
@@ -92,10 +91,6 @@ Keep both setups in step when changing:
 - **A published port or another setting.** Every one is an environment variable
   with a default. Add new ones to both setups, and to the settings table in
   `regtest/local/README.md`.
-
-What a wallet needs to connect (`spark-config.json`, the chain API, the claim
-fee ceiling) is stated in the docs. Verify a claim about what the environment
-can do before writing it there.
 
 Both still load:
 

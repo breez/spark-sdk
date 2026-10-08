@@ -2,8 +2,7 @@
 
 A Spark regtest network of your own: bitcoind, three Spark operators, a Spark
 service provider (SSP) with its Lightning node, an LNURL server, a data-sync
-service, and the mempool explorer with its API. Documented for integrators in
-[Testing and development](https://sdk-doc-spark.breez.technology/guide/testing.html).
+service, and the mempool explorer with its API.
 
 ```bash
 docker compose -f regtest/local/docker-compose.yml up
