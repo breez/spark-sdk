@@ -1,7 +1,10 @@
 //! A chain service for tests: it returns what a test put in it, and fails
 //! every other lookup.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use bitcoin::{Amount, OutPoint, ScriptBuf, Transaction, TxIn, TxOut};
 
@@ -16,6 +19,8 @@ pub(crate) struct ChainStub {
     pub(crate) transactions: HashMap<String, String>,
     /// Every output paid to an address, by address.
     pub(crate) address_txos: HashMap<String, Vec<Utxo>>,
+    /// How many requests the stub received.
+    pub(crate) requests: AtomicUsize,
 }
 
 impl ChainStub {
@@ -58,6 +63,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn get_address_txos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         self.address_txos
             .get(&address)
             .cloned()
@@ -65,6 +71,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         self.heights
             .get(&txid)
             .map(|height| TxStatus {
@@ -80,6 +87,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         self.transactions
             .get(&txid)
             .cloned()
@@ -87,6 +95,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         self.outspends
             .get(&(txid, vout))
             .cloned()

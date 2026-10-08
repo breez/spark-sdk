@@ -34,7 +34,11 @@ use crate::{
     utils::time::now_secs,
 };
 
-use super::{BreezSdk, chain_queries::ChainQueries};
+use super::{
+    BreezSdk,
+    chain_queries::{ChainQueries, batches},
+    recover_funds::store_checks,
+};
 
 #[derive(Default)]
 pub(super) struct UnilateralQuote {
@@ -407,16 +411,31 @@ impl BreezSdk {
     }
 
     /// Checks with the chain service whether the refund of each exited leaf was
-    /// swept. The operators report an exited leaf the same either way. Returns
-    /// what to store for the leaves it has every result for.
+    /// swept. The operators report an exited leaf the same either way. It
+    /// stores the checks of a batch before it starts the next one, and starts
+    /// none after a failed request. Returns the leaves whose check is complete.
     pub(super) async fn check_exited_leaves(
         &self,
         leaves: &[TreeNode],
         queries: &mut ChainQueries,
-    ) -> Vec<UpdateLeafRecovery> {
-        if leaves.is_empty() {
-            return Vec::new();
+    ) -> Vec<String> {
+        let mut complete = Vec::new();
+        for batch in batches(leaves) {
+            if queries.failed() {
+                break;
+            }
+            let checks = self.check_exited_batch(batch, queries).await;
+            complete.extend(store_checks(self.storage.as_ref(), checks).await);
         }
+        complete
+    }
+
+    /// What to store for the leaves of one batch it has every result for.
+    async fn check_exited_batch(
+        &self,
+        leaves: &[TreeNode],
+        queries: &mut ChainQueries,
+    ) -> Vec<UpdateLeafRecovery> {
         let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
         let selection = spark_wallet::ExitLeafSelection::Specific(leaf_ids);
         let context = match self

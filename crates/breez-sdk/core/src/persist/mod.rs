@@ -158,8 +158,9 @@ pub struct WatchtowerExitRecovery {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LeafRecovery {
     pub leaf_id: String,
-    /// When the SDK last read the leaf's on-chain state from the chain
-    /// service, in seconds since the epoch. Unset when it never did.
+    /// When the SDK last completed a check of the leaf's on-chain state with
+    /// the chain service, in seconds since the epoch. Unset while it has
+    /// completed none.
     pub chain_checked_at: Option<u64>,
     pub watchtower_exit_output: Option<StoredWatchtowerExitOutput>,
     /// The co-signed recoveries of `watchtower_exit_output`, ordered by txid.
