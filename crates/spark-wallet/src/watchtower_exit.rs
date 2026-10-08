@@ -11,34 +11,35 @@ use spark::{
 
 use crate::unilateral_exit::{ChainQuery, ChainResult, Observation, ObservedIndex};
 
+/// The on-chain output holding a leaf's funds after a watchtower exit.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WatchtowerExitedOutput {
+pub struct WatchtowerExitOutput {
     pub leaf_id: TreeNodeId,
     pub outpoint: OutPoint,
     pub tx_out: TxOut,
 }
 
-pub const WATCHTOWER_EXITED_STATUSES: [TreeNodeStatus; 2] = [
-    TreeNodeStatus::WatchtowerExited,
-    TreeNodeStatus::WatchtowerExitRecovered,
-];
-
-pub fn is_watchtower_exited(status: TreeNodeStatus) -> bool {
-    WATCHTOWER_EXITED_STATUSES.contains(&status)
-}
-
+/// Where a leaf's funds are after a watchtower exit, read from the results of
+/// a scan's queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ExitedFunds {
-    Found(WatchtowerExitedOutput),
-    /// The chain does not show which direct tx confirmed: the output of the
-    /// one the node holds.
-    Assumed(WatchtowerExitedOutput),
-    /// The direct tx pays no output to the leaf's key, so the operators co-sign
+pub enum WatchtowerExitLookup {
+    /// In a direct tx that is in a block.
+    Found {
+        output: WatchtowerExitOutput,
+        /// Unset when the result does not name the block.
+        block_height: Option<u32>,
+    },
+    /// In the direct tx the nearest on-chain ancestor holds. No result has a
+    /// direct tx of that ancestor in a block.
+    Unconfirmed(WatchtowerExitOutput),
+    /// The direct tx has no output to the leaf's key, so the operators co-sign
     /// no recovery of the leaf.
     Unrecoverable,
     /// The leaf's own refunds recover it.
     Unilateral,
     NotFound,
+    /// A query the lookup needs has no result.
+    Pending,
 }
 
 enum Spender {
@@ -62,31 +63,22 @@ impl Spender {
 /// The confirmed spend of a node's parent output, as far as the chain shows.
 enum Spend<'a> {
     NotShown,
-    By(&'a Transaction),
-    /// By a transaction that could not be read.
+    By(&'a Transaction, Option<u32>),
+    /// By a transaction in a block, for which the chain service returned something else.
     Unread,
+    /// The query for the output's spend has no result.
+    OutspendUnknown,
+    /// The query for the transaction that spent the output has no result.
+    SpenderUnknown,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ResolvedWatchtowerExits {
-    pub outputs: Vec<WatchtowerExitedOutput>,
-    /// Outputs of the direct tx a node holds, where the chain does not show
-    /// which direct tx confirmed.
-    pub assumed: Vec<WatchtowerExitedOutput>,
-    /// The direct tx has no output paying these leaves' key, so the operators
-    /// co-sign no recovery of them.
-    pub unrecoverable: Vec<TreeNodeId>,
-    /// On-chain leaves that their own refunds recover.
-    pub unilateral: Vec<TreeNodeId>,
-}
-
-#[derive(Default)]
 pub struct WatchtowerExitScan {
-    pub resolved: ResolvedWatchtowerExits,
+    pub lookups: HashMap<TreeNodeId, WatchtowerExitLookup>,
+    /// The queries the caller has yet to execute.
     pub pending: Vec<ChainQuery>,
 }
 
-/// Finds the on-chain output holding the funds of each of `leaves`. `nodes`
+/// Looks up the on-chain output holding the funds of each of `leaves`. `nodes`
 /// holds their ancestors, which an on-chain leaf does not need. Run it again
 /// with the results of `pending` until none is left.
 pub fn scan_watchtower_exits(
@@ -95,33 +87,37 @@ pub fn scan_watchtower_exits(
     observed: &[Observation],
 ) -> WatchtowerExitScan {
     let index = ObservedIndex::new(observed);
-    let mut scan = WatchtowerExitScan::default();
+    let mut pending = Vec::new();
+    let mut lookups = HashMap::new();
     for leaf in leaves {
-        match exited_funds(leaf, nodes, &index, &mut scan.pending) {
-            ExitedFunds::Found(output) => scan.resolved.outputs.push(output),
-            ExitedFunds::Assumed(output) => scan.resolved.assumed.push(output),
-            ExitedFunds::Unrecoverable => scan.resolved.unrecoverable.push(leaf.id.clone()),
-            ExitedFunds::Unilateral => scan.resolved.unilateral.push(leaf.id.clone()),
-            ExitedFunds::NotFound => {}
-        }
+        let executed = pending.len();
+        let lookup = lookup_output(leaf, nodes, &index, &mut pending);
+        let lookup = if pending.len() > executed {
+            WatchtowerExitLookup::Pending
+        } else {
+            lookup
+        };
+        lookups.insert(leaf.id.clone(), lookup);
     }
     let mut seen = HashSet::new();
-    scan.pending.retain(|query| seen.insert(query.clone()));
-    scan
+    pending.retain(|query| seen.insert(query.clone()));
+    WatchtowerExitScan { lookups, pending }
 }
 
-fn exited_funds(
+fn lookup_output(
     leaf: &TreeNode,
     nodes: &HashMap<TreeNodeId, TreeNode>,
     observed: &ObservedIndex<'_>,
     pending: &mut Vec<ChainQuery>,
-) -> ExitedFunds {
+) -> WatchtowerExitLookup {
     let mut visited = HashSet::new();
     let mut node = nodes.get(&leaf.id).unwrap_or(leaf);
+    // Whether the spend of the leaf's own parent output has no result.
+    let mut own_spend_unknown = false;
     loop {
         // The operators supply the parent ids, so a cycle is possible.
         if !visited.insert(node.id.clone()) {
-            return ExitedFunds::NotFound;
+            return WatchtowerExitLookup::NotFound;
         }
         let is_leaf = node.id == leaf.id;
         let on_chain = node.status == TreeNodeStatus::OnChain;
@@ -132,35 +128,56 @@ fn exited_funds(
             && let Some(direct_tx) = node.direct_tx.as_ref()
         {
             match confirmed_spend(node, direct_tx, observed, pending) {
-                Spend::By(spender) => {
+                Spend::By(spender, block_height) => {
                     let held = spender.compute_txid() == direct_tx.compute_txid();
                     return match Spender::of(spender, node, direct_tx) {
                         Spender::DirectTx if !(is_leaf && held) => {
-                            output_paying_leaf(leaf, spender)
-                                .map_or(ExitedFunds::Unrecoverable, ExitedFunds::Found)
+                            output_paying_leaf(leaf, spender).map_or(
+                                WatchtowerExitLookup::Unrecoverable,
+                                |output| WatchtowerExitLookup::Found {
+                                    output,
+                                    block_height,
+                                },
+                            )
                         }
-                        // The leaf's refunds spend its node tx and the direct tx it holds.
+                        // A leaf's refunds have the output of its node tx as
+                        // input, and its direct refund that of the direct tx it
+                        // holds. A leaf renewed at a zero timelock has no direct
+                        // refund.
                         Spender::NodeTx | Spender::DirectTx if is_leaf && on_chain => {
-                            ExitedFunds::Unilateral
+                            WatchtowerExitLookup::Unilateral
                         }
-                        _ => ExitedFunds::NotFound,
+                        _ => WatchtowerExitLookup::NotFound,
                     };
                 }
-                Spend::Unread => return ExitedFunds::NotFound,
-                Spend::NotShown if on_chain && !is_leaf => {
-                    return output_paying_leaf(leaf, direct_tx)
-                        .map_or(ExitedFunds::Unrecoverable, ExitedFunds::Assumed);
+                Spend::Unread => return WatchtowerExitLookup::NotFound,
+                Spend::SpenderUnknown => return WatchtowerExitLookup::Pending,
+                Spend::OutspendUnknown if is_leaf => own_spend_unknown = true,
+                Spend::NotShown | Spend::OutspendUnknown if on_chain && !is_leaf => {
+                    // The leaf's own direct tx may be the one in a block.
+                    if own_spend_unknown {
+                        return WatchtowerExitLookup::Pending;
+                    }
+                    return output_paying_leaf(leaf, direct_tx).map_or(
+                        WatchtowerExitLookup::Unrecoverable,
+                        WatchtowerExitLookup::Unconfirmed,
+                    );
                 }
-                Spend::NotShown => {}
+                Spend::NotShown | Spend::OutspendUnknown => {}
             }
         }
+        let not_found = if own_spend_unknown {
+            WatchtowerExitLookup::Pending
+        } else {
+            WatchtowerExitLookup::NotFound
+        };
         // The ancestors of an on-chain node confirmed through their node txs, so
         // none of them holds the funds.
         if on_chain {
-            return ExitedFunds::NotFound;
+            return not_found;
         }
         let Some(parent) = node.parent_node_id.as_ref().and_then(|id| nodes.get(id)) else {
-            return ExitedFunds::NotFound;
+            return not_found;
         };
         node = parent;
     }
@@ -177,26 +194,32 @@ fn confirmed_spend<'a>(
         return Spend::NotShown;
     };
     let query = ChainQuery::Outspend(input.previous_output);
-    let Some(result) = observed.get(&query) else {
-        pending.push(query);
-        return Spend::NotShown;
-    };
-    let txid = match result {
-        ChainResult::Spend(Some(spend)) if spend.confirmed => spend.spender_txid,
-        _ => return Spend::NotShown,
+    let (txid, block_height) = match observed.get(&query) {
+        None => {
+            pending.push(query);
+            return Spend::OutspendUnknown;
+        }
+        Some(ChainResult::Unavailable) => return Spend::OutspendUnknown,
+        Some(ChainResult::Spend(Some(spend))) if spend.confirmed => {
+            (spend.spender_txid, spend.block_height)
+        }
+        Some(_) => return Spend::NotShown,
     };
     for held in [&node.node_tx, direct_tx] {
         if held.compute_txid() == txid {
-            return Spend::By(held);
+            return Spend::By(held, block_height);
         }
     }
     let query = ChainQuery::Transaction(txid);
     match observed.get(&query) {
         None => {
             pending.push(query);
-            Spend::Unread
+            Spend::SpenderUnknown
         }
-        Some(ChainResult::Transaction(tx)) if tx.compute_txid() == txid => Spend::By(tx),
+        Some(ChainResult::Unavailable) => Spend::SpenderUnknown,
+        Some(ChainResult::Transaction(tx)) if tx.compute_txid() == txid => {
+            Spend::By(tx, block_height)
+        }
         Some(_) => Spend::Unread,
     }
 }
@@ -211,7 +234,7 @@ fn is_direct_tx_of(tx: &Transaction, direct_tx: &Transaction) -> bool {
     )
 }
 
-fn output_paying_leaf(leaf: &TreeNode, direct_tx: &Transaction) -> Option<WatchtowerExitedOutput> {
+fn output_paying_leaf(leaf: &TreeNode, direct_tx: &Transaction) -> Option<WatchtowerExitOutput> {
     let leaf_script = ScriptBuf::new_p2tr(
         &Secp256k1::verification_only(),
         leaf.verifying_public_key.x_only_public_key().0,
@@ -222,7 +245,7 @@ fn output_paying_leaf(leaf: &TreeNode, direct_tx: &Transaction) -> Option<Watcht
         .iter()
         .enumerate()
         .find(|(_, output)| output.script_pubkey == leaf_script)?;
-    Some(WatchtowerExitedOutput {
+    Some(WatchtowerExitOutput {
         leaf_id: leaf.id.clone(),
         outpoint: OutPoint {
             txid: direct_tx.compute_txid(),
@@ -244,7 +267,7 @@ pub struct UnsignedWatchtowerExitRecovery {
 /// minimum, or one that leaves less than the dust limit, is built as asked, for
 /// a miner reached directly.
 pub fn build_watchtower_exit_recovery(
-    output: &WatchtowerExitedOutput,
+    output: &WatchtowerExitOutput,
     destination: &Address,
     fee: Fee,
 ) -> Option<UnsignedWatchtowerExitRecovery> {
@@ -372,21 +395,21 @@ mod tests {
         leaf: &TreeNode,
         nodes: &HashMap<TreeNodeId, TreeNode>,
         observed: &[Observation],
-    ) -> ResolvedWatchtowerExits {
-        let scan = scan_watchtower_exits(std::slice::from_ref(leaf), nodes, observed);
-        assert!(scan.pending.is_empty(), "unanswered: {:?}", scan.pending);
-        scan.resolved
+    ) -> WatchtowerExitLookup {
+        let mut scan = scan_watchtower_exits(std::slice::from_ref(leaf), nodes, observed);
+        assert!(scan.pending.is_empty(), "not executed: {:?}", scan.pending);
+        scan.lookups.remove(&leaf.id).unwrap()
     }
 
-    fn found(output: WatchtowerExitedOutput) -> ResolvedWatchtowerExits {
-        ResolvedWatchtowerExits {
-            outputs: vec![output],
-            ..Default::default()
+    fn found(output: WatchtowerExitOutput) -> WatchtowerExitLookup {
+        WatchtowerExitLookup::Found {
+            output,
+            block_height: Some(100),
         }
     }
 
-    fn output_of(value: u64) -> WatchtowerExitedOutput {
-        WatchtowerExitedOutput {
+    fn output_of(value: u64) -> WatchtowerExitOutput {
+        WatchtowerExitOutput {
             leaf_id: TreeNodeId::from_str(LEAF).unwrap(),
             outpoint: OutPoint {
                 txid: Txid::from_byte_array([9; 32]),
@@ -433,7 +456,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            found(WatchtowerExitedOutput {
+            found(WatchtowerExitOutput {
                 leaf_id: leaf.id.clone(),
                 outpoint: OutPoint {
                     txid: confirmed.compute_txid(),
@@ -458,7 +481,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            found(WatchtowerExitedOutput {
+            found(WatchtowerExitOutput {
                 leaf_id: leaf.id.clone(),
                 outpoint: OutPoint {
                     txid: confirmed.compute_txid(),
@@ -486,7 +509,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            ResolvedWatchtowerExits::default()
+            WatchtowerExitLookup::NotFound
         );
     }
 
@@ -507,13 +530,17 @@ mod tests {
         let nodes = by_id(vec![leaf.clone(), split_1]);
         let leaves = [leaf];
 
+        let lookup = |scan: &WatchtowerExitScan| scan.lookups[&leaves[0].id].clone();
+
         let first = scan_watchtower_exits(&leaves, &nodes, &[]);
         assert_eq!(first.pending, vec![observed[0].query.clone()]);
+        assert_eq!(lookup(&first), WatchtowerExitLookup::Pending);
         let second = scan_watchtower_exits(&leaves, &nodes, &observed[..1]);
         assert_eq!(second.pending, vec![observed[1].query.clone()]);
+        assert_eq!(lookup(&second), WatchtowerExitLookup::Pending);
         let done = scan_watchtower_exits(&leaves, &nodes, &observed);
         assert!(done.pending.is_empty());
-        assert_eq!(done.resolved.outputs.len(), 1);
+        assert!(matches!(lookup(&done), WatchtowerExitLookup::Found { .. }));
     }
 
     #[test]
@@ -535,10 +562,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            ResolvedWatchtowerExits {
-                unrecoverable: vec![leaf.id.clone()],
-                ..Default::default()
-            }
+            WatchtowerExitLookup::Unrecoverable
         );
     }
 
@@ -563,7 +587,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            found(WatchtowerExitedOutput {
+            found(WatchtowerExitOutput {
                 leaf_id: leaf.id.clone(),
                 outpoint: OutPoint {
                     txid: confirmed.compute_txid(),
@@ -590,10 +614,7 @@ mod tests {
                     &HashMap::new(),
                     &parent_output_spent_by(&leaf, &spender)
                 ),
-                ResolvedWatchtowerExits {
-                    unilateral: vec![leaf.id.clone()],
-                    ..Default::default()
-                }
+                WatchtowerExitLookup::Unilateral
             );
         }
     }
@@ -608,7 +629,10 @@ mod tests {
         );
         let observed = parent_output_spent_by(&leaf, &confirmed);
 
-        assert_eq!(resolve(&leaf, &HashMap::new(), &observed).outputs.len(), 1);
+        assert!(matches!(
+            resolve(&leaf, &HashMap::new(), &observed),
+            WatchtowerExitLookup::Found { .. }
+        ));
     }
 
     #[test]
@@ -640,23 +664,20 @@ mod tests {
             }];
             assert_eq!(
                 resolve(&leaf, &nodes, &observed),
-                ResolvedWatchtowerExits {
-                    assumed: vec![WatchtowerExitedOutput {
-                        leaf_id: leaf.id.clone(),
-                        outpoint: OutPoint {
-                            txid: held.compute_txid(),
-                            vout: 0,
-                        },
-                        tx_out: held.output[0].clone(),
-                    }],
-                    ..Default::default()
-                }
+                WatchtowerExitLookup::Unconfirmed(WatchtowerExitOutput {
+                    leaf_id: leaf.id.clone(),
+                    outpoint: OutPoint {
+                        txid: held.compute_txid(),
+                        vout: 0,
+                    },
+                    tx_out: held.output[0].clone(),
+                })
             );
         }
     }
 
     #[test]
-    fn a_spender_that_cannot_be_read_gives_no_output() {
+    fn a_spender_the_chain_does_not_return_leaves_the_lookup_pending() {
         let leaf = node(LEAF, Some(SPLIT_1), TreeNodeStatus::WatchtowerExited, None);
         let split_1 = node(
             SPLIT_1,
@@ -685,7 +706,7 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &nodes, &observed),
-            ResolvedWatchtowerExits::default()
+            WatchtowerExitLookup::Pending
         );
     }
 
@@ -700,8 +721,49 @@ mod tests {
 
         assert_eq!(
             resolve(&leaf, &HashMap::new(), &observed),
-            ResolvedWatchtowerExits::default()
+            WatchtowerExitLookup::Pending
         );
+    }
+
+    #[test]
+    fn a_recovered_leaf_without_its_own_result_takes_no_held_direct_tx() {
+        let mut leaf = node(
+            LEAF,
+            Some(SPLIT_1),
+            TreeNodeStatus::WatchtowerExitRecovered,
+            None,
+        );
+        leaf.direct_tx = Some(direct_tx(vec![paying(9_800, key_path_script(&leaf))], 3));
+        let split_1 = node(
+            SPLIT_1,
+            None,
+            TreeNodeStatus::OnChain,
+            Some(direct_tx(vec![paying(9_900, key_path_script(&leaf))], 1)),
+        );
+        let outspend = |node: &TreeNode, result| Observation {
+            query: ChainQuery::Outspend(node.direct_tx.as_ref().unwrap().input[0].previous_output),
+            result,
+        };
+        let nodes = by_id(vec![leaf.clone(), split_1.clone()]);
+
+        // The leaf's own direct tx may be the one in a block.
+        let observed = [
+            outspend(&leaf, ChainResult::Unavailable),
+            outspend(&split_1, ChainResult::Spend(None)),
+        ];
+        assert_eq!(
+            resolve(&leaf, &nodes, &observed),
+            WatchtowerExitLookup::Pending
+        );
+
+        let observed = [
+            outspend(&leaf, ChainResult::Spend(None)),
+            outspend(&split_1, ChainResult::Unavailable),
+        ];
+        assert!(matches!(
+            resolve(&leaf, &nodes, &observed),
+            WatchtowerExitLookup::Unconfirmed(_)
+        ));
     }
 
     #[test]
@@ -717,10 +779,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(
-            resolve(&leaf, &nodes, &[]),
-            ResolvedWatchtowerExits::default()
-        );
+        assert_eq!(resolve(&leaf, &nodes, &[]), WatchtowerExitLookup::NotFound);
     }
 
     #[test]
@@ -728,10 +787,7 @@ mod tests {
         let leaf = node(LEAF, Some(SPLIT_1), TreeNodeStatus::WatchtowerExited, None);
         let nodes = by_id(vec![leaf.clone()]);
 
-        assert_eq!(
-            resolve(&leaf, &nodes, &[]),
-            ResolvedWatchtowerExits::default()
-        );
+        assert_eq!(resolve(&leaf, &nodes, &[]), WatchtowerExitLookup::NotFound);
     }
 
     #[test]
@@ -753,10 +809,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(
-            resolve(&leaf, &nodes, &[]),
-            ResolvedWatchtowerExits::default()
-        );
+        assert_eq!(resolve(&leaf, &nodes, &[]), WatchtowerExitLookup::NotFound);
     }
 
     #[test]

@@ -65,8 +65,8 @@ pub use spark::{
         LeavesReservation, LeavesReservationId, OptimizationError, OptimizationOutcome,
         ReservationPurpose, ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts,
         TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, VerifiedLeafKeys,
-        assemble_exit_chains, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
-        verified_leaf_keys_from_leaves,
+        WATCHTOWER_EXITED_STATUSES, assemble_exit_chains, select_leaves_by_minimum_amount,
+        select_leaves_by_target_amounts, verified_leaf_keys_from_leaves,
     },
     utils::frost::aggregate_frost,
     utils::{
@@ -78,9 +78,8 @@ pub use unilateral_exit::*;
 pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 pub use watchtower_exit::{
-    ResolvedWatchtowerExits, UnsignedWatchtowerExitRecovery, WATCHTOWER_EXITED_STATUSES,
-    WatchtowerExitScan, WatchtowerExitedOutput, build_watchtower_exit_recovery,
-    is_watchtower_exited, scan_watchtower_exits,
+    UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput, WatchtowerExitScan,
+    build_watchtower_exit_recovery, scan_watchtower_exits,
 };
 
 #[cfg(feature = "test-utils")]

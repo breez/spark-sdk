@@ -1,123 +1,102 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    str::FromStr,
-    sync::Arc,
-};
+use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use bitcoin::{
-    Address, Amount, ScriptBuf, Transaction, TxOut, Txid,
+    Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
     consensus::encode::{deserialize_hex, serialize_hex},
     hex::{DisplayHex, FromHex},
 };
 use spark_wallet::{
-    ChainResult, Observation, ResolvedWatchtowerExits, TreeNode, TreeNodeId, TreeNodeStatus,
-    UnsignedWatchtowerExitRecovery, WatchtowerExitedOutput, build_watchtower_exit_recovery,
-    scan_watchtower_exits,
+    ChainQuery, ChainResult, Observation, TreeNode, TreeNodeId, TreeNodeStatus,
+    UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput,
+    build_watchtower_exit_recovery, scan_watchtower_exits,
 };
-use tracing::{error, info, warn};
+use tracing::warn;
 
 use crate::{
-    CooperativeRecoveryError,
-    chain::{BitcoinChainService, Outspend},
+    ChainTransaction, CooperativeRecoveryError, LeafRecovery, StoredWatchtowerExitOutput,
+    UpdateLeafRecovery, WatchtowerExitRecovery,
     error::SdkError,
-    persist::{
-        CachedWatchtowerExit, CachedWatchtowerExitOutput, CachedWatchtowerExitRecovery,
-        ObjectCacheRepository, SeenAt,
-    },
-    utils::replacement::Replaced,
+    utils::{replacement::Replaced, time::now_secs},
 };
 
-use super::{BreezSdk, recover_funds::run_checks, unilateral_exit::execute_chain_query};
+use super::{
+    BreezSdk,
+    chain_queries::{ChainQueries, result_of, without_result},
+};
+
+/// A leaf whose funds are in an on-chain output, with the recoveries stored
+/// for that output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct WatchtowerExit {
+    pub(super) leaf_id: String,
+    pub(super) value_sats: u64,
+    pub(super) output: WatchtowerExitOutput,
+    recoveries: Vec<Transaction>,
+    /// Whether a recovery of `output` is in a block.
+    pub(super) recovered: bool,
+}
+
+/// The result of looking up watchtower exits, by leaf id.
+#[derive(Default)]
+pub(super) struct WatchtowerExits {
+    pub(super) exits: HashMap<String, WatchtowerExit>,
+    /// The lookup of each leaf that has no output to recover.
+    pub(super) missing: HashMap<String, WatchtowerExitLookup>,
+}
+
+/// What the chain service says spent an output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum OutputSpend {
+    /// The chain service returned no result.
+    Unknown,
+    Unspent,
+    InMempool(Txid),
+    InBlock {
+        txid: Txid,
+        /// Unset when the chain service did not report the block.
+        block_height: Option<u32>,
+    },
+}
+
+impl OutputSpend {
+    /// The spender, once the chain service reported its block.
+    pub(super) fn in_block(&self) -> Option<ChainTransaction> {
+        match self {
+            Self::InBlock {
+                txid,
+                block_height: Some(block_height),
+            } => Some(ChainTransaction {
+                txid: txid.to_string(),
+                block_height: *block_height,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// What spent `outpoint`, read from `observed`.
+pub(super) fn output_spend(observed: &[Observation], outpoint: OutPoint) -> OutputSpend {
+    match result_of(observed, &ChainQuery::Outspend(outpoint)) {
+        Some(ChainResult::Spend(None)) => OutputSpend::Unspent,
+        Some(ChainResult::Spend(Some(spend))) if spend.confirmed => OutputSpend::InBlock {
+            txid: spend.spender_txid,
+            block_height: spend.block_height,
+        },
+        Some(ChainResult::Spend(Some(spend))) => OutputSpend::InMempool(spend.spender_txid),
+        _ => OutputSpend::Unknown,
+    }
+}
 
 impl BreezSdk {
-    /// Adds up the watchtower-exited leaves not recovered yet. Returns that
-    /// value, how many of the leaves are new, and the leaves tracked.
-    ///
-    /// A leaf gets its record the first time a sync sees it. The operators
-    /// report a recovered leaf the same whether or not its recovery confirmed,
-    /// so the chain is asked about that leaf first, and it stays out of the
-    /// value until the chain answered.
-    pub(super) async fn sync_watchtower_exits(
+    /// Checks with the chain service where the funds of each recovered leaf are,
+    /// and whether a recovery of them is in a block. The operators report a
+    /// recovered leaf the same either way. Returns what to store for the leaves
+    /// it has every result for.
+    pub(super) async fn check_recovered_leaves(
         &self,
         leaves: &[TreeNode],
-    ) -> (u64, usize, HashSet<String>) {
-        let repository = ObjectCacheRepository::new(self.storage.clone());
-        let mut sats: u64 = 0;
-        let mut found: usize = 0;
-        let mut tracked = HashSet::new();
-        let mut unchecked: Vec<TreeNode> = Vec::new();
-        for leaf in leaves {
-            let leaf_id = leaf.id.to_string();
-            let exit = match repository.fetch_watchtower_exit(&leaf_id).await {
-                Ok(exit) => exit,
-                Err(e) => {
-                    error!("Failed to read the watchtower exit of leaf {leaf_id}: {e}");
-                    continue;
-                }
-            };
-            let exit = match (exit, leaf.status) {
-                (Some(exit), _) => exit,
-                (None, TreeNodeStatus::WatchtowerExited) => {
-                    match self.track_watchtower_exit(leaf, None, None).await {
-                        Ok(exit) => {
-                            if !self.exit_reported(&leaf_id).await {
-                                found = found.saturating_add(1);
-                            }
-                            exit
-                        }
-                        Err(e) => {
-                            error!("Failed to store the watchtower exit of leaf {leaf_id}: {e}");
-                            continue;
-                        }
-                    }
-                }
-                (None, TreeNodeStatus::WatchtowerExitRecovered) => {
-                    unchecked.push(leaf.clone());
-                    continue;
-                }
-                // A quote stores the output of an on-chain leaf it recovers
-                // cooperatively.
-                (None, _) => continue,
-            };
-            tracked.insert(leaf_id);
-            if exit.recovered.is_none() {
-                sats = sats.saturating_add(leaf.value);
-            }
-        }
-        for (leaf, exit) in self.check_recovered_leaves(unchecked).await {
-            let leaf_id = leaf.id.to_string();
-            if exit.recovered.is_none() {
-                sats = sats.saturating_add(leaf.value);
-                if !self.exit_reported(&leaf_id).await {
-                    found = found.saturating_add(1);
-                }
-            }
-            tracked.insert(leaf_id);
-        }
-        if found > 0 {
-            info!("Found {found} leaves a watchtower exit took on-chain");
-        }
-        (sats, found, tracked)
-    }
-
-    /// Whether an earlier sync reported the leaf as one exiting unilaterally.
-    async fn exit_reported(&self, leaf_id: &str) -> bool {
-        matches!(
-            ObjectCacheRepository::new(self.storage.clone())
-                .fetch_exiting_leaf(leaf_id)
-                .await,
-            Ok(Some(_))
-        )
-    }
-
-    /// Asks the chain whether the recovery of each of `leaves` confirmed, and
-    /// records the leaves it got an answer for. The others stay without a
-    /// record, so the next sync asks again.
-    async fn check_recovered_leaves(
-        &self,
-        leaves: Vec<TreeNode>,
-    ) -> Vec<(TreeNode, CachedWatchtowerExit)> {
+        queries: &mut ChainQueries,
+    ) -> Vec<UpdateLeafRecovery> {
         if leaves.is_empty() {
             return Vec::new();
         }
@@ -127,165 +106,30 @@ impl BreezSdk {
             .fetch_nodes_with_ancestors(&leaf_ids)
             .await
         {
-            Ok(nodes) => Arc::new(nodes),
+            Ok(nodes) => nodes,
             Err(e) => {
                 warn!("Failed to fetch the ancestors of recovered leaves: {e}");
                 return Vec::new();
             }
         };
-        let Some(tip) = self.tip_for_checks().await else {
-            return Vec::new();
-        };
-        let checks = leaves
-            .into_iter()
-            .map(|leaf| {
-                let sdk = self.clone();
-                let nodes = nodes.clone();
-                async move {
-                    let exit = sdk.check_recovered_leaf(&leaf, &nodes, tip).await?;
-                    Some((leaf, exit))
-                }
-            })
-            .collect();
-        run_checks(checks).await
-    }
-
-    /// `None` when the chain did not answer.
-    async fn check_recovered_leaf(
-        &self,
-        leaf: &TreeNode,
-        nodes: &HashMap<TreeNodeId, TreeNode>,
-        tip: u32,
-    ) -> Option<CachedWatchtowerExit> {
-        let (resolved, unread) = resolve_watchtower_exit_outputs(
-            self.chain_service.as_ref(),
-            std::slice::from_ref(leaf),
-            nodes,
-        )
-        .await;
-        if unread {
-            return None;
-        }
-        let shown = resolved.outputs.into_iter().map(|output| (output, true));
-        let assumed = resolved.assumed.into_iter().map(|output| (output, false));
-        let found = shown
-            .chain(assumed)
-            .map(|(output, on_chain)| LookedUpOutput { output, on_chain })
-            .next();
-        // Only a recovery spends the output.
-        let recovered = match &found {
-            Some(found) => {
-                let outpoint = found.output.outpoint;
-                match self
-                    .chain_service
-                    .get_outspend(outpoint.txid.to_string(), outpoint.vout)
-                    .await
-                {
-                    Ok(Outspend::Spent { status, .. }) => status.confirmed,
-                    Ok(Outspend::Unspent) => false,
-                    Err(e) => {
-                        warn!(
-                            "Outspend lookup failed for watchtower-exited output {outpoint}: {e}"
-                        );
-                        return None;
-                    }
-                }
-            }
-            None => false,
-        };
-        let recorded = self
-            .update_watchtower_exit(&leaf.id.to_string(), |stored| {
-                let mut exit = stored.unwrap_or_else(|| CachedWatchtowerExit::tracking(leaf));
-                if let Some(found) = &found {
-                    let seen = found.on_chain.then_some(SeenAt { tip: Some(tip) });
-                    exit.take_output(&found.output, seen);
-                }
-                exit.take_spend(recovered, Some(tip));
-                Some(exit)
-            })
+        queries
+            .resolve(|observed| ((), scan_outputs(leaves, &nodes, observed).1))
             .await;
-        match recorded {
-            Ok(exit) => exit,
-            Err(e) => {
-                error!(
-                    "Failed to store the watchtower exit of leaf {}: {e}",
-                    leaf.id
-                );
-                None
-            }
-        }
+        recovered_leaf_checks(leaves, &nodes, &queries.fetched(), now_secs())
     }
 
-    /// Records that a recovery of each of these leaves confirmed. Failures are
-    /// only logged.
-    pub(super) async fn record_recovered(&self, leaf_ids: &[&str], tip: Option<u32>) {
-        for leaf_id in leaf_ids {
-            let recorded = self
-                .update_watchtower_exit(leaf_id, |stored| {
-                    stored.map(|mut stored| {
-                        stored.take_spend(true, tip);
-                        stored
-                    })
-                })
-                .await;
-            if let Err(e) = recorded {
-                error!("Failed to record the recovery of leaf {leaf_id}: {e}");
-            }
-        }
-    }
-
-    pub(super) async fn fetch_watchtower_exit(
-        &self,
-        leaf_id: &str,
-    ) -> Result<Option<CachedWatchtowerExit>, SdkError> {
-        Ok(ObjectCacheRepository::new(self.storage.clone())
-            .fetch_watchtower_exit(leaf_id)
-            .await?)
-    }
-
-    /// The stored exits of `leaves`, after a lookup of the outputs not settled
-    /// at `tip`.
+    /// Looks up the output each of `leaves` is recovered from and whether a
+    /// recovery of it is in a block, and stores what the chain service showed
+    /// in a block.
     pub(super) async fn lookup_watchtower_exits(
         &self,
         leaves: &[TreeNode],
-        tip: Option<u32>,
-    ) -> Result<Vec<CachedWatchtowerExit>, SdkError> {
-        let mut stored = Vec::with_capacity(leaves.len());
-        let mut due = Vec::new();
-        for leaf in leaves {
-            let exit = self.fetch_watchtower_exit(&leaf.id.to_string()).await?;
-            if !output_settled(exit.as_ref(), tip) {
-                due.push(leaf.clone());
-            }
-            stored.push((leaf, exit));
-        }
-        let mut outputs = self.lookup_outputs(&due).await;
-        let mut exits = Vec::with_capacity(stored.len());
-        for (leaf, exit) in stored {
-            let exit = match outputs.remove(&leaf.id.to_string()) {
-                Some(output) => Some(self.track_watchtower_exit(leaf, Some(&output), tip).await?),
-                None => exit,
-            };
-            exits.extend(exit);
-        }
-        Ok(exits)
-    }
-
-    async fn lookup_outputs(&self, leaves: &[TreeNode]) -> HashMap<String, LookedUpOutput> {
-        let leaves: Vec<TreeNode> = {
-            let checks = self.recovery_checks.lock().await;
-            leaves
-                .iter()
-                .filter(|leaf| {
-                    let leaf_id = leaf.id.to_string();
-                    !checks.unrecoverable.contains(&leaf_id)
-                        && !checks.unilateral.contains(&leaf_id)
-                })
-                .cloned()
-                .collect()
-        };
+        stored: &HashMap<String, LeafRecovery>,
+        queries: &mut ChainQueries,
+    ) -> Result<WatchtowerExits, SdkError> {
+        let mut found = WatchtowerExits::default();
         if leaves.is_empty() {
-            return HashMap::new();
+            return Ok(found);
         }
         // The output of an on-chain leaf is in its own direct tx, so only the
         // others need their ancestors.
@@ -294,117 +138,97 @@ impl BreezSdk {
             .filter(|leaf| leaf.status != TreeNodeStatus::OnChain)
             .map(|leaf| leaf.id.clone())
             .collect();
-        let nodes = if exited.is_empty() {
-            HashMap::new()
+        let (nodes, ancestors_known) = if exited.is_empty() {
+            (HashMap::new(), true)
         } else {
             match self.spark_wallet.fetch_nodes_with_ancestors(&exited).await {
-                Ok(nodes) => nodes,
+                Ok(nodes) => (nodes, true),
                 Err(e) => {
                     warn!("Failed to fetch the ancestors of watchtower-exited leaves: {e}");
-                    HashMap::new()
+                    (HashMap::new(), false)
                 }
             }
         };
-        let (resolved, _) =
-            resolve_watchtower_exit_outputs(self.chain_service.as_ref(), &leaves, &nodes).await;
-        if !resolved.unrecoverable.is_empty() || !resolved.unilateral.is_empty() {
-            let mut checks = self.recovery_checks.lock().await;
-            for leaf_id in resolved.unrecoverable {
+        queries
+            .resolve(|observed| ((), scan_outputs(leaves, &nodes, observed).1))
+            .await;
+        let (mut lookups, _) = scan_outputs(leaves, &nodes, queries.observed());
+
+        let now = now_secs();
+        for leaf in leaves {
+            let leaf_id = leaf.id.to_string();
+            let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_known);
+            if lookup == WatchtowerExitLookup::Unrecoverable {
                 warn!(
-                    "No cooperative recovery reaches watchtower-exited leaf {leaf_id}: the direct \
-                     tx that confirmed above it pays no output to its key"
+                    "Watchtower-exited leaf {leaf_id} has no cooperative recovery: the direct \
+                     tx in a block above it has no output for the leaf's key"
                 );
-                checks.unrecoverable.insert(leaf_id.to_string());
             }
-            checks
-                .unilateral
-                .extend(resolved.unilateral.iter().map(ToString::to_string));
-        }
-        let shown = resolved.outputs.into_iter().map(|output| (output, true));
-        let assumed = resolved.assumed.into_iter().map(|output| (output, false));
-        shown
-            .chain(assumed)
-            .map(|(output, on_chain)| {
-                (
-                    output.leaf_id.to_string(),
-                    LookedUpOutput { output, on_chain },
-                )
-            })
-            .collect()
-    }
-
-    async fn track_watchtower_exit(
-        &self,
-        leaf: &TreeNode,
-        found: Option<&LookedUpOutput>,
-        tip: Option<u32>,
-    ) -> Result<CachedWatchtowerExit, SdkError> {
-        let tracked = self
-            .update_watchtower_exit(&leaf.id.to_string(), |stored| {
-                let mut exit = stored.unwrap_or_else(|| CachedWatchtowerExit::tracking(leaf));
-                if let Some(found) = found {
-                    exit.take_output(&found.output, found.on_chain.then_some(SeenAt { tip }));
+            let looked_up =
+                looked_up_exit(leaf, lookup, stored.get(&leaf_id), queries.observed(), now)?;
+            if let Some(update) = looked_up.update {
+                self.store_leaf_recovery(update).await;
+            }
+            match looked_up.exit {
+                Ok(exit) => {
+                    found.exits.insert(leaf_id, exit);
                 }
-                Some(exit)
-            })
-            .await?;
-        tracked
-            .ok_or_else(|| SdkError::Generic("The funds of the leaf were not recorded".to_string()))
-    }
-
-    async fn update_watchtower_exit(
-        &self,
-        leaf_id: &str,
-        update: impl FnOnce(Option<CachedWatchtowerExit>) -> Option<CachedWatchtowerExit>,
-    ) -> Result<Option<CachedWatchtowerExit>, SdkError> {
-        let _lock = self.recovery_state_lock.lock().await;
-        let repository = ObjectCacheRepository::new(self.storage.clone());
-        let stored = repository.fetch_watchtower_exit(leaf_id).await?;
-        let updated = update(stored.clone());
-        if updated != stored
-            && let Some(exit) = &updated
-        {
-            repository.save_watchtower_exit(exit).await?;
+                Err(lookup) => {
+                    found.missing.insert(leaf_id, lookup);
+                }
+            }
         }
-        Ok(updated)
+        Ok(found)
     }
 
     /// The signed recovery of `exit` and its fee: one stored before, or else one
     /// the operators co-sign, unless they were found `unreachable`. `None` once
-    /// a recovery of the output confirmed.
+    /// a recovery of the output is in a block.
     pub(super) async fn cooperative_recovery(
         &self,
-        exit: &CachedWatchtowerExit,
+        exit: &WatchtowerExit,
         destination: &Address,
         fee_rate_sat_per_vbyte: u64,
         unreachable: Option<&str>,
+        queries: &mut ChainQueries,
     ) -> Result<Option<(Transaction, u64)>, CooperativeRecoveryError> {
-        if exit.recovered.is_some() {
+        if exit.recovered {
             return Ok(None);
         }
-        let output = exit.output().map_err(generic)?;
-        let unsigned = build_recovery(&output, destination, fee_rate_sat_per_vbyte)
+        let unsigned = build_recovery(&exit.output, destination, fee_rate_sat_per_vbyte)
             .ok_or_else(|| generic("The output is too small to pay this fee"))?;
-        match recovery_on_network(self.chain_service.as_ref(), exit).await? {
-            RecoveryOnNetwork::Confirmed => {
-                let tip = self.chain_service.tip_height().await.ok();
-                if let Err(e) = self
-                    .update_watchtower_exit(&exit.leaf_id, |stored| {
-                        stored.map(|mut stored| {
-                            stored.take_spend(true, tip);
-                            stored
-                        })
-                    })
-                    .await
-                {
-                    error!("Failed to store the recovery of leaf {}: {e}", exit.leaf_id);
+        let outspend = ChainQuery::Outspend(exit.output.outpoint);
+        queries
+            .resolve(|observed| ((), without_result(vec![outspend.clone()], observed)))
+            .await;
+        let spend = output_spend(queries.observed(), exit.output.outpoint);
+        if let OutputSpend::InBlock { .. } = spend {
+            if let Some(spend) = spend.in_block() {
+                self.store_leaf_recovery(UpdateLeafRecovery {
+                    leaf_id: exit.leaf_id.clone(),
+                    chain_checked_at: Some(now_secs()),
+                    watchtower_exit_spend: Some(spend),
+                    ..Default::default()
+                })
+                .await;
+            }
+            return Ok(None);
+        }
+        let in_mempool = match &spend {
+            OutputSpend::InMempool(txid) if exit.stored_recovery(*txid).is_none() => {
+                let transaction = ChainQuery::Transaction(*txid);
+                queries
+                    .resolve(|observed| ((), without_result(vec![transaction.clone()], observed)))
+                    .await;
+                match result_of(queries.observed(), &transaction) {
+                    Some(ChainResult::Transaction(tx)) => Some(tx.clone()),
+                    _ => None,
                 }
-                return Ok(None);
             }
-            RecoveryOnNetwork::Unconfirmed { txid, replaced } => {
-                outbid(&unsigned, txid, &replaced)?;
-            }
-            RecoveryOnNetwork::None => {}
+            _ => None,
+        };
+        if let Some((txid, replaced)) = recovery_to_outbid(exit, &spend, in_mempool.as_ref())? {
+            outbid(&unsigned, txid, &replaced)?;
         }
         if let Some(signed) = exit.signed_recovery(&unsigned.tx) {
             return Ok(Some((signed, unsigned.fee_sat)));
@@ -417,7 +241,7 @@ impl BreezSdk {
 
         let signed = self
             .spark_wallet
-            .cosign_watchtower_exit_recovery(&output, unsigned.tx)
+            .cosign_watchtower_exit_recovery(&exit.output, unsigned.tx)
             .await
             .map_err(|e| {
                 if e.is_operator_unavailable() {
@@ -430,113 +254,340 @@ impl BreezSdk {
             })?;
         // The transaction is signed either way: losing it here only costs asking
         // the operators again next time.
-        if let Err(e) = self
-            .update_watchtower_exit(&exit.leaf_id, |stored| {
-                stored.map(|mut stored| {
-                    stored.add_recovery(&signed, fee_rate_sat_per_vbyte);
-                    stored
-                })
-            })
-            .await
-        {
-            error!("Failed to store the recovery of leaf {}: {e}", exit.leaf_id);
-        }
+        self.store_leaf_recovery(UpdateLeafRecovery {
+            leaf_id: exit.leaf_id.clone(),
+            watchtower_exit_recovery: Some(WatchtowerExitRecovery {
+                txid: signed.compute_txid().to_string(),
+                transaction_hex: serialize_hex(&signed),
+                output_amount_sats: paid_out(&signed),
+            }),
+            ..Default::default()
+        })
+        .await;
         Ok(Some((signed, unsigned.fee_sat)))
     }
 }
 
-/// Also returns whether a lookup went unanswered.
-async fn resolve_watchtower_exit_outputs(
-    chain: &dyn BitcoinChainService,
+impl WatchtowerExit {
+    /// Takes from `stored` the recoveries with `output` as input. The exit is
+    /// recovered when `spend` or a stored spend of `output` is in a block.
+    pub(super) fn new(
+        leaf_id: String,
+        value_sats: u64,
+        output: WatchtowerExitOutput,
+        stored: Option<&LeafRecovery>,
+        spend: &OutputSpend,
+    ) -> Self {
+        let recoveries = stored
+            .into_iter()
+            .flat_map(|stored| &stored.watchtower_exit_recoveries)
+            .filter_map(|recovery| deserialize_hex::<Transaction>(&recovery.transaction_hex).ok())
+            .filter(|tx| {
+                tx.input
+                    .first()
+                    .is_some_and(|input| input.previous_output == output.outpoint)
+            })
+            .collect();
+        // A stored spend belongs to the stored output.
+        let stored_spend = stored.is_some_and(|stored| {
+            stored.watchtower_exit_spend.is_some()
+                && stored
+                    .watchtower_exit_output
+                    .as_ref()
+                    .is_none_or(|stored| same_outpoint(stored, &output))
+        });
+        Self {
+            leaf_id,
+            value_sats,
+            output,
+            recoveries,
+            recovered: stored_spend || matches!(spend, OutputSpend::InBlock { .. }),
+        }
+    }
+
+    /// The exit of a leaf from its stored output alone. `None` when none is
+    /// stored.
+    pub(super) fn from_stored(
+        value_sats: u64,
+        stored: &LeafRecovery,
+    ) -> Result<Option<Self>, SdkError> {
+        let Some(output) = &stored.watchtower_exit_output else {
+            return Ok(None);
+        };
+        let output = exited_output(&stored.leaf_id, output)?;
+        Ok(Some(Self::new(
+            stored.leaf_id.clone(),
+            value_sats,
+            output,
+            Some(stored),
+            &OutputSpend::Unknown,
+        )))
+    }
+
+    /// The leaf's value less what `output` holds.
+    pub(super) fn exit_fee_sats(&self) -> u64 {
+        self.value_sats
+            .saturating_sub(self.output.tx_out.value.to_sat())
+    }
+
+    /// The stored recovery with the same txid as `unsigned`: a txid does not
+    /// cover the signature.
+    fn signed_recovery(&self, unsigned: &Transaction) -> Option<Transaction> {
+        self.stored_recovery(unsigned.compute_txid()).cloned()
+    }
+
+    fn stored_recovery(&self, txid: Txid) -> Option<&Transaction> {
+        self.recoveries
+            .iter()
+            .find(|stored| stored.compute_txid() == txid)
+    }
+
+    /// The stored recovery with the smallest output, so with the highest fee.
+    fn highest_fee_recovery(&self) -> Option<&Transaction> {
+        self.recoveries.iter().min_by_key(|tx| paid_out(tx))
+    }
+}
+
+/// The lookup of each leaf's output over `observed`, and the queries the caller
+/// has yet to execute: those of the scan, and what spent each output it found.
+/// Such an output is an input of recoveries only.
+fn scan_outputs(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
-) -> (ResolvedWatchtowerExits, bool) {
-    let mut observed: Vec<Observation> = Vec::new();
-    let mut unread = false;
-    loop {
-        let scan = scan_watchtower_exits(leaves, nodes, &observed);
-        if scan.pending.is_empty() {
-            return (scan.resolved, unread);
-        }
-        // A failed lookup records `Unavailable`, so each pass answers its queries
-        // and the loop ends.
-        for query in scan.pending {
-            let result = execute_chain_query(chain, &query).await;
-            unread |= matches!(result, ChainResult::Unavailable);
-            observed.push(Observation { query, result });
-        }
-    }
-}
-
-fn output_settled(exit: Option<&CachedWatchtowerExit>, tip: Option<u32>) -> bool {
-    exit.and_then(|exit| exit.output.as_ref())
-        .and_then(|output| output.found)
-        .is_some_and(|seen| seen.settled(tip))
-}
-
-struct LookedUpOutput {
-    output: WatchtowerExitedOutput,
-    /// False for the output of the direct tx a node holds, when the chain does
-    /// not show which direct tx confirmed.
-    on_chain: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum RecoveryOnNetwork {
-    None,
-    Unconfirmed { txid: Txid, replaced: Replaced },
-    Confirmed,
-}
-
-impl RecoveryOnNetwork {
-    fn unconfirmed(tx: &Transaction, amount_sats: u64) -> Option<Self> {
-        Replaced::spending(tx, amount_sats).map(|replaced| Self::Unconfirmed {
-            txid: tx.compute_txid(),
-            replaced,
+    observed: &[Observation],
+) -> (HashMap<TreeNodeId, WatchtowerExitLookup>, Vec<ChainQuery>) {
+    let scan = scan_watchtower_exits(leaves, nodes, observed);
+    let outspends = scan
+        .lookups
+        .values()
+        .filter_map(|lookup| match lookup {
+            WatchtowerExitLookup::Found { output, .. } => {
+                Some(ChainQuery::Outspend(output.outpoint))
+            }
+            _ => None,
         })
+        .collect();
+    let mut pending = scan.pending;
+    pending.extend(without_result(outspends, observed));
+    (scan.lookups, pending)
+}
+
+/// The lookup of `leaf`. Without the leaf's ancestors `scan_watchtower_exits`
+/// cannot look for its output, unless the leaf is on-chain: its output is in
+/// its own direct tx.
+fn lookup_with(
+    lookup: Option<WatchtowerExitLookup>,
+    leaf: &TreeNode,
+    ancestors_known: bool,
+) -> WatchtowerExitLookup {
+    match lookup {
+        Some(WatchtowerExitLookup::NotFound)
+            if !ancestors_known && leaf.status != TreeNodeStatus::OnChain =>
+        {
+            WatchtowerExitLookup::Pending
+        }
+        Some(lookup) => lookup,
+        None => WatchtowerExitLookup::Pending,
     }
 }
 
-/// When the chain cannot be read, the stored recovery with the highest fee rate
-/// is taken to be the one on the network.
-async fn recovery_on_network(
-    chain: &dyn BitcoinChainService,
-    exit: &CachedWatchtowerExit,
-) -> Result<RecoveryOnNetwork, CooperativeRecoveryError> {
-    let Some(output) = exit.output.as_ref() else {
-        return Ok(RecoveryOnNetwork::None);
-    };
-    match chain.get_outspend(output.txid.clone(), output.vout).await {
-        Ok(Outspend::Unspent) => Ok(RecoveryOnNetwork::None),
-        Ok(Outspend::Spent { status, .. }) if status.confirmed => Ok(RecoveryOnNetwork::Confirmed),
-        Ok(Outspend::Spent { txid, .. }) => {
-            let stored = exit
-                .recoveries()
-                .find(|stored| stored.compute_txid().to_string() == txid);
-            let tx = if let Some(stored) = stored {
-                stored
-            } else {
-                let tx_hex = chain
-                    .get_transaction_hex(txid.clone())
-                    .await
-                    .map_err(generic)?;
-                deserialize_hex(&tx_hex).map_err(generic)?
+/// The result of a lookup for one leaf.
+struct LookedUpExit {
+    /// The lookup instead, when the leaf has no output to recover.
+    exit: Result<WatchtowerExit, WatchtowerExitLookup>,
+    /// What the chain service showed in a block that `stored` does not hold.
+    update: Option<UpdateLeafRecovery>,
+}
+
+fn looked_up_exit(
+    leaf: &TreeNode,
+    lookup: WatchtowerExitLookup,
+    stored: Option<&LeafRecovery>,
+    observed: &[Observation],
+    now: u64,
+) -> Result<LookedUpExit, SdkError> {
+    let leaf_id = leaf.id.to_string();
+    let stored_output = stored.and_then(|stored| stored.watchtower_exit_output.as_ref());
+    let (output, spend, update) = match (lookup, stored_output) {
+        (
+            WatchtowerExitLookup::Found {
+                output,
+                block_height,
+            },
+            _,
+        ) => {
+            let spend = output_spend(observed, output.outpoint);
+            let in_block = block_height.map(|height| stored_output_of(&output, height));
+            // The SDK stores a spend only when storage holds its output.
+            let spent_output_stored = in_block.is_some()
+                || stored_output.is_none_or(|stored| same_outpoint(stored, &output));
+            let update = UpdateLeafRecovery {
+                leaf_id: leaf_id.clone(),
+                chain_checked_at: Some(now),
+                watchtower_exit_output: in_block,
+                watchtower_exit_spend: spend.in_block().filter(|_| spent_output_stored),
+                ..Default::default()
             };
-            RecoveryOnNetwork::unconfirmed(&tx, output.amount_sats).ok_or_else(|| {
-                generic(format!(
-                    "Recovery {txid} pays out more than the output holds"
-                ))
-            })
+            let stored_spend = stored.and_then(|stored| stored.watchtower_exit_spend.as_ref());
+            let new = update
+                .watchtower_exit_output
+                .as_ref()
+                .is_some_and(|output| stored_output != Some(output))
+                || update
+                    .watchtower_exit_spend
+                    .as_ref()
+                    .is_some_and(|spend| stored_spend != Some(spend));
+            (output, spend, new.then_some(update))
         }
-        Err(e) => {
-            warn!(
-                "Outspend lookup failed for watchtower-exited output {}:{}: {e}",
-                output.txid, output.vout
-            );
-            Ok(exit
-                .highest_fee_recovery()
-                .and_then(|tx| RecoveryOnNetwork::unconfirmed(&tx, output.amount_sats))
-                .unwrap_or(RecoveryOnNetwork::None))
+        // An output the chain service reported earlier takes precedence over
+        // the one of the direct tx the node holds.
+        (_, Some(stored_output)) => (
+            exited_output(&leaf_id, stored_output)?,
+            OutputSpend::Unknown,
+            None,
+        ),
+        (WatchtowerExitLookup::Unconfirmed(output), None) => (output, OutputSpend::Unknown, None),
+        (lookup, None) => {
+            return Ok(LookedUpExit {
+                exit: Err(lookup),
+                update: None,
+            });
+        }
+    };
+    Ok(LookedUpExit {
+        exit: Ok(WatchtowerExit::new(
+            leaf_id, leaf.value, output, stored, &spend,
+        )),
+        update,
+    })
+}
+
+/// What to store for each recovered leaf, from the queries with a result:
+/// nothing for a leaf with a query still pending, and a check without an output
+/// for a leaf whose funds the results show in no block. The funds of such a
+/// leaf stay in the total until the chain service shows a recovery of them in
+/// a block.
+fn recovered_leaf_checks(
+    leaves: &[TreeNode],
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+    fetched: &[Observation],
+    now: u64,
+) -> Vec<UpdateLeafRecovery> {
+    let (lookups, _) = scan_outputs(leaves, nodes, fetched);
+    let mut checks = Vec::new();
+    for leaf in leaves {
+        let checked = UpdateLeafRecovery {
+            leaf_id: leaf.id.to_string(),
+            chain_checked_at: Some(now),
+            ..Default::default()
+        };
+        match lookups.get(&leaf.id) {
+            None | Some(WatchtowerExitLookup::Pending) => {}
+            Some(WatchtowerExitLookup::Found {
+                output,
+                block_height,
+            }) => {
+                // The SDK stores a transaction only with the height of its block.
+                let Some(block_height) = block_height else {
+                    continue;
+                };
+                let spend = match output_spend(fetched, output.outpoint) {
+                    OutputSpend::Unknown
+                    | OutputSpend::InBlock {
+                        block_height: None, ..
+                    } => continue,
+                    spend => spend.in_block(),
+                };
+                checks.push(UpdateLeafRecovery {
+                    watchtower_exit_output: Some(stored_output_of(output, *block_height)),
+                    watchtower_exit_spend: spend,
+                    ..checked
+                });
+            }
+            Some(_) => checks.push(checked),
+        }
+    }
+    checks
+}
+
+fn same_outpoint(stored: &StoredWatchtowerExitOutput, output: &WatchtowerExitOutput) -> bool {
+    stored.vout == output.outpoint.vout && stored.txid == output.outpoint.txid.to_string()
+}
+
+fn stored_output_of(
+    output: &WatchtowerExitOutput,
+    block_height: u32,
+) -> StoredWatchtowerExitOutput {
+    StoredWatchtowerExitOutput {
+        txid: output.outpoint.txid.to_string(),
+        vout: output.outpoint.vout,
+        amount_sats: output.tx_out.value.to_sat(),
+        script_pubkey: output.tx_out.script_pubkey.as_bytes().to_lower_hex_string(),
+        block_height,
+    }
+}
+
+fn exited_output(
+    leaf_id: &str,
+    stored: &StoredWatchtowerExitOutput,
+) -> Result<WatchtowerExitOutput, SdkError> {
+    let txid = Txid::from_str(&stored.txid)
+        .map_err(|e| SdkError::Generic(format!("invalid stored txid: {e}")))?;
+    let script_pubkey = Vec::<u8>::from_hex(&stored.script_pubkey)
+        .map_err(|e| SdkError::Generic(format!("invalid stored script: {e}")))?;
+    Ok(WatchtowerExitOutput {
+        leaf_id: leaf_id
+            .parse()
+            .map_err(|e| SdkError::Generic(format!("invalid stored leaf id: {e}")))?,
+        outpoint: OutPoint {
+            txid,
+            vout: stored.vout,
+        },
+        tx_out: TxOut {
+            value: Amount::from_sat(stored.amount_sats),
+            script_pubkey: ScriptBuf::from_bytes(script_pubkey),
+        },
+    })
+}
+
+fn paid_out(tx: &Transaction) -> u64 {
+    tx.output
+        .iter()
+        .map(|output| output.value.to_sat())
+        .fold(0, u64::saturating_add)
+}
+
+/// The recovery of `exit` that is on the network and in no block, with what
+/// replacing it takes. `in_mempool` is the spender the chain service returned,
+/// when it is not a stored recovery. Without a result from the chain service,
+/// the SDK takes the stored recovery with the highest fee to be on the network.
+fn recovery_to_outbid(
+    exit: &WatchtowerExit,
+    spend: &OutputSpend,
+    in_mempool: Option<&Transaction>,
+) -> Result<Option<(Txid, Replaced)>, CooperativeRecoveryError> {
+    let amount_sats = exit.output.tx_out.value.to_sat();
+    match spend {
+        OutputSpend::Unspent | OutputSpend::InBlock { .. } => Ok(None),
+        OutputSpend::Unknown => Ok(exit.highest_fee_recovery().and_then(|tx| {
+            Replaced::spending(tx, amount_sats).map(|replaced| (tx.compute_txid(), replaced))
+        })),
+        OutputSpend::InMempool(txid) => {
+            let tx = exit
+                .stored_recovery(*txid)
+                .or(in_mempool.filter(|tx| tx.compute_txid() == *txid))
+                .ok_or_else(|| {
+                    generic(format!(
+                        "The chain service did not return recovery {txid} from its mempool"
+                    ))
+                })?;
+            Replaced::spending(tx, amount_sats)
+                .map(|replaced| Some((*txid, replaced)))
+                .ok_or_else(|| {
+                    generic(format!(
+                        "Recovery {txid} pays out more than the output holds"
+                    ))
+                })
         }
     }
 }
@@ -560,7 +611,7 @@ fn outbid(
 }
 
 pub(super) fn build_recovery(
-    output: &WatchtowerExitedOutput,
+    output: &WatchtowerExitOutput,
     destination: &Address,
     fee_rate_sat_per_vbyte: u64,
 ) -> Option<UnsignedWatchtowerExitRecovery> {
@@ -579,162 +630,110 @@ fn generic(error: impl Display) -> CooperativeRecoveryError {
     }
 }
 
-impl CachedWatchtowerExit {
-    fn tracking(leaf: &TreeNode) -> Self {
-        Self {
-            leaf_id: leaf.id.to_string(),
-            value_sats: leaf.value,
-            output: None,
-            recoveries: Vec::new(),
-            recovered: None,
-        }
-    }
-
-    /// `seen` is unset for the output of a direct tx the chain has not shown,
-    /// which never replaces an output the chain showed.
-    fn take_output(&mut self, found: &WatchtowerExitedOutput, seen: Option<SeenAt>) {
-        let txid = found.outpoint.txid.to_string();
-        if let Some(stored) = self.output.as_mut() {
-            if stored.txid == txid && stored.vout == found.outpoint.vout {
-                stored.found = match (stored.found, seen) {
-                    (Some(first), Some(now)) => Some(SeenAt {
-                        tip: first.tip.or(now.tip),
-                    }),
-                    (first, now) => first.or(now),
-                };
-                return;
-            }
-            if stored.found.is_some() && seen.is_none() {
-                return;
-            }
-        }
-        self.output = Some(CachedWatchtowerExitOutput {
-            txid,
-            vout: found.outpoint.vout,
-            amount_sats: found.tx_out.value.to_sat(),
-            script_pubkey: found.tx_out.script_pubkey.as_bytes().to_lower_hex_string(),
-            found: seen,
-        });
-        self.recoveries.clear();
-        self.recovered = None;
-    }
-
-    fn take_spend(&mut self, confirmed: bool, tip: Option<u32>) {
-        self.recovered = confirmed.then(|| SeenAt {
-            tip: self.recovered.and_then(|seen| seen.tip).or(tip),
-        });
-    }
-
-    fn add_recovery(&mut self, tx: &Transaction, fee_rate_sat_per_vbyte: u64) {
-        let spends_output = self.output().is_ok_and(|output| {
-            tx.input
-                .first()
-                .is_some_and(|input| input.previous_output == output.outpoint)
-        });
-        let txid = tx.compute_txid();
-        if !spends_output
-            || self
-                .recoveries()
-                .any(|stored| stored.compute_txid() == txid)
-        {
-            return;
-        }
-        self.recoveries.push(CachedWatchtowerExitRecovery {
-            tx_hex: serialize_hex(tx),
-            fee_rate_sat_per_vbyte,
-        });
-    }
-
-    /// The fee of the transaction that took the funds on-chain.
-    pub(super) fn exit_fee_sats(&self) -> u64 {
-        self.output.as_ref().map_or(0, |output| {
-            self.value_sats.saturating_sub(output.amount_sats)
-        })
-    }
-
-    pub(super) fn output(&self) -> Result<WatchtowerExitedOutput, SdkError> {
-        let stored = self.output.as_ref().ok_or_else(|| {
-            SdkError::Generic(format!(
-                "The funds of leaf {} were not found on-chain yet",
-                self.leaf_id
-            ))
-        })?;
-        let txid = Txid::from_str(&stored.txid)
-            .map_err(|e| SdkError::Generic(format!("invalid stored txid: {e}")))?;
-        let script_pubkey = Vec::<u8>::from_hex(&stored.script_pubkey)
-            .map_err(|e| SdkError::Generic(format!("invalid stored script: {e}")))?;
-        Ok(WatchtowerExitedOutput {
-            leaf_id: self
-                .leaf_id
-                .parse()
-                .map_err(|e| SdkError::Generic(format!("invalid stored leaf id: {e}")))?,
-            outpoint: bitcoin::OutPoint {
-                txid,
-                vout: stored.vout,
-            },
-            tx_out: TxOut {
-                value: Amount::from_sat(stored.amount_sats),
-                script_pubkey: ScriptBuf::from_bytes(script_pubkey),
-            },
-        })
-    }
-
-    fn recoveries(&self) -> impl Iterator<Item = Transaction> + '_ {
-        self.recoveries
-            .iter()
-            .filter_map(|recovery| deserialize_hex(&recovery.tx_hex).ok())
-    }
-
-    /// The stored recovery with the same txid as `unsigned`: a txid does not
-    /// cover the signature.
-    fn signed_recovery(&self, unsigned: &Transaction) -> Option<Transaction> {
-        let txid = unsigned.compute_txid();
-        self.recoveries()
-            .find(|stored| stored.compute_txid() == txid)
-    }
-
-    fn highest_fee_recovery(&self) -> Option<Transaction> {
-        let highest = self
-            .recoveries
-            .iter()
-            .max_by_key(|recovery| recovery.fee_rate_sat_per_vbyte)?;
-        deserialize_hex(&highest.tx_hex).ok()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use spark_wallet::tree_store_tests::create_test_node_with_parent;
+    use spark_wallet::{SpendInfo, tree_store_tests::create_test_node_with_parent};
 
-    use crate::chain::stub::{ChainStub, tx_paying};
+    use crate::chain::stub::tx_paying;
 
     use super::*;
 
-    fn exit_with(recoveries: Vec<CachedWatchtowerExitRecovery>) -> CachedWatchtowerExit {
-        CachedWatchtowerExit {
-            leaf_id: "leaf".to_string(),
-            value_sats: 10_955,
-            output: Some(CachedWatchtowerExitOutput {
-                txid: "00".repeat(32),
+    const LEAF_ID: &str = "00000000-0000-0000-0000-00000000000a";
+
+    fn output_at(txid: &str, value_sats: u64) -> WatchtowerExitOutput {
+        WatchtowerExitOutput {
+            leaf_id: LEAF_ID.parse().unwrap(),
+            outpoint: OutPoint {
+                txid: Txid::from_str(&txid.repeat(32)).unwrap(),
                 vout: 0,
-                amount_sats: 10_000,
-                script_pubkey: String::new(),
-                found: Some(SeenAt::default()),
-            }),
-            recoveries,
-            recovered: None,
+            },
+            tx_out: TxOut {
+                value: Amount::from_sat(value_sats),
+                script_pubkey: ScriptBuf::from_bytes(vec![0x51, 0x20]),
+            },
         }
+    }
+
+    fn output() -> WatchtowerExitOutput {
+        output_at("00", 10_000)
     }
 
     fn paying(value: u64) -> Transaction {
-        tx_paying(bitcoin::OutPoint::null(), value)
+        tx_paying(output().outpoint, value)
     }
 
-    fn stored(tx: &Transaction, fee_rate_sat_per_vbyte: u64) -> CachedWatchtowerExitRecovery {
-        CachedWatchtowerExitRecovery {
-            tx_hex: serialize_hex(tx),
-            fee_rate_sat_per_vbyte,
+    fn stored_recovery(tx: &Transaction) -> WatchtowerExitRecovery {
+        WatchtowerExitRecovery {
+            txid: tx.compute_txid().to_string(),
+            transaction_hex: serialize_hex(tx),
+            output_amount_sats: paid_out(tx),
         }
+    }
+
+    fn stored_leaf(recoveries: &[Transaction]) -> LeafRecovery {
+        LeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            chain_checked_at: None,
+            watchtower_exit_output: Some(stored_output_of(&output(), 100)),
+            watchtower_exit_recoveries: recoveries.iter().map(stored_recovery).collect(),
+            watchtower_exit_spend: None,
+            unilateral_exit_sweep: None,
+        }
+    }
+
+    fn exit_of(output: WatchtowerExitOutput, stored: Option<&LeafRecovery>) -> WatchtowerExit {
+        WatchtowerExit::new(
+            LEAF_ID.to_string(),
+            10_955,
+            output,
+            stored,
+            &OutputSpend::Unspent,
+        )
+    }
+
+    fn exit_with(recoveries: &[Transaction]) -> WatchtowerExit {
+        exit_of(output(), Some(&stored_leaf(recoveries)))
+    }
+
+    fn spender() -> Txid {
+        Txid::from_str(&"07".repeat(32)).unwrap()
+    }
+
+    fn in_block(block_height: Option<u32>) -> OutputSpend {
+        OutputSpend::InBlock {
+            txid: spender(),
+            block_height,
+        }
+    }
+
+    fn spent(
+        output: &WatchtowerExitOutput,
+        confirmed: bool,
+        block_height: Option<u32>,
+    ) -> Observation {
+        Observation {
+            query: ChainQuery::Outspend(output.outpoint),
+            result: ChainResult::Spend(Some(SpendInfo {
+                spender_txid: spender(),
+                confirmed,
+                block_height,
+            })),
+        }
+    }
+
+    fn unspent(output: &WatchtowerExitOutput) -> Observation {
+        Observation {
+            query: ChainQuery::Outspend(output.outpoint),
+            result: ChainResult::Spend(None),
+        }
+    }
+
+    #[test]
+    fn a_stored_output_reads_back_as_it_was_found() {
+        let stored = stored_output_of(&output(), 100);
+
+        assert_eq!(exited_output(LEAF_ID, &stored).unwrap(), output());
+        assert_eq!(exit_with(&[]).exit_fee_sats(), 955);
     }
 
     #[test]
@@ -742,119 +741,160 @@ mod tests {
         let unsigned = paying(9_500);
         let mut signed = unsigned.clone();
         signed.input[0].witness = bitcoin::Witness::from_slice(&[[1u8; 64]]);
-        let exit = exit_with(vec![stored(&paying(9_000), 5), stored(&signed, 2)]);
+        let exit = exit_with(&[paying(9_000), signed.clone()]);
 
         assert_eq!(exit.signed_recovery(&unsigned), Some(signed));
         assert_eq!(exit.signed_recovery(&paying(9_400)), None);
     }
 
     #[test]
-    fn the_highest_fee_rate_recovery_is_the_one_assumed_out_there() {
-        let exit = exit_with(vec![
-            stored(&paying(9_800), 2),
-            stored(&paying(9_000), 8),
-            stored(&paying(9_500), 5),
-        ]);
+    fn the_recovery_paying_out_the_least_pays_the_highest_fee() {
+        let exit = exit_with(&[paying(9_800), paying(9_000), paying(9_500)]);
 
-        assert_eq!(exit.highest_fee_recovery(), Some(paying(9_000)));
-        assert!(exit_with(Vec::new()).highest_fee_recovery().is_none());
+        assert_eq!(exit.highest_fee_recovery(), Some(&paying(9_000)));
+        assert!(exit_with(&[]).highest_fee_recovery().is_none());
     }
 
-    fn exit_spent_by(outspend: Option<Outspend>) -> ChainStub {
-        match outspend {
-            Some(outspend) => ChainStub::spending(
-                bitcoin::OutPoint {
-                    txid: Txid::from_str(&"00".repeat(32)).unwrap(),
-                    vout: 0,
-                },
-                outspend,
-            ),
-            None => ChainStub::default(),
+    #[test]
+    fn a_recovery_or_spend_of_another_output_is_not_this_exits() {
+        let other = output_at("02", 9_000);
+        let mut stored = stored_leaf(&[paying(9_500), tx_paying(other.outpoint, 8_000)]);
+        stored.watchtower_exit_spend = Some(ChainTransaction {
+            txid: "spender".to_string(),
+            block_height: 101,
+        });
+
+        let same = exit_of(output(), Some(&stored));
+        assert_eq!(same.recoveries, vec![paying(9_500)]);
+        assert!(same.recovered);
+
+        let replaced = exit_of(other.clone(), Some(&stored));
+        assert_eq!(replaced.recoveries, vec![tx_paying(other.outpoint, 8_000)]);
+        assert!(!replaced.recovered);
+
+        // A spend stored without an output is the spend of the recovery's input.
+        stored.watchtower_exit_output = None;
+        assert!(exit_of(output(), Some(&stored)).recovered);
+        assert!(!exit_of(output(), None).recovered);
+    }
+
+    #[test]
+    fn a_spend_the_chain_service_shows_in_a_block_recovered_the_exit() {
+        let recovered = |spend: &OutputSpend| {
+            WatchtowerExit::new(LEAF_ID.to_string(), 10_955, output(), None, spend).recovered
+        };
+
+        assert!(recovered(&in_block(Some(101))));
+        assert!(recovered(&in_block(None)));
+        for spend in [
+            OutputSpend::Unspent,
+            OutputSpend::InMempool(spender()),
+            OutputSpend::Unknown,
+        ] {
+            assert!(!recovered(&spend));
         }
     }
 
-    #[macros::async_test_all]
-    async fn an_unspent_output_needs_no_outbidding() {
-        let chain = exit_spent_by(Some(Outspend::Unspent));
+    #[test]
+    fn the_spend_of_an_output_is_read_from_its_outspend_result() {
+        let output = output();
+        let spend = |observed: &[Observation]| output_spend(observed, output.outpoint);
 
-        let found = recovery_on_network(&chain, &exit_with(Vec::new())).await;
-
-        assert_eq!(found, Ok(RecoveryOnNetwork::None));
+        assert_eq!(spend(&[]), OutputSpend::Unknown);
+        assert_eq!(
+            spend(&[Observation {
+                query: ChainQuery::Outspend(output.outpoint),
+                result: ChainResult::Unavailable,
+            }]),
+            OutputSpend::Unknown
+        );
+        assert_eq!(spend(&[unspent(&output)]), OutputSpend::Unspent);
+        assert_eq!(
+            spend(&[spent(&output, false, None)]),
+            OutputSpend::InMempool(spender())
+        );
+        assert_eq!(
+            spend(&[spent(&output, true, Some(101))]),
+            in_block(Some(101))
+        );
+        assert_eq!(
+            in_block(Some(101)).in_block(),
+            Some(ChainTransaction {
+                txid: spender().to_string(),
+                block_height: 101,
+            })
+        );
+        // The SDK stores a transaction only with the height of its block.
+        assert_eq!(in_block(None).in_block(), None);
     }
 
-    #[macros::async_test_all]
-    async fn a_confirmed_spend_is_a_confirmed_recovery() {
-        let chain = exit_spent_by(Some(ChainStub::spent("theirs", true, Some(100))));
+    #[test]
+    fn an_unspent_output_needs_no_outbidding() {
+        let found = recovery_to_outbid(&exit_with(&[paying(9_700)]), &OutputSpend::Unspent, None);
 
-        let found = recovery_on_network(&chain, &exit_with(Vec::new())).await;
-
-        assert_eq!(found, Ok(RecoveryOnNetwork::Confirmed));
+        assert_eq!(found, Ok(None));
     }
 
-    #[macros::async_test_all]
-    async fn a_stored_recovery_in_the_mempool_is_outbid_on_what_it_pays() {
+    #[test]
+    fn a_stored_recovery_in_the_mempool_is_outbid_on_what_it_pays() {
         let ours = paying(9_700);
-        let chain = exit_spent_by(Some(ChainStub::spent(
-            &ours.compute_txid().to_string(),
-            false,
-            None,
-        )));
+        let exit = exit_with(std::slice::from_ref(&ours));
 
-        let found = recovery_on_network(&chain, &exit_with(vec![stored(&ours, 2)])).await;
+        let found = recovery_to_outbid(&exit, &OutputSpend::InMempool(ours.compute_txid()), None);
 
         assert_eq!(
             found,
-            Ok(RecoveryOnNetwork::Unconfirmed {
-                txid: ours.compute_txid(),
-                replaced: Replaced {
+            Ok(Some((
+                ours.compute_txid(),
+                Replaced {
                     fee_sats: 300,
                     vsize: ours.vsize() as u64,
-                },
-            })
+                }
+            )))
         );
     }
 
-    #[macros::async_test_all]
-    async fn a_recovery_from_elsewhere_is_read_from_the_chain() {
+    #[test]
+    fn a_recovery_from_elsewhere_is_read_from_the_chain() {
         let theirs = paying(9_000);
-        let txid = theirs.compute_txid().to_string();
-        let mut chain = exit_spent_by(Some(ChainStub::spent(&txid, false, None)));
-        chain.transactions.insert(txid, serialize_hex(&theirs));
-
-        let found = recovery_on_network(&chain, &exit_with(Vec::new())).await;
+        let spend = OutputSpend::InMempool(theirs.compute_txid());
 
         assert_eq!(
-            found,
-            Ok(RecoveryOnNetwork::Unconfirmed {
-                txid: theirs.compute_txid(),
-                replaced: Replaced {
+            recovery_to_outbid(&exit_with(&[]), &spend, Some(&theirs)),
+            Ok(Some((
+                theirs.compute_txid(),
+                Replaced {
                     fee_sats: 1_000,
                     vsize: theirs.vsize() as u64,
-                },
-            })
+                }
+            )))
         );
+        // The chain service did not return it, or returned another transaction.
+        for returned in [None, Some(&paying(9_100))] {
+            assert!(matches!(
+                recovery_to_outbid(&exit_with(&[]), &spend, returned),
+                Err(CooperativeRecoveryError::Generic { .. })
+            ));
+        }
     }
 
-    #[macros::async_test_all]
-    async fn an_unreadable_chain_assumes_the_highest_fee_stored_recovery() {
-        let chain = exit_spent_by(None);
-        let exit = exit_with(vec![stored(&paying(9_800), 2), stored(&paying(9_400), 6)]);
-
-        let found = recovery_on_network(&chain, &exit).await;
+    #[test]
+    fn an_unknown_spend_assumes_the_highest_fee_stored_recovery() {
+        let exit = exit_with(&[paying(9_800), paying(9_400)]);
 
         assert_eq!(
-            found,
-            Ok(RecoveryOnNetwork::Unconfirmed {
-                txid: paying(9_400).compute_txid(),
-                replaced: Replaced {
+            recovery_to_outbid(&exit, &OutputSpend::Unknown, None),
+            Ok(Some((
+                paying(9_400).compute_txid(),
+                Replaced {
                     fee_sats: 600,
                     vsize: paying(9_400).vsize() as u64,
-                },
-            })
+                }
+            )))
         );
         assert_eq!(
-            recovery_on_network(&chain, &exit_with(Vec::new())).await,
-            Ok(RecoveryOnNetwork::None)
+            recovery_to_outbid(&exit_with(&[]), &OutputSpend::Unknown, None),
+            Ok(None)
         );
     }
 
@@ -893,163 +933,323 @@ mod tests {
         assert_eq!(outbid(&enough, theirs.compute_txid(), &replaced), Ok(()));
     }
 
-    #[macros::async_test_all]
-    async fn an_on_chain_leaf_is_found_in_the_direct_tx_the_chain_shows() {
-        let mut leaf = create_test_node_with_parent(
-            "00000000-0000-0000-0000-00000000000a",
-            None,
-            TreeNodeStatus::OnChain,
-        );
+    /// A leaf whose direct tx is in a block at another fee than the one it
+    /// holds, with the two queries that show it.
+    struct ExitedLeaf {
+        leaf: TreeNode,
+        found: WatchtowerExitOutput,
+        parent_spent: Observation,
+        direct_tx: Observation,
+    }
+
+    fn exited_leaf(status: TreeNodeStatus) -> ExitedLeaf {
+        let mut leaf = create_test_node_with_parent(LEAF_ID, None, status);
         let leaf_script = ScriptBuf::new_p2tr(
             &bitcoin::secp256k1::Secp256k1::verification_only(),
             leaf.verifying_public_key.x_only_public_key().0,
             None,
         );
-        let parent_output = bitcoin::OutPoint {
+        let parent_output = OutPoint {
             txid: Txid::from_str(&"03".repeat(32)).unwrap(),
             vout: 0,
         };
         let mut held = tx_paying(parent_output, 9_800);
         held.output[0].script_pubkey = leaf_script.clone();
-        leaf.direct_tx = Some(held);
         let mut confirmed = tx_paying(parent_output, 9_500);
         confirmed.output[0].script_pubkey = leaf_script;
-        let txid = confirmed.compute_txid().to_string();
-        let mut chain =
-            ChainStub::spending(parent_output, ChainStub::spent(&txid, true, Some(100)));
-        chain.transactions.insert(txid, serialize_hex(&confirmed));
-        let leaves = [leaf.clone()];
-
-        let (resolved, unread) =
-            resolve_watchtower_exit_outputs(&chain, &leaves, &HashMap::new()).await;
-        assert!(!unread);
-        assert_eq!(
-            resolved.outputs,
-            vec![WatchtowerExitedOutput {
-                leaf_id: leaf.id.clone(),
-                outpoint: bitcoin::OutPoint {
-                    txid: confirmed.compute_txid(),
-                    vout: 0,
-                },
-                tx_out: confirmed.output[0].clone(),
-            }]
-        );
-
-        let unreachable = ChainStub::default();
-        assert_eq!(
-            resolve_watchtower_exit_outputs(&unreachable, &leaves, &HashMap::new()).await,
-            (ResolvedWatchtowerExits::default(), true)
-        );
-    }
-
-    fn seen_at(tip: u32) -> SeenAt {
-        SeenAt { tip: Some(tip) }
-    }
-
-    fn exited_leaf() -> TreeNode {
-        create_test_node_with_parent(
-            "00000000-0000-0000-0000-00000000000a",
-            None,
-            TreeNodeStatus::WatchtowerExited,
-        )
-    }
-
-    fn output_of(leaf: &TreeNode, txid: &str, value: u64) -> WatchtowerExitedOutput {
-        WatchtowerExitedOutput {
+        let found = WatchtowerExitOutput {
             leaf_id: leaf.id.clone(),
-            outpoint: bitcoin::OutPoint {
-                txid: Txid::from_str(&txid.repeat(32)).unwrap(),
+            outpoint: OutPoint {
+                txid: confirmed.compute_txid(),
                 vout: 0,
             },
-            tx_out: TxOut {
-                value: Amount::from_sat(value),
-                script_pubkey: ScriptBuf::from_bytes(vec![0x51, 0x20]),
+            tx_out: confirmed.output[0].clone(),
+        };
+        leaf.direct_tx = Some(held);
+        ExitedLeaf {
+            leaf,
+            found,
+            parent_spent: Observation {
+                query: ChainQuery::Outspend(parent_output),
+                result: ChainResult::Spend(Some(SpendInfo {
+                    spender_txid: confirmed.compute_txid(),
+                    confirmed: true,
+                    block_height: Some(100),
+                })),
+            },
+            direct_tx: Observation {
+                query: ChainQuery::Transaction(confirmed.compute_txid()),
+                result: ChainResult::Transaction(confirmed),
             },
         }
     }
 
     #[test]
-    fn a_tracked_exit_gives_back_the_output_a_lookup_found() {
-        let leaf = exited_leaf();
-        let output = output_of(&leaf, "01", 800);
-        let mut exit = CachedWatchtowerExit::tracking(&leaf);
-        assert!(exit.output().is_err());
-        assert_eq!(exit.exit_fee_sats(), 0);
+    fn a_found_output_is_checked_for_a_spend() {
+        let exited = exited_leaf(TreeNodeStatus::OnChain);
+        let leaves = [exited.leaf.clone()];
+        let mut observed = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
 
-        exit.take_output(&output, Some(seen_at(100)));
+        let (lookups, pending) = scan_outputs(&leaves, &HashMap::new(), &observed);
+        assert_eq!(
+            lookups[&exited.leaf.id],
+            WatchtowerExitLookup::Found {
+                output: exited.found.clone(),
+                block_height: Some(100),
+            }
+        );
+        assert_eq!(pending, vec![ChainQuery::Outspend(exited.found.outpoint)]);
 
-        assert_eq!(exit.output().unwrap(), output);
-        assert_eq!(exit.value_sats, leaf.value);
-        assert_eq!(exit.exit_fee_sats(), leaf.value - 800);
-    }
-
-    #[test]
-    fn another_output_replaces_the_stored_one_and_what_was_built_on_it() {
-        let leaf = exited_leaf();
-        let first = output_of(&leaf, "01", 800);
-        let second = output_of(&leaf, "02", 700);
-        let recovery = tx_paying(first.outpoint, 600);
-        let mut exit = CachedWatchtowerExit::tracking(&leaf);
-        exit.take_output(&first, Some(seen_at(100)));
-        exit.add_recovery(&recovery, 2);
-        exit.take_spend(true, Some(101));
-
-        exit.take_output(&first, Some(seen_at(103)));
-        assert_eq!(exit.output.as_ref().unwrap().found, Some(seen_at(100)));
-        assert_eq!(exit.recoveries.len(), 1);
-        assert!(exit.recovered.is_some());
-
-        exit.take_output(&second, Some(seen_at(104)));
-        assert_eq!(exit.output().unwrap(), second);
-        assert_eq!(exit.output.as_ref().unwrap().found, Some(seen_at(104)));
-        assert!(exit.recoveries.is_empty());
-        assert_eq!(exit.recovered, None);
-
-        exit.add_recovery(&recovery, 2);
+        observed.push(unspent(&exited.found));
         assert!(
-            exit.recoveries.is_empty(),
-            "a recovery of the replaced output is not kept"
+            scan_outputs(&leaves, &HashMap::new(), &observed)
+                .1
+                .is_empty()
         );
     }
 
-    #[test]
-    fn an_assumed_output_stands_until_the_chain_shows_one() {
-        let leaf = exited_leaf();
-        let held = output_of(&leaf, "01", 800);
-        let confirmed = output_of(&leaf, "02", 700);
-        let mut exit = CachedWatchtowerExit::tracking(&leaf);
+    fn found(exited: &ExitedLeaf, block_height: Option<u32>) -> WatchtowerExitLookup {
+        WatchtowerExitLookup::Found {
+            output: exited.found.clone(),
+            block_height,
+        }
+    }
 
-        exit.take_output(&held, None);
-        assert_eq!(exit.output().unwrap(), held);
-        assert_eq!(exit.output.as_ref().unwrap().found, None);
-        assert!(!output_settled(Some(&exit), Some(1_000)));
-        exit.add_recovery(&tx_paying(held.outpoint, 600), 2);
-
-        exit.take_output(&held, Some(seen_at(100)));
-        assert_eq!(exit.output.as_ref().unwrap().found, Some(seen_at(100)));
-        assert_eq!(exit.recoveries.len(), 1);
-
-        exit.take_output(&confirmed, Some(seen_at(101)));
-        assert_eq!(exit.output().unwrap(), confirmed);
-        assert!(exit.recoveries.is_empty());
-
-        exit.take_output(&held, None);
-        assert_eq!(exit.output().unwrap(), confirmed);
+    fn stored_with(output: Option<StoredWatchtowerExitOutput>) -> LeafRecovery {
+        LeafRecovery {
+            watchtower_exit_output: output,
+            ..stored_leaf(&[])
+        }
     }
 
     #[test]
-    fn a_confirmed_recovery_is_undone_until_it_is_settled() {
-        let mut exit = exit_with(Vec::new());
-        exit.take_spend(true, Some(100));
-        exit.take_spend(true, Some(103));
-        let seen = exit.recovered.unwrap();
-        assert_eq!(seen, SeenAt { tip: Some(100) });
-        assert!(!seen.settled(Some(104)));
-        assert!(seen.settled(Some(105)));
-        assert!(!seen.settled(None));
-        assert!(!SeenAt::default().settled(Some(105)));
+    fn an_output_found_in_a_block_is_stored_with_the_recovery_in_a_block() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+        let in_block_output = stored_output_of(&exited.found, 100);
+        let looked_up = |stored: Option<&LeafRecovery>, observed: &[Observation]| {
+            looked_up_exit(
+                &exited.leaf,
+                found(&exited, Some(100)),
+                stored,
+                observed,
+                1_000,
+            )
+            .unwrap()
+        };
+        let update = |spend| UpdateLeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            chain_checked_at: Some(1_000),
+            watchtower_exit_output: Some(in_block_output.clone()),
+            watchtower_exit_spend: spend,
+            ..Default::default()
+        };
+        let recovery = ChainTransaction {
+            txid: spender().to_string(),
+            block_height: 101,
+        };
 
-        exit.take_spend(false, Some(104));
-        assert_eq!(exit.recovered, None);
+        let new = looked_up(None, &[unspent(&exited.found)]);
+        assert_eq!(new.update, Some(update(None)));
+        let exit = new.exit.unwrap();
+        assert_eq!(exit.output, exited.found);
+        assert!(!exit.recovered);
+
+        let recovered = looked_up(None, &[spent(&exited.found, true, Some(101))]);
+        assert_eq!(recovered.update, Some(update(Some(recovery.clone()))));
+        assert!(recovered.exit.unwrap().recovered);
+
+        // The SDK does not store again what storage already holds.
+        let stored = LeafRecovery {
+            watchtower_exit_spend: Some(recovery),
+            ..stored_with(Some(in_block_output.clone()))
+        };
+        let same = looked_up(Some(&stored), &[spent(&exited.found, true, Some(101))]);
+        assert_eq!(same.update, None);
+        assert!(same.exit.unwrap().recovered);
+
+        // The SDK replaces the stored output with another one it finds.
+        let other = stored_with(Some(stored_output_of(&output(), 90)));
+        let replaced = looked_up(Some(&other), &[unspent(&exited.found)]);
+        assert_eq!(replaced.update, Some(update(None)));
+        assert_eq!(replaced.exit.unwrap().output, exited.found);
+    }
+
+    #[test]
+    fn a_spend_is_only_stored_with_the_output_it_spends() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+        let spend_in_block = [spent(&exited.found, true, Some(101))];
+        // The chain service did not name the block of the output's transaction.
+        let looked_up = |stored: Option<&LeafRecovery>| {
+            looked_up_exit(
+                &exited.leaf,
+                found(&exited, None),
+                stored,
+                &spend_in_block,
+                1_000,
+            )
+            .unwrap()
+        };
+        let spend = Some(ChainTransaction {
+            txid: spender().to_string(),
+            block_height: 101,
+        });
+
+        let update = looked_up(None).update.unwrap();
+        assert_eq!(
+            (update.watchtower_exit_output, update.watchtower_exit_spend),
+            (None, spend)
+        );
+
+        let other = stored_with(Some(stored_output_of(&output(), 90)));
+        let on_other = looked_up(Some(&other));
+        assert_eq!(on_other.update, None);
+        assert!(on_other.exit.unwrap().recovered);
+    }
+
+    #[test]
+    fn a_stored_output_takes_precedence_over_the_direct_tx_the_node_holds() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+        let held = output_at("05", 9_800);
+        let stored = stored_with(Some(stored_output_of(&exited.found, 100)));
+        let looked_up = |lookup: WatchtowerExitLookup, stored: Option<&LeafRecovery>| {
+            looked_up_exit(&exited.leaf, lookup, stored, &[], 1_000).unwrap()
+        };
+
+        for lookup in [
+            WatchtowerExitLookup::Unconfirmed(held.clone()),
+            WatchtowerExitLookup::NotFound,
+            WatchtowerExitLookup::Pending,
+        ] {
+            let found = looked_up(lookup, Some(&stored));
+            assert_eq!(found.update, None);
+            assert_eq!(found.exit.unwrap().output, exited.found);
+        }
+
+        let unconfirmed = looked_up(WatchtowerExitLookup::Unconfirmed(held.clone()), None);
+        assert_eq!(unconfirmed.update, None);
+        assert_eq!(unconfirmed.exit.unwrap().output, held);
+    }
+
+    #[test]
+    fn a_lookup_without_an_output_is_what_the_leaf_is_left_with() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+
+        for lookup in [
+            WatchtowerExitLookup::Unrecoverable,
+            WatchtowerExitLookup::Unilateral,
+            WatchtowerExitLookup::NotFound,
+            WatchtowerExitLookup::Pending,
+        ] {
+            for stored in [None, Some(stored_with(None))] {
+                let found =
+                    looked_up_exit(&exited.leaf, lookup.clone(), stored.as_ref(), &[], 1_000)
+                        .unwrap();
+                assert_eq!(found.update, None);
+                assert_eq!(found.exit, Err(lookup.clone()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_leaf_without_its_ancestors_is_not_looked_for() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+        let on_chain = exited_leaf(TreeNodeStatus::OnChain);
+        let not_found = Some(WatchtowerExitLookup::NotFound);
+
+        assert_eq!(
+            lookup_with(not_found.clone(), &exited.leaf, false),
+            WatchtowerExitLookup::Pending
+        );
+        assert_eq!(
+            lookup_with(not_found.clone(), &exited.leaf, true),
+            WatchtowerExitLookup::NotFound
+        );
+        assert_eq!(
+            lookup_with(not_found, &on_chain.leaf, false),
+            WatchtowerExitLookup::NotFound
+        );
+        assert_eq!(
+            lookup_with(Some(found(&exited, Some(100))), &exited.leaf, false),
+            found(&exited, Some(100))
+        );
+        assert_eq!(
+            lookup_with(None, &exited.leaf, true),
+            WatchtowerExitLookup::Pending
+        );
+    }
+
+    fn check_of(exited: &ExitedLeaf, fetched: &[Observation]) -> Vec<UpdateLeafRecovery> {
+        recovered_leaf_checks(
+            std::slice::from_ref(&exited.leaf),
+            &HashMap::new(),
+            fetched,
+            1_000,
+        )
+    }
+
+    #[test]
+    fn a_recovered_leaf_is_stored_with_its_output_and_the_recovery_in_a_block() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+        let found = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
+        let stored = |spend| UpdateLeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            chain_checked_at: Some(1_000),
+            watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+            watchtower_exit_spend: spend,
+            ..Default::default()
+        };
+        let checked = |outspend: Observation| {
+            let mut fetched = found.clone();
+            fetched.push(outspend);
+            check_of(&exited, &fetched)
+        };
+
+        assert_eq!(
+            checked(spent(&exited.found, true, Some(101))),
+            vec![stored(Some(ChainTransaction {
+                txid: spender().to_string(),
+                block_height: 101,
+            }))]
+        );
+        // With a recovery in the mempool, or none, the funds stay in the total.
+        assert_eq!(
+            checked(spent(&exited.found, false, None)),
+            vec![stored(None)]
+        );
+        assert_eq!(checked(unspent(&exited.found)), vec![stored(None)]);
+    }
+
+    #[test]
+    fn a_recovered_leaf_without_every_result_is_left_for_the_next_sync() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+        let found = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
+
+        for fetched in [
+            Vec::new(),
+            vec![exited.parent_spent.clone()],
+            found.clone(),
+            // The SDK stores a transaction only with the height of its block.
+            [found.clone(), vec![spent(&exited.found, true, None)]].concat(),
+        ] {
+            assert!(check_of(&exited, &fetched).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_recovered_leaf_the_chain_shows_no_output_for_stays_to_recover() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+        let fetched = [Observation {
+            query: exited.parent_spent.query.clone(),
+            result: ChainResult::Spend(None),
+        }];
+
+        assert_eq!(
+            check_of(&exited, &fetched),
+            vec![UpdateLeafRecovery {
+                leaf_id: LEAF_ID.to_string(),
+                chain_checked_at: Some(1_000),
+                ..Default::default()
+            }]
+        );
     }
 }

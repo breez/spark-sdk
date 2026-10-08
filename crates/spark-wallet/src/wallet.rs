@@ -80,7 +80,7 @@ use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
-use crate::watchtower_exit::WatchtowerExitedOutput;
+use crate::watchtower_exit::WatchtowerExitOutput;
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest,
     MasterIdentityPublicKeyUpdate, PreimageRequest, QuerySparkInvoiceResult, TokenBalance,
@@ -1009,7 +1009,7 @@ impl SparkWallet {
 
     pub async fn cosign_watchtower_exit_recovery(
         &self,
-        output: &WatchtowerExitedOutput,
+        output: &WatchtowerExitOutput,
         recovery_tx: Transaction,
     ) -> Result<Transaction, SparkWalletError> {
         Ok(self

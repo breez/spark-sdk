@@ -1,4 +1,5 @@
 mod api;
+mod chain_queries;
 mod contacts;
 mod deposits;
 pub(crate) mod exit_chain_downloader;
@@ -52,10 +53,12 @@ bitflags! {
         const WalletState = 1 << 1;
         const Deposits = 1 << 2;
         const LnurlMetadata = 1 << 3;
+        const ExitChainState = 1 << 4;
         const Full = Self::Wallet.0.0
             | Self::WalletState.0.0
             | Self::Deposits.0.0
-            | Self::LnurlMetadata.0.0;
+            | Self::LnurlMetadata.0.0
+            | Self::ExitChainState.0.0;
     }
 }
 
@@ -104,10 +107,6 @@ pub struct BreezSdk {
     /// Serialises claim attempts on the same deposit across the sync cascade
     /// and explicit `claim_deposit` calls.
     pub(crate) claim_guards: deposits::ClaimGuards,
-    /// Held while a stored recovery row is read and rewritten, never across a
-    /// network call.
-    pub(crate) recovery_state_lock: Arc<Mutex<()>>,
-    pub(crate) recovery_checks: Arc<Mutex<recover_funds::RecoveryChecks>>,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
     /// and LNURL lookups honour the proxy and ride the redirect-validating

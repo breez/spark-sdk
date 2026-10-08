@@ -222,7 +222,9 @@ impl BreezSdk {
                 false
             };
 
-            if sync_type.contains(SyncType::Wallet) {
+            // Runs after the wallet sync, in which the wallet stores the leaves it
+            // reads.
+            if sync_type.contains(SyncType::ExitChainState) {
                 self.sync_recoverable_funds().await;
             }
 

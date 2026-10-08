@@ -50,8 +50,6 @@ pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
 const CONVERSION_BACKOFF_KEY: &str = "conversion_backoff";
-const WATCHTOWER_EXIT_KEY_PREFIX: &str = "watchtower_exit_";
-const EXITING_LEAF_KEY_PREFIX: &str = "exiting_leaf_";
 const RECOVERABLE_FUNDS_KEY: &str = "recoverable_funds";
 
 /// Wrapper stored in the cache that carries context about whether the value
@@ -800,58 +798,6 @@ impl ObjectCacheRepository {
             .await
     }
 
-    pub(crate) async fn save_watchtower_exit(
-        &self,
-        value: &CachedWatchtowerExit,
-    ) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(
-                format!("{WATCHTOWER_EXIT_KEY_PREFIX}{}", value.leaf_id),
-                serde_json::to_string(value)?,
-            )
-            .await
-    }
-
-    pub(crate) async fn fetch_watchtower_exit(
-        &self,
-        leaf_id: &str,
-    ) -> Result<Option<CachedWatchtowerExit>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(format!("{WATCHTOWER_EXIT_KEY_PREFIX}{leaf_id}"))
-            .await?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) async fn save_exiting_leaf(
-        &self,
-        value: &CachedExitingLeaf,
-    ) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(
-                format!("{EXITING_LEAF_KEY_PREFIX}{}", value.leaf_id),
-                serde_json::to_string(value)?,
-            )
-            .await
-    }
-
-    pub(crate) async fn fetch_exiting_leaf(
-        &self,
-        leaf_id: &str,
-    ) -> Result<Option<CachedExitingLeaf>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(format!("{EXITING_LEAF_KEY_PREFIX}{leaf_id}"))
-            .await?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
     pub(crate) async fn save_recoverable_funds(&self, sats: u64) -> Result<(), StorageError> {
         self.storage
             .set_cached_item(RECOVERABLE_FUNDS_KEY.to_string(), sats.to_string())
@@ -1221,60 +1167,6 @@ pub(crate) struct CachedSyncInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
-}
-
-/// The chain tip when the chain first showed something. Unset when the tip
-/// could not be read.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SeenAt {
-    pub(crate) tip: Option<u32>,
-}
-
-impl SeenAt {
-    /// Confirmations after which no reorg is expected.
-    const SETTLED_DEPTH: u32 = 6;
-
-    pub(crate) fn settled(self, tip: Option<u32>) -> bool {
-        matches!(
-            (self.tip, tip),
-            (Some(seen), Some(tip)) if tip.saturating_sub(seen) >= Self::SETTLED_DEPTH - 1
-        )
-    }
-}
-
-/// A leaf whose funds a watchtower exit took on-chain.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CachedWatchtowerExit {
-    pub(crate) leaf_id: String,
-    pub(crate) value_sats: u64,
-    pub(crate) output: Option<CachedWatchtowerExitOutput>,
-    pub(crate) recoveries: Vec<CachedWatchtowerExitRecovery>,
-    /// Set once any recovery of the output confirmed.
-    pub(crate) recovered: Option<SeenAt>,
-}
-
-/// The output holding the leaf's funds, as the last lookup found it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CachedWatchtowerExitOutput {
-    pub(crate) txid: String,
-    pub(crate) vout: u32,
-    pub(crate) amount_sats: u64,
-    pub(crate) script_pubkey: String,
-    /// Unset while the chain has not shown the output, which is then the one
-    /// of the direct tx the node holds.
-    pub(crate) found: Option<SeenAt>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CachedWatchtowerExitRecovery {
-    pub(crate) tx_hex: String,
-    pub(crate) fee_rate_sat_per_vbyte: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CachedExitingLeaf {
-    pub(crate) leaf_id: String,
-    pub(crate) swept: Option<SeenAt>,
 }
 
 #[cfg(feature = "test-utils")]
