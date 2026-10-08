@@ -1127,15 +1127,103 @@ fn walk_branch(
     }
 }
 
-/// Resolves a leaf's refund from its address. The address scan returns every
+/// Where following a leaf's refund through `observed` ends.
+enum RefundTrail {
+    /// A query it needs has no result yet. The query is in `pending`.
+    Pending,
+    /// The chain service returned no result for a query.
+    Unavailable,
+    /// The listing of the address contradicts itself.
+    Unreadable,
+    /// No output of the address is in a block: the refund is not on-chain.
+    NotOnChain,
+    /// The output in a block that no transaction in a block has as input: the
+    /// refund's, or that of the child paying the refund's fee.
+    Unspent(AddressUtxo),
+    /// The sweep of the refund, in a block.
+    Swept {
+        txid: Txid,
+        block_height: Option<u32>,
+    },
+}
+
+/// Follows a leaf's refund from its address. The address scan returns every
 /// output paid to it, spent or not, so its one refund output is found even after
-/// a sweep spends it. The refund's own [`ChainQuery::Outspend`] then separates the
-/// three post-broadcast states:
+/// a sweep has it as input. The [`ChainQuery::Outspend`] of that output then
+/// tells the states apart:
+///
+/// - unspent, or an input of a transaction in no block: [`RefundTrail::Unspent`],
+/// - an input of a transaction in a block that pays the address again: that
+///   output takes the refund's place and is followed the same way,
+/// - an input of any other transaction in a block: [`RefundTrail::Swept`].
+fn follow_refund(
+    leaf_id: &TreeNodeId,
+    address: &Address,
+    observed: &ObservedIndex<'_>,
+    pending: &mut Vec<ChainQuery>,
+) -> RefundTrail {
+    let scan_query = ChainQuery::RefundAddress {
+        leaf_id: leaf_id.clone(),
+        address: address.clone(),
+    };
+    let Some(result) = observed.get(&scan_query) else {
+        pending.push(scan_query);
+        return RefundTrail::Pending;
+    };
+    let txos = match result {
+        ChainResult::AddressUtxos(txos) => txos,
+        ChainResult::Unavailable => return RefundTrail::Unavailable,
+        _ => return RefundTrail::NotOnChain,
+    };
+    // Only one refund variant lands, but once it has the address is public and a
+    // later payment to it is listed first, so the refund is the largest confirmed
+    // output. No confirmed output means the refund is not on-chain yet.
+    let Some(mut txo) = txos.iter().filter(|t| t.confirmed).max_by_key(|t| t.value) else {
+        return RefundTrail::NotOnChain;
+    };
+    let mut steps = 0;
+    loop {
+        // Each step moves to another listed output, so more steps than outputs
+        // means the listing contradicts itself.
+        steps += 1;
+        if steps > txos.len() {
+            return RefundTrail::Unreadable;
+        }
+        let outspend_query = ChainQuery::Outspend(OutPoint {
+            txid: txo.txid,
+            vout: txo.vout,
+        });
+        let Some(spend) = observed.get(&outspend_query) else {
+            pending.push(outspend_query);
+            return RefundTrail::Pending;
+        };
+        let (spender, block_height) = match spend {
+            ChainResult::Spend(Some(info)) if info.confirmed => {
+                (info.spender_txid, info.block_height)
+            }
+            ChainResult::Unavailable => return RefundTrail::Unavailable,
+            _ => return RefundTrail::Unspent(*txo),
+        };
+        // A child that pays the refund's fee out of its value pays the leaf's key
+        // again.
+        let Some(next) = txos
+            .iter()
+            .filter(|t| t.confirmed && t.txid == spender)
+            .max_by_key(|t| t.value)
+        else {
+            return RefundTrail::Swept {
+                txid: spender,
+                block_height,
+            };
+        };
+        txo = next;
+    }
+}
+
+/// Resolves a leaf's refund from its address, see [`follow_refund`]:
 ///
 /// - unspent: [`RefundState::Adopted`], swept by the build,
-/// - spent by a confirmed tx that pays the address again: that output takes the
-///   refund's place and is resolved the same way,
-/// - spent by any other confirmed tx: [`RefundState::Swept`], nothing left to do,
+/// - swept: [`RefundState::Swept`], nothing left to do,
 /// - spent by an unconfirmed tx: still [`RefundState::Adopted`], so a sweep sitting
 ///   in the mempool is rebuilt and handed back to rebroadcast rather than dropped.
 ///
@@ -1150,71 +1238,20 @@ fn interpret_refund(
     unverified: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
 ) {
-    let scan_query = ChainQuery::RefundAddress {
-        leaf_id: leaf_id.clone(),
-        address: address.clone(),
-    };
-    let Some(result) = observed.get(&scan_query) else {
-        pending.push(scan_query);
-        return;
-    };
-    let txos = match result {
-        ChainResult::AddressUtxos(txos) => txos,
-        ChainResult::Unavailable => {
+    let txo = match follow_refund(leaf_id, address, observed, pending) {
+        RefundTrail::Pending | RefundTrail::NotOnChain => return,
+        RefundTrail::Unavailable | RefundTrail::Unreadable => {
             unverified.insert(leaf_id.clone());
             return;
         }
-        _ => return,
-    };
-    // Only one refund variant lands, but once it has the address is public and a
-    // later payment to it is listed first, so the refund is the largest confirmed
-    // output. No confirmed output means the refund is not on-chain yet.
-    let Some(mut txo) = txos.iter().filter(|t| t.confirmed).max_by_key(|t| t.value) else {
-        return;
-    };
-    let mut steps = 0;
-    loop {
-        // Each step moves to another listed output, so more steps than outputs
-        // means the listing contradicts itself.
-        steps += 1;
-        if steps > txos.len() {
-            unverified.insert(leaf_id.clone());
-            return;
-        }
-        let outspend_query = ChainQuery::Outspend(OutPoint {
-            txid: txo.txid,
-            vout: txo.vout,
-        });
-        let Some(spend) = observed.get(&outspend_query) else {
-            pending.push(outspend_query);
-            return;
-        };
-        let (spender, block_height) = match spend {
-            ChainResult::Spend(Some(info)) if info.confirmed => {
-                (info.spender_txid, info.block_height)
-            }
-            ChainResult::Unavailable => {
-                unverified.insert(leaf_id.clone());
-                return;
-            }
-            // Unspent, or spent only by an unconfirmed sweep: adopt so the sweep
-            // is (re)built.
-            _ => break,
-        };
-        // A child that pays the refund's fee out of its value pays the leaf's key
-        // again.
-        let Some(next) = txos
-            .iter()
-            .filter(|t| t.confirmed && t.txid == spender)
-            .max_by_key(|t| t.value)
-        else {
-            trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
+        RefundTrail::Swept { txid, block_height } => {
+            trace!(%leaf_id, sweep = %txid, "interpret_chain: refund swept");
             refunds.insert(leaf_id.clone(), RefundState::Swept);
-            sweeps.insert(leaf_id.clone(), (spender, block_height));
+            sweeps.insert(leaf_id.clone(), (txid, block_height));
             return;
-        };
-        txo = next;
-    }
+        }
+        RefundTrail::Unspent(txo) => txo,
+    };
     let refund_outpoint = OutPoint {
         txid: txo.txid,
         vout: txo.vout,
