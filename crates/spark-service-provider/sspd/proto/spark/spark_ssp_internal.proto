@@ -1,8 +1,6 @@
-// Vendored from breez/spark (branch ssp-enabled, commit 42afde75a),
-// protos/spark_ssp_internal.proto, with the common.proto and spark.proto imports
-// changed to resolve against the spark crate's protos. finalize_node_signatures
-// and query_nodes are newer: only the operator the integration tests run serves
-// them.
+// Vendored from breez/spark-breez (branch breez), protos/spark_ssp_internal.proto,
+// with the common.proto and spark.proto imports changed to resolve against the
+// spark crate's protos.
 syntax = "proto3";
 
 package spark_ssp_internal;

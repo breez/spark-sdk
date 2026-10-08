@@ -11,10 +11,12 @@ let
   pinnedVersion = dockerfile:
     builtins.head (builtins.match ".*\nARG VERSION=([0-9a-f]+)\n.*" (builtins.readFile dockerfile));
 
+  # Lightspark's current code, which is not public: fetching it takes git access
+  # to the private mirror.
   sparkSrc = builtins.fetchGit {
-    url = "https://github.com/breez/spark.git";
-    rev = pinnedVersion (dockerDir + "/spark-so.dockerfile");
-    shallow = true;
+    url = "ssh://git@github.com/breez/spark-breez.git";
+    ref = "breez";
+    rev = pinnedVersion (dockerDir + "/spark-so-private.dockerfile");
   };
 
   # The data-sync commit .env pins, so both setups run the same service.
@@ -41,8 +43,8 @@ rec {
     src = sparkSrc;
     modRoot = "spark";
     subPackages = [ "bin/operator" ];
-    # Moves with the operator pin in spark-so.dockerfile.
-    vendorHash = "sha256-LyEzEfL29dXoHsKa7agQBJWokDyiKkDfe5yFeQrPK08=";
+    # Moves with the operator pin in spark-so-private.dockerfile.
+    vendorHash = "sha256-n37t8AERouhhN1o13HoxkVqdg0hsS3wIjUVE8Gg6bxg=";
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.zeromq ];
     doCheck = false;
@@ -54,8 +56,8 @@ rec {
     src = sparkSrc;
     cargoRoot = "signer";
     buildAndTestSubdir = "signer/spark-frost-signer";
-    # Moves with the operator pin in spark-so.dockerfile.
-    cargoHash = "sha256-E9THpU4MBMrSmp2cNAMmWgL4FOLR303fH3Sp4Q3DGSI=";
+    # Moves with the operator pin in spark-so-private.dockerfile.
+    cargoHash = "sha256-HvgcvTphBXKdEUTaSCmPphsT7wPOwlJ90xus+LnDZiI=";
     nativeBuildInputs = [ pkgs.protobuf ];
     doCheck = false;
   };

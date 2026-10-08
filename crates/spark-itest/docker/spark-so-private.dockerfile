@@ -1,7 +1,8 @@
-# The operator the integration tests run: Lightspark's current code, which is
-# not public, from Breez's private mirror (github.com/breez/spark-breez). The
-# mirror builds and publishes it as a private image, see its breez/README.md.
-# spark-so.dockerfile builds the public code, which regtest/local runs.
+# The operator the integration tests and regtest/local run: Lightspark's current
+# code, which is not public, from Breez's private mirror
+# (github.com/breez/spark-breez). The mirror builds and publishes it as a
+# private image, see its breez/README.md. spark-so.dockerfile builds the public
+# code, for when Lightspark publishes it again.
 ARG USER=so
 # A commit on the mirror's breez branch. migrations-private.dockerfile must pin
 # the same commit.

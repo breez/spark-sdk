@@ -79,10 +79,14 @@ Every setting is an environment variable read when the environment starts:
 | `MAX_DENOMINATION_POWER` | `16` | Largest denomination the SSP keeps, in powers of two sats |
 | `DKG_MIN_AVAILABLE_KEYS` | `12000` | Keyshares each operator keeps unused. The SSP's pool spends over 10,000 |
 | `READY_TIMEOUT_SECONDS` | `2400` | How long the environment reports progress before it gives up |
+| `DOCKER_SUBNET` | `10.250.0.0/24` | Docker's network for the environment. It has to be a 10.x one: the operators serve the SSP only from those |
 | `SPARK_LOCAL_DIR` | `./.spark-local` | Where Nix keeps the environment's state |
 
 Nix reads a few more, for the ports its services hold to one host:
-`OPERATOR_0_TLS_PORT` to `OPERATOR_2_TLS_PORT`, `POSTGRES_PORT`,
+`OPERATOR_0_TLS_PORT` to `OPERATOR_2_TLS_PORT`, `OPERATOR_0_HTTP_PORT` to
+`OPERATOR_2_HTTP_PORT`, `OPERATOR_0_INTERNAL_PORT` to
+`OPERATOR_2_INTERNAL_PORT`, `OPERATOR_0_METRICS_PORT` to
+`OPERATOR_2_METRICS_PORT`, `POSTGRES_PORT`,
 `ELECTRS_PORT`, `ELECTRS_ELECTRUM_PORT`, `ELECTRS_MONITORING_PORT`,
 `MEMPOOL_API_PORT`, `LDK_GRPC_PORT`, `LDK_ALICE_GRPC_PORT` and
 `BITCOIND_ZMQ_PORT`. Their defaults are in
@@ -103,6 +107,13 @@ regtest network alone. It also pins `DATA_SYNC_VERSION`, the commit of
 | [nix/](nix) | The same environment, built and run by Nix |
 
 The operator, the SSP and the Lightning nodes are built from the dockerfiles in
-`crates/spark-itest/docker/`, at the commits pinned there. The integration tests
-build their images from the same directory, except for the operator's, which
-come from the `-private` dockerfiles.
+`crates/spark-itest/docker/`, at the commits pinned there, which the integration
+tests build their own images from.
+
+The operator is Lightspark's current code, which is not public. Docker builds it
+on top of the private image `ghcr.io/breez/spark-operator`: either log in with
+an account that can read it (`docker login ghcr.io`), or build it locally with
+`breez/publish-image.sh --local` from
+[breez/spark-breez](https://github.com/breez/spark-breez), at the commit
+`spark-so-private.dockerfile` pins. Nix builds it from that repository, which
+takes git access to it.

@@ -11,12 +11,8 @@ pub mod proto {
     pub mod spark_ssp_internal {
         tonic::include_proto!("spark_ssp_internal");
     }
-    pub mod spark_internal {
-        tonic::include_proto!("spark_internal");
-    }
 }
 
-use proto::spark_internal::spark_internal_service_client::SparkInternalServiceClient;
 use proto::spark_ssp_internal::spark_ssp_internal_service_client::SparkSspInternalServiceClient;
 pub use proto::spark_ssp_internal::{
     ClaimInstantStaticDepositUtxoSwapRequest, ClaimInstantStaticDepositUtxoSwapResponse,
@@ -59,15 +55,6 @@ fn ssp_client(
     InterceptedService<spark::operator::rpc::Transport, HeaderInterceptor>,
 > {
     SparkSspInternalServiceClient::with_interceptor(client.transport().clone(), interceptor)
-}
-
-fn internal_client(
-    client: &SparkRpcClient,
-    interceptor: HeaderInterceptor,
-) -> SparkInternalServiceClient<
-    InterceptedService<spark::operator::rpc::Transport, HeaderInterceptor>,
-> {
-    SparkInternalServiceClient::with_interceptor(client.transport().clone(), interceptor)
 }
 
 pub async fn prepare_tree_address(
@@ -167,32 +154,17 @@ pub async fn sign_static_deposit_sweep_tx(
 }
 
 /// Unlike the public query, returns nodes regardless of their wallet's privacy
-/// setting. Operators that serve the service provider's query serve their own
-/// internal one to other operators only, and those built from the public code
-/// (regtest/local's) serve only the internal one.
+/// setting.
 pub async fn query_nodes_internal(
     client: &SparkRpcClient,
     req: QueryNodesRequest,
 ) -> Result<QueryNodesResponse> {
-    let response = with_auth_retry(client, |interceptor| {
+    with_auth_retry(client, |interceptor| {
         let mut c = ssp_client(client, interceptor);
         let req = req.clone();
         async move { c.query_nodes(req).await }
     })
-    .await;
-    if !is_unimplemented(&response) {
-        return response;
-    }
-    with_auth_retry(client, |interceptor| {
-        let mut c = internal_client(client, interceptor);
-        let req = req.clone();
-        async move { c.query_nodes(req).await }
-    })
     .await
-}
-
-fn is_unimplemented<T>(response: &Result<T>) -> bool {
-    matches!(response, Err(OperatorRpcError::Connection(status)) if status.code() == tonic::Code::Unimplemented)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -259,34 +231,15 @@ pub async fn get_utxos_for_address(
     .await
 }
 
-/// Completes the nodes of a tree `create_tree` started. Operators that serve this
-/// call disable the public `finalize_node_signatures_v2`, and those built from
-/// the public code (regtest/local's) serve only that.
+/// Completes the nodes of a tree `create_tree` started.
 pub async fn finalize_node_signatures(
     client: &SparkRpcClient,
     req: FinalizeNodeSignaturesRequest,
 ) -> Result<FinalizeNodeSignaturesResponse> {
-    let response = with_auth_retry(client, |interceptor| {
+    with_auth_retry(client, |interceptor| {
         let mut c = ssp_client(client, interceptor);
         let req = req.clone();
         async move { c.finalize_node_signatures(req).await }
-    })
-    .await;
-    if is_unimplemented(&response) {
-        return finalize_node_signatures_v2(client, req).await;
-    }
-    response
-}
-
-async fn finalize_node_signatures_v2(
-    client: &SparkRpcClient,
-    req: FinalizeNodeSignaturesRequest,
-) -> Result<FinalizeNodeSignaturesResponse> {
-    use spark::operator::rpc::spark::spark_service_client::SparkServiceClient;
-    with_auth_retry(client, |interceptor| {
-        let mut c = SparkServiceClient::with_interceptor(client.transport().clone(), interceptor);
-        let req = req.clone();
-        async move { c.finalize_node_signatures_v2(req).await }
     })
     .await
 }
