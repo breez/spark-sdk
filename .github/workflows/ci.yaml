@@ -152,13 +152,17 @@ jobs:
         id: snapshot
         run: |
           key=$(cargo run --quiet -p spark-itest --bin itest-bootstrap-snapshot-key)
-          echo "key=itest-bootstrap-snapshot-${{ runner.os }}-$key" >> "$GITHUB_OUTPUT"
+          echo "key=itest-bootstrap-snapshot-encrypted-${{ runner.os }}-$key" >> "$GITHUB_OUTPUT"
 
+      # The operators' dumps hold the private operator's migrations, and a pull
+      # request from a fork can restore this repository's caches and anyone can
+      # download its artifacts. So the snapshot is cached and handed on only
+      # encrypted, with a key forks get no copy of.
       - name: Restore the snapshot
         id: cache
         uses: actions/cache/restore@v4
         with:
-          path: crates/spark-itest/state-snapshot
+          path: /tmp/itest-snapshot/state-snapshot.tar.enc
           key: ${{ steps.snapshot.outputs.key }}
 
       # Only a snapshot this job has to build needs a cluster to build it in.
@@ -174,19 +178,33 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: make capture-itest-state
 
+      - name: Encrypt the snapshot
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SNAPSHOT_KEY: ${{ secrets.ITEST_SNAPSHOT_KEY }}
+        run: |
+          if [ -z "$SNAPSHOT_KEY" ]; then
+            echo "::error::The snapshot needs the ITEST_SNAPSHOT_KEY secret"
+            exit 1
+          fi
+          set -o pipefail
+          mkdir -p /tmp/itest-snapshot
+          tar -C crates/spark-itest -cf - state-snapshot |
+            openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:SNAPSHOT_KEY \
+              -out /tmp/itest-snapshot/state-snapshot.tar.enc
+
       - name: Cache the snapshot
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: crates/spark-itest/state-snapshot
+          path: /tmp/itest-snapshot/state-snapshot.tar.enc
           key: ${{ steps.snapshot.outputs.key }}
 
       - name: Hand the snapshot to the itest jobs
         uses: actions/upload-artifact@v4
         with:
           name: itest-state-snapshot
-          path: crates/spark-itest/state-snapshot
-          include-hidden-files: true
+          path: /tmp/itest-snapshot/state-snapshot.tar.enc
           overwrite: true
           retention-days: 1
 
@@ -241,7 +259,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: itest-state-snapshot
-          path: crates/spark-itest/state-snapshot
+          path: /tmp/itest-snapshot
+
+      - name: Decrypt the state snapshot
+        env:
+          SNAPSHOT_KEY: ${{ secrets.ITEST_SNAPSHOT_KEY }}
+        run: |
+          set -o pipefail
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:SNAPSHOT_KEY \
+            -in /tmp/itest-snapshot/state-snapshot.tar.enc |
+            tar -C crates/spark-itest -xf -
 
       - name: Load the itest images
         uses: ./.github/actions/itest-images
@@ -268,7 +295,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: itest-state-snapshot
-          path: crates/spark-itest/state-snapshot
+          path: /tmp/itest-snapshot
+
+      - name: Decrypt the state snapshot
+        env:
+          SNAPSHOT_KEY: ${{ secrets.ITEST_SNAPSHOT_KEY }}
+        run: |
+          set -o pipefail
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:SNAPSHOT_KEY \
+            -in /tmp/itest-snapshot/state-snapshot.tar.enc |
+            tar -C crates/spark-itest -xf -
 
       # `make compat-itest` builds the daemon's image when it is missing, for
       # rebuilding a stale snapshot, so it is loaded here rather than built.
