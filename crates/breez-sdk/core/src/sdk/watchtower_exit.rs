@@ -1530,6 +1530,73 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_recovered_leaf_below_an_on_chain_split_node_takes_two_requests() {
+            let split_id = "00000000-0000-0000-0000-00000000000c";
+            let outpoint = |byte: &str| OutPoint {
+                txid: Txid::from_str(&byte.repeat(32)).unwrap(),
+                vout: 0,
+            };
+            let mut leaf = create_test_node_with_parent(
+                LEAF_ID,
+                Some(split_id),
+                TreeNodeStatus::WatchtowerExitRecovered,
+            );
+            let leaf_script = ScriptBuf::new_p2tr(
+                &bitcoin::secp256k1::Secp256k1::verification_only(),
+                leaf.verifying_public_key.x_only_public_key().0,
+                None,
+            );
+            let mut own = tx_paying(outpoint("05"), 9_800);
+            own.output[0].script_pubkey = leaf_script.clone();
+            leaf.direct_tx = Some(own);
+            let mut held = tx_paying(outpoint("06"), 9_900);
+            held.output[0].script_pubkey = leaf_script;
+            let mut split = create_test_node_with_parent(split_id, None, TreeNodeStatus::OnChain);
+            split.direct_tx = Some(held.clone());
+            let found = WatchtowerExitOutput {
+                leaf_id: leaf.id.clone(),
+                outpoint: OutPoint {
+                    txid: held.compute_txid(),
+                    vout: 0,
+                },
+                tx_out: held.output[0].clone(),
+            };
+            let nodes = HashMap::from([(leaf.id.clone(), leaf.clone()), (split.id.clone(), split)]);
+            // The split node's direct tx is in a block, and nothing spent its
+            // output.
+            let chain = chain_knowing(&[
+                Observation {
+                    query: ChainQuery::Outspend(outpoint("06")),
+                    result: ChainResult::Spend(Some(SpendInfo {
+                        spender_txid: held.compute_txid(),
+                        confirmed: true,
+                        block_height: Some(100),
+                    })),
+                },
+                unspent(&found),
+            ]);
+            let storage = temp_storage();
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let complete = store_recovered_leaf_checks(
+                &[leaf],
+                &nodes,
+                &HashMap::new(),
+                &mut queries,
+                &storage,
+            )
+            .await;
+
+            assert_eq!(complete, vec![LEAF_ID.to_string()]);
+            // The input of the split node, and the spend of the output found.
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                stored_in(&storage).await[LEAF_ID].watchtower_exit_output,
+                Some(stored_output_of(&found, 100))
+            );
+        }
+
+        #[tokio::test]
         async fn a_sync_stores_the_batches_it_finished_and_the_next_one_checks_the_rest() {
             let exited: Vec<ExitedLeaf> = (0..12).map(leaf_number).collect();
             let leaves: Vec<TreeNode> = exited.iter().map(|exited| exited.leaf.clone()).collect();

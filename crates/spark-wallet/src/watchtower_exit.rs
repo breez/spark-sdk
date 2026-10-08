@@ -110,6 +110,37 @@ fn lookup_output(
     observed: &ObservedIndex<'_>,
     pending: &mut Vec<ChainQuery>,
 ) -> WatchtowerExitLookup {
+    // The funds of a recovered leaf are in a direct tx of its nearest on-chain
+    // ancestor, or in the leaf's own direct tx at another fee. A direct tx of
+    // the ancestor and the ancestor's node tx have the same input, so when the
+    // direct tx is in a block, no transaction below the ancestor is, and the
+    // leaf's own input is unspent. The SDK therefore queries the ancestor's
+    // input first, and the leaf's own input only when the ancestor's direct tx
+    // is in no block. It does so only when that direct tx has an output to the
+    // leaf's key: without one it holds the leaf's funds at no fee.
+    if leaf.status == TreeNodeStatus::WatchtowerExitRecovered
+        && let Some(ancestor) = nearest_on_chain_ancestor(leaf, nodes)
+        && let Some(direct_tx) = ancestor.direct_tx.as_ref()
+        && output_paying_leaf(leaf, direct_tx).is_some()
+    {
+        let queued = pending.len();
+        match confirmed_spend(ancestor, direct_tx, observed, pending) {
+            Spend::By(spender, block_height)
+                if matches!(Spender::of(spender, ancestor, direct_tx), Spender::DirectTx) =>
+            {
+                return output_paying_leaf(leaf, spender).map_or(
+                    WatchtowerExitLookup::Unrecoverable,
+                    |output| WatchtowerExitLookup::Found {
+                        output,
+                        block_height,
+                    },
+                );
+            }
+            _ if pending.len() > queued => return WatchtowerExitLookup::Pending,
+            _ => {}
+        }
+    }
+
     let mut visited = HashSet::new();
     let mut node = nodes.get(&leaf.id).unwrap_or(leaf);
     // Whether the spend of the leaf's own parent output has no result.
@@ -127,6 +158,7 @@ fn lookup_output(
         if (on_chain || recovered)
             && let Some(direct_tx) = node.direct_tx.as_ref()
         {
+            let queued = pending.len();
             match confirmed_spend(node, direct_tx, observed, pending) {
                 Spend::By(spender, block_height) => {
                     let held = spender.compute_txid() == direct_tx.compute_txid();
@@ -152,6 +184,12 @@ fn lookup_output(
                 }
                 Spend::Unread => return WatchtowerExitLookup::NotFound,
                 Spend::SpenderUnknown => return WatchtowerExitLookup::Pending,
+                // The SDK waits for the result of the leaf's own input before it
+                // queries an ancestor: the leaf's own direct tx may be the one
+                // in a block.
+                Spend::OutspendUnknown if is_leaf && pending.len() > queued => {
+                    return WatchtowerExitLookup::Pending;
+                }
                 Spend::OutspendUnknown if is_leaf => own_spend_unknown = true,
                 Spend::NotShown | Spend::OutspendUnknown if on_chain && !is_leaf => {
                     // The leaf's own direct tx may be the one in a block.
@@ -181,6 +219,28 @@ fn lookup_output(
         };
         node = parent;
     }
+}
+
+/// The nearest ancestor of `leaf` among `nodes` that the operators report as
+/// on-chain.
+fn nearest_on_chain_ancestor<'a>(
+    leaf: &TreeNode,
+    nodes: &'a HashMap<TreeNodeId, TreeNode>,
+) -> Option<&'a TreeNode> {
+    let mut visited = HashSet::new();
+    let mut parent_id = nodes.get(&leaf.id).unwrap_or(leaf).parent_node_id.clone();
+    while let Some(id) = parent_id {
+        // The operators supply the parent ids, so a cycle is possible.
+        if !visited.insert(id.clone()) {
+            return None;
+        }
+        let node = nodes.get(&id)?;
+        if node.status == TreeNodeStatus::OnChain {
+            return Some(node);
+        }
+        parent_id = node.parent_node_id.clone();
+    }
+    None
 }
 
 /// A lookup missing from `observed` is added to `pending`.
@@ -791,6 +851,107 @@ mod tests {
             resolve(&leaf, &nodes, &observed),
             WatchtowerExitLookup::Unconfirmed(_)
         ));
+    }
+
+    fn input_of(node: &TreeNode) -> ChainQuery {
+        ChainQuery::Outspend(node.direct_tx.as_ref().unwrap().input[0].previous_output)
+    }
+
+    #[test]
+    fn a_recovered_leaf_queries_the_input_of_its_on_chain_ancestor_first() {
+        let mut leaf = node(
+            LEAF,
+            Some(SPLIT_1),
+            TreeNodeStatus::WatchtowerExitRecovered,
+            None,
+        );
+        leaf.direct_tx = Some(direct_tx(vec![paying(9_800, key_path_script(&leaf))], 3));
+        let held = direct_tx(vec![paying(9_900, key_path_script(&leaf))], 1);
+        let split_1 = node(SPLIT_1, None, TreeNodeStatus::OnChain, Some(held.clone()));
+        let nodes = by_id(vec![leaf.clone(), split_1.clone()]);
+        let leaves = [leaf.clone()];
+        let ancestor_input = |result| Observation {
+            query: input_of(&split_1),
+            result,
+        };
+
+        let first = scan_watchtower_exits(&leaves, &nodes, &[]);
+        assert_eq!(first.pending, vec![input_of(&split_1)]);
+
+        // The ancestor's direct tx is in a block, so the leaf's own input is
+        // not queried.
+        let in_block = [ancestor_input(ChainResult::Spend(Some(SpendInfo {
+            spender_txid: held.compute_txid(),
+            confirmed: true,
+            block_height: Some(100),
+        })))];
+        let done = scan_watchtower_exits(&leaves, &nodes, &in_block);
+        assert!(done.pending.is_empty());
+        assert_eq!(
+            done.lookups[&leaf.id],
+            found(WatchtowerExitOutput {
+                leaf_id: leaf.id.clone(),
+                outpoint: OutPoint {
+                    txid: held.compute_txid(),
+                    vout: 0,
+                },
+                tx_out: held.output[0].clone(),
+            })
+        );
+
+        // It is in no block, so the leaf's own input is queried next.
+        let unspent = [ancestor_input(ChainResult::Spend(None))];
+        let second = scan_watchtower_exits(&leaves, &nodes, &unspent);
+        assert_eq!(second.pending, vec![input_of(&leaf)]);
+        assert_eq!(second.lookups[&leaf.id], WatchtowerExitLookup::Pending);
+    }
+
+    #[test]
+    fn a_recovered_leaf_queries_its_own_input_first_below_a_direct_tx_without_its_key() {
+        let mut leaf = node(
+            LEAF,
+            Some(BRANCH),
+            TreeNodeStatus::WatchtowerExitRecovered,
+            None,
+        );
+        leaf.direct_tx = Some(direct_tx(vec![paying(9_800, key_path_script(&leaf))], 3));
+        let branch = node(
+            BRANCH,
+            None,
+            TreeNodeStatus::OnChain,
+            Some(direct_tx(vec![paying(9_900, ScriptBuf::new())], 1)),
+        );
+        let nodes = by_id(vec![leaf.clone(), branch.clone()]);
+        let leaves = [leaf.clone()];
+        let scan = |observed: &[Observation]| scan_watchtower_exits(&leaves, &nodes, observed);
+
+        assert_eq!(scan(&[]).pending, vec![input_of(&leaf)]);
+
+        // The leaf's own direct tx is in a block at another fee, so the
+        // ancestor's input is not queried.
+        let confirmed = spending(
+            parent_output(3),
+            vec![paying(9_500, key_path_script(&leaf))],
+        );
+        let observed = parent_output_spent_by(&leaf, &confirmed);
+        assert_eq!(
+            scan(&observed[..1]).pending,
+            vec![observed[1].query.clone()]
+        );
+        let done = scan(&observed);
+        assert!(done.pending.is_empty());
+        assert!(matches!(
+            done.lookups[&leaf.id],
+            WatchtowerExitLookup::Found { .. }
+        ));
+
+        // Nothing in a block has the leaf's own input, so the ancestor's input
+        // is queried next.
+        let unspent = [Observation {
+            query: input_of(&leaf),
+            result: ChainResult::Spend(None),
+        }];
+        assert_eq!(scan(&unspent).pending, vec![input_of(&branch)]);
     }
 
     #[test]
