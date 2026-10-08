@@ -35,7 +35,7 @@ See [Connecting with a Passkey](passkey.md) for the full setup guide including P
 
 ## Advanced Initialization
 
-If you're running the SDK on a server, start with [Server-side configuration](server_deployments.md), which covers a wallet per user and a single treasury wallet.
+If you're running the SDK on a server, start with [Running on a server](server_deployments.md), which covers a wallet per user, a single treasury wallet, and keeping the keys out of the server.
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
 

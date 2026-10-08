@@ -10,4 +10,4 @@ The SDK supports advanced features that may be useful in specific use cases:
 - **[Managing webhooks](webhooks.md)** delivers real-time notifications of wallet events, such as completed payments or on-chain deposits, to a URL you register
 - **[Unilateral exit](unilateral_exit.md)** moves funds onto the Bitcoin blockchain without the Spark operators, as a safety net
 
-If you're running the SDK on a server, see [Server-side configuration](server_deployments.md).
+If you're running the SDK on a server, see [Running on a server](server_deployments.md).
