@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bitcoin::{
-    Address, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, OutPoint, Script, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
     absolute::LockTime, secp256k1::Secp256k1, transaction::Version,
 };
 use spark::{
@@ -271,12 +271,39 @@ pub fn build_watchtower_exit_recovery(
     destination: &Address,
     fee: Fee,
 ) -> Option<UnsignedWatchtowerExitRecovery> {
+    recovery_of(
+        output.outpoint,
+        output.tx_out.value,
+        destination.script_pubkey(),
+        fee,
+    )
+}
+
+/// The amount of a recovery's output to `script_pubkey`, for an input holding
+/// `value` and at `fee`. `None` when it is below the dust limit of
+/// `script_pubkey`: nodes do not relay such a recovery.
+pub fn watchtower_exit_recovery_payout(
+    value: Amount,
+    script_pubkey: &Script,
+    fee: Fee,
+) -> Option<Amount> {
+    let recovery = recovery_of(OutPoint::null(), value, script_pubkey.to_owned(), fee)?;
+    let payout = recovery.tx.output.first()?.value;
+    (payout >= script_pubkey.minimal_non_dust()).then_some(payout)
+}
+
+fn recovery_of(
+    outpoint: OutPoint,
+    value: Amount,
+    script_pubkey: ScriptBuf,
+    fee: Fee,
+) -> Option<UnsignedWatchtowerExitRecovery> {
     let mut recovery_tx = Transaction {
         // The version of the recovery the operators' own SDK builds.
         version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
-            previous_output: output.outpoint,
+            previous_output: outpoint,
             sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
             // Sized with the key-path signature it will carry.
             witness: Witness::from_slice(&[[0u8; 64]]),
@@ -284,18 +311,18 @@ pub fn build_watchtower_exit_recovery(
         }],
         output: vec![TxOut {
             value: Amount::ZERO,
-            script_pubkey: destination.script_pubkey(),
+            script_pubkey,
         }],
     };
     let vsize = recovery_tx.vsize() as u64;
     recovery_tx.input[0].witness = Witness::new();
 
     let fee_sat = fee.to_sats(vsize);
-    let value = output.tx_out.value.to_sat().checked_sub(fee_sat)?;
-    if value == 0 {
+    let payout = value.to_sat().checked_sub(fee_sat)?;
+    if payout == 0 {
         return None;
     }
-    recovery_tx.output[0].value = Amount::from_sat(value);
+    recovery_tx.output[0].value = Amount::from_sat(payout);
     Some(UnsignedWatchtowerExitRecovery {
         tx: recovery_tx,
         fee_sat,
@@ -875,6 +902,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(recovery.tx.output[0].value, Amount::from_sat(1));
+    }
+
+    #[test]
+    fn a_recovery_that_leaves_less_than_dust_has_no_payout() {
+        let script = regtest_address().script_pubkey();
+        let dust = script.minimal_non_dust();
+        let fee = Fee::Fixed { amount: 500 };
+        let payout = |value: Amount| watchtower_exit_recovery_payout(value, &script, fee);
+
+        assert_eq!(payout(dust + Amount::from_sat(500)), Some(dust));
+        assert_eq!(payout(dust + Amount::from_sat(499)), None);
+        assert_eq!(payout(Amount::from_sat(500)), None);
     }
 
     #[test]

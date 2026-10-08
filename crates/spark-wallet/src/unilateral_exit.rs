@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use bitcoin::{Address, OutPoint, Transaction, Txid};
+use bitcoin::{Address, Amount, FeeRate, OutPoint, Transaction, Txid};
 use spark::{
     services::{
         ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
         ExitRefundState, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        walk_unilateral_exit_chain,
+        p2tr_key_path_input_weight, walk_unilateral_exit_chain,
     },
     signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
@@ -692,6 +692,12 @@ pub fn leaf_refund_addresses(
         }
     }
     addresses
+}
+
+/// The fee of one refund input of a sweep at `fee_rate`. `None` when the fee
+/// overflows.
+pub fn refund_sweep_input_fee(fee_rate: FeeRate) -> Option<Amount> {
+    fee_rate.fee_wu(p2tr_key_path_input_weight())
 }
 
 /// Reads what the chain has already done to each leaf's branch, with no funding
