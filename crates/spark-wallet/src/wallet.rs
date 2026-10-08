@@ -1882,7 +1882,7 @@ impl SparkWallet {
         self.load_selected_exit_context(selection).await
     }
 
-    /// [`Self::load_exit_context`] without the refresh.
+    /// The context of `selection` from the leaves and chains the tree store holds.
     pub async fn load_selected_exit_context(
         &self,
         selection: ExitLeafSelection,
@@ -1892,19 +1892,6 @@ impl SparkWallet {
         Ok(ExitContext {
             leaf_ids,
             filter,
-            tree_nodes,
-        })
-    }
-
-    /// The context of exactly `leaf_ids`, without the refresh.
-    pub async fn load_stored_exit_context(
-        &self,
-        leaf_ids: Vec<TreeNodeId>,
-    ) -> Result<ExitContext, SparkWalletError> {
-        let tree_nodes = self.load_exit_tree_nodes(&leaf_ids).await?;
-        Ok(ExitContext {
-            leaf_ids,
-            filter: UnilateralExitLeafFilter::All,
             tree_nodes,
         })
     }
