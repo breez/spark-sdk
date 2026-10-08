@@ -3216,8 +3216,9 @@ pub struct PrepareRecoverFundsResponse {
     pub recoverable_value_sats: u64,
     /// `cooperative_fee_sats + cpfp_fee_sats + fanout_fee_sats + sweep_fee_sats`.
     pub total_fee_sats: u64,
-    /// What comes off the value of the cooperative leaves: the fee of the
-    /// transaction that took each on-chain, and the fee of its recovery.
+    /// Paid from the cooperative leaves' own value. Each leaf has two fees: the
+    /// one of the transaction the operators broadcast to move it on-chain, which
+    /// is already paid, and the one of its recovery transaction.
     pub cooperative_fee_sats: u64,
     /// Paid by the CPFP children, from your funding UTXOs.
     pub cpfp_fee_sats: u64,
