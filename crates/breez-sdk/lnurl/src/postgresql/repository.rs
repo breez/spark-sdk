@@ -3,6 +3,7 @@ use lnurl_models::ListMetadataMetadata;
 use spark_postgres::deadpool_postgres::{GenericClient, Pool};
 use spark_postgres::tokio_postgres;
 
+use crate::domains::DomainGroup;
 use crate::repository::{
     DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
     TransferRequest, WebhookPayloadData,
@@ -238,10 +239,11 @@ fn now_secs_i32() -> i32 {
 impl crate::repository::LnurlRepository for LnurlRepository {
     async fn delete_user(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
         name: &str,
     ) -> Result<bool, LnurlRepositoryError> {
+        let domain = group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         lock_registrations(&tx, domain, &[pubkey]).await?;
@@ -263,7 +265,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn get_user_by_name(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
@@ -275,11 +277,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let maybe_user = client
-            .query_opt(&stmt, &[&domain, &name])
+            .query_opt(&stmt, &[&group.as_str(), &name])
             .await?
             .map(|row| {
                 Ok::<_, tokio_postgres::Error>(User {
-                    domain: domain.to_string(),
+                    group: group.clone(),
                     pubkey: row.try_get(0)?,
                     name: row.try_get(1)?,
                     description: row.try_get(2)?,
@@ -291,7 +293,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn get_user_by_pubkey(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
@@ -303,11 +305,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let maybe_user = client
-            .query_opt(&stmt, &[&domain, &pubkey])
+            .query_opt(&stmt, &[&group.as_str(), &pubkey])
             .await?
             .map(|row| {
                 Ok::<_, tokio_postgres::Error>(User {
-                    domain: domain.to_string(),
+                    group: group.clone(),
                     pubkey: row.try_get(0)?,
                     name: row.try_get(1)?,
                     description: row.try_get(2)?,
@@ -322,14 +324,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         user: &User,
         limit: Option<RegistrationLimit>,
     ) -> Result<(), LnurlRepositoryError> {
+        let domain = user.group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
 
-        lock_registrations(&tx, &user.domain, &[&user.pubkey]).await?;
+        lock_registrations(&tx, domain, &[&user.pubkey]).await?;
 
         // Read before the write overwrites it: taking a new name gives up the
         // one this pubkey holds now.
-        let previous = name_of(&tx, &user.domain, &user.pubkey).await?;
+        let previous = name_of(&tx, domain, &user.pubkey).await?;
 
         // Written before the hold is checked. Taking the name in the unique
         // index is what serializes this against a release of the same name, so
@@ -348,7 +351,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         tx.execute(
             &upsert_stmt,
             &[
-                &user.domain,
+                &domain,
                 &user.pubkey,
                 &user.name,
                 &user.description,
@@ -357,7 +360,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         )
         .await?;
 
-        if reserved_for_other(&tx, &user.domain, &user.name, &user.pubkey).await? {
+        if reserved_for_other(&tx, domain, &user.name, &user.pubkey).await? {
             // The tx rolls back on drop, so the name stays as the hold left it.
             return Err(LnurlRepositoryError::NameReserved);
         }
@@ -366,18 +369,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let release_stmt = tx
             .prepare_cached("DELETE FROM released_names WHERE domain = $1 AND name = $2")
             .await?;
-        tx.execute(&release_stmt, &[&user.domain, &user.name])
-            .await?;
+        tx.execute(&release_stmt, &[&domain, &user.name]).await?;
 
         let name_changed = previous.as_deref() != Some(user.name.as_str());
         if let Some(previous) = previous
             && previous != user.name
         {
-            reserve_name(&tx, &user.domain, &previous, &user.pubkey).await?;
+            reserve_name(&tx, domain, &previous, &user.pubkey).await?;
         }
 
         if name_changed && let Some(limit) = limit {
-            record_registration(&tx, &user.domain, &user.pubkey, limit).await?;
+            record_registration(&tx, domain, &user.pubkey, limit).await?;
         }
 
         tx.commit().await?;
@@ -386,7 +388,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn name_status(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
         asking_pubkey: Option<&str>,
     ) -> Result<NameStatus, LnurlRepositoryError> {
@@ -401,7 +403,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let row = client
-            .query_one(&stmt, &[&domain, &name, &now(), &asking_pubkey])
+            .query_one(&stmt, &[&group.as_str(), &name, &now(), &asking_pubkey])
             .await?;
         let taken: bool = row.try_get(0)?;
         let reserved: bool = row.try_get(1)?;
@@ -419,12 +421,13 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         claim: crate::repository::StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError> {
         let TransferRequest {
-            domain,
+            group,
             from_pubkey,
             to_pubkey,
             username,
             description,
         } = transfer;
+        let domain = group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         // Both sides, before the claim below: transactions that take the
@@ -1334,11 +1337,12 @@ mod postgres_tests {
     /// seeded directly: the read side is what a cooldown policy would build on.
     #[tokio::test]
     async fn a_lapsed_hold_lets_anyone_register_the_name() {
+        use crate::domains::DomainGroup;
         use crate::repository::{LnurlRepository, NameStatus};
 
         let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool.clone());
-        let domain = "lapsed.com";
+        let domain = &DomainGroup::new("lapsed.com");
 
         pool.get()
             .await
@@ -1346,7 +1350,7 @@ mod postgres_tests {
             .execute(
                 "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
                  VALUES ($1, 'jane', 'jjjj', 0, 1)",
-                &[&domain],
+                &[&domain.as_str()],
             )
             .await
             .unwrap();
@@ -1358,7 +1362,7 @@ mod postgres_tests {
         );
         db.upsert_user(
             &crate::user::User {
-                domain: domain.into(),
+                group: domain.clone(),
                 pubkey: "kkkk".into(),
                 name: "jane".into(),
                 description: "jane".into(),

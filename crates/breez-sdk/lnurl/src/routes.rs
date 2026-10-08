@@ -29,6 +29,7 @@ use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
+    domains::DomainGroup,
     invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
@@ -129,13 +130,13 @@ where
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
         validate_username(&username)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (_, group) = resolve_domain(&state, &host).await?;
         // Answers for nobody, so a name held for the pubkey that gave it up
         // reads as unavailable here too. Telling that pubkey apart would mean
         // saying who a name is held for, and this route carries no signature.
         // `available_for_pubkey` is the one that answers a wallet about its own
         // released name.
-        let status = name_status(&state, &domain, &username, None).await?;
+        let status = name_status(&state, &group, &username, None).await?;
 
         Ok(Json(CheckUsernameAvailableResponse {
             available: status == NameStatus::Free,
@@ -157,7 +158,7 @@ where
         } = payload;
         let username = sanitize_username(&username);
         validate_username(&username)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
@@ -173,7 +174,7 @@ where
             return Err(invalid_signature_for_domain(&domain));
         }
 
-        let status = name_status(&state, &domain, &username, Some(&identity.to_string())).await?;
+        let status = name_status(&state, &group, &username, Some(&identity.to_string())).await?;
 
         Ok(Json(CheckUsernameAvailableResponse {
             available: status == NameStatus::Free,
@@ -199,7 +200,7 @@ where
         // Resolving the domain first also refuses a request naming a host this
         // server does not serve without spending the statement.
         validate_description(&description)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
@@ -214,7 +215,7 @@ where
         claim_statement(&state, &pubkey, candidate).await?;
 
         let user = User {
-            domain,
+            group,
             pubkey: pubkey.to_string(),
             name: username,
             description,
@@ -257,10 +258,10 @@ where
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
-        let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
+        let lnurl = format!("lnurlp://{}/lnurlp/{}", domain, user.name);
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
-            lightning_address: format!("{}@{}", user.name, user.domain),
+            lightning_address: format!("{}@{}", user.name, domain),
         }))
     }
 
@@ -282,7 +283,7 @@ where
         let username = sanitize_username(&username);
         validate_username(&username)?;
         validate_description(&description)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let (from_pk, from_sig) = parse_signed_request(&from_pubkey, &from_signature)?;
         let (to_pk, to_sig) = parse_signed_request(&to_pubkey, &to_signature)?;
@@ -329,7 +330,7 @@ where
             .db
             .transfer_username(
                 TransferRequest {
-                    domain: &domain,
+                    group: &group,
                     from_pubkey: &from_pk.to_string(),
                     to_pubkey: &to_pk.to_string(),
                     username: &username,
@@ -408,7 +409,7 @@ where
         // Resolved before verification because the v2 message names it, and
         // before the claim so a request naming a host this server does not serve
         // is refused without spending the statement.
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
@@ -424,7 +425,7 @@ where
 
         let registered = state
             .db
-            .get_user_by_pubkey(&domain, &pubkey.to_string())
+            .get_user_by_pubkey(&group, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -450,7 +451,7 @@ where
 
         let removed = state
             .db
-            .delete_user(&domain, &pubkey.to_string(), &username)
+            .delete_user(&group, &pubkey.to_string(), &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -479,7 +480,7 @@ where
             signature,
             timestamp,
         } = payload;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
@@ -492,7 +493,7 @@ where
 
         let user = state
             .db
-            .get_user_by_pubkey(&domain, &identity.to_string())
+            .get_user_by_pubkey(&group, &identity.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -504,10 +505,10 @@ where
 
         match user {
             Some(user) => {
-                let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
+                let lnurl = format!("lnurlp://{}/lnurlp/{}", domain, user.name);
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
-                    lightning_address: format!("{}@{}", user.name, &user.domain),
+                    lightning_address: format!("{}@{}", user.name, domain),
                     username: user.name,
                     description: user.description,
                 }))
@@ -534,7 +535,7 @@ where
             updated_after,
         } = params;
         let (signature, timestamp) = metadata_credentials(&headers, signature, timestamp)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, _) = resolve_domain(&state, &host).await?;
 
         let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
@@ -583,9 +584,10 @@ where
         }
 
         let username = sanitize_username(&identifier);
+        let (domain, group) = resolve_domain(&state, &host).await?;
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host).await?, &username)
+            .get_user_by_name(&group, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -599,14 +601,11 @@ where
         let nostr_pubkey = user_nostr_pubkey(state.nostr_keys.as_ref(), &user.pubkey)?;
         let allows_nostr = nostr_pubkey.is_some().then_some(true);
         Ok(Json(PayResponse {
-            callback: format!(
-                "{}://{}/lnurlp/{}/invoice",
-                state.scheme, &user.domain, user.name
-            ),
+            callback: format!("{}://{}/lnurlp/{}/invoice", state.scheme, domain, user.name),
             max_sendable: state.max_sendable,
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
-            metadata: get_metadata(&user.domain, &user),
+            metadata: get_metadata(&domain, &user),
             #[allow(clippy::cast_possible_truncation)]
             comment_allowed: Some(MAX_COMMENT_LENGTH as u32),
             allows_nostr,
@@ -626,11 +625,11 @@ where
         }
 
         let username = sanitize_username(&identifier);
-        let domain = sanitize_domain(&state, &host).await?;
+        let (domain, group) = resolve_domain(&state, &host).await?;
 
         let user = state
             .db
-            .get_user_by_name(&domain, &username)
+            .get_user_by_name(&group, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -680,12 +679,12 @@ where
         let desc_hash = if let Some(event) = &zap_request {
             sha256::Hash::hash(event.as_json().as_bytes())
         } else {
-            let metadata = get_metadata(&user.domain, &user);
+            let metadata = get_metadata(&domain, &user);
             sha256::Hash::hash(metadata.as_bytes())
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let wallet = state.invoice_wallet(&domain).await;
+        let wallet = state.invoice_wallet(&group).await;
         let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -1834,7 +1833,7 @@ fn statement_hash(pubkey: &PublicKey, signed_message: &str) -> [u8; 32] {
 /// [`LnurlRepository::name_status`] for what `asking_pubkey` changes.
 async fn name_status<DB>(
     state: &State<DB>,
-    domain: &str,
+    group: &DomainGroup,
     username: &str,
     asking_pubkey: Option<&str>,
 ) -> Result<NameStatus, (StatusCode, Json<Value>)>
@@ -1843,7 +1842,7 @@ where
 {
     state
         .db
-        .name_status(domain, username, asking_pubkey)
+        .name_status(group, username, asking_pubkey)
         .await
         .map_err(|e| {
             error!("failed to execute query: {}", e);
@@ -1955,19 +1954,15 @@ struct SspAmount {
     unit: String,
 }
 
-async fn sanitize_domain<DB>(
+/// The domain a request names and the group that domain is in.
+async fn resolve_domain<DB>(
     state: &State<DB>,
     domain: &str,
-) -> Result<String, (StatusCode, Json<Value>)> {
+) -> Result<(String, DomainGroup), (StatusCode, Json<Value>)> {
     let domain = domain.trim().to_lowercase();
     let domains = state.domains.read().await;
-    if domains.contains_key(&domain) {
-        return Ok(domain);
-    }
-    // An empty allow-list falls open to any host, for local/test setups only.
-    // Never on mainnet: there it must be an explicit deny.
-    if domains.is_empty() && !state.is_mainnet {
-        return Ok(domain);
+    if let Some(group) = crate::domains::group_of(&domains, &domain, state.is_mainnet) {
+        return Ok((domain, group));
     }
     warn!("domain not allowed: {}", domain);
     Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))))
@@ -2030,7 +2025,7 @@ mod tests {
     impl LnurlRepository for MockRepository {
         async fn delete_user(
             &self,
-            _: &str,
+            _: &DomainGroup,
             _: &str,
             _: &str,
         ) -> Result<bool, LnurlRepositoryError> {
@@ -2062,14 +2057,14 @@ mod tests {
         }
         async fn get_user_by_name(
             &self,
-            _: &str,
+            _: &DomainGroup,
             _: &str,
         ) -> Result<Option<User>, LnurlRepositoryError> {
             Ok(None)
         }
         async fn get_user_by_pubkey(
             &self,
-            _: &str,
+            _: &DomainGroup,
             _: &str,
         ) -> Result<Option<User>, LnurlRepositoryError> {
             Ok(None)
@@ -2083,7 +2078,7 @@ mod tests {
         }
         async fn name_status(
             &self,
-            _: &str,
+            _: &DomainGroup,
             _: &str,
             _: Option<&str>,
         ) -> Result<NameStatus, LnurlRepositoryError> {
@@ -3602,7 +3597,7 @@ mod tests {
 
     fn registered_as(name: &str) -> User {
         User {
-            domain: "example.com".to_string(),
+            group: DomainGroup::new("example.com"),
             pubkey: "02abc123".to_string(),
             name: name.to_string(),
             description: String::new(),

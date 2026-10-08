@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -11,6 +11,37 @@ const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 /// has none and falls back to the configured default. The api key is exchanged
 /// for the partner JWT that carries Spark attribution.
 pub type DomainMap = HashMap<String, Option<String>>;
+
+/// A group of domains that serve the same users, named after one of them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DomainGroup(String);
+
+impl DomainGroup {
+    pub fn new(domain: impl Into<String>) -> Self {
+        Self(domain.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DomainGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The group `domain` is in, or `None` when the server does not serve `domain`.
+pub fn group_of(domains: &DomainMap, domain: &str, is_mainnet: bool) -> Option<DomainGroup> {
+    match domains.get(domain) {
+        Some(_) => Some(DomainGroup::new(domain)),
+        // An empty allow-list falls open to any host, for local/test setups only.
+        // Never on mainnet: there it must be an explicit deny.
+        None if domains.is_empty() && !is_mainnet => Some(DomainGroup::new(domain)),
+        None => None,
+    }
+}
 
 /// Load the allowed domains from the database and start a background task that
 /// periodically refreshes them. Returns the shared handle that should be stored
@@ -164,6 +195,31 @@ mod tests {
         // A domain with no api key maps to None; the default is applied when
         // selecting the wallet, not here.
         assert_eq!(map.get("b.com"), Some(&None));
+    }
+
+    #[test]
+    fn only_allowed_domains_are_served() {
+        let map = to_map(vec![cfg("a.com", None)]);
+        assert_eq!(
+            group_of(&map, "a.com", true),
+            Some(DomainGroup::new("a.com"))
+        );
+        assert_eq!(group_of(&map, "b.com", true), None);
+        assert_eq!(
+            group_of(&map, "b.com", false),
+            None,
+            "a domain missing from a list that has entries is refused on every network"
+        );
+    }
+
+    #[test]
+    fn an_empty_allow_list_serves_any_domain_off_mainnet_only() {
+        let map = DomainMap::new();
+        assert_eq!(
+            group_of(&map, "a.com", false),
+            Some(DomainGroup::new("a.com"))
+        );
+        assert_eq!(group_of(&map, "a.com", true), None);
     }
 
     #[test]

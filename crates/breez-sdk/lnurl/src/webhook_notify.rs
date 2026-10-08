@@ -128,7 +128,7 @@ mod shared_tests {
             &crate::user::User {
                 name: "alice".to_string(),
                 pubkey: "enqueue_pubkey".to_string(),
-                domain: domain.to_string(),
+                group: crate::domains::DomainGroup::new(domain),
                 description: String::new(),
             },
             None,
