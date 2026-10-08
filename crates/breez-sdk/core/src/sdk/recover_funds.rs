@@ -573,7 +573,7 @@ impl BreezSdk {
             ExitLeafSelection::Specific { leaf_ids } => Some(leaf_ids.iter().cloned().collect()),
             _ => None,
         };
-        let selected: Vec<TreeNode> = self
+        let candidates = self
             .watchtower_exit_candidates()
             .await?
             .into_iter()
@@ -583,16 +583,24 @@ impl BreezSdk {
                     .is_none_or(|named| named.contains(&leaf.id.to_string()))
             })
             .collect();
+        let (finished, selected) = finished_and_open(candidates, stored);
         let mut found = self
             .lookup_watchtower_exits(&selected, stored, queries)
             .await?;
 
         let mut not_unilateral: HashSet<String> = selected
             .iter()
+            .chain(&finished)
             .filter(|leaf| leaf.status.is_watchtower_exited())
             .map(|leaf| leaf.id.to_string())
             .collect();
         not_unilateral.extend(found.exits.keys().cloned());
+        not_unilateral.extend(
+            finished
+                .iter()
+                .map(|leaf| leaf.id.to_string())
+                .filter(|leaf_id| stored[leaf_id].watchtower_exit_spend.is_some()),
+        );
         let skipped = selected
             .iter()
             .filter_map(|leaf| {
@@ -630,6 +638,23 @@ impl BreezSdk {
             not_unilateral,
         })
     }
+}
+
+/// Whether storage holds the recovery or the sweep of the leaf's funds in a
+/// block.
+fn is_finished(stored: &LeafRecovery) -> bool {
+    stored.watchtower_exit_spend.is_some() || stored.unilateral_exit_sweep.is_some()
+}
+
+/// Splits `leaves` into the finished ones and the ones a quote still looks up.
+/// A lookup of a finished leaf could only find again what storage holds.
+fn finished_and_open(
+    leaves: Vec<TreeNode>,
+    stored: &HashMap<String, LeafRecovery>,
+) -> (Vec<TreeNode>, Vec<TreeNode>) {
+    leaves
+        .into_iter()
+        .partition(|leaf| stored.get(&leaf.id.to_string()).is_some_and(is_finished))
 }
 
 fn new_leaves(leaves: &[TreeNode], stored: &HashMap<String, LeafRecovery>) -> NewLeaves {
@@ -815,7 +840,7 @@ mod tests {
     use bitcoin::{Txid, hashes::Hash};
     use spark_wallet::tree_store_tests::create_test_node_with_parent;
 
-    use crate::chain::stub::tx_paying;
+    use crate::{StoredWatchtowerExitOutput, chain::stub::tx_paying};
 
     use super::*;
 
@@ -1006,6 +1031,48 @@ mod tests {
             ..stored_leaf(OTHER_LEAF_ID)
         };
         assert_eq!(funds(Some(swept), &new_leaf_ids), (value, 1));
+    }
+
+    fn stored_output() -> StoredWatchtowerExitOutput {
+        StoredWatchtowerExitOutput {
+            txid: Txid::from_byte_array([3u8; 32]).to_string(),
+            vout: 0,
+            amount_sats: 9_500,
+            script_pubkey: "5120".to_string(),
+            block_height: 100,
+        }
+    }
+
+    #[test]
+    fn a_quote_looks_up_no_leaf_whose_recovery_or_sweep_is_stored() {
+        let id = |n: u8| format!("00000000-0000-0000-0000-0000000000{n:02}");
+        let leaves: Vec<TreeNode> = (1u8..=4)
+            .map(|n| {
+                create_test_node_with_parent(&id(n), None, TreeNodeStatus::WatchtowerExitRecovered)
+            })
+            .collect();
+        let stored = by_leaf_id(vec![
+            LeafRecovery {
+                watchtower_exit_spend: Some(in_block("recovery")),
+                ..stored_leaf(&id(1))
+            },
+            LeafRecovery {
+                unilateral_exit_sweep: Some(in_block("sweep")),
+                ..stored_leaf(&id(2))
+            },
+            LeafRecovery {
+                watchtower_exit_output: Some(stored_output()),
+                ..stored_leaf(&id(3))
+            },
+        ]);
+        let ids = |leaves: &[TreeNode]| -> Vec<String> {
+            leaves.iter().map(|leaf| leaf.id.to_string()).collect()
+        };
+
+        let (finished, open) = finished_and_open(leaves, &stored);
+
+        assert_eq!(ids(&finished), vec![id(1), id(2)]);
+        assert_eq!(ids(&open), vec![id(3), id(4)]);
     }
 
     fn unilateral(
