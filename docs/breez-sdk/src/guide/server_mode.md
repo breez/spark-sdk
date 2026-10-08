@@ -8,7 +8,7 @@ Use this configuration when:
 - Each request builds the SDK, performs one operation, and disconnects.
 - Background work that makes sense for a long-lived mobile client (periodic sync, real-time sync, leaf optimization, lightning-address recovery) would be wasted on a per-request lifecycle.
 
-If you're building a mobile or desktop wallet, stay on the default ([client mode](initializing.md)): this configuration disables features your app relies on. For a single wallet your own service owns, see [Treasury configuration](treasury.md), which is a standard deployment.
+If you're building a mobile or desktop wallet, stay on the [default configuration](initializing.md): this configuration disables features your app relies on. For a single wallet your own service owns, see [Treasury configuration](treasury.md), which is a standard deployment.
 
 When the server must not be able to send payments on its own, this configuration pairs with [Client signing](client_signing.md): the user reviews and signs each payment on their side, and the build and publish steps are stateless, so they fit the per-request lifecycle.
 
@@ -39,7 +39,7 @@ Explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#n
 
 ## Driving the SDK explicitly
 
-Because nothing runs in the background, the user is responsible for calling the operations that the SDK would otherwise schedule itself. In practice there are only three things to drive, plus one one-time setup per wallet:
+Because nothing runs in the background, the host is responsible for calling the operations that the SDK would otherwise schedule itself. In practice there are only three things to drive, plus one one-time setup per wallet:
 
 ### Sync
 
@@ -56,7 +56,7 @@ The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events]
 
 ### Claiming on-chain deposits
 
-SDKs in this configuration do not run the periodic deposit detection and claim sweep that client mode uses. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:
+SDKs in this configuration do not run the periodic deposit detection and claim sweep that the default configuration runs. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:
 
 - Call {{#name sync_wallet}} to run the SDK's deposit sync and automatic claim logic using your configured [{{#name max_deposit_claim_fee}}](./config.md#max-deposit-claim-fee).
 - If your backend already knows the deposit outpoint and wants to drive a specific claim, call {{#name claim_deposit}} for that `txid`/`vout`.
@@ -77,7 +77,7 @@ The flashnet conversion refunder doesn't run in the background here. If you do u
 
 ### One-time setup: Spark private mode
 
-The client-mode SDK applies [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) on first startup. SDKs in this configuration do not: each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call {{#name update_user_settings}} with {{#name spark_private_mode_enabled}} set to `true`. See [User settings](user_settings.md).
+The SDK in its default configuration applies [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) on first startup. SDKs in this configuration do not: each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call {{#name update_user_settings}} with {{#name spark_private_mode_enabled}} set to `true`. See [User settings](user_settings.md).
 
 ## Event delivery via webhooks
 
@@ -128,7 +128,7 @@ Anything driven by an external signal that the wallet state changed. The exact o
 
 ### One-time provisioning
 
-When a wallet is first registered, run a one-time setup pass to apply the configuration the client-mode SDK would otherwise apply itself on first startup, currently the [private mode preset](./config.md#private-mode-enabled-by-default):
+When a wallet is first registered, run a one-time setup pass to apply the settings the SDK in its default configuration would otherwise apply itself on first startup, currently the [private mode preset](./config.md#private-mode-enabled-by-default):
 
 ```text
     new wallet registered
