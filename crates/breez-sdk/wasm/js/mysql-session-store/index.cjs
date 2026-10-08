@@ -16,10 +16,12 @@ try {
   try {
     mysql = require("mysql2/promise");
   } catch (fallbackError) {
-    throw new Error(
+    const loadError = new Error(
       `mysql2 not found. Please install it in your project: npm install mysql2@^3.11.0\n` +
         `Original error: ${error.message}\nFallback error: ${fallbackError.message}`
     );
+    loadError.code = fallbackError.code;
+    throw loadError;
   }
 }
 

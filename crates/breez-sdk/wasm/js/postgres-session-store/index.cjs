@@ -22,10 +22,12 @@ try {
   try {
     pg = require("pg");
   } catch (fallbackError) {
-    throw new Error(
+    const loadError = new Error(
       `pg not found. Please install it in your project: npm install pg@^8.18.0\n` +
         `Original error: ${error.message}\nFallback error: ${fallbackError.message}`
     );
+    loadError.code = fallbackError.code;
+    throw loadError;
   }
 }
 

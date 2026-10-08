@@ -1153,6 +1153,9 @@ try {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load PostgreSQL storage:', error.message);
     }
+    // The WASM bridge builds every PostgreSQL store from a pool, so a caller that asks
+    // for PostgreSQL storage gets this load error.
+    global.createPostgresPool = () => { throw error; };
 }
 
 // Automatically import and set up the PostgreSQL tree store for Node.js
@@ -1198,6 +1201,9 @@ try {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load MySQL storage:', error.message);
     }
+    // The WASM bridge builds every MySQL store from a pool, so a caller that asks
+    // for MySQL storage gets this load error.
+    global.createMysqlPool = () => { throw error; };
 }
 
 // Automatically import and set up the MySQL tree store for Node.js
