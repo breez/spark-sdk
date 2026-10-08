@@ -64,7 +64,7 @@ where
 
         deliveries.push(NewWebhookDelivery {
             identifier: item.payment_hash,
-            domain: item.domain,
+            domain: item.group.to_string(),
             payload: json,
         });
     }
@@ -173,6 +173,58 @@ mod shared_tests {
         assert_eq!(data["amount_sat"], 1000);
     }
 
+    /// A payment through a domain in another domain's group is delivered to the
+    /// group's webhook and names the address that was paid. The caller allows
+    /// `group.example.com` and puts `joined.example.com` in its group first.
+    pub async fn enqueue_webhooks_delivers_to_the_group_of_the_paid_domain<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let webhook_service = WebhookService::new(db.clone());
+        let preimage_bytes = [13u8; 32];
+        let (preimage_hex, payment_hash, invoice_str) =
+            super::test_helpers::generate_test_invoice(&preimage_bytes);
+
+        db.upsert_user(
+            &crate::user::User {
+                name: "alice".to_string(),
+                pubkey: "group_pubkey".to_string(),
+                group: crate::domains::DomainGroup::new("group.example.com"),
+                description: String::new(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let now = now_millis();
+        let invoice = Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: "group_pubkey".to_string(),
+            invoice: invoice_str,
+            preimage: Some(preimage_hex),
+            invoice_expiry: i64::MAX,
+            created_at: now,
+            updated_at: now,
+            domain: Some("joined.example.com".to_string()),
+            amount_received_sat: Some(1000),
+        };
+        db.upsert_invoice(&invoice).await.unwrap();
+
+        crate::webhook_notify::notify_webhooks(db, &webhook_service, &[payment_hash])
+            .await
+            .unwrap();
+
+        let deliveries = db.take_pending_webhook_deliveries().await.unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].domain, "group.example.com");
+        let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
+        assert_eq!(
+            payload["data"]["lightning_address"],
+            "alice@joined.example.com"
+        );
+    }
+
     pub async fn enqueue_webhooks_skips_invoice_without_domain<DB>(db: &DB)
     where
         DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
@@ -262,12 +314,29 @@ mod shared_tests {
 #[cfg(test)]
 mod postgres_tests {
     use super::shared_tests;
-    use crate::test_support::test_db;
+    use crate::test_support::{test_db, test_pool};
 
     #[tokio::test]
     async fn enqueue_webhooks_creates_delivery() {
         let (_pg, db) = test_db().await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
+    }
+
+    #[tokio::test]
+    async fn enqueue_webhooks_delivers_to_the_group_of_the_paid_domain() {
+        let (_pg, pool) = test_pool().await;
+        pool.get()
+            .await
+            .unwrap()
+            .batch_execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('group.example.com');
+                 INSERT INTO allowed_domains (domain, domain_group)
+                 VALUES ('joined.example.com', 'group.example.com');",
+            )
+            .await
+            .unwrap();
+        let db = crate::postgresql::LnurlRepository::new(pool);
+        shared_tests::enqueue_webhooks_delivers_to_the_group_of_the_paid_domain(&db).await;
     }
 
     #[tokio::test]

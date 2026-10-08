@@ -339,7 +339,7 @@ pub struct WebhookPayloadData {
     pub amount_received_sat: Option<i64>,
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
-    pub domain: String,
+    pub group: DomainGroup,
     pub nostr_zap_request: Option<String>,
 }
 

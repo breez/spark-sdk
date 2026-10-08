@@ -939,12 +939,14 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let stmt = client
             .prepare_cached(
                 "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
-                        u.name, u.domain,
+                        u.name, COALESCE(d.domain_group, i.domain),
                         sc.sender_comment,
                         i.domain,
                         z.zap_request
                  FROM invoices i
-                 LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
+                 LEFT JOIN allowed_domains d ON d.domain = i.domain
+                 LEFT JOIN users u ON u.pubkey = i.user_pubkey
+                                  AND u.domain = COALESCE(d.domain_group, i.domain)
                  LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
                  LEFT JOIN zaps z ON z.payment_hash = i.payment_hash
                  WHERE i.payment_hash = ANY($1)
@@ -957,20 +959,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .into_iter()
             .map(|row| {
                 let name: Option<String> = row.try_get(5)?;
-                let user_domain: Option<String> = row.try_get(6)?;
-                let lightning_address = match (name, user_domain) {
-                    (Some(n), Some(d)) => Some(format!("{n}@{d}")),
-                    _ => None,
-                };
+                let group: String = row.try_get(6)?;
+                let domain: String = row.try_get(8)?;
                 Ok::<_, tokio_postgres::Error>(WebhookPayloadData {
                     payment_hash: row.try_get(0)?,
                     user_pubkey: row.try_get(1)?,
                     invoice: row.try_get(2)?,
                     preimage: row.try_get(3)?,
                     amount_received_sat: row.try_get(4)?,
-                    lightning_address,
+                    lightning_address: name.map(|name| format!("{name}@{domain}")),
                     sender_comment: row.try_get(7)?,
-                    domain: row.try_get(8)?,
+                    group: DomainGroup::new(group),
                     nostr_zap_request: row.try_get(9)?,
                 })
             })
