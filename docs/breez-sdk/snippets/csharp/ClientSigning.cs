@@ -70,10 +70,10 @@ namespace BreezSdkSnippets
                     break;
                 case UnsignedTransferPackage.TokenPull tokenPull:
                     Console.WriteLine($"Approve pulling {tokenPull.amount} of token " +
-                        $"{tokenPull.tokenIdentifier} from {tokenPull.payerPublicKey}");
+                        $"{tokenPull.tokenIdentifier} from {tokenPull.payerAddress}");
                     foreach (var receiver in tokenPull.receivers)
                     {
-                        Console.WriteLine($"  {receiver.amount} to {receiver.receiverPublicKey}");
+                        Console.WriteLine($"  {receiver.amount} to {receiver.receiverAddress}");
                     }
                     Console.WriteLine($"Expires at {tokenPull.expiryTime}");
                     signature = new TransferSignature.Token(

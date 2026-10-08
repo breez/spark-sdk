@@ -8,7 +8,7 @@ class TokenAllowances {
         // ANCHOR: create-token-allowance
         val response = sdk.createTokenAllowance(
             CreateTokenAllowanceRequest(
-                spenderPublicKey = "<spender identity public key>",
+                spenderAddress = "<spender spark address>",
                 tokenIdentifier = "<token identifier>",
                 maxPerPayment = TokenAllowanceLimit.Amount(BigInteger.fromLong(5_000_000L)),
                 maxTotal = TokenAllowanceLimit.Amount(BigInteger.fromLong(100_000_000L)),
@@ -25,7 +25,7 @@ class TokenAllowances {
         val response = sdk.listTokenAllowances(
             ListTokenAllowancesRequest(
                 role = TokenAllowanceRole.OWNER,
-                counterpartyPublicKey = null,
+                counterpartyAddress = null,
                 tokenIdentifier = null,
                 includeInactive = false,
                 offset = null,
@@ -48,12 +48,12 @@ class TokenAllowances {
         // ANCHOR: pull-payment
         val prepareResponse = sdk.preparePullPayment(
             PreparePullPaymentRequest(
-                payerPublicKey = "<payer identity public key>",
+                payerAddress = "<payer spark address>",
                 tokenIdentifier = "<token identifier>",
                 receivers = listOf(
                     PullReceiver(
                         amount = BigInteger.fromLong(5_000_000L),
-                        receiverPublicKey = null,
+                        receiverAddress = null,
                     )
                 ),
             )

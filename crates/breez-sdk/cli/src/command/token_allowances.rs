@@ -42,8 +42,8 @@ impl From<TokenAllowanceLimitArg> for TokenAllowanceLimit {
 pub enum TokenAllowanceCommand {
     /// Grant a spender an allowance over this wallet's tokens
     Create {
-        /// Identity public key of the spender
-        spender_public_key: String,
+        /// Spark address of the spender
+        spender_address: String,
         /// Identifier of the token
         token_identifier: String,
         /// Expiry as a Unix timestamp in seconds
@@ -54,7 +54,7 @@ pub enum TokenAllowanceCommand {
         /// Limit on all payments together, in token base units, or `unlimited`
         #[arg(long)]
         max_total: TokenAllowanceLimitArg,
-        /// Identity public key the spender may pay. Repeat for each recipient, or omit for any.
+        /// Spark address the spender may pay. Repeat for each recipient, or omit for any.
         #[arg(short = 'r', long = "recipient")]
         allowed_recipients: Vec<String>,
     },
@@ -70,9 +70,9 @@ pub enum TokenAllowanceCommand {
         /// owner or spender
         #[arg(default_value = "owner")]
         role: TokenAllowanceRole,
-        /// Only allowances with this counterparty identity public key
+        /// Only allowances with this counterparty Spark address
         #[arg(long)]
-        counterparty_public_key: Option<String>,
+        counterparty_address: Option<String>,
         /// Only allowances for this token
         #[arg(long)]
         token_identifier: Option<String>,
@@ -94,7 +94,7 @@ pub async fn handle_command(
 ) -> Result<bool, anyhow::Error> {
     match command {
         TokenAllowanceCommand::Create {
-            spender_public_key,
+            spender_address,
             token_identifier,
             expiry_time,
             max_per_payment,
@@ -103,7 +103,7 @@ pub async fn handle_command(
         } => {
             let response = sdk
                 .create_token_allowance(CreateTokenAllowanceRequest {
-                    spender_public_key,
+                    spender_address,
                     token_identifier,
                     max_per_payment: max_per_payment.into(),
                     max_total: max_total.into(),
@@ -122,7 +122,7 @@ pub async fn handle_command(
         }
         TokenAllowanceCommand::List {
             role,
-            counterparty_public_key,
+            counterparty_address,
             token_identifier,
             include_inactive,
             offset,
@@ -131,7 +131,7 @@ pub async fn handle_command(
             let response = sdk
                 .list_token_allowances(ListTokenAllowancesRequest {
                     role,
-                    counterparty_public_key,
+                    counterparty_address,
                     token_identifier,
                     include_inactive,
                     offset,

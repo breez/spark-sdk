@@ -70,15 +70,15 @@ const signPackage = async (
     case 'tokenPull': {
       const {
         prepareTokenTransaction,
-        payerPublicKey,
+        payerAddress,
         tokenIdentifier,
         receivers,
         amount,
         expiryTime
       } = unsigned
-      console.log(`Approve pulling ${amount} of token ${tokenIdentifier} from ${payerPublicKey}`)
+      console.log(`Approve pulling ${amount} of token ${tokenIdentifier} from ${payerAddress}`)
       for (const receiver of receivers) {
-        console.log(`  ${receiver.amount} to ${receiver.receiverPublicKey ?? ''}`)
+        console.log(`  ${receiver.amount} to ${receiver.receiverAddress ?? ''}`)
       }
       console.log(`Expires at ${expiryTime}`)
       signature = {

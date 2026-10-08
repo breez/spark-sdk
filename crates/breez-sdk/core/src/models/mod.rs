@@ -2146,7 +2146,7 @@ pub enum UnsignedTransferPackage {
     TokenPull {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
         pull_context: Vec<u8>,
-        payer_public_key: String,
+        payer_address: String,
         token_identifier: String,
         receivers: Vec<PullReceiver>,
         amount: u128,

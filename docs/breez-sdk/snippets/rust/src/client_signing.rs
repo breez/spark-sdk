@@ -81,17 +81,17 @@ async fn sign_package(
         }
         UnsignedTransferPackage::TokenPull {
             prepare_token_transaction,
-            payer_public_key,
+            payer_address,
             token_identifier,
             receivers,
             amount,
             expiry_time,
             ..
         } => {
-            info!("Approve pulling {amount} of token {token_identifier} from {payer_public_key}");
+            info!("Approve pulling {amount} of token {token_identifier} from {payer_address}");
             for receiver in receivers {
-                let key = receiver.receiver_public_key.as_deref().unwrap_or_default();
-                info!("  {} to {key}", receiver.amount);
+                let address = receiver.receiver_address.as_deref().unwrap_or_default();
+                info!("  {} to {address}", receiver.amount);
             }
             info!("Expires at {expiry_time}");
             TransferSignature::Token {

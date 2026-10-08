@@ -97,7 +97,7 @@ impl From<BatchRecipientArg> for BatchRecipient {
 
 #[derive(Clone, Debug)]
 pub struct PullReceiverArg {
-    receiver_public_key: Option<String>,
+    receiver_address: Option<String>,
     amount: u128,
 }
 
@@ -105,15 +105,15 @@ impl std::str::FromStr for PullReceiverArg {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (receiver_public_key, amount) = match s.split_once(':') {
-            Some((key, amount)) => (Some(key.to_string()), amount),
+        let (receiver_address, amount) = match s.split_once(':') {
+            Some((address, amount)) => (Some(address.to_string()), amount),
             None => (None, s),
         };
         let amount = amount
             .parse::<u128>()
             .map_err(|_| format!("Invalid amount in receiver '{s}'"))?;
         Ok(Self {
-            receiver_public_key,
+            receiver_address,
             amount,
         })
     }
@@ -123,7 +123,7 @@ impl From<PullReceiverArg> for PullReceiver {
     fn from(arg: PullReceiverArg) -> Self {
         PullReceiver {
             amount: arg.amount,
-            receiver_public_key: arg.receiver_public_key,
+            receiver_address: arg.receiver_address,
         }
     }
 }
@@ -325,11 +325,11 @@ pub enum Command {
 
     /// Pull a payment from a wallet that granted this wallet an allowance
     PullPayment {
-        /// Identity public key of the payer
-        payer_public_key: String,
+        /// Spark address of the payer
+        payer_address: String,
         /// Identifier of the token
         token_identifier: String,
-        /// A receiver as `amount` (this wallet) or `public_key:amount`. Repeat for each receiver.
+        /// A receiver as `amount` (this wallet) or `address:amount`. Repeat for each receiver.
         #[arg(short = 'r', long = "receiver", required = true)]
         receivers: Vec<PullReceiverArg>,
     },
@@ -1117,13 +1117,13 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::PullPayment {
-            payer_public_key,
+            payer_address,
             token_identifier,
             receivers,
         } => {
             let prepare_response = sdk
                 .prepare_pull_payment(PreparePullPaymentRequest {
-                    payer_public_key,
+                    payer_address,
                     token_identifier,
                     receivers: receivers.into_iter().map(Into::into).collect(),
                 })
@@ -1132,16 +1132,13 @@ pub(crate) async fn execute_command(
                 "Pulling {} base units of {} from {}",
                 prepare_response.amount,
                 prepare_response.token_identifier,
-                prepare_response.payer_public_key
+                prepare_response.payer_address
             );
             for receiver in &prepare_response.receivers {
                 println!(
                     "  {} to {}",
                     receiver.amount,
-                    receiver
-                        .receiver_public_key
-                        .as_deref()
-                        .unwrap_or("this wallet")
+                    receiver.receiver_address.as_deref().unwrap_or_default()
                 );
             }
             let line = rl

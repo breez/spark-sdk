@@ -25,14 +25,14 @@ async fn issue_token(instance: &SdkInstance) -> Result<String> {
     Ok(metadata.identifier)
 }
 
-async fn identity_key(instance: &SdkInstance) -> Result<String> {
+async fn spark_address(instance: &SdkInstance) -> Result<String> {
     Ok(instance
         .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
         })
         .await?
-        .identity_pubkey)
+        .payment_request)
 }
 
 fn in_one_hour() -> u64 {
@@ -46,7 +46,7 @@ fn in_one_hour() -> u64 {
 fn list_request(role: TokenAllowanceRole, include_inactive: bool) -> ListTokenAllowancesRequest {
     ListTokenAllowancesRequest {
         role,
-        counterparty_public_key: None,
+        counterparty_address: None,
         token_identifier: None,
         include_inactive: Some(include_inactive),
         offset: None,
@@ -56,14 +56,14 @@ fn list_request(role: TokenAllowanceRole, include_inactive: bool) -> ListTokenAl
 
 async fn grant(
     owner: &SdkInstance,
-    spender_key: &str,
+    spender_address: &str,
     token_identifier: &str,
     allowed_recipients: Vec<String>,
 ) -> Result<TokenAllowance> {
     Ok(owner
         .sdk
         .create_token_allowance(CreateTokenAllowanceRequest {
-            spender_public_key: spender_key.to_string(),
+            spender_address: spender_address.to_string(),
             token_identifier: token_identifier.to_string(),
             max_per_payment: TokenAllowanceLimit::Amount { amount: 5_000 },
             max_total: TokenAllowanceLimit::Amount { amount: 20_000 },
@@ -81,14 +81,14 @@ async fn test_01_owner_grants_lists_and_revokes(#[future] env: Result<Environmen
     let owner = env.create_wallet().await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
-    let spender_key = identity_key(&spender).await?;
+    let owner_address = spark_address(&owner).await?;
+    let spender_address = spark_address(&spender).await?;
 
-    let created = grant(&owner, &spender_key, &token_identifier, vec![]).await?;
+    let created = grant(&owner, &spender_address, &token_identifier, vec![]).await?;
     info!("Created allowance {}", created.id);
     assert_eq!(created.status, TokenAllowanceStatus::Active);
-    assert_eq!(created.spender_public_key, spender_key);
-    assert_eq!(created.owner_public_key, owner_key);
+    assert_eq!(created.spender_address, spender_address);
+    assert_eq!(created.owner_address, owner_address);
     assert_eq!(
         created.max_per_payment,
         TokenAllowanceLimit::Amount { amount: 5_000 }
@@ -113,13 +113,13 @@ async fn test_01_owner_grants_lists_and_revokes(#[future] env: Result<Environmen
     assert!(
         spender_view
             .iter()
-            .any(|a| a.id == created.id && a.owner_public_key == owner_key)
+            .any(|a| a.id == created.id && a.owner_address == owner_address)
     );
 
     let duplicate = owner
         .sdk
         .create_token_allowance(CreateTokenAllowanceRequest {
-            spender_public_key: spender_key.clone(),
+            spender_address: spender_address.clone(),
             token_identifier: token_identifier.clone(),
             max_per_payment: TokenAllowanceLimit::Amount { amount: 5_000 },
             max_total: TokenAllowanceLimit::Amount { amount: 20_000 },
@@ -152,23 +152,23 @@ async fn test_01_owner_grants_lists_and_revokes(#[future] env: Result<Environmen
     Ok(())
 }
 
-fn to(receiver_public_key: Option<String>, amount: u128) -> PullReceiver {
+fn to(receiver_address: Option<String>, amount: u128) -> PullReceiver {
     PullReceiver {
         amount,
-        receiver_public_key,
+        receiver_address,
     }
 }
 
 async fn prepare(
     spender: &SdkInstance,
-    payer_key: &str,
+    payer_address: &str,
     token_identifier: &str,
     receivers: Vec<PullReceiver>,
 ) -> Result<PreparePullPaymentResponse, SdkError> {
     spender
         .sdk
         .prepare_pull_payment(PreparePullPaymentRequest {
-            payer_public_key: payer_key.to_string(),
+            payer_address: payer_address.to_string(),
             token_identifier: token_identifier.to_string(),
             receivers,
         })
@@ -240,10 +240,10 @@ async fn test_02_spender_pulls_into_own_wallet_and_retries(
     let owner = env.create_wallet().await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
     grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
         vec![],
     )
@@ -251,7 +251,7 @@ async fn test_02_spender_pulls_into_own_wallet_and_retries(
 
     let prepared = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
         vec![to(None, 1_000)],
     )
@@ -283,10 +283,10 @@ async fn test_03_one_pull_pays_several_receivers(#[future] env: Result<Environme
     let seller = env.create_wallet().await?;
     let platform = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
     grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
         vec![],
     )
@@ -294,11 +294,11 @@ async fn test_03_one_pull_pays_several_receivers(#[future] env: Result<Environme
 
     let prepared = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
         vec![
-            to(Some(identity_key(&seller).await?), 950),
-            to(Some(identity_key(&platform).await?), 50),
+            to(Some(spark_address(&seller).await?), 950),
+            to(Some(spark_address(&platform).await?), 50),
         ],
     )
     .await?;
@@ -326,17 +326,23 @@ async fn test_04_allowlist_limits_receivers(#[future] env: Result<Environment>) 
     let spender = env.create_wallet().await?;
     let settlement = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
-    let settlement_key = identity_key(&settlement).await?;
+    let owner_address = spark_address(&owner).await?;
+    let settlement_address = spark_address(&settlement).await?;
     grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
-        vec![settlement_key.clone()],
+        vec![settlement_address.clone()],
     )
     .await?;
 
-    let into_spender = prepare(&spender, &owner_key, &token_identifier, vec![to(None, 100)]).await;
+    let into_spender = prepare(
+        &spender,
+        &owner_address,
+        &token_identifier,
+        vec![to(None, 100)],
+    )
+    .await;
     assert!(matches!(
         into_spender,
         Err(SdkError::TokenAllowance {
@@ -347,9 +353,9 @@ async fn test_04_allowlist_limits_receivers(#[future] env: Result<Environment>) 
 
     let prepared = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
-        vec![to(Some(settlement_key), 100)],
+        vec![to(Some(settlement_address), 100)],
     )
     .await?;
     pull(&spender, &prepared).await?;
@@ -365,16 +371,22 @@ async fn test_05_pull_fails_after_payer_spends(#[future] env: Result<Environment
     let spender = env.create_wallet().await?;
     let sink = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
     grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
         vec![],
     )
     .await?;
 
-    let old = prepare(&spender, &owner_key, &token_identifier, vec![to(None, 100)]).await?;
+    let old = prepare(
+        &spender,
+        &owner_address,
+        &token_identifier,
+        vec![to(None, 100)],
+    )
+    .await?;
 
     let sink_address = sink
         .sdk
@@ -422,7 +434,13 @@ async fn test_05_pull_fails_after_payer_spends(#[future] env: Result<Environment
         "{error}"
     );
 
-    let fresh = prepare(&spender, &owner_key, &token_identifier, vec![to(None, 100)]).await?;
+    let fresh = prepare(
+        &spender,
+        &owner_address,
+        &token_identifier,
+        vec![to(None, 100)],
+    )
+    .await?;
     pull(&spender, &fresh).await?;
     wait_for_token_balance(&spender.sdk, &token_identifier, 100, 60).await?;
     Ok(())
@@ -435,10 +453,10 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
     let owner = env.create_wallet().await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
     let allowance = grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
         vec![],
     )
@@ -446,7 +464,7 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
 
     let over_cap = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
         vec![to(None, 6_000)],
     )
@@ -479,7 +497,13 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
             allowance_id: allowance.id,
         })
         .await?;
-    let after_revoke = prepare(&spender, &owner_key, &token_identifier, vec![to(None, 100)]).await;
+    let after_revoke = prepare(
+        &spender,
+        &owner_address,
+        &token_identifier,
+        vec![to(None, 100)],
+    )
+    .await;
     assert!(matches!(
         after_revoke,
         Err(SdkError::TokenAllowance {
@@ -510,7 +534,7 @@ async fn test_07_client_signed_pull(#[future] env: Result<Environment>) -> Resul
     let env = env.await?;
     let owner = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
 
     let spender_mnemonic = fixtures::random_mnemonic()?;
     let dir = tempfile::Builder::new()
@@ -522,13 +546,19 @@ async fn test_07_client_signed_pull(#[future] env: Result<Environment>) -> Resul
         default_external_signers(spender_mnemonic, None, Network::Regtest, None)?.spark_signer;
     grant(
         &owner,
-        &identity_key(&spender).await?,
+        &spark_address(&spender).await?,
         &token_identifier,
         vec![],
     )
     .await?;
 
-    let prepared = prepare(&spender, &owner_key, &token_identifier, vec![to(None, 700)]).await?;
+    let prepared = prepare(
+        &spender,
+        &owner_address,
+        &token_identifier,
+        vec![to(None, 700)],
+    )
+    .await?;
     let unsigned = spender
         .sdk
         .build_unsigned_pull_package(BuildUnsignedPullPackageRequest {
@@ -575,11 +605,11 @@ async fn test_08_operators_refuse_pull_over_total_limit(
     let owner = env.create_wallet().await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
-    let owner_key = identity_key(&owner).await?;
+    let owner_address = spark_address(&owner).await?;
     owner
         .sdk
         .create_token_allowance(CreateTokenAllowanceRequest {
-            spender_public_key: identity_key(&spender).await?,
+            spender_address: spark_address(&spender).await?,
             token_identifier: token_identifier.clone(),
             max_per_payment: TokenAllowanceLimit::Amount { amount: 1_000 },
             max_total: TokenAllowanceLimit::Amount { amount: 1_500 },
@@ -590,7 +620,7 @@ async fn test_08_operators_refuse_pull_over_total_limit(
 
     let first = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
         vec![to(None, 1_000)],
     )
@@ -600,7 +630,7 @@ async fn test_08_operators_refuse_pull_over_total_limit(
 
     let second = prepare(
         &spender,
-        &owner_key,
+        &owner_address,
         &token_identifier,
         vec![to(None, 1_000)],
     )

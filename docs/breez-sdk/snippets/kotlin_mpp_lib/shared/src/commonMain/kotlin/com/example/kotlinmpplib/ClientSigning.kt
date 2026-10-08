@@ -57,9 +57,9 @@ class ClientSigning {
             }
             is UnsignedTransferPackage.TokenPull -> {
                 // Log.v("Breez", "Approve pulling ${unsigned.amount} of token " +
-                //     "${unsigned.tokenIdentifier} from ${unsigned.payerPublicKey}")
+                //     "${unsigned.tokenIdentifier} from ${unsigned.payerAddress}")
                 for (receiver in unsigned.receivers) {
-                    val recipient = receiver.receiverPublicKey
+                    val recipient = receiver.receiverAddress
                     // Log.v("Breez", "  ${receiver.amount} to $recipient")
                 }
                 // Log.v("Breez", "Expires at ${unsigned.expiryTime}")

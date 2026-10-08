@@ -3,7 +3,7 @@ import type { BreezSdk } from '@breeztech/breez-sdk-spark'
 const exampleCreateTokenAllowance = async (sdk: BreezSdk) => {
   // ANCHOR: create-token-allowance
   const response = await sdk.createTokenAllowance({
-    spenderPublicKey: '<spender identity public key>',
+    spenderAddress: '<spender spark address>',
     tokenIdentifier: '<token identifier>',
     maxPerPayment: { type: 'amount', amount: '5000000' },
     maxTotal: { type: 'amount', amount: '100000000' },
@@ -32,7 +32,7 @@ const exampleRevokeTokenAllowance = async (sdk: BreezSdk) => {
 const examplePullPayment = async (sdk: BreezSdk) => {
   // ANCHOR: pull-payment
   const prepareResponse = await sdk.preparePullPayment({
-    payerPublicKey: '<payer identity public key>',
+    payerAddress: '<payer spark address>',
     tokenIdentifier: '<token identifier>',
     receivers: [{ amount: '5000000' }]
   })

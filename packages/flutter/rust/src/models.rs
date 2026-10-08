@@ -919,7 +919,7 @@ pub enum _UnsignedTransferPackage {
     TokenPull {
         prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
         pull_context: Vec<u8>,
-        payer_public_key: String,
+        payer_address: String,
         token_identifier: String,
         receivers: Vec<PullReceiver>,
         amount: u128,
@@ -2149,7 +2149,7 @@ pub enum _TokenAllowanceLimit {
 
 #[frb(mirror(CreateTokenAllowanceRequest))]
 pub struct _CreateTokenAllowanceRequest {
-    pub spender_public_key: String,
+    pub spender_address: String,
     pub token_identifier: String,
     pub max_per_payment: TokenAllowanceLimit,
     pub max_total: TokenAllowanceLimit,
@@ -2176,7 +2176,7 @@ pub enum _TokenAllowanceRole {
 #[frb(mirror(ListTokenAllowancesRequest))]
 pub struct _ListTokenAllowancesRequest {
     pub role: TokenAllowanceRole,
-    pub counterparty_public_key: Option<String>,
+    pub counterparty_address: Option<String>,
     pub token_identifier: Option<String>,
     pub include_inactive: Option<bool>,
     pub offset: Option<u32>,
@@ -2199,8 +2199,8 @@ pub enum _TokenAllowanceStatus {
 #[frb(mirror(TokenAllowance))]
 pub struct _TokenAllowance {
     pub id: String,
-    pub owner_public_key: String,
-    pub spender_public_key: String,
+    pub owner_address: String,
+    pub spender_address: String,
     pub token_identifier: String,
     pub max_per_payment: TokenAllowanceLimit,
     pub max_total: TokenAllowanceLimit,
@@ -2215,19 +2215,19 @@ pub struct _TokenAllowance {
 #[frb(mirror(PullReceiver))]
 pub struct _PullReceiver {
     pub amount: u128,
-    pub receiver_public_key: Option<String>,
+    pub receiver_address: Option<String>,
 }
 
 #[frb(mirror(PreparePullPaymentRequest))]
 pub struct _PreparePullPaymentRequest {
-    pub payer_public_key: String,
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
 }
 
 #[frb(mirror(PreparePullPaymentResponse))]
 pub struct _PreparePullPaymentResponse {
-    pub payer_public_key: String,
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
     pub amount: u128,

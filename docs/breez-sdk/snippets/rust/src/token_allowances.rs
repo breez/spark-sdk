@@ -6,7 +6,7 @@ async fn create_token_allowance(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: create-token-allowance
     let response = sdk
         .create_token_allowance(CreateTokenAllowanceRequest {
-            spender_public_key: "<spender identity public key>".to_string(),
+            spender_address: "<spender spark address>".to_string(),
             token_identifier: "<token identifier>".to_string(),
             max_per_payment: TokenAllowanceLimit::Amount { amount: 5_000_000 },
             max_total: TokenAllowanceLimit::Amount {
@@ -26,7 +26,7 @@ async fn list_token_allowances(sdk: &BreezSdk) -> Result<()> {
     let response = sdk
         .list_token_allowances(ListTokenAllowancesRequest {
             role: TokenAllowanceRole::Owner,
-            counterparty_public_key: None,
+            counterparty_address: None,
             token_identifier: None,
             include_inactive: Some(false),
             offset: None,
@@ -54,11 +54,11 @@ async fn pull_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: pull-payment
     let prepare_response = sdk
         .prepare_pull_payment(PreparePullPaymentRequest {
-            payer_public_key: "<payer identity public key>".to_string(),
+            payer_address: "<payer spark address>".to_string(),
             token_identifier: "<token identifier>".to_string(),
             receivers: vec![PullReceiver {
                 amount: 5_000_000,
-                receiver_public_key: None,
+                receiver_address: None,
             }],
         })
         .await?;

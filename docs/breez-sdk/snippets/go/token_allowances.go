@@ -17,7 +17,7 @@ func CreateTokenAllowance(sdk *breez_sdk_spark.BreezSdk) error {
 	}
 
 	response, err := sdk.CreateTokenAllowance(breez_sdk_spark.CreateTokenAllowanceRequest{
-		SpenderPublicKey:  "<spender identity public key>",
+		SpenderAddress:    "<spender spark address>",
 		TokenIdentifier:   "<token identifier>",
 		MaxPerPayment:     maxPerPayment,
 		MaxTotal:          maxTotal,
@@ -37,12 +37,12 @@ func ListTokenAllowances(sdk *breez_sdk_spark.BreezSdk) error {
 	includeInactive := false
 
 	response, err := sdk.ListTokenAllowances(breez_sdk_spark.ListTokenAllowancesRequest{
-		Role:                  breez_sdk_spark.TokenAllowanceRoleOwner,
-		CounterpartyPublicKey: nil,
-		TokenIdentifier:       nil,
-		IncludeInactive:       &includeInactive,
-		Offset:                nil,
-		Limit:                 nil,
+		Role:                breez_sdk_spark.TokenAllowanceRoleOwner,
+		CounterpartyAddress: nil,
+		TokenIdentifier:     nil,
+		IncludeInactive:     &includeInactive,
+		Offset:              nil,
+		Limit:               nil,
 	})
 	if err != nil {
 		return err
@@ -69,12 +69,12 @@ func RevokeTokenAllowance(sdk *breez_sdk_spark.BreezSdk) error {
 func PullPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: pull-payment
 	prepareResponse, err := sdk.PreparePullPayment(breez_sdk_spark.PreparePullPaymentRequest{
-		PayerPublicKey:  "<payer identity public key>",
+		PayerAddress:    "<payer spark address>",
 		TokenIdentifier: "<token identifier>",
 		Receivers: []breez_sdk_spark.PullReceiver{
 			{
-				Amount:            new(big.Int).SetInt64(5_000_000),
-				ReceiverPublicKey: nil,
+				Amount:          new(big.Int).SetInt64(5_000_000),
+				ReceiverAddress: nil,
 			},
 		},
 	})

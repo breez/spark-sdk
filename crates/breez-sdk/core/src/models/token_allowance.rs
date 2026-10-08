@@ -14,7 +14,8 @@ pub enum TokenAllowanceLimit {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CreateTokenAllowanceRequest {
-    pub spender_public_key: String,
+    /// The spender's Spark address.
+    pub spender_address: String,
     pub token_identifier: String,
     /// The most a single pull may move.
     pub max_per_payment: TokenAllowanceLimit,
@@ -22,7 +23,7 @@ pub struct CreateTokenAllowanceRequest {
     pub max_total: TokenAllowanceLimit,
     /// When the allowance expires, in Unix seconds.
     pub expiry_time: u64,
-    /// Identity public keys the spender may pay, or empty to allow any recipient.
+    /// Spark addresses the spender may pay, or empty to allow any recipient.
     pub allowed_recipients: Vec<String>,
 }
 
@@ -62,7 +63,7 @@ impl FromStr for TokenAllowanceRole {
 pub struct ListTokenAllowancesRequest {
     pub role: TokenAllowanceRole,
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub counterparty_public_key: Option<String>,
+    pub counterparty_address: Option<String>,
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub token_identifier: Option<String>,
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
@@ -92,8 +93,8 @@ pub enum TokenAllowanceStatus {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TokenAllowance {
     pub id: String,
-    pub owner_public_key: String,
-    pub spender_public_key: String,
+    pub owner_address: String,
+    pub spender_address: String,
     pub token_identifier: String,
     /// The most a single pull may move.
     pub max_per_payment: TokenAllowanceLimit,
@@ -102,7 +103,7 @@ pub struct TokenAllowance {
     /// The amount of every pull sent so far, including pulls that later failed, so it can be
     /// higher than what was actually pulled.
     pub spent_amount: u128,
-    /// Identity public keys the spender may pay, or empty to allow any recipient.
+    /// Spark addresses the spender may pay, or empty to allow any recipient.
     pub allowed_recipients: Vec<String>,
     /// When the allowance expires, in Unix seconds.
     pub expiry_time: u64,
@@ -115,15 +116,16 @@ pub struct TokenAllowance {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PullReceiver {
     pub amount: u128,
-    /// The receiver's identity public key, or unset to pay this wallet. Responses always set it.
+    /// The receiver's Spark address, or unset to pay this wallet. Responses always set it.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub receiver_public_key: Option<String>,
+    pub receiver_address: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PreparePullPaymentRequest {
-    pub payer_public_key: String,
+    /// The payer's Spark address.
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
 }
@@ -131,7 +133,7 @@ pub struct PreparePullPaymentRequest {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PreparePullPaymentResponse {
-    pub payer_public_key: String,
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
     pub amount: u128,
@@ -206,29 +208,6 @@ impl From<spark_wallet::TokenAllowanceStatus> for TokenAllowanceStatus {
             spark_wallet::TokenAllowanceStatus::Exhausted => Self::Exhausted,
             spark_wallet::TokenAllowanceStatus::Expired => Self::Expired,
             spark_wallet::TokenAllowanceStatus::Revoked => Self::Revoked,
-        }
-    }
-}
-
-impl From<spark_wallet::TokenAllowance> for TokenAllowance {
-    fn from(allowance: spark_wallet::TokenAllowance) -> Self {
-        Self {
-            id: allowance.id,
-            owner_public_key: allowance.owner_public_key.to_string(),
-            spender_public_key: allowance.spender_public_key.to_string(),
-            token_identifier: allowance.token_identifier,
-            max_per_payment: allowance.max_per_payment.into(),
-            max_total: allowance.max_total.into(),
-            spent_amount: allowance.spent_amount,
-            allowed_recipients: allowance
-                .allowed_recipients
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            expiry_time: allowance.expiry_time,
-            created_at: allowance.created_at,
-            revoked_at: allowance.revoked_at,
-            status: allowance.status.into(),
         }
     }
 }

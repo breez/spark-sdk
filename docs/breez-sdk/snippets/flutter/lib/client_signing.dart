@@ -55,9 +55,9 @@ Future<SignedTransferPackage> signPackage(
             .prepareTokenTransaction(unsigned.prepareTokenTransaction));
   } else if (unsigned is UnsignedTransferPackage_TokenPull) {
     print("Approve pulling ${unsigned.amount} of token"
-        " ${unsigned.tokenIdentifier} from ${unsigned.payerPublicKey}");
+        " ${unsigned.tokenIdentifier} from ${unsigned.payerAddress}");
     for (final receiver in unsigned.receivers) {
-      print("  ${receiver.amount} to ${receiver.receiverPublicKey}");
+      print("  ${receiver.amount} to ${receiver.receiverAddress}");
     }
     print("Expires at ${unsigned.expiryTime}");
     signature = TransferSignature.token(

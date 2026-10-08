@@ -10,7 +10,7 @@ namespace BreezSdkSnippets
             // ANCHOR: create-token-allowance
             var response = await sdk.CreateTokenAllowance(
                 request: new CreateTokenAllowanceRequest(
-                    spenderPublicKey: "<spender identity public key>",
+                    spenderAddress: "<spender spark address>",
                     tokenIdentifier: "<token identifier>",
                     maxPerPayment: new TokenAllowanceLimit.Amount(new BigInteger(5_000_000)),
                     maxTotal: new TokenAllowanceLimit.Amount(new BigInteger(100_000_000)),
@@ -28,7 +28,7 @@ namespace BreezSdkSnippets
             var response = await sdk.ListTokenAllowances(
                 request: new ListTokenAllowancesRequest(
                     role: TokenAllowanceRole.Owner,
-                    counterpartyPublicKey: null,
+                    counterpartyAddress: null,
                     tokenIdentifier: null,
                     includeInactive: false,
                     offset: null,
@@ -56,12 +56,12 @@ namespace BreezSdkSnippets
             // ANCHOR: pull-payment
             var prepareResponse = await sdk.PreparePullPayment(
                 request: new PreparePullPaymentRequest(
-                    payerPublicKey: "<payer identity public key>",
+                    payerAddress: "<payer spark address>",
                     tokenIdentifier: "<token identifier>",
                     receivers: new PullReceiver[] {
                         new PullReceiver(
                             amount: new BigInteger(5_000_000),
-                            receiverPublicKey: null
+                            receiverAddress: null
                         )
                     }
                 )

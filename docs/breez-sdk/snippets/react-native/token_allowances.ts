@@ -7,7 +7,7 @@ import {
 const exampleCreateTokenAllowance = async (sdk: BreezSdk) => {
   // ANCHOR: create-token-allowance
   const response = await sdk.createTokenAllowance({
-    spenderPublicKey: '<spender identity public key>',
+    spenderAddress: '<spender spark address>',
     tokenIdentifier: '<token identifier>',
     maxPerPayment: new TokenAllowanceLimit.Amount({ amount: BigInt(5_000_000) }),
     maxTotal: new TokenAllowanceLimit.Amount({ amount: BigInt(100_000_000) }),
@@ -22,7 +22,7 @@ const exampleListTokenAllowances = async (sdk: BreezSdk) => {
   // ANCHOR: list-token-allowances
   const response = await sdk.listTokenAllowances({
     role: TokenAllowanceRole.Owner,
-    counterpartyPublicKey: undefined,
+    counterpartyAddress: undefined,
     tokenIdentifier: undefined,
     includeInactive: false,
     offset: undefined,
@@ -43,9 +43,9 @@ const exampleRevokeTokenAllowance = async (sdk: BreezSdk) => {
 const examplePullPayment = async (sdk: BreezSdk) => {
   // ANCHOR: pull-payment
   const prepareResponse = await sdk.preparePullPayment({
-    payerPublicKey: '<payer identity public key>',
+    payerAddress: '<payer spark address>',
     tokenIdentifier: '<token identifier>',
-    receivers: [{ amount: BigInt(5_000_000), receiverPublicKey: undefined }]
+    receivers: [{ amount: BigInt(5_000_000), receiverAddress: undefined }]
   })
   console.log(`Pulling ${prepareResponse.amount}`)
 

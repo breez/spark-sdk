@@ -50,11 +50,11 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
             signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
         )
     case let .tokenPull(
-        prepareTokenTransaction, _, payerPublicKey, tokenIdentifier, receivers, amount, expiryTime
+        prepareTokenTransaction, _, payerAddress, tokenIdentifier, receivers, amount, expiryTime
     ):
-        print("Approve pulling \(amount) of token \(tokenIdentifier) from \(payerPublicKey)")
+        print("Approve pulling \(amount) of token \(tokenIdentifier) from \(payerAddress)")
         for receiver in receivers {
-            print("  \(receiver.amount) to \(receiver.receiverPublicKey ?? "")")
+            print("  \(receiver.amount) to \(receiver.receiverAddress ?? "")")
         }
         print("Expires at \(expiryTime)")
         signature = TransferSignature.token(

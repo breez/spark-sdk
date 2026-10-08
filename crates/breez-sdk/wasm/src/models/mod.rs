@@ -1465,7 +1465,7 @@ pub enum UnsignedTransferPackage {
     TokenPull {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
         pull_context: Vec<u8>,
-        payer_public_key: String,
+        payer_address: String,
         token_identifier: String,
         receivers: Vec<PullReceiver>,
         #[tsify(type = "string")]
@@ -2344,7 +2344,7 @@ pub enum TokenAllowanceLimit {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CreateTokenAllowanceRequest)]
 pub struct CreateTokenAllowanceRequest {
-    pub spender_public_key: String,
+    pub spender_address: String,
     pub token_identifier: String,
     pub max_per_payment: TokenAllowanceLimit,
     pub max_total: TokenAllowanceLimit,
@@ -2371,7 +2371,7 @@ pub enum TokenAllowanceRole {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListTokenAllowancesRequest)]
 pub struct ListTokenAllowancesRequest {
     pub role: TokenAllowanceRole,
-    pub counterparty_public_key: Option<String>,
+    pub counterparty_address: Option<String>,
     pub token_identifier: Option<String>,
     pub include_inactive: Option<bool>,
     pub offset: Option<u32>,
@@ -2394,8 +2394,8 @@ pub enum TokenAllowanceStatus {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowance)]
 pub struct TokenAllowance {
     pub id: String,
-    pub owner_public_key: String,
-    pub spender_public_key: String,
+    pub owner_address: String,
+    pub spender_address: String,
     pub token_identifier: String,
     pub max_per_payment: TokenAllowanceLimit,
     pub max_total: TokenAllowanceLimit,
@@ -2412,19 +2412,19 @@ pub struct PullReceiver {
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
-    pub receiver_public_key: Option<String>,
+    pub receiver_address: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePullPaymentRequest)]
 pub struct PreparePullPaymentRequest {
-    pub payer_public_key: String,
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PreparePullPaymentResponse)]
 pub struct PreparePullPaymentResponse {
-    pub payer_public_key: String,
+    pub payer_address: String,
     pub token_identifier: String,
     pub receivers: Vec<PullReceiver>,
     pub amount: u128,

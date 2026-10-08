@@ -955,7 +955,7 @@ fn unknown_command() {
 #[test]
 fn token_allowance_commands() {
     let Command::TokenAllowances(TokenAllowanceCommand::Create {
-        spender_public_key,
+        spender_address,
         token_identifier,
         expiry_time,
         max_per_payment,
@@ -968,7 +968,7 @@ fn token_allowance_commands() {
     else {
         panic!("expected TokenAllowances Create");
     };
-    assert_eq!(spender_public_key, "02aa");
+    assert_eq!(spender_address, "02aa");
     assert_eq!(token_identifier, "btkn1x");
     assert_eq!(expiry_time, 4_102_444_800);
     assert_eq!(

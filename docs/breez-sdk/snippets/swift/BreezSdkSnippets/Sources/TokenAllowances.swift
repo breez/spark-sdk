@@ -5,7 +5,7 @@ func createTokenAllowance(sdk: BreezSdk) async throws {
     // ANCHOR: create-token-allowance
     let response = try await sdk.createTokenAllowance(
         request: CreateTokenAllowanceRequest(
-            spenderPublicKey: "<spender identity public key>",
+            spenderAddress: "<spender spark address>",
             tokenIdentifier: "<token identifier>",
             maxPerPayment: .amount(amount: BInt(5_000_000)),
             maxTotal: .amount(amount: BInt(100_000_000)),
@@ -21,7 +21,7 @@ func listTokenAllowances(sdk: BreezSdk) async throws {
     let response = try await sdk.listTokenAllowances(
         request: ListTokenAllowancesRequest(
             role: .owner,
-            counterpartyPublicKey: nil,
+            counterpartyAddress: nil,
             tokenIdentifier: nil,
             includeInactive: false,
             offset: nil,
@@ -44,10 +44,10 @@ func pullPayment(sdk: BreezSdk) async throws {
     // ANCHOR: pull-payment
     let prepareResponse = try await sdk.preparePullPayment(
         request: PreparePullPaymentRequest(
-            payerPublicKey: "<payer identity public key>",
+            payerAddress: "<payer spark address>",
             tokenIdentifier: "<token identifier>",
             receivers: [
-                PullReceiver(amount: BInt(5_000_000), receiverPublicKey: nil)
+                PullReceiver(amount: BInt(5_000_000), receiverAddress: nil)
             ]
         ))
     print("Pulling \(prepareResponse.amount)")

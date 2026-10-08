@@ -17,7 +17,7 @@ async def create_token_allowance(sdk: BreezSdk):
     try:
         response = await sdk.create_token_allowance(
             request=CreateTokenAllowanceRequest(
-                spender_public_key="<spender identity public key>",
+                spender_address="<spender spark address>",
                 token_identifier="<token identifier>",
                 max_per_payment=TokenAllowanceLimit.AMOUNT(amount=5_000_000),
                 max_total=TokenAllowanceLimit.AMOUNT(amount=100_000_000),
@@ -38,7 +38,7 @@ async def list_token_allowances(sdk: BreezSdk):
         response = await sdk.list_token_allowances(
             request=ListTokenAllowancesRequest(
                 role=TokenAllowanceRole.OWNER,
-                counterparty_public_key=None,
+                counterparty_address=None,
                 token_identifier=None,
                 include_inactive=False,
                 offset=None,
@@ -70,9 +70,9 @@ async def pull_payment(sdk: BreezSdk):
     try:
         prepare_response = await sdk.prepare_pull_payment(
             request=PreparePullPaymentRequest(
-                payer_public_key="<payer identity public key>",
+                payer_address="<payer spark address>",
                 token_identifier="<token identifier>",
-                receivers=[PullReceiver(amount=5_000_000, receiver_public_key=None)],
+                receivers=[PullReceiver(amount=5_000_000, receiver_address=None)],
             )
         )
         logging.debug(f"Pulling {prepare_response.amount}")

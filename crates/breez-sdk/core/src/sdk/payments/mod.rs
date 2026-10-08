@@ -164,7 +164,7 @@ impl BreezSdk {
         &self,
         request: BuildUnsignedPullPackageRequest,
     ) -> Result<UnsignedTransferPackage, SdkError> {
-        client_signing::build_unsigned_pull_package(&request)
+        client_signing::build_unsigned_pull_package(&request, self.config.network)
     }
 
     #[instrument(

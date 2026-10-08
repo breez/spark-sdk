@@ -4,7 +4,7 @@ Future<void> createTokenAllowance(BreezSdk sdk) async {
   // ANCHOR: create-token-allowance
   final response = await sdk.createTokenAllowance(
       request: CreateTokenAllowanceRequest(
-          spenderPublicKey: "<spender identity public key>",
+          spenderAddress: "<spender spark address>",
           tokenIdentifier: "<token identifier>",
           maxPerPayment: TokenAllowanceLimit.amount(amount: BigInt.from(5000000)),
           maxTotal: TokenAllowanceLimit.amount(amount: BigInt.from(100000000)),
@@ -19,7 +19,7 @@ Future<void> listTokenAllowances(BreezSdk sdk) async {
   final response = await sdk.listTokenAllowances(
       request: ListTokenAllowancesRequest(
           role: TokenAllowanceRole.owner,
-          counterpartyPublicKey: null,
+          counterpartyAddress: null,
           tokenIdentifier: null,
           includeInactive: false,
           offset: null,
@@ -41,10 +41,10 @@ Future<void> pullPayment(BreezSdk sdk) async {
   // ANCHOR: pull-payment
   final prepareResponse = await sdk.preparePullPayment(
       request: PreparePullPaymentRequest(
-          payerPublicKey: "<payer identity public key>",
+          payerAddress: "<payer spark address>",
           tokenIdentifier: "<token identifier>",
           receivers: [
-        PullReceiver(amount: BigInt.from(5000000), receiverPublicKey: null)
+        PullReceiver(amount: BigInt.from(5000000), receiverAddress: null)
       ]));
   print("Pulling ${prepareResponse.amount}");
 

@@ -95,10 +95,10 @@ func SignPackage(
 			"Approve pulling %v of token %v from %v",
 			pkg.Amount,
 			pkg.TokenIdentifier,
-			pkg.PayerPublicKey,
+			pkg.PayerAddress,
 		)
 		for _, receiver := range pkg.Receivers {
-			log.Printf("  %v to %v", receiver.Amount, *receiver.ReceiverPublicKey)
+			log.Printf("  %v to %v", receiver.Amount, *receiver.ReceiverAddress)
 		}
 		log.Printf("Expires at %v", pkg.ExpiryTime)
 		signed, err := signer.PrepareTokenTransaction(pkg.PrepareTokenTransaction)

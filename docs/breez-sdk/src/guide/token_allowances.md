@@ -2,7 +2,7 @@
 
 A token allowance lets another wallet pull tokens from your wallet, within limits you set. The wallet that grants the allowance is the owner. The wallet that pulls is the spender.
 
-An allowance names the spender by its identity public key, and sets:
+An allowance names the spender by its Spark address, and sets:
 
 - the token
 - a limit on each payment and a limit on all payments together
@@ -41,7 +41,7 @@ A spender pulls in two steps. {{#name prepare_pull_payment}} finds the allowance
 
 {{#tabs token_allowances:pull-payment}}
 
-Leave a receiver's public key unset to pull into your own wallet. One pull can pay several receivers. When the allowance has a recipient list, every receiver must be on it, your own wallet included. The per-payment limit applies to the total.
+Leave a receiver's address unset to pull into your own wallet. One pull can pay several receivers. When the allowance has a recipient list, every receiver must be on it, your own wallet included. The per-payment limit applies to the total.
 
 ### Retrying
 

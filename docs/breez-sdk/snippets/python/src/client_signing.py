@@ -90,10 +90,10 @@ async def sign_package(
     elif isinstance(unsigned, UnsignedTransferPackage.TOKEN_PULL):
         logging.debug(
             f"Approve pulling {unsigned.amount} of token {unsigned.token_identifier}"
-            f" from {unsigned.payer_public_key}"
+            f" from {unsigned.payer_address}"
         )
         for receiver in unsigned.receivers:
-            logging.debug(f"  {receiver.amount} to {receiver.receiver_public_key}")
+            logging.debug(f"  {receiver.amount} to {receiver.receiver_address}")
         logging.debug(f"Expires at {unsigned.expiry_time}")
         signature = TransferSignature.TOKEN(
             signed=await signer.prepare_token_transaction(
