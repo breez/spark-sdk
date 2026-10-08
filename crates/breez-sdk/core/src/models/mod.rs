@@ -3264,9 +3264,11 @@ pub enum SkippedLeafReason {
     /// At the quoted fee rate, recovering the leaf costs at least what it holds.
     /// A low enough fee rate brings the leaf back into the quote.
     FeeExceedsValue,
-    /// The SDK did not find the leaf's funds on-chain, or could not read the
-    /// chain for them. A later quote can find them.
+    /// The SDK read the chain and found no output holding the leaf's funds.
     FundsNotFound,
+    /// The SDK could not look up where the leaf's funds are. It looks again on
+    /// the next quote.
+    Unverified,
     /// No recovery can be built for the leaf as it stands. `message` says why.
     NotRecoverable { message: String },
 }

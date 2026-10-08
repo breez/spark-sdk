@@ -1036,6 +1036,7 @@ pub struct SkippedLeaf {
 pub enum SkippedLeafReason {
     FeeExceedsValue,
     FundsNotFound,
+    Unverified,
     NotRecoverable { message: String },
 }
 

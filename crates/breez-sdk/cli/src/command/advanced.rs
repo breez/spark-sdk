@@ -255,6 +255,7 @@ fn print_skipped(skipped: &[SkippedLeaf]) {
         let reason = match &leaf.reason {
             SkippedLeafReason::FeeExceedsValue => "recovering it costs too much at this fee rate",
             SkippedLeafReason::FundsNotFound => "its funds were not found on-chain",
+            SkippedLeafReason::Unverified => "its funds could not be looked up",
             SkippedLeafReason::NotRecoverable { message } => message,
         };
         println!(
