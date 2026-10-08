@@ -1897,6 +1897,48 @@ pub enum UpdateWatchedAddressPayload {
     Unwatch { issued_at: u64 },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ChainTransaction)]
+pub struct ChainTransaction {
+    pub txid: String,
+    pub block_height: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StoredWatchtowerExitOutput)]
+pub struct StoredWatchtowerExitOutput {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    pub script_pubkey: String,
+    pub block_height: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WatchtowerExitRecovery)]
+pub struct WatchtowerExitRecovery {
+    pub txid: String,
+    pub transaction_hex: String,
+    pub output_amount_sats: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LeafRecovery)]
+pub struct LeafRecovery {
+    pub leaf_id: String,
+    pub chain_checked_at: Option<u64>,
+    pub watchtower_exit_output: Option<StoredWatchtowerExitOutput>,
+    pub watchtower_exit_recoveries: Vec<WatchtowerExitRecovery>,
+    pub watchtower_exit_spend: Option<ChainTransaction>,
+    pub unilateral_exit_sweep: Option<ChainTransaction>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateLeafRecovery)]
+pub struct UpdateLeafRecovery {
+    pub leaf_id: String,
+    pub chain_checked_at: Option<u64>,
+    pub watchtower_exit_output: Option<StoredWatchtowerExitOutput>,
+    pub watchtower_exit_recovery: Option<WatchtowerExitRecovery>,
+    pub watchtower_exit_spend: Option<ChainTransaction>,
+    pub unilateral_exit_sweep: Option<ChainTransaction>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CheckLightningAddressRequest)]
 pub struct CheckLightningAddressRequest {
     pub username: String,

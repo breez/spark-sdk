@@ -21,9 +21,10 @@ use crate::{
     SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
-        Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-        UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
+        ChainTransaction, LeafRecovery, Payment, PaymentMetadata, SetLnurlMetadataItem, Storage,
+        StorageError, StorageListPaymentsRequest, StoragePaymentDetailsFilter,
+        StoredCrossChainSwap, StoredWatchtowerExitOutput, UpdateDepositPayload, UpdateLeafRecovery,
+        UpdateWatchedAddressPayload, WatchedDepositAddress, WatchtowerExitRecovery,
         parse_payment_status,
     },
     sync_storage::{
@@ -505,8 +506,151 @@ impl PostgresStorage {
             // JSON-encoded MaxFee, overriding the configured one. NULL when the
             // configured one applies.
             vec!["ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSONB".to_string()],
+            // Migration 25: Leaf recoveries. What the chain service reported about
+            // leaves with funds to recover on-chain, and the recoveries the operators
+            // co-signed. Every block height is in brz_chain_transactions, keyed by
+            // txid.
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_leaf_recoveries (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    chain_checked_at BIGINT,
+                    PRIMARY KEY (user_id, leaf_id)
+                 )"
+                .to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_chain_transactions (
+                    user_id BYTEA NOT NULL,
+                    txid TEXT NOT NULL,
+                    block_height BIGINT NOT NULL,
+                    PRIMARY KEY (user_id, txid)
+                 )"
+                .to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_outputs (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    txid TEXT NOT NULL,
+                    vout BIGINT NOT NULL,
+                    amount_sats BIGINT NOT NULL,
+                    script_pubkey TEXT NOT NULL,
+                    PRIMARY KEY (user_id, leaf_id)
+                 )"
+                .to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_recoveries (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    txid TEXT NOT NULL,
+                    transaction_hex TEXT NOT NULL,
+                    output_amount_sats BIGINT NOT NULL,
+                    PRIMARY KEY (user_id, leaf_id, txid)
+                 )"
+                .to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_spends (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    txid TEXT NOT NULL,
+                    PRIMARY KEY (user_id, leaf_id)
+                 )"
+                .to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_unilateral_exit_sweeps (
+                    user_id BYTEA NOT NULL,
+                    leaf_id TEXT NOT NULL,
+                    txid TEXT NOT NULL,
+                    PRIMARY KEY (user_id, leaf_id)
+                 )"
+                .to_string(),
+            ],
         ]
     }
+}
+
+async fn set_chain_transaction(
+    tx: &Transaction<'_>,
+    identity: &[u8],
+    txid: &str,
+    block_height: u32,
+) -> Result<(), StorageError> {
+    tx.execute(
+        "INSERT INTO brz_chain_transactions (user_id, txid, block_height)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, txid) DO UPDATE SET block_height = EXCLUDED.block_height",
+        &[&identity, &txid, &i64::from(block_height)],
+    )
+    .await?;
+    Ok(())
+}
+
+/// One statement for all of a user's leaf recoveries, so `PostgreSQL` reads an
+/// output and its recoveries from the same snapshot. A leaf recovery has one
+/// row per watchtower exit recovery, or a single row when it has none.
+const SELECT_LEAF_RECOVERIES_SQL: &str = "
+    SELECT l.leaf_id,
+           l.chain_checked_at,
+           o.txid,
+           ot.block_height,
+           o.vout,
+           o.amount_sats,
+           o.script_pubkey,
+           s.txid,
+           st.block_height,
+           w.txid,
+           wt.block_height,
+           r.txid,
+           r.transaction_hex,
+           r.output_amount_sats
+      FROM brz_leaf_recoveries l
+      LEFT JOIN brz_watchtower_exit_outputs o ON o.user_id = l.user_id AND o.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions ot ON ot.user_id = o.user_id AND ot.txid = o.txid
+      LEFT JOIN brz_watchtower_exit_spends s ON s.user_id = l.user_id AND s.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions st ON st.user_id = s.user_id AND st.txid = s.txid
+      LEFT JOIN brz_unilateral_exit_sweeps w ON w.user_id = l.user_id AND w.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions wt ON wt.user_id = w.user_id AND wt.txid = w.txid
+      LEFT JOIN brz_watchtower_exit_recoveries r ON r.user_id = l.user_id AND r.leaf_id = l.leaf_id
+     WHERE l.user_id = $1
+     ORDER BY l.leaf_id, r.txid";
+
+/// Maps a `SELECT_LEAF_RECOVERIES_SQL` row to a [`LeafRecovery`] with the
+/// watchtower exit recovery of that row, if it has one.
+fn leaf_recovery_from_row(row: &Row) -> Result<LeafRecovery, StorageError> {
+    let chain_transaction = |index: usize| -> Result<Option<ChainTransaction>, StorageError> {
+        let txid: Option<String> = row.get(index);
+        let block_height: Option<i64> = row.get(index.saturating_add(1));
+        match (txid, block_height) {
+            (Some(txid), Some(block_height)) => Ok(Some(ChainTransaction {
+                txid,
+                block_height: u32::try_from(block_height)?,
+            })),
+            _ => Ok(None),
+        }
+    };
+    let output = match chain_transaction(2)? {
+        Some(ChainTransaction { txid, block_height }) => Some(StoredWatchtowerExitOutput {
+            txid,
+            vout: u32::try_from(row.get::<_, i64>(4))?,
+            amount_sats: u64::try_from(row.get::<_, i64>(5))?,
+            script_pubkey: row.get(6),
+            block_height,
+        }),
+        None => None,
+    };
+    let recovery = match row.get::<_, Option<String>>(11) {
+        Some(txid) => Some(WatchtowerExitRecovery {
+            txid,
+            transaction_hex: row.get(12),
+            output_amount_sats: u64::try_from(row.get::<_, i64>(13))?,
+        }),
+        None => None,
+    };
+    Ok(LeafRecovery {
+        leaf_id: row.get(0),
+        chain_checked_at: row
+            .get::<_, Option<i64>>(1)
+            .map(u64::try_from)
+            .transpose()?,
+        watchtower_exit_output: output,
+        watchtower_exit_recoveries: recovery.into_iter().collect(),
+        watchtower_exit_spend: chain_transaction(7)?,
+        unilateral_exit_sweep: chain_transaction(9)?,
+    })
 }
 
 /// Maps a `brz_cross_chain_swaps` row (columns `provider, id, is_terminal,
@@ -1460,6 +1604,129 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    async fn list_leaf_recoveries(&self) -> Result<Vec<LeafRecovery>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(SELECT_LEAF_RECOVERIES_SQL, &[&self.identity])
+            .await?;
+
+        let mut leaf_recoveries: Vec<LeafRecovery> = Vec::new();
+        for row in &rows {
+            let leaf_recovery = leaf_recovery_from_row(row)?;
+            match leaf_recoveries.last_mut() {
+                Some(last) if last.leaf_id == leaf_recovery.leaf_id => {
+                    last.watchtower_exit_recoveries
+                        .extend(leaf_recovery.watchtower_exit_recoveries);
+                }
+                _ => leaf_recoveries.push(leaf_recovery),
+            }
+        }
+        Ok(leaf_recoveries)
+    }
+
+    async fn update_leaf_recovery(&self, update: UpdateLeafRecovery) -> Result<(), StorageError> {
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+        let tx = client.transaction().await?;
+        let leaf_id = &update.leaf_id;
+        // DO UPDATE rather than DO NOTHING: PostgreSQL then locks the row until
+        // the transaction ends, so a second writer of the same leaf waits here.
+        // Two interleaved writers could otherwise leave a leaf with one output
+        // and the recoveries of another.
+        tx.execute(
+            "INSERT INTO brz_leaf_recoveries (user_id, leaf_id) VALUES ($1, $2)
+             ON CONFLICT (user_id, leaf_id) DO UPDATE SET leaf_id = EXCLUDED.leaf_id",
+            &[&self.identity, leaf_id],
+        )
+        .await?;
+        if let Some(chain_checked_at) = update.chain_checked_at {
+            tx.execute(
+                "UPDATE brz_leaf_recoveries
+                 SET chain_checked_at = GREATEST(COALESCE(chain_checked_at, 0), $3)
+                 WHERE user_id = $1 AND leaf_id = $2",
+                &[&self.identity, leaf_id, &i64::try_from(chain_checked_at)?],
+            )
+            .await?;
+        }
+        if let Some(output) = &update.watchtower_exit_output {
+            let vout = i64::from(output.vout);
+            for table in [
+                "brz_watchtower_exit_recoveries",
+                "brz_watchtower_exit_spends",
+            ] {
+                tx.execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE user_id = $1 AND leaf_id = $2 AND EXISTS (
+                             SELECT 1 FROM brz_watchtower_exit_outputs
+                             WHERE user_id = $1 AND leaf_id = $2 AND (txid <> $3 OR vout <> $4))"
+                    ),
+                    &[&self.identity, leaf_id, &output.txid, &vout],
+                )
+                .await?;
+            }
+            set_chain_transaction(&tx, &self.identity, &output.txid, output.block_height).await?;
+            tx.execute(
+                "INSERT INTO brz_watchtower_exit_outputs
+                     (user_id, leaf_id, txid, vout, amount_sats, script_pubkey)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (user_id, leaf_id) DO UPDATE SET
+                     txid = EXCLUDED.txid,
+                     vout = EXCLUDED.vout,
+                     amount_sats = EXCLUDED.amount_sats,
+                     script_pubkey = EXCLUDED.script_pubkey",
+                &[
+                    &self.identity,
+                    leaf_id,
+                    &output.txid,
+                    &vout,
+                    &i64::try_from(output.amount_sats)?,
+                    &output.script_pubkey,
+                ],
+            )
+            .await?;
+        }
+        if let Some(recovery) = &update.watchtower_exit_recovery {
+            tx.execute(
+                "INSERT INTO brz_watchtower_exit_recoveries
+                     (user_id, leaf_id, txid, transaction_hex, output_amount_sats)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (user_id, leaf_id, txid) DO NOTHING",
+                &[
+                    &self.identity,
+                    leaf_id,
+                    &recovery.txid,
+                    &recovery.transaction_hex,
+                    &i64::try_from(recovery.output_amount_sats)?,
+                ],
+            )
+            .await?;
+        }
+        for (table, transaction) in [
+            ("brz_watchtower_exit_spends", &update.watchtower_exit_spend),
+            ("brz_unilateral_exit_sweeps", &update.unilateral_exit_sweep),
+        ] {
+            let Some(transaction) = transaction else {
+                continue;
+            };
+            set_chain_transaction(
+                &tx,
+                &self.identity,
+                &transaction.txid,
+                transaction.block_height,
+            )
+            .await?;
+            tx.execute(
+                &format!(
+                    "INSERT INTO {table} (user_id, leaf_id, txid) VALUES ($1, $2, $3)
+                     ON CONFLICT (user_id, leaf_id) DO UPDATE SET txid = EXCLUDED.txid"
+                ),
+                &[&self.identity, leaf_id, &transaction.txid],
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
@@ -2289,6 +2556,12 @@ mod tests {
     async fn test_watched_deposit_addresses() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_watched_deposit_addresses(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_leaf_recoveries() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_leaf_recoveries(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3347,7 +3620,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration version must advance to 24");
+        assert_eq!(version, 25, "migration version must advance to 25");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3643,7 +3916,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 24, "migration must advance to 24");
+        assert_eq!(version, 25, "migration must advance to 25");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

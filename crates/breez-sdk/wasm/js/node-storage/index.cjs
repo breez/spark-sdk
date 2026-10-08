@@ -864,6 +864,147 @@ class SqliteStorage {
     }
   }
 
+  listLeafRecoveries() {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT l.leaf_id,
+                  l.chain_checked_at,
+                  o.txid AS output_txid,
+                  o.vout AS output_vout,
+                  o.amount_sats AS output_amount_sats,
+                  o.script_pubkey AS output_script_pubkey,
+                  ot.block_height AS output_block_height,
+                  s.txid AS spend_txid,
+                  st.block_height AS spend_block_height,
+                  w.txid AS sweep_txid,
+                  wt.block_height AS sweep_block_height,
+                  r.txid AS recovery_txid,
+                  r.transaction_hex AS recovery_transaction_hex,
+                  r.output_amount_sats AS recovery_output_amount_sats
+             FROM leaf_recoveries l
+             LEFT JOIN watchtower_exit_outputs o ON o.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions ot ON ot.txid = o.txid
+             LEFT JOIN watchtower_exit_spends s ON s.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions st ON st.txid = s.txid
+             LEFT JOIN unilateral_exit_sweeps w ON w.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions wt ON wt.txid = w.txid
+             LEFT JOIN watchtower_exit_recoveries r ON r.leaf_id = l.leaf_id
+             ORDER BY l.leaf_id, r.txid`
+        )
+        .all();
+      return Promise.resolve(leafRecoveriesFromRows(rows));
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to list leaf recoveries: ${error.message}`, error)
+      );
+    }
+  }
+
+  updateLeafRecovery(update) {
+    try {
+      const leafId = update.leafId;
+      const setChainTransaction = this.db.prepare(
+        `INSERT INTO chain_transactions (txid, block_height) VALUES (?, ?)
+           ON CONFLICT(txid) DO UPDATE SET block_height = excluded.block_height`
+      );
+      const transaction = this.db.transaction(() => {
+        this.db
+          .prepare(
+            "INSERT INTO leaf_recoveries (leaf_id) VALUES (?) ON CONFLICT(leaf_id) DO NOTHING"
+          )
+          .run(leafId);
+        if (update.chainCheckedAt != null) {
+          this.db
+            .prepare(
+              `UPDATE leaf_recoveries
+                 SET chain_checked_at = MAX(COALESCE(chain_checked_at, 0), ?)
+                 WHERE leaf_id = ?`
+            )
+            .run(update.chainCheckedAt, leafId);
+        }
+        if (update.watchtowerExitOutput != null) {
+          const output = update.watchtowerExitOutput;
+          for (const table of [
+            "watchtower_exit_recoveries",
+            "watchtower_exit_spends",
+          ]) {
+            this.db
+              .prepare(
+                `DELETE FROM ${table} WHERE leaf_id = @leafId AND EXISTS (
+                     SELECT 1 FROM watchtower_exit_outputs
+                     WHERE leaf_id = @leafId AND (txid <> @txid OR vout <> @vout))`
+              )
+              .run({ leafId, txid: output.txid, vout: output.vout });
+          }
+          setChainTransaction.run(output.txid, output.blockHeight);
+          this.db
+            .prepare(
+              `INSERT INTO watchtower_exit_outputs
+                   (leaf_id, txid, vout, amount_sats, script_pubkey)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(leaf_id) DO UPDATE SET
+                   txid = excluded.txid,
+                   vout = excluded.vout,
+                   amount_sats = excluded.amount_sats,
+                   script_pubkey = excluded.script_pubkey`
+            )
+            .run(
+              leafId,
+              output.txid,
+              output.vout,
+              output.amountSats,
+              output.scriptPubkey
+            );
+        }
+        if (update.watchtowerExitRecovery != null) {
+          const recovery = update.watchtowerExitRecovery;
+          this.db
+            .prepare(
+              `INSERT INTO watchtower_exit_recoveries
+                   (leaf_id, txid, transaction_hex, output_amount_sats)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(leaf_id, txid) DO NOTHING`
+            )
+            .run(
+              leafId,
+              recovery.txid,
+              recovery.transactionHex,
+              recovery.outputAmountSats
+            );
+        }
+        for (const [table, chainTransaction] of [
+          ["watchtower_exit_spends", update.watchtowerExitSpend],
+          ["unilateral_exit_sweeps", update.unilateralExitSweep],
+        ]) {
+          if (chainTransaction == null) {
+            continue;
+          }
+          setChainTransaction.run(
+            chainTransaction.txid,
+            chainTransaction.blockHeight
+          );
+          this.db
+            .prepare(
+              `INSERT INTO ${table} (leaf_id, txid) VALUES (?, ?)
+                 ON CONFLICT(leaf_id) DO UPDATE SET txid = excluded.txid`
+            )
+            .run(leafId, chainTransaction.txid);
+        }
+      });
+
+      transaction.immediate();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to update leaf recovery '${update.leafId}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
@@ -1590,6 +1731,49 @@ function crossChainSwapFromRow(row) {
     data: row.data,
     secrets: row.secrets,
   };
+}
+
+/// A row holds a leaf recovery and one of its watchtower exit recoveries, so
+/// a leaf recovery with several of them spans several rows.
+function leafRecoveriesFromRows(rows) {
+  const leafRecoveries = [];
+  for (const row of rows) {
+    let leafRecovery = leafRecoveries[leafRecoveries.length - 1];
+    if (leafRecovery?.leafId !== row.leaf_id) {
+      leafRecovery = {
+        leafId: row.leaf_id,
+        chainCheckedAt: row.chain_checked_at,
+        watchtowerExitOutput:
+          row.output_block_height != null
+            ? {
+                txid: row.output_txid,
+                vout: row.output_vout,
+                amountSats: row.output_amount_sats,
+                scriptPubkey: row.output_script_pubkey,
+                blockHeight: row.output_block_height,
+              }
+            : null,
+        watchtowerExitRecoveries: [],
+        watchtowerExitSpend:
+          row.spend_block_height != null
+            ? { txid: row.spend_txid, blockHeight: row.spend_block_height }
+            : null,
+        unilateralExitSweep:
+          row.sweep_block_height != null
+            ? { txid: row.sweep_txid, blockHeight: row.sweep_block_height }
+            : null,
+      };
+      leafRecoveries.push(leafRecovery);
+    }
+    if (row.recovery_txid != null) {
+      leafRecovery.watchtowerExitRecoveries.push({
+        txid: row.recovery_txid,
+        transactionHex: row.recovery_transaction_hex,
+        outputAmountSats: row.recovery_output_amount_sats,
+      });
+    }
+  }
+  return leafRecoveries;
 }
 
 async function createDefaultStorage(dataDir, logger = null) {

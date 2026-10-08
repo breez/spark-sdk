@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::{
-    DepositClaimError, InstantClaimStatus, LnurlWithdrawInfo, MaxFee, Payment, PaymentDetails,
-    PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, RefundState, SparkHtlcDetails,
-    SparkHtlcStatus, Storage, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
-    UpdateWatchedAddressPayload,
+    ChainTransaction, DepositClaimError, InstantClaimStatus, LeafRecovery, LnurlWithdrawInfo,
+    MaxFee, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType,
+    RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage, StoredWatchtowerExitOutput,
+    TokenMetadata, TokenTransactionType, UpdateDepositPayload, UpdateLeafRecovery,
+    UpdateWatchedAddressPayload, WatchtowerExitRecovery,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -4453,4 +4454,223 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
     assert_eq!(delivered_amount, Some(70_900_000));
     assert_eq!(bridge_ref, Some("0xabc123".to_string()));
     assert!(fetched.conversion_details.is_none());
+}
+
+#[allow(clippy::too_many_lines)]
+pub async fn test_leaf_recoveries(storage: Box<dyn Storage>) {
+    let update = |leaf_id: &str| UpdateLeafRecovery {
+        leaf_id: leaf_id.to_string(),
+        ..Default::default()
+    };
+    let transaction = |txid: &str, block_height| ChainTransaction {
+        txid: txid.to_string(),
+        block_height,
+    };
+    let output = |txid: &str, vout, block_height| StoredWatchtowerExitOutput {
+        txid: txid.to_string(),
+        vout,
+        amount_sats: 5_000_000_000,
+        script_pubkey: "5120aa".to_string(),
+        block_height,
+    };
+    let recovery = |txid: &str, output_amount_sats| WatchtowerExitRecovery {
+        txid: txid.to_string(),
+        transaction_hex: format!("hex-of-{txid}"),
+        output_amount_sats,
+    };
+    let stored = |leaf_recoveries: Vec<LeafRecovery>, leaf_id: &str| {
+        leaf_recoveries
+            .into_iter()
+            .find(|leaf| leaf.leaf_id == leaf_id)
+            .unwrap()
+    };
+
+    assert!(storage.list_leaf_recoveries().await.unwrap().is_empty());
+
+    // For an update with no part set, the storage stores the leaf alone, and
+    // only once.
+    storage
+        .update_leaf_recovery(update("leaf_b"))
+        .await
+        .unwrap();
+    storage
+        .update_leaf_recovery(update("leaf_b"))
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.list_leaf_recoveries().await.unwrap(),
+        vec![LeafRecovery {
+            leaf_id: "leaf_b".to_string(),
+            chain_checked_at: None,
+            watchtower_exit_output: None,
+            watchtower_exit_recoveries: Vec::new(),
+            watchtower_exit_spend: None,
+            unilateral_exit_sweep: None,
+        }]
+    );
+
+    // The storage keeps the later check time, and compares the times as numbers.
+    for (given, expected) in [(200, 200), (100, 200), (1_000, 1_000), (999, 1_000)] {
+        storage
+            .update_leaf_recovery(UpdateLeafRecovery {
+                chain_checked_at: Some(given),
+                ..update("leaf_b")
+            })
+            .await
+            .unwrap();
+        let leaf = stored(storage.list_leaf_recoveries().await.unwrap(), "leaf_b");
+        assert_eq!(leaf.chain_checked_at, Some(expected));
+    }
+
+    // The storage stores each part on its own, and keeps what it holds for an
+    // unset part.
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            watchtower_exit_output: Some(output("direct_tx", 1, 100)),
+            ..update("leaf_b")
+        })
+        .await
+        .unwrap();
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            watchtower_exit_recovery: Some(recovery("recovery_b", 4_999_999_000)),
+            ..update("leaf_b")
+        })
+        .await
+        .unwrap();
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            watchtower_exit_recovery: Some(recovery("recovery_a", 9_200)),
+            watchtower_exit_spend: Some(transaction("recovery_a", 101)),
+            ..update("leaf_b")
+        })
+        .await
+        .unwrap();
+    let leaf = stored(storage.list_leaf_recoveries().await.unwrap(), "leaf_b");
+    assert_eq!(leaf.chain_checked_at, Some(1_000));
+    assert_eq!(
+        leaf.watchtower_exit_output,
+        Some(output("direct_tx", 1, 100))
+    );
+    assert_eq!(
+        leaf.watchtower_exit_recoveries,
+        vec![
+            recovery("recovery_a", 9_200),
+            recovery("recovery_b", 4_999_999_000)
+        ],
+        "recoveries are listed by txid"
+    );
+    assert_eq!(
+        leaf.watchtower_exit_spend,
+        Some(transaction("recovery_a", 101))
+    );
+    assert_eq!(leaf.unilateral_exit_sweep, None);
+
+    // The storage keeps a recovery it already holds under that txid as it is.
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            watchtower_exit_recovery: Some(WatchtowerExitRecovery {
+                transaction_hex: "another".to_string(),
+                ..recovery("recovery_a", 1)
+            }),
+            ..update("leaf_b")
+        })
+        .await
+        .unwrap();
+    let leaf = stored(storage.list_leaf_recoveries().await.unwrap(), "leaf_b");
+    assert_eq!(
+        leaf.watchtower_exit_recoveries,
+        vec![
+            recovery("recovery_a", 9_200),
+            recovery("recovery_b", 4_999_999_000)
+        ]
+    );
+
+    // The storage replaces the block height of a txid with the one given again,
+    // wherever the txid is used.
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            watchtower_exit_output: Some(output("direct_tx", 1, 102)),
+            watchtower_exit_spend: Some(transaction("recovery_a", 103)),
+            ..update("leaf_b")
+        })
+        .await
+        .unwrap();
+    let leaf = stored(storage.list_leaf_recoveries().await.unwrap(), "leaf_b");
+    assert_eq!(
+        leaf.watchtower_exit_output,
+        Some(output("direct_tx", 1, 102))
+    );
+    assert_eq!(
+        leaf.watchtower_exit_spend,
+        Some(transaction("recovery_a", 103))
+    );
+    assert_eq!(
+        leaf.watchtower_exit_recoveries.len(),
+        2,
+        "the same output keeps what was built on it"
+    );
+
+    // Two leaves with the same sweep share its block height.
+    for leaf_id in ["leaf_a", "leaf_b"] {
+        storage
+            .update_leaf_recovery(UpdateLeafRecovery {
+                unilateral_exit_sweep: Some(transaction("sweep", 110)),
+                ..update(leaf_id)
+            })
+            .await
+            .unwrap();
+    }
+    storage
+        .update_leaf_recovery(UpdateLeafRecovery {
+            unilateral_exit_sweep: Some(transaction("sweep", 111)),
+            ..update("leaf_a")
+        })
+        .await
+        .unwrap();
+    let leaf_recoveries = storage.list_leaf_recoveries().await.unwrap();
+    assert_eq!(
+        leaf_recoveries
+            .iter()
+            .map(|leaf| leaf.leaf_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf_a", "leaf_b"],
+        "leaf recoveries are listed by leaf id"
+    );
+    for leaf in &leaf_recoveries {
+        assert_eq!(leaf.unilateral_exit_sweep, Some(transaction("sweep", 111)));
+    }
+    assert_eq!(
+        stored(leaf_recoveries, "leaf_a").watchtower_exit_output,
+        None
+    );
+
+    // For an output at another vout or txid, the storage removes the recoveries
+    // and the spend of the replaced one, and stores a new recovery in the same
+    // write.
+    for (replacement, kept) in [
+        (output("direct_tx", 0, 102), "recovery_c"),
+        (output("another_direct_tx", 0, 104), "recovery_d"),
+    ] {
+        storage
+            .update_leaf_recovery(UpdateLeafRecovery {
+                watchtower_exit_spend: Some(transaction("recovery_a", 103)),
+                ..update("leaf_b")
+            })
+            .await
+            .unwrap();
+        storage
+            .update_leaf_recovery(UpdateLeafRecovery {
+                watchtower_exit_output: Some(replacement.clone()),
+                watchtower_exit_recovery: Some(recovery(kept, 8_000)),
+                ..update("leaf_b")
+            })
+            .await
+            .unwrap();
+        let leaf = stored(storage.list_leaf_recoveries().await.unwrap(), "leaf_b");
+        assert_eq!(leaf.watchtower_exit_output, Some(replacement));
+        assert_eq!(leaf.watchtower_exit_recoveries, vec![recovery(kept, 8_000)]);
+        assert_eq!(leaf.watchtower_exit_spend, None);
+        assert_eq!(leaf.unilateral_exit_sweep, Some(transaction("sweep", 111)));
+    }
 }
