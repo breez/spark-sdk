@@ -689,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn fully_migrated_database_reruns_nothing() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         // Re-running migration 1 would fail: `users` already exists.
         run(&pool).await.expect("adopt migrated database");
@@ -712,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn adoption_is_idempotent() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         run(&pool).await.expect("first run");
         run(&pool).await.expect("second run");
