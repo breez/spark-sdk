@@ -14,6 +14,10 @@ use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 #[cfg(feature = "browser-tests")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+/// Three bytes per character, so byte offsets 8 and 10, the lengths of the
+/// `bitcoin:` and `lightning:` prefixes, fall inside a character.
+const MULTIBYTE_INPUT: &str = "こんにちは世界";
+
 /// BIP21 amounts which can lead to rounding errors.
 /// The format is: (sat amount, BIP21 BTC amount)
 fn get_bip21_rounding_test_vectors() -> Vec<(u64, f64)> {
@@ -268,6 +272,19 @@ async fn test_bip353_with_invalid_dns_record() {
     let result = input_parser.parse(bip353_address).await;
 
     // Should fail to parse the BIP353 record and fall back to checking if it's a lightning address
+    assert!(matches!(result, Err(ParseError::InvalidInput)));
+}
+
+#[async_test_all]
+async fn test_bip353_with_multibyte_dns_record() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    mock_dns_resolver.add_response(vec![String::from(MULTIBYTE_INPUT)]);
+
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let result = input_parser.parse("test@example.com").await;
+
     assert!(matches!(result, Err(ParseError::InvalidInput)));
 }
 
@@ -661,6 +678,17 @@ async fn test_generic_invalid_input() {
         result,
         Err(crate::input::ParseError::InvalidInput)
     ));
+}
+
+#[async_test_all]
+async fn test_multibyte_invalid_input() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let result = input_parser.parse(MULTIBYTE_INPUT).await;
+
+    assert!(matches!(result, Err(ParseError::InvalidInput)));
 }
 
 #[async_test_all]

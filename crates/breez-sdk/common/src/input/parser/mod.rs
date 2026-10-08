@@ -472,11 +472,11 @@ fn has_lightning_prefix(input: &str) -> bool {
 }
 
 fn has_prefix(input: &str, prefix: &str) -> bool {
-    if input.len() < prefix.len() {
-        return false;
-    }
-
-    input[..prefix.len()].eq_ignore_ascii_case(prefix)
+    // `get` returns `None` for an input shorter than the prefix, and for one
+    // with a multi-byte character across that offset, where slicing panics.
+    input
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 fn replace_prefix(input: &str, prefix: &str, new_prefix: &str) -> String {
