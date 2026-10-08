@@ -271,6 +271,17 @@ struct ChainInterpretation {
 pub struct ExitChainScan {
     pub state: ExitChainState,
     pub pending: Vec<ChainQuery>,
+    /// The sweep of each refund that the results show swept, sorted by leaf id.
+    pub sweeps: Vec<RefundSweep>,
+}
+
+/// The sweep of a leaf's refund, in a block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefundSweep {
+    pub leaf_id: TreeNodeId,
+    pub txid: Txid,
+    /// Unset when the chain service did not report the block.
+    pub block_height: Option<u32>,
 }
 
 /// The exit's on-chain state as the tree alone shows it: which nodes are
@@ -280,6 +291,7 @@ pub struct ExitChainScan {
 struct ExitChainWalk {
     nodes: HashMap<TreeNodeId, NodeState>,
     refunds: HashMap<TreeNodeId, RefundState>,
+    sweeps: HashMap<TreeNodeId, (Txid, Option<u32>)>,
     stopped: HashSet<TreeNodeId>,
     unverified: HashSet<TreeNodeId>,
     /// Confirmed nodes whose on-chain spend `scan_funding` cannot see: the
@@ -650,6 +662,7 @@ fn restore_exit_chain_walk(state: &ExitChainState, leaf_ids: &[TreeNodeId]) -> E
     ExitChainWalk {
         nodes,
         refunds,
+        sweeps: HashMap::new(),
         stopped,
         unverified: state.unverified_nodes.iter().cloned().collect(),
         unverifiable_confirmed: state.unverifiable_confirmed_nodes.iter().cloned().collect(),
@@ -745,6 +758,16 @@ pub fn scan_exit_chain(
         ids.sort();
         ids
     };
+    let mut sweeps: Vec<RefundSweep> = walk
+        .sweeps
+        .into_iter()
+        .map(|(leaf_id, (txid, block_height))| RefundSweep {
+            leaf_id,
+            txid,
+            block_height,
+        })
+        .collect();
+    sweeps.sort_by(|a, b| a.leaf_id.cmp(&b.leaf_id));
 
     ExitChainScan {
         state: ExitChainState {
@@ -755,6 +778,7 @@ pub fn scan_exit_chain(
             unverifiable_confirmed_nodes: sorted(walk.unverifiable_confirmed),
         },
         pending,
+        sweeps,
     }
 }
 
@@ -784,6 +808,7 @@ fn walk_exit_chain(
             address,
             observed,
             &mut walk.refunds,
+            &mut walk.sweeps,
             &mut walk.unverified,
             &mut walk.pending,
         );
@@ -809,6 +834,7 @@ fn interpret_chain(plan: &UnilateralExitPlan, state: &ExitChainState) -> ChainIn
         stopped,
         mut unverified,
         unverifiable_confirmed,
+        sweeps: _,
         pending: _,
     } = restore_exit_chain_walk(state, &leaf_ids);
 
@@ -949,6 +975,7 @@ fn walk_branch(
         stopped,
         unverified,
         unverifiable_confirmed,
+        sweeps: _,
         pending,
     } = walk;
     let Some(leaf) = node_map.get(leaf_id) else {
@@ -1113,6 +1140,7 @@ fn interpret_refund(
     address: &Address,
     observed: &ObservedIndex<'_>,
     refunds: &mut HashMap<TreeNodeId, RefundState>,
+    sweeps: &mut HashMap<TreeNodeId, (Txid, Option<u32>)>,
     unverified: &mut HashSet<TreeNodeId>,
     pending: &mut Vec<ChainQuery>,
 ) {
@@ -1155,8 +1183,10 @@ fn interpret_refund(
             pending.push(outspend_query);
             return;
         };
-        let spender = match spend {
-            ChainResult::Spend(Some(info)) if info.confirmed => info.spender_txid,
+        let (spender, block_height) = match spend {
+            ChainResult::Spend(Some(info)) if info.confirmed => {
+                (info.spender_txid, info.block_height)
+            }
             ChainResult::Unavailable => {
                 unverified.insert(leaf_id.clone());
                 return;
@@ -1174,6 +1204,7 @@ fn interpret_refund(
         else {
             trace!(%leaf_id, txid = %txo.txid, "interpret_chain: refund swept");
             refunds.insert(leaf_id.clone(), RefundState::Swept);
+            sweeps.insert(leaf_id.clone(), (spender, block_height));
             return;
         };
         txo = next;
@@ -3611,6 +3642,31 @@ mod interpret_tests {
             interp.resolved.refunds.get(&leaf_id),
             Some(RefundState::Swept)
         ));
+    }
+
+    #[test]
+    fn a_scan_names_the_sweep_of_a_swept_refund() {
+        let (prepared, leaf_id, mut observed, child_outpoint, _) = refund_with_child();
+        let sweep = Txid::from_byte_array([7u8; 32]);
+        observed.push(Observation {
+            query: ChainQuery::Outspend(child_outpoint),
+            result: ChainResult::Spend(Some(SpendInfo {
+                spender_txid: sweep,
+                confirmed: true,
+                block_height: Some(120),
+            })),
+        });
+
+        let scan = scan_of(&prepared, &observed);
+
+        assert_eq!(
+            scan.sweeps,
+            vec![RefundSweep {
+                leaf_id,
+                txid: sweep,
+                block_height: Some(120),
+            }]
+        );
     }
 
     #[test]
