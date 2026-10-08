@@ -284,6 +284,26 @@ pub struct RefundSweep {
     pub block_height: Option<u32>,
 }
 
+/// Whether a sweep of a leaf's refund is in a block, read from the results of
+/// a scan's queries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefundSweepLookup {
+    /// A query the lookup needs has no result.
+    Pending,
+    /// A sweep of the refund is in a block.
+    Swept(RefundSweep),
+    /// The results show no sweep in a block: the refund is unspent, its sweep
+    /// is in no block, the address has no refund in a block, or its listing
+    /// contradicts itself.
+    NotSwept,
+}
+
+pub struct RefundSweepScan {
+    pub lookups: HashMap<TreeNodeId, RefundSweepLookup>,
+    /// The queries the caller has yet to execute.
+    pub pending: Vec<ChainQuery>,
+}
+
 /// The exit's on-chain state as the tree alone shows it: which nodes are
 /// confirmed, which refunds landed, which branches can no longer be continued.
 /// Answered without any funding, so it can be resolved before an exit is funded.
@@ -786,6 +806,37 @@ pub fn scan_exit_chain(
         pending,
         sweeps,
     }
+}
+
+/// Looks up whether a sweep of each leaf's refund is in a block, from the
+/// leaf's refund address alone. Run it again with the results of `pending`
+/// until none is left.
+pub fn scan_refund_sweeps(
+    refund_addresses: &HashMap<TreeNodeId, Address>,
+    observed: &[Observation],
+) -> RefundSweepScan {
+    let index = ObservedIndex::new(observed);
+    let mut pending = Vec::new();
+    let lookups = refund_addresses
+        .iter()
+        .map(|(leaf_id, address)| {
+            let lookup = match follow_refund(leaf_id, address, &index, &mut pending) {
+                RefundTrail::Pending | RefundTrail::Unavailable => RefundSweepLookup::Pending,
+                RefundTrail::Swept { txid, block_height } => {
+                    RefundSweepLookup::Swept(RefundSweep {
+                        leaf_id: leaf_id.clone(),
+                        txid,
+                        block_height,
+                    })
+                }
+                RefundTrail::Unreadable | RefundTrail::NotOnChain | RefundTrail::Unspent(_) => {
+                    RefundSweepLookup::NotSwept
+                }
+            };
+            (leaf_id.clone(), lookup)
+        })
+        .collect();
+    RefundSweepScan { lookups, pending }
 }
 
 /// Walks each leaf's branch and reads back its refund, emitting the lookups still
@@ -3710,6 +3761,119 @@ mod interpret_tests {
                 block_height: Some(120),
             }]
         );
+    }
+
+    fn sweep_lookup(
+        leaf_id: &TreeNodeId,
+        observed: &[Observation],
+    ) -> (RefundSweepLookup, Vec<ChainQuery>) {
+        let addresses = HashMap::from([(leaf_id.clone(), leaf_addr())]);
+        let mut scan = scan_refund_sweeps(&addresses, observed);
+        (scan.lookups.remove(leaf_id).unwrap(), scan.pending)
+    }
+
+    fn spent_in_block(outpoint: OutPoint, spender: Txid, block_height: u32) -> Observation {
+        Observation {
+            query: ChainQuery::Outspend(outpoint),
+            result: ChainResult::Spend(Some(SpendInfo {
+                spender_txid: spender,
+                confirmed: true,
+                block_height: Some(block_height),
+            })),
+        }
+    }
+
+    #[test]
+    fn a_refund_sweep_takes_the_address_and_one_outspend() {
+        let leaf_id = TreeNodeId::from_str("leaf").unwrap();
+        let refund = OutPoint {
+            txid: Txid::from_byte_array([5u8; 32]),
+            vout: 0,
+        };
+        let sweep = Txid::from_byte_array([7u8; 32]);
+        let address = refund_scan(&leaf_id, refund.txid, 42_000);
+
+        let (lookup, pending) = sweep_lookup(&leaf_id, &[]);
+        assert_eq!(lookup, RefundSweepLookup::Pending);
+        assert_eq!(pending, vec![address.query.clone()]);
+
+        let (lookup, pending) = sweep_lookup(&leaf_id, std::slice::from_ref(&address));
+        assert_eq!(lookup, RefundSweepLookup::Pending);
+        assert_eq!(pending, vec![ChainQuery::Outspend(refund)]);
+
+        let swept = [address.clone(), spent_in_block(refund, sweep, 120)];
+        let (lookup, pending) = sweep_lookup(&leaf_id, &swept);
+        assert!(pending.is_empty());
+        assert_eq!(
+            lookup,
+            RefundSweepLookup::Swept(RefundSweep {
+                leaf_id: leaf_id.clone(),
+                txid: sweep,
+                block_height: Some(120),
+            })
+        );
+    }
+
+    #[test]
+    fn a_refund_without_a_sweep_in_a_block_is_not_swept() {
+        let leaf_id = TreeNodeId::from_str("leaf").unwrap();
+        let refund = OutPoint {
+            txid: Txid::from_byte_array([5u8; 32]),
+            vout: 0,
+        };
+        let sweep = Txid::from_byte_array([7u8; 32]);
+        let address = refund_scan(&leaf_id, refund.txid, 42_000);
+
+        // The refund itself is not fetched: its spend settles the lookup.
+        for outspend in [unspent(refund), spent_unconfirmed(refund, sweep)] {
+            let (lookup, pending) = sweep_lookup(&leaf_id, &[address.clone(), outspend]);
+            assert!(pending.is_empty());
+            assert_eq!(lookup, RefundSweepLookup::NotSwept);
+        }
+        let (lookup, pending) = sweep_lookup(&leaf_id, &[no_refund(&leaf_id)]);
+        assert!(pending.is_empty());
+        assert_eq!(lookup, RefundSweepLookup::NotSwept);
+    }
+
+    #[test]
+    fn a_refund_sweep_is_followed_through_the_child_paying_the_refunds_fee() {
+        let (_, leaf_id, observed, child_outpoint, _) = refund_with_child();
+        let sweep = Txid::from_byte_array([7u8; 32]);
+        // The address listing and the spend of the refund by its child.
+        let followed = &observed[2..];
+
+        let (lookup, pending) = sweep_lookup(&leaf_id, followed);
+        assert_eq!(lookup, RefundSweepLookup::Pending);
+        assert_eq!(pending, vec![ChainQuery::Outspend(child_outpoint)]);
+
+        let swept = [followed, &[spent_in_block(child_outpoint, sweep, 120)]].concat();
+        let (lookup, pending) = sweep_lookup(&leaf_id, &swept);
+        assert!(pending.is_empty());
+        assert_eq!(
+            lookup,
+            RefundSweepLookup::Swept(RefundSweep {
+                leaf_id,
+                txid: sweep,
+                block_height: Some(120),
+            })
+        );
+    }
+
+    #[test]
+    fn a_refund_query_without_a_result_leaves_the_sweep_lookup_pending() {
+        let leaf_id = TreeNodeId::from_str("leaf").unwrap();
+        let unavailable = Observation {
+            query: ChainQuery::RefundAddress {
+                leaf_id: leaf_id.clone(),
+                address: leaf_addr(),
+            },
+            result: ChainResult::Unavailable,
+        };
+
+        let (lookup, pending) = sweep_lookup(&leaf_id, &[unavailable]);
+
+        assert_eq!(lookup, RefundSweepLookup::Pending);
+        assert!(pending.is_empty());
     }
 
     #[test]
