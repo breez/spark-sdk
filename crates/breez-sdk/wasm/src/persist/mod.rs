@@ -13,9 +13,9 @@ use wasm_bindgen_futures::js_sys::Promise;
 use std::collections::HashMap;
 
 use crate::models::{
-    Contact, DepositInfo, IncomingChange, ListContactsRequest, OutgoingChange, Payment,
-    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
-    StoredCrossChainSwap, UnversionedRecordChange, UpdateDepositPayload,
+    Contact, DepositInfo, IncomingChange, LeafRecovery, ListContactsRequest, OutgoingChange,
+    Payment, PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
+    StoredCrossChainSwap, UnversionedRecordChange, UpdateDepositPayload, UpdateLeafRecovery,
     UpdateWatchedAddressPayload, WatchedDepositAddress,
 };
 
@@ -279,6 +279,34 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let promise = self
             .storage
             .update_watched_deposit_address(address, payload.into())
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
+    async fn list_leaf_recoveries(
+        &self,
+    ) -> Result<Vec<breez_sdk_spark::LeafRecovery>, StorageError> {
+        let promise = self
+            .storage
+            .list_leaf_recoveries()
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let leaf_recoveries: Vec<LeafRecovery> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(leaf_recoveries.into_iter().map(Into::into).collect())
+    }
+
+    async fn update_leaf_recovery(
+        &self,
+        update: breez_sdk_spark::UpdateLeafRecovery,
+    ) -> Result<(), StorageError> {
+        let promise = self
+            .storage
+            .update_leaf_recovery(update.into())
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -590,6 +618,8 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
     listWatchedDepositAddresses: () => Promise<WatchedDepositAddress[]>;
     updateWatchedDepositAddress: (address: string, payload: UpdateWatchedAddressPayload) => Promise<void>;
+    listLeafRecoveries: () => Promise<LeafRecovery[]>;
+    updateLeafRecovery: (update: UpdateLeafRecovery) => Promise<void>;
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
     getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
     listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
@@ -677,6 +707,15 @@ extern "C" {
         this: &Storage,
         address: String,
         payload: UpdateWatchedAddressPayload,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = listLeafRecoveries, catch)]
+    pub fn list_leaf_recoveries(this: &Storage) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = updateLeafRecovery, catch)]
+    pub fn update_leaf_recovery(
+        this: &Storage,
+        update: UpdateLeafRecovery,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLnurlMetadata, catch)]

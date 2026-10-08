@@ -521,6 +521,44 @@ class MigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN max_claim_fee TEXT`,
         ],
       },
+      {
+        // Leaf recoveries. What the chain service reported about leaves with
+        // funds to recover on-chain, and the recoveries the operators co-signed.
+        // Every block height is in chain_transactions, keyed by txid.
+        name: "Add leaf recovery tables",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS leaf_recoveries (
+              leaf_id TEXT NOT NULL PRIMARY KEY,
+              chain_checked_at INTEGER
+          )`,
+          `CREATE TABLE IF NOT EXISTS chain_transactions (
+              txid TEXT NOT NULL PRIMARY KEY,
+              block_height INTEGER NOT NULL
+          )`,
+          `CREATE TABLE IF NOT EXISTS watchtower_exit_outputs (
+              leaf_id TEXT NOT NULL PRIMARY KEY,
+              txid TEXT NOT NULL,
+              vout INTEGER NOT NULL,
+              amount_sats INTEGER NOT NULL,
+              script_pubkey TEXT NOT NULL
+          )`,
+          `CREATE TABLE IF NOT EXISTS watchtower_exit_recoveries (
+              leaf_id TEXT NOT NULL,
+              txid TEXT NOT NULL,
+              transaction_hex TEXT NOT NULL,
+              output_amount_sats INTEGER NOT NULL,
+              PRIMARY KEY (leaf_id, txid)
+          )`,
+          `CREATE TABLE IF NOT EXISTS watchtower_exit_spends (
+              leaf_id TEXT NOT NULL PRIMARY KEY,
+              txid TEXT NOT NULL
+          )`,
+          `CREATE TABLE IF NOT EXISTS unilateral_exit_sweeps (
+              leaf_id TEXT NOT NULL PRIMARY KEY,
+              txid TEXT NOT NULL
+          )`,
+        ],
+      },
     ];
   }
 }

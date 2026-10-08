@@ -61,6 +61,13 @@ async fn test_watched_deposit_addresses() {
 }
 
 #[wasm_bindgen_test]
+async fn test_leaf_recoveries() {
+    let storage = create_test_storage("leaf_recoveries").await;
+
+    breez_sdk_spark::storage_tests::test_leaf_recoveries(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_unclaimed_deposits_crud() {
     let storage = create_test_storage("unclaimed_deposits_crud").await;
 

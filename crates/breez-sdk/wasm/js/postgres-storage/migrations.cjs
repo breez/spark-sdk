@@ -563,6 +563,55 @@ class PostgresMigrationManager {
           `ALTER TABLE brz_unclaimed_deposits ADD COLUMN max_claim_fee JSONB`,
         ],
       },
+      {
+        // Leaf recoveries. What the chain service reported about leaves with
+        // funds to recover on-chain, and the recoveries the operators co-signed.
+        // Every block height is in brz_chain_transactions, keyed by txid.
+        name: "Add leaf recovery tables",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_leaf_recoveries (
+              user_id BYTEA NOT NULL,
+              leaf_id TEXT NOT NULL,
+              chain_checked_at BIGINT,
+              PRIMARY KEY (user_id, leaf_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_chain_transactions (
+              user_id BYTEA NOT NULL,
+              txid TEXT NOT NULL,
+              block_height BIGINT NOT NULL,
+              PRIMARY KEY (user_id, txid)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_watchtower_exit_outputs (
+              user_id BYTEA NOT NULL,
+              leaf_id TEXT NOT NULL,
+              txid TEXT NOT NULL,
+              vout BIGINT NOT NULL,
+              amount_sats BIGINT NOT NULL,
+              script_pubkey TEXT NOT NULL,
+              PRIMARY KEY (user_id, leaf_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_watchtower_exit_recoveries (
+              user_id BYTEA NOT NULL,
+              leaf_id TEXT NOT NULL,
+              txid TEXT NOT NULL,
+              transaction_hex TEXT NOT NULL,
+              output_amount_sats BIGINT NOT NULL,
+              PRIMARY KEY (user_id, leaf_id, txid)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_watchtower_exit_spends (
+              user_id BYTEA NOT NULL,
+              leaf_id TEXT NOT NULL,
+              txid TEXT NOT NULL,
+              PRIMARY KEY (user_id, leaf_id)
+          )`,
+          `CREATE TABLE IF NOT EXISTS brz_unilateral_exit_sweeps (
+              user_id BYTEA NOT NULL,
+              leaf_id TEXT NOT NULL,
+              txid TEXT NOT NULL,
+              PRIMARY KEY (user_id, leaf_id)
+          )`,
+        ],
+      },
     ];
   }
 }

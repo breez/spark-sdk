@@ -14,9 +14,11 @@ use crate::{
     SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{
-        PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
-        StoragePaymentDetailsFilter, StoredCrossChainSwap, UpdateDepositPayload,
-        UpdateWatchedAddressPayload, WatchedDepositAddress, parse_payment_status,
+        ChainTransaction, LeafRecovery, PaymentMetadata, SetLnurlMetadataItem,
+        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
+        StoredWatchtowerExitOutput, UpdateDepositPayload, UpdateLeafRecovery,
+        UpdateWatchedAddressPayload, WatchedDepositAddress, WatchtowerExitRecovery,
+        parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -401,8 +403,54 @@ impl SqliteStorage {
             // The fee ceiling standing for one deposit as a JSON-encoded MaxFee,
             // overriding the configured one. NULL when the configured one applies.
             "ALTER TABLE unclaimed_deposits ADD COLUMN max_claim_fee TEXT;",
+            // Leaf recoveries. What the chain service reported about leaves with
+            // funds to recover on-chain, and the recoveries the operators co-signed.
+            // Every block height is in chain_transactions, keyed by txid.
+            "CREATE TABLE IF NOT EXISTS leaf_recoveries (
+                leaf_id TEXT NOT NULL PRIMARY KEY,
+                chain_checked_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS chain_transactions (
+                txid TEXT NOT NULL PRIMARY KEY,
+                block_height INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS watchtower_exit_outputs (
+                leaf_id TEXT NOT NULL PRIMARY KEY,
+                txid TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                amount_sats INTEGER NOT NULL,
+                script_pubkey TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS watchtower_exit_recoveries (
+                leaf_id TEXT NOT NULL,
+                txid TEXT NOT NULL,
+                transaction_hex TEXT NOT NULL,
+                output_amount_sats INTEGER NOT NULL,
+                PRIMARY KEY (leaf_id, txid)
+            );
+            CREATE TABLE IF NOT EXISTS watchtower_exit_spends (
+                leaf_id TEXT NOT NULL PRIMARY KEY,
+                txid TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS unilateral_exit_sweeps (
+                leaf_id TEXT NOT NULL PRIMARY KEY,
+                txid TEXT NOT NULL
+            );",
         ]
     }
+}
+
+fn set_chain_transaction(
+    tx: &Transaction,
+    txid: &str,
+    block_height: u32,
+) -> Result<(), StorageError> {
+    tx.execute(
+        "INSERT INTO chain_transactions (txid, block_height) VALUES (?1, ?2)
+         ON CONFLICT(txid) DO UPDATE SET block_height = excluded.block_height",
+        params![txid, block_height],
+    )?;
+    Ok(())
 }
 
 /// Maps a `cross_chain_swaps` row to a [`StoredCrossChainSwap`].
@@ -1120,6 +1168,160 @@ impl Storage for SqliteStorage {
                 )?;
             }
         }
+        Ok(())
+    }
+
+    async fn list_leaf_recoveries(&self) -> Result<Vec<LeafRecovery>, StorageError> {
+        let mut connection = self.get_connection()?;
+        // One transaction, so SQLite runs both reads on the same snapshot: an
+        // output comes with the recoveries stored for it.
+        let connection = connection.transaction()?;
+        let mut recoveries: HashMap<String, Vec<WatchtowerExitRecovery>> = HashMap::new();
+        let mut stmt = connection.prepare(
+            "SELECT leaf_id, txid, transaction_hex, output_amount_sats
+             FROM watchtower_exit_recoveries ORDER BY leaf_id, txid",
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                WatchtowerExitRecovery {
+                    txid: row.get(1)?,
+                    transaction_hex: row.get(2)?,
+                    output_amount_sats: row.get(3)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (leaf_id, recovery) = row?;
+            recoveries.entry(leaf_id).or_default().push(recovery);
+        }
+
+        let mut stmt = connection.prepare(
+            "SELECT l.leaf_id, l.chain_checked_at,
+                    o.txid, o.vout, o.amount_sats, o.script_pubkey, ot.block_height,
+                    s.txid, st.block_height,
+                    w.txid, wt.block_height
+             FROM leaf_recoveries l
+             LEFT JOIN watchtower_exit_outputs o ON o.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions ot ON ot.txid = o.txid
+             LEFT JOIN watchtower_exit_spends s ON s.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions st ON st.txid = s.txid
+             LEFT JOIN unilateral_exit_sweeps w ON w.leaf_id = l.leaf_id
+             LEFT JOIN chain_transactions wt ON wt.txid = w.txid
+             ORDER BY l.leaf_id",
+        )?;
+        let chain_transaction = |row: &Row, index: usize| -> rusqlite::Result<_> {
+            let txid: Option<String> = row.get(index)?;
+            let block_height: Option<u32> = row.get(index.saturating_add(1))?;
+            Ok(txid
+                .zip(block_height)
+                .map(|(txid, block_height)| ChainTransaction { txid, block_height }))
+        };
+        let rows = stmt.query_map(params![], |row| {
+            let leaf_id: String = row.get(0)?;
+            let output = match (
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<u32>>(6)?,
+            ) {
+                (Some(txid), Some(block_height)) => Some(StoredWatchtowerExitOutput {
+                    txid,
+                    vout: row.get(3)?,
+                    amount_sats: row.get(4)?,
+                    script_pubkey: row.get(5)?,
+                    block_height,
+                }),
+                _ => None,
+            };
+            Ok(LeafRecovery {
+                chain_checked_at: row.get(1)?,
+                watchtower_exit_output: output,
+                watchtower_exit_recoveries: recoveries.remove(&leaf_id).unwrap_or_default(),
+                watchtower_exit_spend: chain_transaction(row, 7)?,
+                unilateral_exit_sweep: chain_transaction(row, 9)?,
+                leaf_id,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    async fn update_leaf_recovery(&self, update: UpdateLeafRecovery) -> Result<(), StorageError> {
+        let mut connection = self.get_connection()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let leaf_id = &update.leaf_id;
+        tx.execute(
+            "INSERT INTO leaf_recoveries (leaf_id) VALUES (?) ON CONFLICT(leaf_id) DO NOTHING",
+            params![leaf_id],
+        )?;
+        if let Some(chain_checked_at) = update.chain_checked_at {
+            tx.execute(
+                "UPDATE leaf_recoveries
+                 SET chain_checked_at = MAX(COALESCE(chain_checked_at, 0), ?1)
+                 WHERE leaf_id = ?2",
+                params![chain_checked_at, leaf_id],
+            )?;
+        }
+        if let Some(output) = &update.watchtower_exit_output {
+            for table in ["watchtower_exit_recoveries", "watchtower_exit_spends"] {
+                tx.execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE leaf_id = ?1 AND EXISTS (
+                             SELECT 1 FROM watchtower_exit_outputs
+                             WHERE leaf_id = ?1 AND (txid <> ?2 OR vout <> ?3))"
+                    ),
+                    params![leaf_id, output.txid, output.vout],
+                )?;
+            }
+            set_chain_transaction(&tx, &output.txid, output.block_height)?;
+            tx.execute(
+                "INSERT INTO watchtower_exit_outputs
+                     (leaf_id, txid, vout, amount_sats, script_pubkey)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(leaf_id) DO UPDATE SET
+                     txid = excluded.txid,
+                     vout = excluded.vout,
+                     amount_sats = excluded.amount_sats,
+                     script_pubkey = excluded.script_pubkey",
+                params![
+                    leaf_id,
+                    output.txid,
+                    output.vout,
+                    output.amount_sats,
+                    output.script_pubkey
+                ],
+            )?;
+        }
+        if let Some(recovery) = &update.watchtower_exit_recovery {
+            tx.execute(
+                "INSERT INTO watchtower_exit_recoveries
+                     (leaf_id, txid, transaction_hex, output_amount_sats)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(leaf_id, txid) DO NOTHING",
+                params![
+                    leaf_id,
+                    recovery.txid,
+                    recovery.transaction_hex,
+                    recovery.output_amount_sats
+                ],
+            )?;
+        }
+        for (table, transaction) in [
+            ("watchtower_exit_spends", &update.watchtower_exit_spend),
+            ("unilateral_exit_sweeps", &update.unilateral_exit_sweep),
+        ] {
+            let Some(transaction) = transaction else {
+                continue;
+            };
+            set_chain_transaction(&tx, &transaction.txid, transaction.block_height)?;
+            tx.execute(
+                &format!(
+                    "INSERT INTO {table} (leaf_id, txid) VALUES (?1, ?2)
+                     ON CONFLICT(leaf_id) DO UPDATE SET txid = excluded.txid"
+                ),
+                params![leaf_id, transaction.txid],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -2069,6 +2271,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_watched_deposit_addresses(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_leaf_recoveries() {
+        let temp_dir = create_temp_dir("sqlite_storage_leaf_recoveries");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_leaf_recoveries(Box::new(storage)).await;
     }
 
     #[tokio::test]

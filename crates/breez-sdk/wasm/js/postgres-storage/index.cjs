@@ -874,6 +874,153 @@ class PostgresStorage {
     }
   }
 
+  async listLeafRecoveries() {
+    try {
+      const result = await this.pool.query(
+        `SELECT l.leaf_id,
+                l.chain_checked_at,
+                o.txid AS output_txid,
+                o.vout AS output_vout,
+                o.amount_sats AS output_amount_sats,
+                o.script_pubkey AS output_script_pubkey,
+                ot.block_height AS output_block_height,
+                s.txid AS spend_txid,
+                st.block_height AS spend_block_height,
+                w.txid AS sweep_txid,
+                wt.block_height AS sweep_block_height,
+                r.txid AS recovery_txid,
+                r.transaction_hex AS recovery_transaction_hex,
+                r.output_amount_sats AS recovery_output_amount_sats
+           FROM brz_leaf_recoveries l
+           LEFT JOIN brz_watchtower_exit_outputs o
+             ON o.user_id = l.user_id AND o.leaf_id = l.leaf_id
+           LEFT JOIN brz_chain_transactions ot
+             ON ot.user_id = o.user_id AND ot.txid = o.txid
+           LEFT JOIN brz_watchtower_exit_spends s
+             ON s.user_id = l.user_id AND s.leaf_id = l.leaf_id
+           LEFT JOIN brz_chain_transactions st
+             ON st.user_id = s.user_id AND st.txid = s.txid
+           LEFT JOIN brz_unilateral_exit_sweeps w
+             ON w.user_id = l.user_id AND w.leaf_id = l.leaf_id
+           LEFT JOIN brz_chain_transactions wt
+             ON wt.user_id = w.user_id AND wt.txid = w.txid
+           LEFT JOIN brz_watchtower_exit_recoveries r
+             ON r.user_id = l.user_id AND r.leaf_id = l.leaf_id
+           WHERE l.user_id = $1
+           ORDER BY l.leaf_id, r.txid`,
+        [this.identity]
+      );
+      return leafRecoveriesFromRows(result.rows);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list leaf recoveries: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async updateLeafRecovery(update) {
+    try {
+      const leafId = update.leafId;
+      await this._withTransaction(async (client) => {
+        const setChainTransaction = (txid, blockHeight) =>
+          client.query(
+            `INSERT INTO brz_chain_transactions (user_id, txid, block_height)
+               VALUES ($1, $2, $3)
+               ON CONFLICT(user_id, txid) DO UPDATE SET block_height = EXCLUDED.block_height`,
+            [this.identity, txid, blockHeight]
+          );
+
+        // PostgreSQL locks the leaf's row, so writers of one leaf do not interleave.
+        await client.query(
+          `INSERT INTO brz_leaf_recoveries (user_id, leaf_id) VALUES ($1, $2)
+             ON CONFLICT(user_id, leaf_id) DO UPDATE SET leaf_id = EXCLUDED.leaf_id`,
+          [this.identity, leafId]
+        );
+        if (update.chainCheckedAt != null) {
+          await client.query(
+            `UPDATE brz_leaf_recoveries
+               SET chain_checked_at = GREATEST(COALESCE(chain_checked_at, 0), $3)
+               WHERE user_id = $1 AND leaf_id = $2`,
+            [this.identity, leafId, String(update.chainCheckedAt)]
+          );
+        }
+        if (update.watchtowerExitOutput != null) {
+          const output = update.watchtowerExitOutput;
+          for (const table of [
+            "brz_watchtower_exit_recoveries",
+            "brz_watchtower_exit_spends",
+          ]) {
+            await client.query(
+              `DELETE FROM ${table}
+                 WHERE user_id = $1 AND leaf_id = $2 AND EXISTS (
+                   SELECT 1 FROM brz_watchtower_exit_outputs
+                   WHERE user_id = $1 AND leaf_id = $2 AND (txid <> $3 OR vout <> $4))`,
+              [this.identity, leafId, output.txid, output.vout]
+            );
+          }
+          await setChainTransaction(output.txid, output.blockHeight);
+          await client.query(
+            `INSERT INTO brz_watchtower_exit_outputs
+                 (user_id, leaf_id, txid, vout, amount_sats, script_pubkey)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT(user_id, leaf_id) DO UPDATE SET
+                 txid = EXCLUDED.txid,
+                 vout = EXCLUDED.vout,
+                 amount_sats = EXCLUDED.amount_sats,
+                 script_pubkey = EXCLUDED.script_pubkey`,
+            [
+              this.identity,
+              leafId,
+              output.txid,
+              output.vout,
+              String(output.amountSats),
+              output.scriptPubkey,
+            ]
+          );
+        }
+        if (update.watchtowerExitRecovery != null) {
+          const recovery = update.watchtowerExitRecovery;
+          await client.query(
+            `INSERT INTO brz_watchtower_exit_recoveries
+                 (user_id, leaf_id, txid, transaction_hex, output_amount_sats)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT(user_id, leaf_id, txid) DO NOTHING`,
+            [
+              this.identity,
+              leafId,
+              recovery.txid,
+              recovery.transactionHex,
+              String(recovery.outputAmountSats),
+            ]
+          );
+        }
+        for (const [table, chainTransaction] of [
+          ["brz_watchtower_exit_spends", update.watchtowerExitSpend],
+          ["brz_unilateral_exit_sweeps", update.unilateralExitSweep],
+        ]) {
+          if (chainTransaction == null) {
+            continue;
+          }
+          await setChainTransaction(
+            chainTransaction.txid,
+            chainTransaction.blockHeight
+          );
+          await client.query(
+            `INSERT INTO ${table} (user_id, leaf_id, txid) VALUES ($1, $2, $3)
+               ON CONFLICT(user_id, leaf_id) DO UPDATE SET txid = EXCLUDED.txid`,
+            [this.identity, leafId, chainTransaction.txid]
+          );
+        }
+      });
+    } catch (error) {
+      throw new StorageError(
+        `Failed to update leaf recovery '${update.leafId}': ${error.message}`,
+        error
+      );
+    }
+  }
+
   async setLnurlMetadata(metadata) {
     try {
       await this._withTransaction(async (client) => {
@@ -1646,6 +1793,58 @@ function crossChainSwapFromRow(row) {
     data: row.data,
     secrets: row.secrets,
   };
+}
+
+/**
+ * A row holds a leaf recovery and one of its watchtower exit recoveries, so
+ * a leaf recovery with several of them spans several rows.
+ */
+function leafRecoveriesFromRows(rows) {
+  const leafRecoveries = [];
+  for (const row of rows) {
+    let leafRecovery = leafRecoveries[leafRecoveries.length - 1];
+    if (leafRecovery?.leafId !== row.leaf_id) {
+      leafRecovery = {
+        leafId: row.leaf_id,
+        chainCheckedAt:
+          row.chain_checked_at != null ? BigInt(row.chain_checked_at) : null,
+        watchtowerExitOutput:
+          row.output_block_height != null
+            ? {
+                txid: row.output_txid,
+                vout: Number(row.output_vout),
+                amountSats: BigInt(row.output_amount_sats),
+                scriptPubkey: row.output_script_pubkey,
+                blockHeight: Number(row.output_block_height),
+              }
+            : null,
+        watchtowerExitRecoveries: [],
+        watchtowerExitSpend:
+          row.spend_block_height != null
+            ? {
+                txid: row.spend_txid,
+                blockHeight: Number(row.spend_block_height),
+              }
+            : null,
+        unilateralExitSweep:
+          row.sweep_block_height != null
+            ? {
+                txid: row.sweep_txid,
+                blockHeight: Number(row.sweep_block_height),
+              }
+            : null,
+      };
+      leafRecoveries.push(leafRecovery);
+    }
+    if (row.recovery_txid != null) {
+      leafRecovery.watchtowerExitRecoveries.push({
+        txid: row.recovery_txid,
+        transactionHex: row.recovery_transaction_hex,
+        outputAmountSats: BigInt(row.recovery_output_amount_sats),
+      });
+    }
+  }
+  return leafRecoveries;
 }
 
 /**

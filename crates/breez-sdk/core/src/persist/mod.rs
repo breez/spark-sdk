@@ -124,6 +124,74 @@ pub enum UpdateWatchedAddressPayload {
     Unwatch { issued_at: u64 },
 }
 
+/// A transaction the chain service reported in a block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ChainTransaction {
+    pub txid: String,
+    pub block_height: u32,
+}
+
+/// The on-chain output holding a leaf's funds after a watchtower exit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StoredWatchtowerExitOutput {
+    pub txid: String,
+    pub vout: u32,
+    pub amount_sats: u64,
+    pub script_pubkey: String,
+    /// The block the output's transaction is in.
+    pub block_height: u32,
+}
+
+/// A transaction the Spark operators co-signed, with a
+/// [`StoredWatchtowerExitOutput`] as its input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WatchtowerExitRecovery {
+    pub txid: String,
+    pub transaction_hex: String,
+    /// The amount of the transaction's output. Its fee is its input's amount less this.
+    pub output_amount_sats: u64,
+}
+
+/// What is stored about a leaf with funds to recover on-chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LeafRecovery {
+    pub leaf_id: String,
+    /// When the SDK last read the leaf's on-chain state from the chain
+    /// service, in seconds since the epoch. Unset when it never did.
+    pub chain_checked_at: Option<u64>,
+    pub watchtower_exit_output: Option<StoredWatchtowerExitOutput>,
+    /// The co-signed recoveries of `watchtower_exit_output`, ordered by txid.
+    pub watchtower_exit_recoveries: Vec<WatchtowerExitRecovery>,
+    /// The spend of `watchtower_exit_output`, once it is in a block.
+    pub watchtower_exit_spend: Option<ChainTransaction>,
+    /// The sweep of the leaf's refund, once it is in a block.
+    pub unilateral_exit_sweep: Option<ChainTransaction>,
+}
+
+/// A change to a stored [`LeafRecovery`]. The storage keeps what it holds for a
+/// part left unset.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UpdateLeafRecovery {
+    pub leaf_id: String,
+    /// The storage keeps the later of this time and the one it holds.
+    pub chain_checked_at: Option<u64>,
+    /// The storage replaces the output it holds with this one. When this one
+    /// is at another txid or vout, the storage also removes the recoveries and
+    /// the spend it holds, which belong to the replaced output.
+    pub watchtower_exit_output: Option<StoredWatchtowerExitOutput>,
+    /// The storage adds this recovery unless it holds one with the same txid.
+    pub watchtower_exit_recovery: Option<WatchtowerExitRecovery>,
+    /// The storage replaces the spend it holds with this one.
+    pub watchtower_exit_spend: Option<ChainTransaction>,
+    /// The storage replaces the sweep it holds with this one.
+    pub unilateral_exit_sweep: Option<ChainTransaction>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SetLnurlMetadataItem {
     pub payment_hash: String,
@@ -569,6 +637,14 @@ pub trait Storage: Send + Sync {
         address: String,
         payload: UpdateWatchedAddressPayload,
     ) -> Result<(), StorageError>;
+
+    /// Lists every stored leaf recovery, ordered by leaf id.
+    async fn list_leaf_recoveries(&self) -> Result<Vec<LeafRecovery>, StorageError>;
+
+    /// Stores a leaf recovery when the leaf has none, then applies the parts of
+    /// `update` that are set, all in one atomic write. A txid has one block
+    /// height: the one given last.
+    async fn update_leaf_recovery(&self, update: UpdateLeafRecovery) -> Result<(), StorageError>;
 
     async fn set_lnurl_metadata(
         &self,
