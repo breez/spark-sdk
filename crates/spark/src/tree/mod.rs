@@ -203,6 +203,20 @@ pub enum TreeNodeStatus {
     Unknown,
 }
 
+/// The statuses of a node below a direct tx in a block. Its funds are in an
+/// output of that direct tx, which is an input of none of the node's own
+/// transactions.
+pub const WATCHTOWER_EXITED_STATUSES: [TreeNodeStatus; 2] = [
+    TreeNodeStatus::WatchtowerExited,
+    TreeNodeStatus::WatchtowerExitRecovered,
+];
+
+impl TreeNodeStatus {
+    pub fn is_watchtower_exited(self) -> bool {
+        WATCHTOWER_EXITED_STATUSES.contains(&self)
+    }
+}
+
 impl std::fmt::Display for TreeNodeStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
