@@ -18,6 +18,41 @@ The same services run natively under Nix, as processes rather than containers:
 nix run .#local-env
 ```
 
+## Connecting a wallet
+
+Docker writes the environment's Spark config to
+`regtest/local/data/spark-config.json`, and Nix to `spark-config.json` in its
+state directory. A wallet starts from the SDK's default regtest config and
+changes five things:
+
+- **Spark config**: `parse_spark_config` reads the file, which carries the
+  operators and the SSP. Its result goes on `spark_config`.
+- **Chain service**: a REST chain service at `http://127.0.0.1:8090/api`, of
+  type `MempoolSpace`.
+- **Deposit claim fee**: the SSP can quote more to claim a deposit than the
+  default `max_deposit_claim_fee` of 1 sat/vbyte allows. A deposit quoted above
+  the ceiling waits for a manual claim.
+- **Lightning address domain**: `lnurl_domain` is the LNURL server,
+  `http://127.0.0.1:8080`.
+- **Sync server**: `real_time_sync_server_url` is the data-sync service,
+  `http://127.0.0.1:8081`. The JavaScript SDK reaches it over gRPC-Web, at
+  `http://127.0.0.1:8082`.
+
+```rust
+let mut config = default_config(Network::Regtest);
+let spark_config = std::fs::read_to_string("regtest/local/data/spark-config.json")?;
+config.spark_config = Some(parse_spark_config(spark_config)?);
+config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 5 });
+config.lnurl_domain = Some("http://127.0.0.1:8080".to_string());
+config.real_time_sync_server_url = Some("http://127.0.0.1:8081".to_string());
+```
+
+Every service a wallet uses is served over plain HTTP and answers cross-origin
+requests, so a wallet in a browser connects the same way. For an Android
+emulator, start the environment with `PUBLIC_HOST=10.0.2.2`. For a phone on your
+network, set `PUBLIC_HOST` to your machine's address there and
+`BIND_ADDRESS=0.0.0.0`.
+
 ## Settings
 
 Every setting is an environment variable read when the environment starts:

@@ -66,10 +66,11 @@ nvm use 22 || nvm install 22  # then re-run the make target
 
 ## Local Regtest Environment
 
-`regtest/local/` runs the services the local itests use, for integrators rather
-than for tests: `docker compose up` (also `make local-env-up`) and, natively,
-`nix run .#local-env`. Both take the scripts in `regtest/local/scripts/`, so a
-change there reaches both. It is documented in `regtest/local/README.md`.
+`regtest/local/` runs the services the local itests use as a standing
+environment, for development on this repository: `docker compose up` (also
+`make local-env-up`) and, natively, `nix run .#local-env`. Both take the scripts
+in `regtest/local/scripts/`, so a change there reaches both. It is documented in
+`regtest/local/README.md`.
 
 Keep both setups in step when changing:
 
