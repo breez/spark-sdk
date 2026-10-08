@@ -2787,7 +2787,7 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
         .await
         .expect_err("one sat short cannot fund the exit");
     assert!(
-        matches!(err, SdkError::InsufficientCpfpFunds { required_sat } if required_sat == minimum),
+        matches!(err, SdkError::InsufficientCpfpFunds { required_sat, .. } if required_sat == minimum),
         "got: {err:?} (expected required {minimum})"
     );
     Ok(())
@@ -2850,7 +2850,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
         )
         .await
     {
-        Err(SdkError::InsufficientCpfpFunds { required_sat }) => required_sat,
+        Err(SdkError::InsufficientCpfpFunds { required_sat, .. }) => required_sat,
         other => panic!("expected the fan-out requirement at the budget floor, got {other:?}"),
     };
 

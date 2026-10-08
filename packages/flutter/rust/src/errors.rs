@@ -37,12 +37,16 @@ pub enum _SdkError {
         too_small: bool,
         bound_amount: Option<u128>,
         bound_usd_cents: Option<u64>,
+        docs_url: String,
     },
     CrossChainRouteUnavailable {
         reason: String,
         temporary: bool,
+        docs_url: String,
     },
-    CrossChainDisabled,
+    CrossChainDisabled {
+        docs_url: String,
+    },
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),
@@ -52,6 +56,7 @@ pub enum _SdkError {
         max_fee: Option<Fee>,
         required_fee_sats: u64,
         required_fee_rate_sat_per_vbyte: u64,
+        docs_url: String,
     },
     MissingUtxo {
         tx: String,
@@ -60,20 +65,26 @@ pub enum _SdkError {
     DepositTooSmall {
         tx: String,
         vout: u32,
+        docs_url: String,
     },
     DepositClaimInProgress {
         tx: String,
         vout: u32,
+        docs_url: String,
     },
     RefundReplacementFeeTooLow {
         pending_fee_sats: u64,
         required_fee_sats: u64,
+        docs_url: String,
     },
     LnurlError(String),
     Signer(String),
     OptimizationAlreadyRunning,
     OptimizationCancelled,
-    InsufficientCpfpFunds { required_sat: u64 },
+    InsufficientCpfpFunds {
+        required_sat: u64,
+        docs_url: String,
+    },
     Generic(String),
 }
 

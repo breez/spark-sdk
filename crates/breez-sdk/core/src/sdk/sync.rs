@@ -773,13 +773,13 @@ impl BreezSdk {
             .as_ref()
             .is_some_and(|(_, max_fee_sats)| spark_requested_fee_sats <= *max_fee_sats);
         if !within_limit {
-            return Err(SdkError::MaxDepositClaimFeeExceeded {
-                tx: detailed_utxo.txid.to_string(),
-                vout: detailed_utxo.vout,
-                max_fee: resolved_max_fee.map(|(fee, _)| fee),
-                required_fee_sats: spark_requested_fee_sats,
-                required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
-            });
+            return Err(SdkError::max_deposit_claim_fee_exceeded(
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
+                resolved_max_fee.map(|(fee, _)| fee),
+                spark_requested_fee_sats,
+                spark_requested_fee_rate,
+            ));
         }
 
         info!(
