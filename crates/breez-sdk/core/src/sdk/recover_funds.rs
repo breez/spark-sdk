@@ -28,7 +28,10 @@ use crate::{
 use super::{
     BreezSdk,
     chain_queries::{ChainQueries, without_result},
-    unilateral_exit::{UnilateralBuild, UnilateralQuote, check_recovery_transactions, node_ids},
+    unilateral_exit::{
+        UnilateralBuild, UnilateralQuote, check_recovery_transactions, node_ids,
+        store_exited_leaf_checks,
+    },
     watchtower_exit::{OutputSpend, WatchtowerExit, build_recovery, output_spend},
 };
 
@@ -348,7 +351,15 @@ impl BreezSdk {
             self.check_recovered_leaves(&new.recovered, &stored, &mut queries)
                 .await,
         );
-        new_leaf_ids.extend(self.check_exited_leaves(&new.exited, &mut queries).await);
+        new_leaf_ids.extend(
+            store_exited_leaf_checks(
+                &new.exited,
+                self.config.network.into(),
+                &mut queries,
+                self.storage.as_ref(),
+            )
+            .await,
+        );
         if !new_leaf_ids.is_empty() {
             stored = match self.leaf_recoveries().await {
                 Ok(stored) => stored,
