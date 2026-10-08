@@ -3535,7 +3535,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
 
 /// A leaf whose exit started is recoverable, is reported once, and leaves the
 /// total once a check saw its sweep confirm. A device without a record of the
-/// leaf asks the chain whether its refund was swept.
+/// leaf checks on-chain whether its refund was swept.
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn test_an_exit_is_recoverable_until_swept(#[case] backend: SignerBackend) -> Result<()> {
@@ -3593,7 +3593,7 @@ async fn test_an_exit_is_recoverable_until_swept(#[case] backend: SignerBackend)
     assert_eq!(
         get_info(&sdk).await?.recoverable_funds_sats,
         leaf.value_sats,
-        "a sync does not ask the chain about a leaf it has a record of"
+        "a sync does not check the chain for a leaf it has a record of"
     );
     wait_for_verdict(&sdk, &built, |verdict| {
         matches!(verdict, RecoveryVerdict::Done)
@@ -3915,7 +3915,7 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
     assert_eq!(
         get_info(&sdk).await?.recoverable_funds_sats,
         leaf.value_sats,
-        "a sync does not ask the chain about a leaf it has a record of"
+        "a sync does not check the chain for a leaf it has a record of"
     );
     for recovery in [&first, &bumped] {
         wait_for_verdict(&sdk, recovery, |verdict| {

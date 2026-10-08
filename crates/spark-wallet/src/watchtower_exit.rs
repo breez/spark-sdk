@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chain_is_asked_one_step_at_a_time() {
+    fn the_chain_is_queried_one_step_at_a_time() {
         let leaf = node(LEAF, Some(SPLIT_1), TreeNodeStatus::WatchtowerExited, None);
         let confirmed = spending(
             parent_output(1),
