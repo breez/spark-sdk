@@ -80,10 +80,6 @@ echo "operators.json lists the operators, proceeding with startup"
 sleep 1
 
 
-# The operator's listeners: by default one port serving everything. Unquoted
-# below so it splits into flags.
-OPERATOR_LISTENER_FLAGS="${OPERATOR_LISTENER_FLAGS:--port 8535}"
-
 echo "Starting spark operator..."
 operator \
     -config "$RUN_CONFIG_FILE" \
@@ -94,7 +90,9 @@ operator \
     -operators "$OPERATORS_JSON" \
     -threshold ${SPARK_THRESHOLD} \
     -signer "unix:///tmp/frost.sock" \
-    $OPERATOR_LISTENER_FLAGS \
+    -grpc-port 8535 \
+    -http-port 8536 \
+    -internal-grpc-port 8537 \
     -database "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${DB_NAME}?sslmode=disable" \
     -run-dir "/data" \
     -local true 2>&1 | sed "s/^/[Operator] /" &

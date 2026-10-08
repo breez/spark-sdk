@@ -33,7 +33,7 @@ const POSTGRES_PORT: u16 = 5432;
 
 // Default ports for operators - starting from 8535
 const OPERATOR_PORT: u16 = 8535;
-/// Where the operators serve each other, as spark-so-private.dockerfile sets.
+/// Where the operators serve each other, as the operator image's entrypoint sets.
 const OPERATOR_INTERNAL_PORT: u16 = 8537;
 pub const NUM_OPERATORS: usize = 3; // Using 3 operators by default
 pub const MIN_SIGNERS: usize = 2; // Threshold for signing

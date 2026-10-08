@@ -66,7 +66,7 @@ nvm use 22 || nvm install 22  # then re-run the make target
 
 ## Itest Operator
 
-The itests and `regtest/local` run Lightspark's current operator, whose code is not public, from the private image `ghcr.io/breez/spark-operator`. It is built from Breez's private mirror, github.com/breez/spark-breez (see its `breez/README.md`), and `crates/spark-itest/docker/spark-so-private.dockerfile` and `migrations-private.dockerfile` pin it by mirror commit. `spark-so.dockerfile` and `migrations.dockerfile` build the public code, which nothing runs until Lightspark updates its public repository again.
+The itests and `regtest/local` run Lightspark's current operator, whose code is not public, from the private image `ghcr.io/breez/spark-operator`. It is built from Breez's private mirror, github.com/breez/spark-breez (see its `breez/README.md`), and `crates/spark-itest/docker/spark-so-private.dockerfile` and `migrations-private.dockerfile` pin it by mirror commit. Building from Lightspark's public code instead, for when they update their public repository again, is in git history.
 
 Never put the private code or an image built from it anywhere public. That includes CI caches and artifacts, which forks can read: CI builds the operator images in every job instead of caching them.
 

@@ -1,8 +1,7 @@
 # The operator the integration tests and regtest/local run: Lightspark's current
 # code, which is not public, from Breez's private mirror
 # (github.com/breez/spark-breez). The mirror builds and publishes it as a
-# private image, see its breez/README.md. spark-so.dockerfile builds the public
-# code, for when Lightspark publishes it again.
+# private image, see its breez/README.md.
 ARG USER=so
 # A commit on the mirror's breez branch. migrations-private.dockerfile must pin
 # the same commit.
@@ -36,9 +35,8 @@ RUN mkdir -p /config/ && chown -R $USER:$USER /config/
 
 USER $USER
 
-# This operator serves gRPC, grpc-web and the operator-to-operator services on
-# ports of their own. Clients use gRPC on 8535, as with the public operator.
-ENV OPERATOR_LISTENER_FLAGS="-grpc-port 8535 -http-port 8536 -internal-grpc-port 8537"
+# Operator gRPC port. The entrypoint also serves gRPC-Web on 8536 and the
+# operator-to-operator services on 8537.
 EXPOSE 8535
 
 COPY so.config.yaml /config/
