@@ -221,6 +221,16 @@ fn lookup_output(
     }
 }
 
+/// The output for `leaf` in the direct tx its nearest on-chain ancestor holds:
+/// where the leaf's funds are when that direct tx is the one in a block.
+pub fn assumed_watchtower_exit_output(
+    leaf: &TreeNode,
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+) -> Option<WatchtowerExitOutput> {
+    let direct_tx = nearest_on_chain_ancestor(leaf, nodes)?.direct_tx.as_ref()?;
+    output_paying_leaf(leaf, direct_tx)
+}
+
 /// The nearest ancestor of `leaf` among `nodes` that the operators report as
 /// on-chain.
 fn nearest_on_chain_ancestor<'a>(

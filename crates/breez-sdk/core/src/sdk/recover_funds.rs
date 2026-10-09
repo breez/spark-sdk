@@ -33,7 +33,8 @@ use super::{
         store_exited_leaf_checks,
     },
     watchtower_exit::{
-        OutputSpend, WatchtowerExit, build_recovery, output_spend, outputs_from_storage,
+        MissingExit, OutputSpend, WatchtowerExit, build_recovery, output_spend,
+        outputs_from_storage,
     },
 };
 
@@ -146,7 +147,7 @@ impl BreezSdk {
         // Looked up first, so an unknown leaf fails the call before anything is
         // signed.
         let mut queries = ChainQueries::new(self.chain_service.clone());
-        let exits = self
+        let (exits, failed) = self
             .quoted_watchtower_exits(&cooperative, &mut queries)
             .await?;
 
@@ -190,7 +191,7 @@ impl BreezSdk {
             fanout_fee_sats: unilateral.fanout_fee_sats,
             sweep_fee_sats: unilateral.sweep_fee_sats,
             leaves,
-            failed: cooperative.failed,
+            failed: failed.into_iter().chain(cooperative.failed).collect(),
             transactions,
             funding_inputs,
             fee_rate_sat_per_vbyte: fee_rate,
@@ -546,15 +547,17 @@ impl BreezSdk {
         Ok(self.spark_wallet.list_leaves_with_status(&statuses).await?)
     }
 
-    /// The watchtower exit of each cooperative leaf in a quote. Fails when no
-    /// output was found for one.
+    /// The watchtower exit of each cooperative leaf of a prepare response, and
+    /// the leaves the SDK builds no recovery for. Fails when the SDK has no
+    /// output at all for a leaf: the prepare response then does not match the
+    /// wallet's data.
     async fn quoted_watchtower_exits(
         &self,
         leaves: &[&RecoverFundsLeaf],
         queries: &mut ChainQueries,
-    ) -> Result<Vec<WatchtowerExit>, SdkError> {
+    ) -> Result<(Vec<WatchtowerExit>, Vec<CooperativeRecoveryFailure>), SdkError> {
         if leaves.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let stored = self.leaf_recoveries().await?;
         let listed: Vec<TreeNode> = self
@@ -579,25 +582,30 @@ impl BreezSdk {
         let mut found = self
             .lookup_watchtower_exits(&listed, &stored, &from_storage, queries)
             .await?;
+        let recovered: HashSet<String> = listed
+            .iter()
+            .filter(|leaf| leaf.status == TreeNodeStatus::WatchtowerExitRecovered)
+            .map(|leaf| leaf.id.to_string())
+            .collect();
         let mut exits = Vec::with_capacity(leaves.len());
+        let mut failed = Vec::new();
         for leaf in leaves {
-            let exit = match found.exits.remove(&leaf.leaf_id) {
-                Some(exit) => Some(exit),
-                // A leaf the wallet no longer lists still has its stored output.
-                None => stored
-                    .get(&leaf.leaf_id)
-                    .map(|stored| WatchtowerExit::from_stored(leaf.value_sats, stored))
-                    .transpose()?
-                    .flatten(),
-            };
-            exits.push(exit.ok_or_else(|| {
-                SdkError::InvalidInput(format!(
-                    "Leaf {} has no funds this wallet can recover cooperatively",
-                    leaf.leaf_id
-                ))
-            })?);
+            if let Some(exit) = found.exits.remove(&leaf.leaf_id) {
+                exits.push(exit);
+                continue;
+            }
+            let unresolved = unresolved_exit(
+                leaf,
+                found.missing.get(&leaf.leaf_id),
+                stored.get(&leaf.leaf_id),
+                recovered.contains(&leaf.leaf_id),
+            )?;
+            match unresolved {
+                Unresolved::Exit(exit) => exits.push(exit),
+                Unresolved::Failed(failure) => failed.push(failure),
+            }
         }
-        Ok(exits)
+        Ok((exits, failed))
     }
 
     async fn split_selection(
@@ -646,7 +654,8 @@ impl BreezSdk {
             .iter()
             .filter_map(|leaf| {
                 let leaf_id = leaf.id.to_string();
-                skipped_cooperative_leaf(leaf, stored.get(&leaf_id), found.missing.get(&leaf_id))
+                let lookup = found.missing.get(&leaf_id).map(|missing| &missing.lookup);
+                skipped_cooperative_leaf(leaf, stored.get(&leaf_id), lookup)
             })
             .collect();
         let cooperative = selected
@@ -676,6 +685,68 @@ impl BreezSdk {
             not_unilateral,
         })
     }
+}
+
+/// What `recover_funds` makes of a cooperative leaf without an exit from the
+/// lookup.
+enum Unresolved {
+    Exit(WatchtowerExit),
+    Failed(CooperativeRecoveryFailure),
+}
+
+/// The exit of `leaf` when the lookup gave none, or why the leaf failed. The
+/// SDK builds on the stored output of a leaf the wallet no longer lists, and
+/// on the output it assumes when the lookup has no result. A lookup that shows
+/// the leaf's funds elsewhere fails the leaf. Errors when the SDK has no output
+/// for the leaf at all.
+fn unresolved_exit(
+    leaf: &RecoverFundsLeaf,
+    missing: Option<&MissingExit>,
+    stored: Option<&LeafRecovery>,
+    recovered: bool,
+) -> Result<Unresolved, SdkError> {
+    let no_output = || {
+        SdkError::InvalidInput(format!(
+            "Leaf {} has no funds this wallet can recover cooperatively",
+            leaf.leaf_id
+        ))
+    };
+    let Some(missing) = missing else {
+        let exit = stored
+            .map(|stored| WatchtowerExit::from_stored(leaf.value_sats, stored))
+            .transpose()?
+            .flatten();
+        return exit.map(Unresolved::Exit).ok_or_else(no_output);
+    };
+    let assumed = missing.assumed.clone().ok_or_else(no_output)?;
+    let message = match &missing.lookup {
+        WatchtowerExitLookup::NotFound => "The chain shows the leaf's funds in no output",
+        WatchtowerExitLookup::Unrecoverable => {
+            "The transaction that took the leaf's funds on-chain pays none of them to the \
+             leaf's key"
+        }
+        WatchtowerExitLookup::Unilateral => "The leaf's own refunds recover its funds",
+        WatchtowerExitLookup::Pending
+        | WatchtowerExitLookup::Found { .. }
+        | WatchtowerExitLookup::Unconfirmed(_) => {
+            return Ok(Unresolved::Exit(WatchtowerExit::new(
+                leaf.leaf_id.clone(),
+                leaf.value_sats,
+                assumed,
+                stored,
+                &OutputSpend::Unknown,
+                recovered,
+            )));
+        }
+    };
+    Ok(Unresolved::Failed(CooperativeRecoveryFailure {
+        leaf_id: leaf.leaf_id.clone(),
+        output_txid: assumed.outpoint.txid.to_string(),
+        output_vout: assumed.outpoint.vout,
+        error: CooperativeRecoveryError::Generic {
+            message: message.to_string(),
+        },
+    }))
 }
 
 /// The leaves `selection` names. `None` for a selection by status.
@@ -1244,6 +1315,75 @@ mod tests {
             recoverable_funds(leaves, &stored, &HashSet::new()).0,
             leaf.value
         );
+    }
+
+    #[test]
+    fn a_leaf_without_a_looked_up_exit_is_built_on_an_assumed_output_or_fails() {
+        let leaf = RecoverFundsLeaf {
+            leaf_id: LEAF_ID.to_string(),
+            value_sats: 10_000,
+            method: RecoveryMethod::Cooperative,
+        };
+        let assumed = spark_wallet::WatchtowerExitOutput {
+            leaf_id: create_test_node_with_parent(LEAF_ID, None, TreeNodeStatus::WatchtowerExited)
+                .id,
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout: 1,
+            },
+            tx_out: bitcoin::TxOut {
+                value: Amount::from_sat(9_500),
+                script_pubkey: ScriptBuf::new(),
+            },
+        };
+        let missing = |lookup: WatchtowerExitLookup, has_assumed: bool| MissingExit {
+            lookup,
+            assumed: has_assumed.then(|| assumed.clone()),
+        };
+
+        // The lookup has no result: the SDK builds on the output it assumes.
+        let pending = missing(WatchtowerExitLookup::Pending, true);
+        let Unresolved::Exit(exit) = unresolved_exit(&leaf, Some(&pending), None, false).unwrap()
+        else {
+            panic!("expected an exit");
+        };
+        assert_eq!(exit.output, assumed);
+
+        // The lookup shows the leaf's funds elsewhere: the leaf fails, and the
+        // entry names the output the SDK assumed.
+        for lookup in [
+            WatchtowerExitLookup::NotFound,
+            WatchtowerExitLookup::Unrecoverable,
+            WatchtowerExitLookup::Unilateral,
+        ] {
+            let elsewhere = missing(lookup, true);
+            let Unresolved::Failed(failure) =
+                unresolved_exit(&leaf, Some(&elsewhere), None, false).unwrap()
+            else {
+                panic!("expected a failure");
+            };
+            assert_eq!(failure.output_txid, assumed.outpoint.txid.to_string());
+            assert_eq!(failure.output_vout, 1);
+            assert!(matches!(
+                failure.error,
+                CooperativeRecoveryError::Generic { .. }
+            ));
+        }
+
+        // Without any output the prepare response does not match the wallet.
+        let no_output = missing(WatchtowerExitLookup::Pending, false);
+        assert!(unresolved_exit(&leaf, Some(&no_output), None, false).is_err());
+        assert!(unresolved_exit(&leaf, None, None, false).is_err());
+
+        // A leaf the wallet no longer lists still has its stored output.
+        let stored = LeafRecovery {
+            watchtower_exit_output: Some(stored_output()),
+            ..stored_leaf(LEAF_ID)
+        };
+        assert!(matches!(
+            unresolved_exit(&leaf, None, Some(&stored), false).unwrap(),
+            Unresolved::Exit(_)
+        ));
     }
 
     #[test]
