@@ -14,7 +14,7 @@ class RecoverFunds {
         // ANCHOR_END: recoverable-funds
     }
 
-    suspend fun quoteRecovery(sdk: BreezSdk): PrepareRecoverFundsResponse {
+    suspend fun prepareRecovery(sdk: BreezSdk): PrepareRecoverFundsResponse {
         // ANCHOR: prepare-recover-funds
         val quote = sdk.prepareRecoverFunds(
             PrepareRecoverFundsRequest(
@@ -47,7 +47,7 @@ class RecoverFunds {
 
     suspend fun recoverCooperatively(sdk: BreezSdk, quote: PrepareRecoverFundsResponse) {
         // ANCHOR: recover-cooperatively
-        // A quote that asks for funding holds a unilateral exit: quote the
+        // A quote with funding holds a unilateral exit: prepare the
         // cooperative leaves alone to recover them without it.
         val prepared = if (quote.funding != null) {
             val leafIds = quote.leaves
@@ -136,7 +136,7 @@ class RecoverFunds {
                 // Log.v("Breez", "Every transaction confirmed: the recovery is done")
             }
             is RecoveryVerdict.Redo -> {
-                // Quote and build again, naming the same leaves. Pass recovery.fundingInputs
+                // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
                 // back and the SDK follows them to whatever they have become.
                 // Log.v("Breez", "Build the recovery again: ${verdict.reason}")
             }

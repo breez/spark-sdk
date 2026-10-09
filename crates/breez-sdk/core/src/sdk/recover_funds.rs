@@ -42,10 +42,10 @@ use super::{
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
-    /// Quotes a recovery of the selected leaves: how each is recovered, the exact
-    /// fees, and how much to fund. It records a recovery or sweep it finds in a
-    /// block, so the SDK leaves those funds out of the total to recover at the
-    /// next sync.
+    /// Prepares a recovery of the selected leaves: how each is recovered, the
+    /// exact fees, and how much to fund. It records a recovery or sweep it finds
+    /// in a block, so the SDK leaves those funds out of the total to recover at
+    /// the next sync.
     pub async fn prepare_recover_funds(
         &self,
         request: PrepareRecoverFundsRequest,
@@ -291,7 +291,7 @@ struct CooperativeRecoveries {
 
 struct RecoverySelection {
     cooperative: Vec<WatchtowerExit>,
-    /// Leaves only a cooperative recovery reaches, and that have none to quote.
+    /// Leaves only a cooperative recovery reaches, and that have none to prepare.
     skipped: Vec<SkippedLeaf>,
     unilateral: Option<spark_wallet::ExitLeafSelection>,
     /// Leaves that no unilateral exit recovers.
@@ -910,7 +910,7 @@ fn is_finished(stored: &LeafRecovery) -> bool {
     stored.watchtower_exit_spend.is_some() || stored.unilateral_exit_sweep.is_some()
 }
 
-/// Splits `leaves` into the finished ones and the ones a quote still looks up.
+/// Splits `leaves` into the finished ones and the ones prepare still looks up.
 /// A lookup of a finished leaf could only find again what storage holds.
 fn finished_and_open(
     leaves: Vec<TreeNode>,

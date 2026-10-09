@@ -16,7 +16,7 @@ const exampleFetchRecoverableFunds = async (sdk: BreezSdk) => {
   // ANCHOR_END: recoverable-funds
 }
 
-const exampleQuoteRecovery = async (sdk: BreezSdk): Promise<PrepareRecoverFundsResponse> => {
+const examplePrepareRecovery = async (sdk: BreezSdk): Promise<PrepareRecoverFundsResponse> => {
   // ANCHOR: prepare-recover-funds
   const quote = await sdk.prepareRecoverFunds({
     feeRateSatPerVbyte: 2,
@@ -44,7 +44,7 @@ const exampleQuoteRecovery = async (sdk: BreezSdk): Promise<PrepareRecoverFundsR
 
 const exampleRecoverCooperatively = async (sdk: BreezSdk, quote: PrepareRecoverFundsResponse) => {
   // ANCHOR: recover-cooperatively
-  // A quote that asks for funding holds a unilateral exit: quote the
+  // A quote with funding holds a unilateral exit: prepare the
   // cooperative leaves alone to recover them without it.
   let prepared = quote
   if (quote.funding != null) {
@@ -125,7 +125,7 @@ const exampleCheckRecovery = async (sdk: BreezSdk, stored: RecoverFundsResponse)
       break
     }
     case 'redo': {
-      // Quote and build again, naming the same leaves. Pass recovery.fundingInputs
+      // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
       // back and the SDK follows them to whatever they have become.
       console.log(`Build the recovery again: ${checked.verdict.reason}`)
       break

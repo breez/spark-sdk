@@ -16,7 +16,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: recoverable-funds
         }
 
-        async Task<PrepareRecoverFundsResponse> QuoteRecovery(BreezSdk sdk)
+        async Task<PrepareRecoverFundsResponse> PrepareRecovery(BreezSdk sdk)
         {
             // ANCHOR: prepare-recover-funds
             var quote = await sdk.PrepareRecoverFunds(
@@ -50,7 +50,7 @@ namespace BreezSdkSnippets
         async Task RecoverCooperatively(BreezSdk sdk, PrepareRecoverFundsResponse quote)
         {
             // ANCHOR: recover-cooperatively
-            // A quote that asks for funding holds a unilateral exit: quote the
+            // A quote with funding holds a unilateral exit: prepare the
             // cooperative leaves alone to recover them without it.
             if (quote.funding != null)
             {
@@ -149,7 +149,7 @@ namespace BreezSdkSnippets
                     Console.WriteLine("Every transaction confirmed: the recovery is done");
                     break;
                 case RecoveryVerdict.Redo { reason: var reason }:
-                    // Quote and build again, naming the same leaves. Pass
+                    // Prepare and build again, naming the same leaves. Pass
                     // recovery.fundingInputs back and the SDK follows them to whatever
                     // they have become.
                     Console.WriteLine($"Build the recovery again: {reason}");

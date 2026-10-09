@@ -101,8 +101,8 @@ impl BreezSdk {
         self.inner.import_unilateral_exit_state(request).await
     }
 
-    /// Quotes a recovery of the selected leaves: how each is recovered, the exact
-    /// fees, and how much to fund.
+    /// Prepares a recovery of the selected leaves: how each is recovered, the
+    /// exact fees, and how much to fund.
     pub async fn prepare_recover_funds(
         &self,
         request: PrepareRecoverFundsRequest,

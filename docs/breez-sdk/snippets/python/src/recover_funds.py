@@ -33,7 +33,7 @@ async def fetch_recoverable_funds(sdk: BreezSdk):
         raise
 
 
-async def quote_recovery(sdk: BreezSdk) -> PrepareRecoverFundsResponse:
+async def prepare_recovery(sdk: BreezSdk) -> PrepareRecoverFundsResponse:
     try:
         # ANCHOR: prepare-recover-funds
         quote = await sdk.prepare_recover_funds(
@@ -66,7 +66,7 @@ async def quote_recovery(sdk: BreezSdk) -> PrepareRecoverFundsResponse:
 async def recover_cooperatively(sdk: BreezSdk, quote: PrepareRecoverFundsResponse):
     try:
         # ANCHOR: recover-cooperatively
-        # A quote that asks for funding holds a unilateral exit: quote the
+        # A quote with funding holds a unilateral exit: prepare the
         # cooperative leaves alone to recover them without it.
         if quote.funding is not None:
             leaf_ids = [
@@ -152,7 +152,7 @@ async def check_recovery(sdk: BreezSdk, stored: RecoverFundsResponse):
         elif isinstance(checked.verdict, RecoveryVerdict.DONE):
             logging.debug("Every transaction confirmed: the recovery is done")
         elif isinstance(checked.verdict, RecoveryVerdict.REDO):
-            # Quote and build again, naming the same leaves. Pass
+            # Prepare and build again, naming the same leaves. Pass
             # recovery.funding_inputs back and the SDK follows them to whatever
             # they have become.
             logging.debug(f"Build the recovery again: {checked.verdict.reason}")
