@@ -446,9 +446,11 @@ fn looked_up_exit(
                 || stored_output.is_none_or(|stored| same_outpoint(stored, &output));
             // Only a recovered leaf has a spend to check.
             let complete = !recovered || spend.is_known();
+            // The SDK stores the output as soon as it finds it, and the check
+            // time once the check is complete.
             let update = UpdateLeafRecovery {
                 leaf_id: leaf_id.clone(),
-                chain_checked_at: Some(now),
+                chain_checked_at: complete.then_some(now),
                 watchtower_exit_output: in_block,
                 watchtower_exit_spend: spend.in_block().filter(|_| spent_output_stored),
                 ..Default::default()
@@ -462,11 +464,8 @@ fn looked_up_exit(
                     .watchtower_exit_spend
                     .as_ref()
                     .is_some_and(|spend| stored_spend != Some(spend))
-                || unchecked_output(stored, &output);
-            // A quote stores what it found only once its check of the leaf is
-            // complete, so a stored output without a check time is one a sync
-            // has yet to finish checking.
-            (output, spend, (new && complete).then_some(update))
+                || (complete && unchecked_output(stored, &output));
+            (output, spend, new.then_some(update))
         }
         // An output the chain service reported earlier takes precedence over
         // the one of the direct tx the node holds.
@@ -661,7 +660,7 @@ fn recovered_leaf_checks(
     checks
 }
 
-/// Whether storage holds `output` for the leaf without a check time: a sync
+/// Whether storage holds `output` for the leaf without a check time: the SDK
 /// found the output and has yet to learn whether it is spent.
 fn unchecked_output(stored: Option<&LeafRecovery>, output: &WatchtowerExitOutput) -> bool {
     stored.is_some_and(|stored| {
@@ -1259,19 +1258,55 @@ mod tests {
         assert_eq!(same.update, None);
         assert!(same.exit.unwrap().recovered);
 
-        // An output a sync stored without a check time gets its check time.
+        // An output stored without a check time gets its check time.
         let unchecked = stored_with(Some(in_block_output.clone()));
         let checked = looked_up(Some(&unchecked), &[unspent(&exited.found)]);
         assert_eq!(checked.update, Some(update(None)));
-        // The SDK stores nothing while it does not know whether the output is
-        // spent.
-        assert_eq!(looked_up(None, &[]).update, None);
 
         // The SDK replaces the stored output with another one it finds.
         let other = stored_with(Some(stored_output_of(&output(), 90)));
         let replaced = looked_up(Some(&other), &[unspent(&exited.found)]);
         assert_eq!(replaced.update, Some(update(None)));
         assert_eq!(replaced.exit.unwrap().output, exited.found);
+    }
+
+    #[test]
+    fn a_lookup_stores_a_found_output_before_its_spend_is_known() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+        let in_block_output = stored_output_of(&exited.found, 100);
+        // No query for the spend of the output has a result.
+        let looked_up = |stored: Option<&LeafRecovery>| {
+            looked_up_exit(
+                &exited.leaf,
+                true,
+                found(&exited, Some(100)),
+                stored,
+                &[],
+                1_000,
+            )
+            .unwrap()
+        };
+        let output_alone = Some(UpdateLeafRecovery {
+            leaf_id: LEAF_ID.to_string(),
+            watchtower_exit_output: Some(in_block_output.clone()),
+            ..Default::default()
+        });
+
+        let new = looked_up(None);
+        assert_eq!(new.update, output_alone);
+        assert!(!new.exit.unwrap().recovered);
+        assert_eq!(looked_up(Some(&stored_with(None))).update, output_alone);
+        let other = stored_with(Some(stored_output_of(&output(), 90)));
+        assert_eq!(looked_up(Some(&other)).update, output_alone);
+
+        // Storage holds the output already, with or without a check time.
+        let unchecked = stored_with(Some(in_block_output.clone()));
+        assert_eq!(looked_up(Some(&unchecked)).update, None);
+        let checked = LeafRecovery {
+            chain_checked_at: Some(900),
+            ..unchecked
+        };
+        assert_eq!(looked_up(Some(&checked)).update, None);
     }
 
     #[test]
@@ -1637,6 +1672,54 @@ mod tests {
                     block_height: 101,
                 })
             );
+        }
+
+        #[tokio::test]
+        async fn a_lookup_keeps_the_found_output_and_a_later_one_falls_back_on_it() {
+            let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+            let leaves = [exited.leaf.clone()];
+            let storage = temp_storage();
+
+            // The chain service fails the request for the spend of the output.
+            let chain = chain_knowing(&[exited.parent_spent.clone(), exited.direct_tx.clone()]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let found = store_watchtower_exit_lookups(
+                &leaves,
+                &HashMap::new(),
+                true,
+                &HashMap::new(),
+                &mut queries,
+                &storage,
+            )
+            .await
+            .unwrap();
+
+            let stored = stored_in(&storage).await;
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 3);
+            assert_eq!(found.exits[LEAF_ID].output, exited.found);
+            assert_eq!(
+                stored[LEAF_ID].watchtower_exit_output,
+                Some(stored_output_of(&exited.found, 100))
+            );
+            assert_eq!(stored[LEAF_ID].chain_checked_at, None);
+
+            // The chain service fails every request.
+            let chain = chain_knowing(&[]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let found = store_watchtower_exit_lookups(
+                &leaves,
+                &HashMap::new(),
+                true,
+                &stored,
+                &mut queries,
+                &storage,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+            assert_eq!(found.exits[LEAF_ID].output, exited.found);
+            assert!(found.missing.is_empty());
         }
 
         #[tokio::test]
