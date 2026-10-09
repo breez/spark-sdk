@@ -22,7 +22,7 @@ use crate::{
 use super::{
     BreezSdk,
     chain_queries::{ChainQueries, batches, result_of, without_result},
-    recover_funds::store_checks,
+    recover_funds::{store_checks, store_update},
 };
 
 /// A leaf whose funds are in an on-chain output, with the recoveries stored
@@ -147,9 +147,8 @@ impl BreezSdk {
         stored: &HashMap<String, LeafRecovery>,
         queries: &mut ChainQueries,
     ) -> Result<WatchtowerExits, SdkError> {
-        let mut found = WatchtowerExits::default();
         if leaves.is_empty() {
-            return Ok(found);
+            return Ok(WatchtowerExits::default());
         }
         // The output of an on-chain leaf is in its own direct tx, so only the
         // others need their ancestors.
@@ -169,36 +168,15 @@ impl BreezSdk {
                 }
             }
         };
-        queries
-            .resolve(|observed| ((), scan_outputs(leaves, &nodes, observed).1))
-            .await;
-        let (mut lookups, _) = scan_outputs(leaves, &nodes, queries.observed());
-
-        let now = now_secs();
-        for leaf in leaves {
-            let leaf_id = leaf.id.to_string();
-            let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_known);
-            if lookup == WatchtowerExitLookup::Unrecoverable {
-                warn!(
-                    "Watchtower-exited leaf {leaf_id} has no cooperative recovery: the direct \
-                     tx in a block above it has no output for the leaf's key"
-                );
-            }
-            let looked_up =
-                looked_up_exit(leaf, lookup, stored.get(&leaf_id), queries.observed(), now)?;
-            if let Some(update) = looked_up.update {
-                self.store_leaf_recovery(update).await;
-            }
-            match looked_up.exit {
-                Ok(exit) => {
-                    found.exits.insert(leaf_id, exit);
-                }
-                Err(lookup) => {
-                    found.missing.insert(leaf_id, lookup);
-                }
-            }
-        }
-        Ok(found)
+        store_watchtower_exit_lookups(
+            leaves,
+            &nodes,
+            ancestors_known,
+            stored,
+            queries,
+            self.storage.as_ref(),
+        )
+        .await
     }
 
     /// The signed recovery of `exit` and its fee: one stored before, or else one
@@ -485,6 +463,50 @@ fn looked_up_exit(
         )),
         update,
     })
+}
+
+/// Looks up the watchtower exit of each of `leaves` and stores what the chain
+/// service showed in a block. `nodes` holds the ancestors of the leaves when
+/// `ancestors_known`.
+async fn store_watchtower_exit_lookups(
+    leaves: &[TreeNode],
+    nodes: &HashMap<TreeNodeId, TreeNode>,
+    ancestors_known: bool,
+    stored: &HashMap<String, LeafRecovery>,
+    queries: &mut ChainQueries,
+    storage: &dyn Storage,
+) -> Result<WatchtowerExits, SdkError> {
+    queries
+        .resolve(|observed| ((), scan_outputs(leaves, nodes, observed).1))
+        .await;
+    let (mut lookups, _) = scan_outputs(leaves, nodes, queries.observed());
+
+    let mut found = WatchtowerExits::default();
+    let now = now_secs();
+    for leaf in leaves {
+        let leaf_id = leaf.id.to_string();
+        let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_known);
+        if lookup == WatchtowerExitLookup::Unrecoverable {
+            warn!(
+                "Watchtower-exited leaf {leaf_id} has no cooperative recovery: the direct \
+                 tx in a block above it has no output for the leaf's key"
+            );
+        }
+        let looked_up =
+            looked_up_exit(leaf, lookup, stored.get(&leaf_id), queries.observed(), now)?;
+        if let Some(update) = looked_up.update {
+            store_update(storage, update).await;
+        }
+        match looked_up.exit {
+            Ok(exit) => {
+                found.exits.insert(leaf_id, exit);
+            }
+            Err(lookup) => {
+                found.missing.insert(leaf_id, lookup);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Checks `leaves` batch by batch. It stores what a batch established before
