@@ -27,9 +27,9 @@ use crate::{
 
 use super::{
     BreezSdk,
-    chain_queries::{ChainQueries, without_result},
+    chain_queries::{ChainQueries, StoredCheck, StoredInBlock, without_result},
     unilateral_exit::{
-        UnilateralBuild, UnilateralQuote, check_recovery_transactions, node_ids,
+        UnilateralBuild, UnilateralQuote, check_recovery_transactions, has_stored_sweep, node_ids,
         store_exited_leaf_checks,
     },
     watchtower_exit::{
@@ -51,8 +51,10 @@ impl BreezSdk {
         let fee_rate = request.fee_rate_sat_per_vbyte;
         let destination = parse_destination(&request.destination, self.config.network)?;
         self.spark_wallet.refresh_before_exit().await;
-        let stored = self.leaf_recoveries().await?;
         let mut queries = ChainQueries::new(self.chain_service.clone());
+        let stored = self
+            .checked_leaf_recoveries(&request.selection, &mut queries)
+            .await?;
         let selection = self
             .split_selection(request.selection, &stored, &mut queries)
             .await?;
@@ -296,6 +298,27 @@ impl BreezSdk {
             .fetch_recoverable_funds()
             .await?
             .unwrap_or_default())
+    }
+
+    /// The stored recoveries as prepare reads them. The SDK first checks that
+    /// the recovery or sweep of a finished leaf is still in a block: always for
+    /// a leaf `selection` names, and else while the transaction is not settled.
+    /// One the chain service no longer shows in a block is left out, so its
+    /// leaf is not finished for this call. Storage keeps it.
+    async fn checked_leaf_recoveries(
+        &self,
+        selection: &ExitLeafSelection,
+        queries: &mut ChainQueries,
+    ) -> Result<HashMap<String, LeafRecovery>, SdkError> {
+        let stored = self.leaf_recoveries().await?;
+        let named = named_leaf_ids(selection);
+        let finished = finished_transactions(&stored, named.as_ref());
+        let checks = queries.check_stored_in_block(&finished).await;
+        let (stored, moved) = after_finished_checks(stored, &checks);
+        for update in moved {
+            self.store_leaf_recovery(update).await;
+        }
+        Ok(stored)
     }
 
     pub(super) async fn leaf_recoveries(&self) -> Result<HashMap<String, LeafRecovery>, SdkError> {
@@ -583,13 +606,10 @@ impl BreezSdk {
         stored: &HashMap<String, LeafRecovery>,
         queries: &mut ChainQueries,
     ) -> Result<RecoverySelection, SdkError> {
-        let named: Option<HashSet<String>> = match &selection {
-            ExitLeafSelection::Specific { leaf_ids } if leaf_ids.is_empty() => {
-                return Err(SdkError::InvalidInput("No leaves to recover".to_string()));
-            }
-            ExitLeafSelection::Specific { leaf_ids } => Some(leaf_ids.iter().cloned().collect()),
-            _ => None,
-        };
+        let named = named_leaf_ids(&selection);
+        if named.as_ref().is_some_and(HashSet::is_empty) {
+            return Err(SdkError::InvalidInput("No leaves to recover".to_string()));
+        }
         let candidates = self
             .watchtower_exit_candidates()
             .await?
@@ -614,11 +634,13 @@ impl BreezSdk {
             .map(|leaf| leaf.id.to_string())
             .collect();
         not_unilateral.extend(found.exits.keys().cloned());
+        // A finished leaf has nothing left to exit, also when the SDK cannot
+        // read its exit from the chain.
         not_unilateral.extend(
-            finished
-                .iter()
-                .map(|leaf| leaf.id.to_string())
-                .filter(|leaf_id| stored[leaf_id].watchtower_exit_spend.is_some()),
+            stored
+                .values()
+                .filter(|leaf| is_finished(leaf))
+                .map(|leaf| leaf.leaf_id.clone()),
         );
         let skipped = selected
             .iter()
@@ -635,10 +657,7 @@ impl BreezSdk {
 
         let unilateral = match selection {
             ExitLeafSelection::Specific { leaf_ids } => {
-                let leaf_ids: Vec<String> = leaf_ids
-                    .into_iter()
-                    .filter(|leaf_id| !not_unilateral.contains(leaf_id))
-                    .collect();
+                let leaf_ids = named_for_unilateral(leaf_ids, &not_unilateral, stored);
                 if leaf_ids.is_empty() {
                     None
                 } else {
@@ -657,6 +676,102 @@ impl BreezSdk {
             not_unilateral,
         })
     }
+}
+
+/// The leaves `selection` names. `None` for a selection by status.
+fn named_leaf_ids(selection: &ExitLeafSelection) -> Option<HashSet<String>> {
+    match selection {
+        ExitLeafSelection::Specific { leaf_ids } => Some(leaf_ids.iter().cloned().collect()),
+        ExitLeafSelection::All | ExitLeafSelection::RecoverableOnly => None,
+    }
+}
+
+/// The named leaves the unilateral prepare gets. One with a stored sweep is
+/// among them although nothing is left to exit: the unilateral prepare reports
+/// its refund as swept.
+fn named_for_unilateral(
+    leaf_ids: Vec<String>,
+    not_unilateral: &HashSet<String>,
+    stored: &HashMap<String, LeafRecovery>,
+) -> Vec<String> {
+    leaf_ids
+        .into_iter()
+        .filter(|leaf_id| !not_unilateral.contains(leaf_id) || has_stored_sweep(stored, leaf_id))
+        .collect()
+}
+
+/// The recovery and the sweep in a block of each finished leaf a call covers:
+/// the leaves in `named`, or every stored leaf for a selection by status. The
+/// SDK checks one of a named leaf however deep it is.
+fn finished_transactions(
+    stored: &HashMap<String, LeafRecovery>,
+    named: Option<&HashSet<String>>,
+) -> Vec<StoredInBlock> {
+    stored
+        .values()
+        .filter(|leaf| named.is_none_or(|named| named.contains(&leaf.leaf_id)))
+        .flat_map(|leaf| [&leaf.watchtower_exit_spend, &leaf.unilateral_exit_sweep])
+        .flatten()
+        .map(|transaction| StoredInBlock {
+            txid: transaction.txid.clone(),
+            block_height: transaction.block_height,
+            check_always: named.is_some(),
+        })
+        .collect()
+}
+
+/// `transaction` after its check: unset when the chain service no longer shows
+/// it in a block, and at its new height when it shows it in another block.
+/// Also whether the height changed.
+fn after_check(
+    transaction: Option<ChainTransaction>,
+    checks: &HashMap<String, StoredCheck>,
+) -> (Option<ChainTransaction>, bool) {
+    let Some(transaction) = transaction else {
+        return (None, false);
+    };
+    match checks.get(&transaction.txid) {
+        Some(StoredCheck::NotInBlock) => (None, false),
+        Some(StoredCheck::InBlock {
+            block_height: Some(block_height),
+        }) if *block_height != transaction.block_height => (
+            Some(ChainTransaction {
+                block_height: *block_height,
+                ..transaction
+            }),
+            true,
+        ),
+        _ => (Some(transaction), false),
+    }
+}
+
+/// `stored` after the `checks` of its recoveries and sweeps, and what to store:
+/// each transaction the chain service shows in another block than the stored
+/// one.
+fn after_finished_checks(
+    stored: HashMap<String, LeafRecovery>,
+    checks: &HashMap<String, StoredCheck>,
+) -> (HashMap<String, LeafRecovery>, Vec<UpdateLeafRecovery>) {
+    let mut moved = Vec::new();
+    let stored = stored
+        .into_iter()
+        .map(|(leaf_id, mut leaf)| {
+            let (spend, spend_moved) = after_check(leaf.watchtower_exit_spend.take(), checks);
+            let (sweep, sweep_moved) = after_check(leaf.unilateral_exit_sweep.take(), checks);
+            if spend_moved || sweep_moved {
+                moved.push(UpdateLeafRecovery {
+                    leaf_id: leaf_id.clone(),
+                    watchtower_exit_spend: spend.clone().filter(|_| spend_moved),
+                    unilateral_exit_sweep: sweep.clone().filter(|_| sweep_moved),
+                    ..Default::default()
+                });
+            }
+            leaf.watchtower_exit_spend = spend;
+            leaf.unilateral_exit_sweep = sweep;
+            (leaf_id, leaf)
+        })
+        .collect();
+    (stored, moved)
 }
 
 /// Returns whether storing `update` succeeded. The SDK only logs a failure: it
@@ -1128,6 +1243,114 @@ mod tests {
         assert_eq!(
             recoverable_funds(leaves, &stored, &HashSet::new()).0,
             leaf.value
+        );
+    }
+
+    #[test]
+    fn a_finished_leaf_is_checked_always_when_named_and_else_while_not_settled() {
+        let stored = by_leaf_id(vec![
+            LeafRecovery {
+                watchtower_exit_spend: Some(in_block("recovery")),
+                ..stored_leaf(LEAF_ID)
+            },
+            LeafRecovery {
+                unilateral_exit_sweep: Some(in_block("sweep")),
+                ..stored_leaf(OTHER_LEAF_ID)
+            },
+        ]);
+        let txids = |transactions: &[StoredInBlock]| -> HashSet<(String, bool)> {
+            transactions
+                .iter()
+                .map(|tx| (tx.txid.clone(), tx.check_always))
+                .collect()
+        };
+
+        assert_eq!(
+            txids(&finished_transactions(&stored, None)),
+            HashSet::from([
+                ("recovery".to_string(), false),
+                ("sweep".to_string(), false)
+            ])
+        );
+        let named = HashSet::from([OTHER_LEAF_ID.to_string()]);
+        assert_eq!(
+            txids(&finished_transactions(&stored, Some(&named))),
+            HashSet::from([("sweep".to_string(), true)])
+        );
+    }
+
+    #[test]
+    fn a_named_leaf_with_a_stored_sweep_reaches_the_unilateral_prepare() {
+        const THIRD_LEAF_ID: &str = "00000000-0000-0000-0000-00000000000c";
+        let stored = by_leaf_id(vec![
+            LeafRecovery {
+                watchtower_exit_spend: Some(in_block("recovery")),
+                ..stored_leaf(LEAF_ID)
+            },
+            LeafRecovery {
+                unilateral_exit_sweep: Some(in_block("sweep")),
+                ..stored_leaf(OTHER_LEAF_ID)
+            },
+        ]);
+        let not_unilateral = HashSet::from([LEAF_ID.to_string(), OTHER_LEAF_ID.to_string()]);
+        let named = vec![
+            LEAF_ID.to_string(),
+            OTHER_LEAF_ID.to_string(),
+            THIRD_LEAF_ID.to_string(),
+        ];
+
+        assert_eq!(
+            named_for_unilateral(named, &not_unilateral, &stored),
+            vec![OTHER_LEAF_ID.to_string(), THIRD_LEAF_ID.to_string()]
+        );
+    }
+
+    #[test]
+    fn a_leaf_is_not_finished_while_the_chain_shows_its_recovery_in_no_block() {
+        let stored = || {
+            by_leaf_id(vec![
+                LeafRecovery {
+                    watchtower_exit_spend: Some(in_block("recovery")),
+                    ..stored_leaf(LEAF_ID)
+                },
+                LeafRecovery {
+                    unilateral_exit_sweep: Some(in_block("sweep")),
+                    ..stored_leaf(OTHER_LEAF_ID)
+                },
+            ])
+        };
+
+        // Without a result the SDK goes by storage.
+        let (unchanged, moved) = after_finished_checks(stored(), &HashMap::new());
+        assert_eq!(unchanged, stored());
+        assert!(moved.is_empty());
+
+        let checks = HashMap::from([
+            ("recovery".to_string(), StoredCheck::NotInBlock),
+            (
+                "sweep".to_string(),
+                StoredCheck::InBlock {
+                    block_height: Some(104),
+                },
+            ),
+        ]);
+        let (checked, moved) = after_finished_checks(stored(), &checks);
+        assert!(!is_finished(&checked[LEAF_ID]));
+        let sweep = ChainTransaction {
+            txid: "sweep".to_string(),
+            block_height: 104,
+        };
+        assert_eq!(
+            checked[OTHER_LEAF_ID].unilateral_exit_sweep,
+            Some(sweep.clone())
+        );
+        assert_eq!(
+            moved,
+            vec![UpdateLeafRecovery {
+                leaf_id: OTHER_LEAF_ID.to_string(),
+                unilateral_exit_sweep: Some(sweep),
+                ..Default::default()
+            }]
         );
     }
 
