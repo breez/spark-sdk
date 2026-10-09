@@ -47,7 +47,7 @@ A cooperative recovery is one transaction per leaf. It spends the leaf's funds f
 
 ### A unilateral exit of a single leaf
 
-To move a leaf on-chain you broadcast the chain of transactions from the tree down to that leaf, then a refund transaction, then a final sweep to your destination address. Because the pre-signed transactions pay no fee on their own, each one is broadcast together with a CPFP child that pays its fee.
+To move a leaf on-chain you broadcast the chain of transactions from the tree down to that leaf, then a refund transaction, then a final sweep to your destination address. Because the pre-signed transactions pay no fee on their own, each one is broadcast together with a CPFP child that pays its fee. A leaf received with a [watchtower fee ladder](./config.md#watchtower-fee-ladder) is the exception at the last step: the child of its refund is signed by the SDK and pays the fee out of the leaf itself.
 
 With one leaf there is no fan-out: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.
 
@@ -90,7 +90,7 @@ Its fields tell you how much Bitcoin to gather and how to structure it:
 - {{#name recoverable_value_sats}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sats}} is the on-chain fee to recover it, broken down into its components below. Compare them to decide whether the recovery is worth it at the current fee rate.
 - {{#name funding}} says how much to fund, two ways. {{#name single_utxo_sats}} is the simplest: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches. {{#name per_branch}} lets you skip the fan-out (and its {{#name fanout_fee_sats}}) by funding **one UTXO per branch**, each of at least the amount in its {{#name PerBranchFunding}} entry.
 
-Only a unilateral exit with steps left to broadcast needs funding. {{#name funding}} is unset when every leaf is recovered cooperatively, or when only a sweep is left, which pays its fee from the refunds it spends.
+Only a unilateral exit with steps left to broadcast needs funding. {{#name funding}} is unset when every leaf is recovered cooperatively, or when nothing left needs it: the sweep pays its fee from the refunds it spends, and a refund received with a fee ladder pays its own.
 
 {{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK read the chain and found no output holding the leaf's funds. {{#enum SkippedLeafReason::Unverified}} means the SDK could not look up where the leaf's funds are, and it looks again the next time you prepare. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
 
@@ -107,13 +107,14 @@ A recovery pays its mining fees from two different places, so {{#name total_fee_
 | {{#name cooperative_fee_sats}} | The value being recovered. Each cooperative leaf has two fees: the one of the transaction the operators broadcast to move it on-chain, which is already paid, and the one of its recovery transaction. Zero when there are none |
 | {{#name cpfp_fee_sats}} | The funding UTXOs, through the CPFP children that fee-bump the tree transactions |
 | {{#name fanout_fee_sats}} | The funding UTXO, by the fan-out transaction. Zero when there is no fan-out |
+| {{#name refund_fee_sats}} | The value being recovered, by refunds that pay their own fee. Zero when there are none |
 | {{#name sweep_fee_sats}} | The value being recovered, by the final sweep |
 
-The four add up to {{#name total_fee_sats}}.
+The five add up to {{#name total_fee_sats}}.
 
-The CPFP and fan-out fees come out of the Bitcoin you supplied as funding and do not reduce what the recovery returns. The other two come off the money on its way to your address: the sweep pays out what is left of the refunds after its own fee, and a cooperative recovery pays out what its leaf has left on-chain after its own fee.
+The CPFP and fan-out fees come out of the Bitcoin you supplied as funding and do not reduce what the recovery returns. The other three come off the money on its way to your address: the sweep pays out what is left of the refunds after its own fee, a refund that pays its own fee leaves its leaf that much less, and a cooperative recovery pays out what its leaf has left on-chain after its own fee.
 
-**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sats}} less {{#name cooperative_fee_sats}} and {{#name sweep_fee_sats}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind. {{#name recoverable_value_sats}} less {{#name total_fee_sats}} is not the arriving amount: it subtracts the CPFP and fan-out fees, which the funding already paid.
+**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sats}} less {{#name cooperative_fee_sats}}, {{#name refund_fee_sats}} and {{#name sweep_fee_sats}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind. {{#name recoverable_value_sats}} less {{#name total_fee_sats}} is not the arriving amount: it subtracts the CPFP and fan-out fees, which the funding already paid.
 
 **What the recovery costs in total** is {{#name total_fee_sats}}, across the funding UTXO and the recovered value together. Beginning with {{#name recoverable_value_sats}} in Spark and a funding UTXO worth F, the destination ends up with those two added together, less {{#name total_fee_sats}}.
 

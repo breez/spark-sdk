@@ -91,6 +91,14 @@ impl SparkSigner for RecordingSparkSigner {
         self.inner.sign_leaf_refund_spend(leaf_id, sighash).await
     }
 
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: &TreeNodeId,
+        sighashes: &[[u8; 32]],
+    ) -> Result<Vec<schnorr::Signature>, SignerError> {
+        self.inner.sign_leaf_refund_spends(leaf_id, sighashes).await
+    }
+
     async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
         self.derivations
             .lock()

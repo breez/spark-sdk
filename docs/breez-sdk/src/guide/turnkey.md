@@ -42,4 +42,5 @@ The policy allows the server's credential to run everything except the transfer 
 
 - Turnkey signers are available on all platforms except Flutter, which does not support external signers (see [Using an External Signer](external_signer.md)).
 - In the Rust crate the integration is behind the `turnkey` cargo feature. The published bindings ship with it enabled.
+- The [watchtower fee ladder](config.md#watchtower-fee-ladder) is off by default with a Turnkey signer, since Turnkey bills per signature and a ladder adds many. To turn it on, set {{#name watchtower_fee_ladder_enabled}} to true and allow `SIGN_RAW_PAYLOADS` in the server credential's policy. Without it, claims still succeed but sign no ladder.
 - A Turnkey wallet cannot recover funds cooperatively yet: Turnkey does not support the signing round a [cooperative recovery](recover_funds.md) needs, so every {{#enum RecoveryMethod::Cooperative}} leaf comes back in {{#name failed}} with {{#enum CooperativeRecoveryError::Generic}}.

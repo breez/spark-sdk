@@ -230,6 +230,7 @@ def _decode_recovery(data):
         cooperative_fee_sats=data["cooperative_fee_sats"],
         cpfp_fee_sats=data["cpfp_fee_sats"],
         fanout_fee_sats=data["fanout_fee_sats"],
+        refund_fee_sats=data["refund_fee_sats"],
         sweep_fee_sats=data["sweep_fee_sats"],
         leaves=[
             RecoverFundsLeaf(

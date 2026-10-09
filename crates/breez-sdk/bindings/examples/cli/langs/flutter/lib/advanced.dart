@@ -342,6 +342,7 @@ Map<String, dynamic> _recoveryToJson(RecoverFundsResponse r) => {
   'cooperativeFeeSats': r.cooperativeFeeSats.toString(),
   'cpfpFeeSats': r.cpfpFeeSats.toString(),
   'fanoutFeeSats': r.fanoutFeeSats.toString(),
+  'refundFeeSats': r.refundFeeSats.toString(),
   'sweepFeeSats': r.sweepFeeSats.toString(),
   'leaves': [
     for (final l in r.leaves)
@@ -361,6 +362,7 @@ RecoverFundsResponse _recoveryFromJson(Map<String, dynamic> j) {
     cooperativeFeeSats: BigInt.parse(j['cooperativeFeeSats'] as String),
     cpfpFeeSats: BigInt.parse(j['cpfpFeeSats'] as String),
     fanoutFeeSats: BigInt.parse(j['fanoutFeeSats'] as String),
+    refundFeeSats: BigInt.parse(j['refundFeeSats'] as String),
     sweepFeeSats: BigInt.parse(j['sweepFeeSats'] as String),
     leaves:
         (j['leaves'] as List).map((e) {

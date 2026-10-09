@@ -363,12 +363,13 @@ fn parse_cpfp_input(s: &str, kind: FundingKindArg) -> Result<CpfpInput, anyhow::
 fn print_recovery(response: &RecoverFundsResponse) {
     println!(
         "Recoverable {} sats, total fee {} sats (cooperative {}, cpfp {}, fanout {}, \
-         sweep {}), {} transaction(s):",
+         refund {}, sweep {}), {} transaction(s):",
         response.recoverable_value_sats,
         response.total_fee_sats,
         response.cooperative_fee_sats,
         response.cpfp_fee_sats,
         response.fanout_fee_sats,
+        response.refund_fee_sats,
         response.sweep_fee_sats,
         response.transactions.len(),
     );
@@ -542,6 +543,7 @@ mod tests {
             cooperative_fee_sats: 300,
             cpfp_fee_sats: 900,
             fanout_fee_sats: 400,
+            refund_fee_sats: 0,
             sweep_fee_sats: 200,
             leaves: vec![
                 RecoverFundsLeaf {

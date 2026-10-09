@@ -411,6 +411,21 @@ pub trait SparkSigner: Send + Sync + 'static {
         sighash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
 
+    /// [`sign_leaf_refund_spend`](Self::sign_leaf_refund_spend) for several
+    /// sighashes under the same leaf key, returned in the same order. Lets a
+    /// remote signer sign them in one round trip.
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: &TreeNodeId,
+        sighashes: &[[u8; 32]],
+    ) -> Result<Vec<schnorr::Signature>, SignerError> {
+        let mut signatures = Vec::with_capacity(sighashes.len());
+        for sighash in sighashes {
+            signatures.push(self.sign_leaf_refund_spend(leaf_id, sighash).await?);
+        }
+        Ok(signatures)
+    }
+
     /// Produce FROST shares for a batch of jobs (maps to `SPARK_SIGN_FROST`).
     /// Used directly by deposit tree creation, transfer/coop-exit refund
     /// signing, timelock renewal, static-deposit refund, lightning send, and

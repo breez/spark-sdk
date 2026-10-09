@@ -3744,6 +3744,7 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         mixed.cooperative_fee_sats
             + mixed.cpfp_fee_sats
             + mixed.fanout_fee_sats
+            + mixed.refund_fee_sats
             + mixed.sweep_fee_sats
     );
     let funded: Vec<&str> = quoted_funding(&mixed)

@@ -23,7 +23,7 @@ nix run .#local-env
 Docker writes the environment's Spark config to
 `regtest/local/data/spark-config.json`, and Nix to `spark-config.json` in its
 state directory. A wallet starts from the SDK's default regtest config and
-changes five things:
+changes six things:
 
 - **Spark config**: `parse_spark_config` reads the file, which carries the
   operators and the SSP. Its result goes on `spark_config`.
@@ -37,6 +37,7 @@ changes five things:
 - **Sync server**: `real_time_sync_server_url` is the data-sync service,
   `http://127.0.0.1:8081`. The JavaScript SDK reaches it over gRPC-Web, at
   `http://127.0.0.1:8082`.
+- **Watchtower fee ladder**: the operators predate watchtower fee ladders and reject a payment received with one, so `watchtower_fee_ladder_enabled` is false.
 
 ```rust
 let mut config = default_config(Network::Regtest);
@@ -45,6 +46,7 @@ config.spark_config = Some(parse_spark_config(spark_config)?);
 config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 5 });
 config.lnurl_domain = Some("http://127.0.0.1:8080".to_string());
 config.real_time_sync_server_url = Some("http://127.0.0.1:8081".to_string());
+config.watchtower_fee_ladder_enabled = Some(false);
 ```
 
 Every service a wallet uses is served over plain HTTP and answers cross-origin

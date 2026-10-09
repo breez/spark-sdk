@@ -352,6 +352,7 @@ fun readRecovery(path: String): RecoverFundsResponse {
         cooperativeFeeSats = root["cooperative_fee_sats"].asLong.toULong(),
         cpfpFeeSats = root["cpfp_fee_sats"].asLong.toULong(),
         fanoutFeeSats = root["fanout_fee_sats"].asLong.toULong(),
+        refundFeeSats = root["refund_fee_sats"].asLong.toULong(),
         sweepFeeSats = root["sweep_fee_sats"].asLong.toULong(),
         leaves = root["leaves"].asJsonArray.map { deserializeRecoveryLeaf(it.asJsonObject) },
         failed = root["failed"].asJsonArray.map { deserializeRecoveryFailure(it.asJsonObject) },

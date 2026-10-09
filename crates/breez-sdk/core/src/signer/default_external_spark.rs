@@ -246,6 +246,30 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
         Ok(SchnorrSignatureBytes::from_signature(&sig))
     }
 
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighashes: Vec<Vec<u8>>,
+    ) -> Result<Vec<SchnorrSignatureBytes>, SignerError> {
+        let id = leaf_id.to_tree_node_id().map_err(err)?;
+        let sighashes = sighashes
+            .into_iter()
+            .map(|sighash| {
+                <[u8; 32]>::try_from(sighash.as_slice())
+                    .map_err(|_| SignerError::Generic("sighash must be 32 bytes".to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sigs = self
+            .inner
+            .sign_leaf_refund_spends(&id, &sighashes)
+            .await
+            .map_err(err)?;
+        Ok(sigs
+            .iter()
+            .map(SchnorrSignatureBytes::from_signature)
+            .collect())
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<ExternalFrostJob>,

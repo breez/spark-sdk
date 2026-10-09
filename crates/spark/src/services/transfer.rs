@@ -22,7 +22,8 @@ use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Sequence;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, XOnlyPublicKey};
+use bitcoin::{Transaction, Witness};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 use platform_utils::tokio;
@@ -36,6 +37,9 @@ use crate::{
         PreparedTransfer, SparkSigner, TransferLeafInput,
     },
     tree::{TreeNode, TreeNodeId},
+    utils::fee_ladder::{
+        LADDER_RUNG_TABLE_VERSION, anchorless_refund_tx, refund_ladder_fees, refund_rung_tx,
+    },
     utils::transactions::{RefundTransactions, create_refund_txs},
 };
 
@@ -75,6 +79,9 @@ pub struct TransferService {
     operator_pool: Arc<OperatorPool>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
     claim_locks: ClaimLocks,
+    /// Whether a claim signs a fee ladder for each leaf's refund, so the
+    /// watchtower can pay the fee the mempool needs when it defends the leaf.
+    fee_ladder_enabled: bool,
 }
 
 /// One lock per transfer being claimed. Callers may drive claims for the same
@@ -179,6 +186,7 @@ impl TransferService {
         split_secret_threshold: u32,
         operator_pool: Arc<OperatorPool>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
+        fee_ladder_enabled: bool,
     ) -> Self {
         Self {
             spark_signer,
@@ -187,6 +195,7 @@ impl TransferService {
             operator_pool,
             transfer_observer,
             claim_locks: ClaimLocks::default(),
+            fee_ladder_enabled,
         }
     }
 
@@ -952,6 +961,7 @@ impl TransferService {
         // Build every leaf-variant claim-refund FROST job up front, then sign the
         // whole batch in one call.
         let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
+        let mut refund_ladders: Vec<Option<operator_rpc::spark::FeeBumpLadder>> = Vec::new();
         for (i, leaf) in leaves.iter().enumerate() {
             // The claim refund is signed with the receiver's new leaf key, which
             // is the derived key for this node id.
@@ -1031,6 +1041,18 @@ impl TransferService {
                 &signing_public_key,
                 self.network,
             );
+            // The operators take an anchorless refund only together with its
+            // ladder, so a leaf without one keeps the anchored refund.
+            let (cpfp_refund_tx, refund_ladder) = if self.fee_ladder_enabled {
+                let anchorless = anchorless_refund_tx(&cpfp_refund_tx);
+                match self.sign_refund_ladder(&leaf.node.id, &anchorless).await {
+                    Some(ladder) => (anchorless, Some(ladder)),
+                    None => (cpfp_refund_tx, None),
+                }
+            } else {
+                (cpfp_refund_tx, None)
+            };
+            refund_ladders.push(refund_ladder);
 
             let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, node_tx_out)?;
             let cpfp = build_refund_signing_job(
@@ -1090,7 +1112,87 @@ impl TransferService {
         }
 
         let signed = sign_leaf_refunds(&self.spark_signer, leaf_jobs).await?;
-        into_user_signed_job_groups(signed)
+        let (mut cpfp, direct, direct_from_cpfp) = into_user_signed_job_groups(signed)?;
+        for (job, ladder) in cpfp.iter_mut().zip(refund_ladders) {
+            job.refund_ladder = ladder;
+        }
+        Ok((cpfp, direct, direct_from_cpfp))
+    }
+
+    /// Signs the fee ladder for `refund_tx` with the leaf's key. `None` when the
+    /// leaf is too small for one, or when the signer fails or returns a
+    /// signature that does not verify: a claim should not fail over a ladder.
+    async fn sign_refund_ladder(
+        &self,
+        leaf_id: &TreeNodeId,
+        refund_tx: &Transaction,
+    ) -> Option<operator_rpc::spark::FeeBumpLadder> {
+        let fees = refund_ladder_fees(refund_tx);
+        let prevout = refund_tx.output.first()?;
+        let owner_key =
+            XOnlyPublicKey::from_slice(prevout.script_pubkey.as_bytes().get(2..)?).ok()?;
+        let value = prevout.value.to_sat();
+        let mut rungs: Vec<Transaction> = fees
+            .iter()
+            .map(|fee| refund_rung_tx(refund_tx, value - fee))
+            .collect();
+        if rungs.is_empty() {
+            debug!("Leaf {leaf_id} is too small for a refund fee ladder");
+            return None;
+        }
+        let sighashes = rungs
+            .iter()
+            .map(|rung| sighash_from_tx(rung, 0, prevout).map(|h| h.to_byte_array()))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let signatures = match self
+            .spark_signer
+            .sign_leaf_refund_spends(leaf_id, &sighashes)
+            .await
+        {
+            Ok(signatures) if signatures.len() == rungs.len() => signatures,
+            Ok(signatures) => {
+                warn!(
+                    "Keeping the anchored refund for leaf {leaf_id}: the signer returned {} signatures for {} rungs",
+                    signatures.len(),
+                    rungs.len()
+                );
+                return None;
+            }
+            Err(e) => {
+                warn!(
+                    "Keeping the anchored refund for leaf {leaf_id}: signing its fee ladder failed: {e}"
+                );
+                return None;
+            }
+        };
+        let secp = Secp256k1::verification_only();
+        for ((rung, sighash), signature) in rungs.iter_mut().zip(&sighashes).zip(&signatures) {
+            let message = Message::from_digest(*sighash);
+            if secp
+                .verify_schnorr(signature, &message, &owner_key)
+                .is_err()
+            {
+                warn!(
+                    "Keeping the anchored refund for leaf {leaf_id}: a fee ladder signature does not verify"
+                );
+                return None;
+            }
+            rung.input[0].witness = Witness::from_slice(&[signature.serialize()]);
+        }
+        debug!(
+            "Signed a refund fee ladder of {} rungs for leaf {leaf_id}",
+            rungs.len()
+        );
+        Some(operator_rpc::spark::FeeBumpLadder {
+            rung_table_version: LADDER_RUNG_TABLE_VERSION,
+            rungs: rungs
+                .iter()
+                .map(|rung| operator_rpc::spark::FeeBumpRung {
+                    signed_tx: bitcoin::consensus::serialize(rung),
+                })
+                .collect(),
+        })
     }
 
     pub async fn verify_pending_transfer(
@@ -1542,6 +1644,80 @@ mod tests {
         assert_eq!(claim_locks.len(), 0, "a cancelled claim stranded its lock");
     }
 
+    /// With the fee ladder on, a claim signs an anchorless cpfp refund and a
+    /// ladder of rungs spending it, each signed by the leaf key the refund pays.
+    #[async_test_all]
+    async fn a_claim_signs_a_refund_fee_ladder() {
+        use crate::utils::fee_ladder::{LADDER_RUNG_TABLE_VERSION, is_anchorless_refund};
+        use bitcoin::consensus::deserialize;
+        use bitcoin::hashes::Hash;
+        use bitcoin::secp256k1::{Message, Secp256k1, XOnlyPublicKey};
+
+        let signer: Arc<dyn SparkSigner> = Arc::new(RecordingSparkSigner::new());
+        let service = TransferService::new(
+            Arc::clone(&signer),
+            Network::Regtest,
+            2,
+            unroutable_operator_pool(&signer).await,
+            None,
+            true,
+        );
+        let incoming_key = signer
+            .get_public_key_for_leaf(&TreeNodeId::generate())
+            .await
+            .unwrap();
+        let leaf = LeafToClaim {
+            node: create_test_leaf_held_under("leaf", incoming_key),
+            incoming_key: EncryptedSecret::new(Vec::new()),
+        };
+
+        let (cpfp, direct, direct_from_cpfp) = service
+            .sign_claim_refunds(
+                std::slice::from_ref(&leaf),
+                &[operator_commitments(3).await],
+                &[operator_commitments(3).await],
+                &[operator_commitments(3).await],
+            )
+            .await
+            .unwrap();
+
+        let refund: bitcoin::Transaction = deserialize(&cpfp[0].raw_tx).unwrap();
+        assert!(is_anchorless_refund(&refund));
+        let ladder = cpfp[0].refund_ladder.as_ref().expect("a ladder");
+        assert_eq!(ladder.rung_table_version, LADDER_RUNG_TABLE_VERSION);
+        assert!(!ladder.rungs.is_empty());
+        assert!(
+            direct
+                .iter()
+                .chain(&direct_from_cpfp)
+                .all(|job| job.refund_ladder.is_none()),
+            "only the cpfp refund carries a ladder"
+        );
+
+        let prevout = &refund.output[0];
+        let owner_key = XOnlyPublicKey::from_slice(&prevout.script_pubkey.as_bytes()[2..]).unwrap();
+        let secp = Secp256k1::verification_only();
+        let mut previous_fee = 0;
+        for rung in &ladder.rungs {
+            let rung: bitcoin::Transaction = deserialize(&rung.signed_tx).unwrap();
+            assert_eq!(rung.input[0].previous_output.txid, refund.compute_txid());
+            let fee = prevout.value.to_sat() - rung.output[0].value.to_sat();
+            assert!(fee * 100 >= previous_fee * 125);
+            previous_fee = fee;
+            let sighash = crate::bitcoin::sighash_from_tx(&rung, 0, prevout).unwrap();
+            let signature = bitcoin::secp256k1::schnorr::Signature::from_slice(
+                rung.input[0].witness.nth(0).unwrap(),
+            )
+            .unwrap();
+            secp.verify_schnorr(
+                &signature,
+                &Message::from_digest(sighash.to_byte_array()),
+                &owner_key,
+            )
+            .unwrap();
+        }
+    }
+
     /// A claim signs its refunds with the key derived from the node id, the key
     /// it moves the leaf to, and records them under that key, whatever key the
     /// leaf arrived under.
@@ -1555,6 +1731,7 @@ mod tests {
             2,
             unroutable_operator_pool(&signer).await,
             None,
+            false,
         );
         let node_id: TreeNodeId = "leaf".parse().unwrap();
         let node_key = signer.get_public_key_for_leaf(&node_id).await.unwrap();
@@ -1609,6 +1786,7 @@ mod tests {
             2,
             unroutable_operator_pool(&signer).await,
             None,
+            false,
         );
         let leaves = vec![
             LeafKeyTweak {

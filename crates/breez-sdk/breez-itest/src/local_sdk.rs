@@ -307,6 +307,11 @@ fn base_local_config(
     // The SSP quotes its spend cost plus a margin, which the SDK's default ceiling
     // (1 sat/vByte over a 99-vByte claim tx) refuses.
     config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 4 });
+    // The local operator build predates fee ladders and rejects the anchorless
+    // refund a ladder comes with.
+    // TODO: turn on once the itests run Lightspark's current operator
+    // (breez/spark-sdk#1207).
+    config.watchtower_fee_ladder_enabled = Some(false);
     config.spark_config = Some(SparkConfig {
         coordinator_identifier,
         threshold: wallet_config.split_secret_threshold,

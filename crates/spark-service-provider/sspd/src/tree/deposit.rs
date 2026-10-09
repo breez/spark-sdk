@@ -726,6 +726,7 @@ impl TreeDepositService {
                 .collect::<Result<_, _>>()?,
             direct_node_tx_signing_job: None,
             direct_refund_tx_signing_job: None,
+            refund_ladder: None,
             direct_from_cpfp_refund_tx_signing_job: data
                 .direct_from_cpfp_refund_tx
                 .as_ref()

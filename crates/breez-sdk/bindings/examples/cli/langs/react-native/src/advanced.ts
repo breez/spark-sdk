@@ -448,6 +448,7 @@ async function readRecoveryFile(path: string): Promise<RecoverFundsResponse> {
     cooperativeFeeSats: BigInt(raw.cooperativeFeeSats),
     cpfpFeeSats: BigInt(raw.cpfpFeeSats),
     fanoutFeeSats: BigInt(raw.fanoutFeeSats),
+    refundFeeSats: BigInt(raw.refundFeeSats),
     sweepFeeSats: BigInt(raw.sweepFeeSats),
     leaves: raw.leaves.map((leaf: any) => RecoverFundsLeaf.create({
       leafId: leaf.leafId,

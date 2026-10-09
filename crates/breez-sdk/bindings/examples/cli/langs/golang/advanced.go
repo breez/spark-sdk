@@ -562,6 +562,7 @@ func recoveryFromMap(m map[string]interface{}) breez_sdk_spark.RecoverFundsRespo
 		CooperativeFeeSats:   mapUint64(m, "cooperative_fee_sats"),
 		CpfpFeeSats:          mapUint64(m, "cpfp_fee_sats"),
 		FanoutFeeSats:        mapUint64(m, "fanout_fee_sats"),
+		RefundFeeSats:        mapUint64(m, "refund_fee_sats"),
 		SweepFeeSats:         mapUint64(m, "sweep_fee_sats"),
 		FeeRateSatPerVbyte:   mapUint64(m, "fee_rate_sat_per_vbyte"),
 		Destination:          mapStr(m, "destination"),

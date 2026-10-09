@@ -651,6 +651,38 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         Ok(SchnorrSignatureBytes::from_signature(&sig))
     }
 
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighashes: Vec<Vec<u8>>,
+    ) -> Result<Vec<SchnorrSignatureBytes>, SignerError> {
+        // Same account and scheme as `sign_leaf_refund_spend`, one request for
+        // all of them.
+        let leaf_id = leaf_id.to_tree_node_id().map_err(to_spark_err)?;
+        let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(&leaf_id));
+        let sign_with = self
+            .client
+            .create_account(path, bitcoin_p2tr_format(self.network))
+            .await
+            .map_err(to_spark_err)?;
+        let results = self
+            .client
+            .sign_raw_many(
+                sign_with,
+                sighashes.iter().map(hex::encode).collect(),
+                HASH_FUNCTION_NO_OP,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        results
+            .iter()
+            .map(|result| {
+                let sig = schnorr_from_rs(&result.r, &result.s).map_err(to_spark_err)?;
+                Ok(SchnorrSignatureBytes::from_signature(&sig))
+            })
+            .collect()
+    }
+
     async fn sign_frost(
         &self,
         jobs: Vec<ExternalFrostJob>,

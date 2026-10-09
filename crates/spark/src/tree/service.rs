@@ -1371,6 +1371,7 @@ mod tests {
             1,
             Arc::clone(&operator_pool),
             None,
+            false,
         ));
         let swap_service = Arc::new(Swap::new(
             Network::Regtest,
@@ -1383,6 +1384,7 @@ mod tests {
             Arc::clone(&spark_signer),
             Network::Regtest,
             Arc::clone(&operator_pool),
+            false,
         ));
 
         SynchronousTreeService::new(

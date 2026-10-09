@@ -218,6 +218,7 @@ impl HtlcService {
                     .await?
                     .serialize()
                     .to_vec(),
+                transfer_id: String::new(),
             })
             .await?;
 

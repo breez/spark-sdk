@@ -73,6 +73,14 @@ pub trait ExternalSparkSigner: Send + Sync {
         sighash: Vec<u8>,
     ) -> Result<SchnorrSignatureBytes, SignerError>;
 
+    /// `sign_leaf_refund_spend` for several sighashes under the same leaf key,
+    /// returning the signatures in the same order.
+    async fn sign_leaf_refund_spends(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+        sighashes: Vec<Vec<u8>>,
+    ) -> Result<Vec<SchnorrSignatureBytes>, SignerError>;
+
     /// Produce FROST shares for a batch of jobs.
     async fn sign_frost(
         &self,

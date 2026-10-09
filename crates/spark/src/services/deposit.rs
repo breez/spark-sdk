@@ -847,6 +847,7 @@ impl DepositService {
                                 .clone(),
                         }),
                         additional_inputs: Vec::new(),
+                        refund_ladder: None,
                     }),
                     refund_tx_signing_job: Some(operator_rpc::spark::UserSignedTxSigningJob {
                         subuser_contributions: Vec::new(),
@@ -863,6 +864,7 @@ impl DepositService {
                                 .clone(),
                         }),
                         additional_inputs: Vec::new(),
+                        refund_ladder: None,
                     }),
                     direct_from_cpfp_refund_tx_signing_job: Some(
                         operator_rpc::spark::UserSignedTxSigningJob {
@@ -886,6 +888,7 @@ impl DepositService {
                                     .clone(),
                             }),
                             additional_inputs: Vec::new(),
+                            refund_ladder: None,
                         },
                     ),
                     additional_on_chain_utxos: Vec::new(),

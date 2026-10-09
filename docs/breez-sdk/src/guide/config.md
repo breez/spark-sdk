@@ -95,6 +95,14 @@ Set it to `false` when a collection behind every operation costs more than it is
 
 The flag governs only the automatic collection. {{#name sync_wallet}} collects the missing data regardless of it and returns once that is done, so **with the automatic collection off, an explicit sync is what keeps the data current**. A leaf whose chain the operators will not complete stays un-exitable until a later attempt succeeds, so a successful sync means the collection ran, not that every leaf is now exitable.
 
+## Watchtower fee ladder
+
+Whether the SDK pre-signs the transactions that protect your funds on-chain at a range of fees.
+
+While you are offline, the Spark operators watch the chain for anyone trying to exit an outdated state of your balance, and broadcast your own pre-signed transactions to defend it. With a fee ladder they can pick the fee the network needs at that moment, so the defense holds when on-chain fees are high. Without one, it pays a fixed fee and can fall behind in a fee spike.
+
+A ladder adds up to 24 signatures for each leaf the wallet claims, which includes leaves returned from swaps (the change of a send, or leaf optimization) as well as payments received, and up to 24 more each time a leaf's refund timelock is renewed. With a local signer that cost is negligible, but a remote signer such as [Turnkey](./turnkey.md) may bill per signature. Unset, the ladder is on with a local signer and off with a remote one. Set {{#name watchtower_fee_ladder_enabled}} to override either way.
+
 ## Optimization configuration
 
 The SDK can automatically optimize both the Spark leaf set and a token's

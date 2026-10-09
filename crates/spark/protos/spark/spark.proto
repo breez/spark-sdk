@@ -67,8 +67,6 @@ service SparkService {
     // the funds. Returns an error if the UTXO has already been claimed.
     rpc initiate_static_deposit_utxo_refund(InitiateStaticDepositUtxoRefundRequest) returns (InitiateStaticDepositUtxoRefundResponse) {}
 
-    rpc exit_single_node_trees(ExitSingleNodeTreesRequest) returns (ExitSingleNodeTreesResponse) {}
-
     // Co-signs a transaction spending the on-chain output a watchtower exit left
     // behind, for a leaf whose own exit path that exit destroyed. The caller
     // supplies the transaction and aggregates the SE's FROST shares with its own
@@ -127,6 +125,11 @@ service SparkService {
 
 message SubscribeToEventsRequest {
     bytes identity_public_key = 10;
+    // Deliver each transfer event with every participant's leaves and receiver
+    // entries, not only this subscriber's. The default delivers only the
+    // subscriber's own, for backward compatibility. Clients written before a transfer
+    // could carry several participants may keep reading all `leaves` as "mine".
+    bool include_all_participants = 20;
 }
 
 message SubscribeToEventsResponse {
@@ -405,6 +408,16 @@ message RenewLeafRequest {
       // node transaction to the transaction chain with zero timelock as well.
       // This case is mostly used for user-created trees from L1 deposits.
       RenewNodeZeroTimelockSigningJob renew_node_zero_timelock_signing_job = 4;
+
+      // Refreshes a RETURNED leaf: re-signs only the refund transactions,
+      // paying the owner, on the multiple of 100 at or below
+      // (current refund timelock - 100), the same step a send takes. The node
+      // transaction is untouched. The only refund a returned transfer can
+      // still broadcast is a lightning HTLC one at current - 30, so the new
+      // refunds beat it. Requires the leaf to be RETURNED
+      // with a refund timelock above 300; at or below that the leaf renews
+      // through one of the arms above instead, which reset the refund.
+      DecrementRefundTimelockSigningJob decrement_refund_timelock_signing_job = 6;
     }
 
     // When set, the renewal is authorized via a delegate decomposition (Spark
@@ -437,6 +450,12 @@ message RenewNodeTimelockSigningJob {
     UserSignedTxSigningJob direct_node_tx_signing_job = 5;
     UserSignedTxSigningJob direct_refund_tx_signing_job = 6;
     UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 7;
+
+    // SP-4089 Phase 3 DIRECT_NODE fee-bump ladder for the leaf's node-hop direct
+    // tx: J FROST-co-signed direct_tx variants at ascending fees, in place of the
+    // single direct_node_tx_signing_job. Additive and optional (old clients omit).
+    repeated UserSignedTxSigningJob direct_node_ladder_signing_jobs = 8;
+    uint32 direct_node_ladder_rung_table_version = 9;
 }
 
 message RenewRefundTimelockSigningJob {
@@ -450,6 +469,22 @@ message RenewRefundTimelockSigningJob {
     UserSignedTxSigningJob direct_node_tx_signing_job = 3;
     UserSignedTxSigningJob direct_refund_tx_signing_job = 4;
     UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
+
+    // SP-4089 Phase 3 DIRECT_NODE fee-bump ladder for the leaf's node-hop direct
+    // tx: J FROST-co-signed direct_tx variants at ascending fees, in place of the
+    // single direct_node_tx_signing_job. Additive and optional (old clients omit).
+    repeated UserSignedTxSigningJob direct_node_ladder_signing_jobs = 6;
+    uint32 direct_node_ladder_rung_table_version = 7;
+}
+
+message DecrementRefundTimelockSigningJob {
+    // Signing job with the updated cpfp refund transaction, spending the
+    // leaf's current node transaction one timelock interval lower.
+    UserSignedTxSigningJob refund_tx_signing_job = 1;
+    // Required iff the leaf has a direct refund transaction today.
+    UserSignedTxSigningJob direct_refund_tx_signing_job = 2;
+    // Required iff the leaf has a direct-from-cpfp refund transaction today.
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 3;
 }
 
 message RenewNodeZeroTimelockSigningJob {
@@ -465,6 +500,12 @@ message RenewNodeZeroTimelockSigningJob {
     UserSignedTxSigningJob direct_node_tx_signing_job = 3;
     UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
 
+    // SP-4089 Phase 3 DIRECT_NODE fee-bump ladder for the leaf's node-hop direct
+    // tx: J FROST-co-signed direct_tx variants at ascending fees, in place of the
+    // single direct_node_tx_signing_job. Additive and optional (old clients omit).
+    repeated UserSignedTxSigningJob direct_node_ladder_signing_jobs = 6;
+    uint32 direct_node_ladder_rung_table_version = 7;
+
     // Notice no signing job for the split node; we will be using the existing
     // node transaction.
 }
@@ -474,6 +515,7 @@ message RenewLeafResponse {
       RenewNodeTimelockResult renew_node_timelock_result = 1;
       RenewRefundTimelockResult renew_refund_timelock_result = 2;
       RenewNodeZeroTimelockResult renew_node_zero_timelock_result = 3;
+      DecrementRefundTimelockResult decrement_refund_timelock_result = 4;
     }
 }
 
@@ -489,6 +531,10 @@ message RenewRefundTimelockResult {
 message RenewNodeZeroTimelockResult {
     TreeNode split_node = 1;
     TreeNode node = 2;
+}
+
+message DecrementRefundTimelockResult {
+    TreeNode node = 1;
 }
 
 /**
@@ -549,6 +595,10 @@ message StartTreeCreationRequest {
     SigningJob direct_refund_tx_signing_job = 6;
     // The signing job for the root node's direct refund transaction
     SigningJob direct_from_cpfp_refund_tx_signing_job = 7;
+    // Optional CPFP fee-bump ladder for the root node's refund tx when that node
+    // is a leaf (a single-node tree), mirroring UserSignedTxSigningJob.refund_ladder.
+    // Additive and optional (SP-4089).
+    FeeBumpLadder refund_ladder = 8;
 }
 
 /**
@@ -579,6 +629,10 @@ message StartDepositTreeCreationRequest {
     SigningJob direct_refund_tx_signing_job = 6 [deprecated = true];
     // The signing job for the root node's direct from cpfp refund transaction.
     SigningJob direct_from_cpfp_refund_tx_signing_job = 7;
+    // Optional CPFP fee-bump ladder for the root node's refund tx when that node
+    // is a leaf (a single-node deposit tree), mirroring
+    // UserSignedTxSigningJob.refund_ladder. Additive and optional (SP-4089).
+    FeeBumpLadder refund_ladder = 8;
 }
 
 /**
@@ -705,11 +759,41 @@ message SecretProof {
     repeated bytes proofs = 1;
 }
 
+// FeeBumpLadder is a set of pre-signed CPFP fee-bump transactions ("rungs")
+// uploaded alongside a user-signed refund tx (SP-4089). The watchtower
+// broadcasts the cheapest rung that clears the mempool for an honest exit and
+// climbs against the defense-window budget when contested. The fee comes out of
+// the leaf itself, so no separately funded UTXO is required.
+message FeeBumpLadder {
+    // Protocol rung table plus vsize basis these rungs were signed against.
+    // Persisted alongside the ladder so the SO can reject rungs signed against
+    // an outdated basis without deserializing them.
+    uint32 rung_table_version = 1;
+    // Rungs in ascending-feerate order; the position is the rung index (index 0
+    // is the cheapest). Order is positional and the feerate is derived from each
+    // signed tx, so neither is carried on the rung itself.
+    repeated FeeBumpRung rungs = 2;
+}
+
+// FeeBumpRung is one pre-signed CPFP transaction in a FeeBumpLadder. It spends
+// the refund output and pays the remainder back to the owner minus the package
+// fee. Kept as a message rather than a bare bytes so per-rung fields can be
+// added later without a breaking change.
+message FeeBumpRung {
+    // Fully signed rung tx with witness included, broadcast verbatim by the
+    // watchtower with no reconstruction step. The feerate (fee / package vsize)
+    // is derived from this tx at store time.
+    bytes signed_tx = 1;
+}
+
 message LeafRefundTxSigningJob {
     string leaf_id = 1;
     SigningJob refund_tx_signing_job = 2;
     SigningJob direct_refund_tx_signing_job = 3;
     SigningJob direct_from_cpfp_refund_tx_signing_job = 4;
+    // Optional CPFP fee-bump ladder for this leaf's refund tx (SP-4089), mirroring
+    // UserSignedTxSigningJob.refund_ladder. Additive and optional.
+    FeeBumpLadder refund_ladder = 5;
 }
 
 message UserSignedTxSigningJob {
@@ -730,6 +814,11 @@ message UserSignedTxSigningJob {
     // (signing_nonce_commitment, user_signature). Exactly one of the two
     // forms may be present.
     repeated SubUserSigningContribution subuser_contributions = 8;
+    // Optional CPFP fee-bump ladder for this leaf's refund tx (SP-4089). When
+    // present, the SO validates and stores it so the watchtower can fee-compete
+    // an honest exit rather than relying on the flat-fee direct chain. Additive
+    // and optional: old clients omit it and keep their existing defense.
+    FeeBumpLadder refund_ladder = 9;
 }
 
 // InputSigningData carries the per-input signing data for additional root tx
@@ -1103,10 +1192,18 @@ message TransferSender {
 
 message Transfer {
     string id = 1;
-    bytes sender_identity_public_key = 2;
-    bytes receiver_identity_public_key = 3;
+    // Deprecated: the sender, from when a transfer had exactly one. Read
+    // `senders`, which is authoritative for every sender.
+    bytes sender_identity_public_key = 2 [deprecated = true];
+    // Deprecated: the receiver, from when a transfer had exactly one. Read
+    // `receivers`, which is authoritative for every receiver.
+    bytes receiver_identity_public_key = 3 [deprecated = true];
+    // The aggregate across every participant. Prefer `TransferReceiver.status`
+    // when able, which is authoritative per receiver.
     TransferStatus status = 4;
-    uint64 total_value = 5;
+    // Deprecated: the total transfer value, summing ALL participants. For an
+    // individual participant, sum that participant's `leaves`.
+    uint64 total_value = 5 [deprecated = true];
     google.protobuf.Timestamp expiry_time = 6;
     repeated TransferLeaf leaves = 7;
     google.protobuf.Timestamp created_time = 8;
@@ -1129,7 +1226,9 @@ message TransferLeaf {
     bytes intermediate_direct_refund_tx = 5;
     bytes intermediate_direct_from_cpfp_refund_tx = 6;
     bytes pending_key_tweak_public_key = 7;
+    // The receiver edge this leaf is assigned to.
     string transfer_receiver_id = 8;
+    // The sender edge this leaf came from.
     string transfer_sender_id = 9;
 }
 
@@ -1212,6 +1311,10 @@ message TransferFilter {
     repeated TransferType types = 70;
     Network network = 4;
     repeated TransferStatus statuses = 80;
+    // Include all senders and receivers in the response.
+    // By default `leaves` and `receivers` may be narrowed to the participant this
+    // filter names for backwards compatibility.
+    bool include_all_participants = 90;
     Order order = 5;
 
     oneof time_filter {
@@ -1436,6 +1539,9 @@ message ExtendLeafRequest {
     SigningJob direct_node_tx_signing_job = 5;
     SigningJob direct_refund_tx_signing_job = 6;
     SigningJob direct_from_cpfp_refund_tx_signing_job = 7;
+    // Optional CPFP fee-bump ladder for this leaf's extended refund tx (SP-4089),
+    // mirroring UserSignedTxSigningJob.refund_ladder. Additive and optional.
+    FeeBumpLadder refund_ladder = 8;
 }
 
 message ExtendLeafSigningResult {
@@ -1491,6 +1597,10 @@ message CreationNode {
     SigningJob direct_refund_tx_signing_job = 5;
     // The direct from cpfp refund tx can only exist if there's no children.
     SigningJob direct_from_cpfp_refund_tx_signing_job = 6;
+    // Optional CPFP fee-bump ladder for a leaf node's refund tx (present only for
+    // childless nodes, alongside refund_tx_signing_job), mirroring
+    // UserSignedTxSigningJob.refund_ladder. Additive and optional (SP-4089).
+    FeeBumpLadder refund_ladder = 7;
 }
 
 message CreateTreeRequest {
@@ -1577,6 +1687,17 @@ message ProvidePreimageRequest {
     bytes payment_hash = 1;
     bytes preimage = 2;
     bytes identity_public_key = 3;
+    // The transfer this preimage settles, as recorded at InitiatePreimageSwap.
+    // (payment_hash, identity_public_key) does not uniquely identify a pending
+    // swap: the preimage_request uniqueness index is partial (status !=
+    // 'RETURNED'), so a cancelled request and a replacement reusing the same
+    // hash coexist and the SO would otherwise settle whichever one it happened
+    // to select (SP-4068). Callers should populate it.
+    //
+    // Deliberately carries no validate.rules so that a malformed value is
+    // handled by the handler under its rollout knob rather than rejected by the
+    // interceptor at every knob setting.
+    string transfer_id = 4;
 }
 
 message ProvidePreimageResponse {
@@ -1783,26 +1904,9 @@ message ExitingTree {
     uint32 vin = 3;
 }
 
-message ExitSingleNodeTreeSigningResult {
-    string tree_id = 1;
-    SigningResult signing_result = 2;
-    bytes verifying_key = 3;
-}
-
 message BitcoinTransactionOutput {
     int64 value = 1;
     bytes pk_script = 2;
-}
-
-message ExitSingleNodeTreesRequest {
-    bytes owner_identity_public_key = 1;
-    repeated ExitingTree exiting_trees = 2;
-    bytes raw_tx = 3;
-    repeated BitcoinTransactionOutput previous_outputs = 4;
-}
-
-message ExitSingleNodeTreesResponse {
-    repeated ExitSingleNodeTreeSigningResult signing_results = 1;
 }
 
 message RecoverWatchtowerExitedLeafRequest {
@@ -1987,6 +2091,12 @@ enum TreeNodeStatus {
     // when it confirms — the SE never observes the broadcast. Terminal: the leaf
     // can no longer be used off-chain, and recovery is on L1.
     TREE_NODE_STATUS_WATCHTOWER_EXIT_RECOVERED = 15;
+    // A leaf whose outbound lightning send was returned. The HTLC refund
+    // signed for that transfer stays valid, so the leaf is owned but not
+    // spendable until the owner renews it through renew_leaf. Other transfer
+    // types return to AVAILABLE: their refunds only gain a witness together
+    // with the key tweak.
+    TREE_NODE_STATUS_RETURNED = 16;
 }
 
 message WalletSetting {

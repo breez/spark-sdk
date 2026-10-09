@@ -115,6 +115,8 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             2, // split_secret_threshold
             operator_pool.clone(),
             None,
+            // The SSP's leaves keep their anchored refunds.
+            false,
         ));
 
         // DepositService requires a service provider, but the SSP never calls
@@ -158,6 +160,8 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             spark_signer.clone(),
             spark_network,
             operator_pool.clone(),
+            // The SSP's leaves keep their flat-fee direct node txs.
+            false,
         ));
         let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
             identity_public_key,
