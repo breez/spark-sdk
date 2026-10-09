@@ -161,6 +161,7 @@ pub(in crate::sdk) async fn known_token_contracts(
             chain_id: None,
             amount: None,
         },
+        delivery_method: None,
     };
 
     let mut listed = match sdk.get_cross_chain_routes(&filter).await {

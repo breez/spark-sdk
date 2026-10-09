@@ -2,7 +2,7 @@
 
 You can add your own fee to the [USDC/USDT payments](./cross_chain.md) your users make through the SDK. You set the fee in the [Partner portal](https://partners.breez.technology/), and the SDK applies it with no code or configuration change.
 
-- The fee applies to [sends](./send_payment.md#usdc-usdt), [receives](./receive_payment.md#usdc-usdt), and [Cash App payment links](./cash_app_to_usdc_usdt.md) made with your API key and Breez SDK - Spark 0.27 or later.
+- The fee applies to [sends](./send_payment.md#usdc-usdt), [receives](./receive_payment.md#usdc-usdt), and [Cash App bridges](./cash_app.md) made with your API key and Breez SDK - Spark 0.27 or later.
 - It is charged as a percentage of each payment after the provider's own fee. It is included in the {{#name service_fee_amount}} the SDK returns for each payment, so users see it in the fee your app already displays.
 - Flashnet, which processes cross-chain payments, keeps 20% of your fee, and you receive the remaining 80%. See [Flashnet's fee documentation](https://docs.flashnet.xyz/orchestra/fees) for how fees are calculated.
 - Until you set a fee, payments work as before.

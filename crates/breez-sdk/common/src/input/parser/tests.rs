@@ -699,6 +699,67 @@ async fn test_lightning_address_with_prefix() {
 }
 
 #[async_test_all]
+async fn test_cash_app_cashtag() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    mock_lnurl_pay_endpoint(&mock_rest_client, None);
+
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+    let result = input_parser.parse("$Alice").await;
+
+    let Ok(InputType::LightningAddress(details)) = result else {
+        panic!("Expected a Lightning address, got {result:?}");
+    };
+    assert_eq!(details.address, "alice@cash.app");
+}
+
+#[async_test_all]
+async fn test_cash_app_cashtag_unknown_account() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    mock_lnurl_pay_endpoint(
+        &mock_rest_client,
+        Some("Error generating LUD06".to_string()),
+    );
+
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+    let result = input_parser.parse("$alice").await;
+    assert!(
+        matches!(result, Err(ParseError::InvalidInput)),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
+async fn test_cash_app_cashtag_with_domain_skips_bip_353() {
+    // A BIP-353 lookup would find this record and parse as BIP-21 instead.
+    let mock_dns_resolver = MockDnsResolver::new();
+    mock_dns_resolver.add_response(vec![String::from(
+        "bitcoin:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+    )]);
+    let mock_rest_client = MockRestClient::new();
+    mock_lnurl_pay_endpoint(&mock_rest_client, None);
+
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+    let result = input_parser.parse("$alice@cash.app").await;
+
+    let Ok(InputType::LightningAddress(details)) = result else {
+        panic!("Expected a Lightning address, got {result:?}");
+    };
+    assert_eq!(details.address, "alice@cash.app");
+}
+
+#[async_test_all]
+async fn test_bare_username_is_not_a_cashtag() {
+    let input_parser = InputParser::new(MockDnsResolver::new(), MockRestClient::new(), None);
+    let result = input_parser.parse("alice").await;
+    assert!(
+        matches!(result, Err(ParseError::InvalidInput)),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
 async fn test_lnurl() {
     let mock_dns_resolver = MockDnsResolver::new();
     let mock_rest_client = MockRestClient::new();

@@ -1181,9 +1181,11 @@ pub enum CrossChainAddressFamily {
 pub enum CrossChainRouteFilter {
     Send {
         address_details: CrossChainAddressDetails,
+        delivery_method: Option<DeliveryMethod>,
     },
     Receive {
         contract_address: Option<String>,
+        delivery_method: Option<DeliveryMethod>,
     },
     PaymentLink {
         address_details: CrossChainAddressDetails,
@@ -2291,6 +2293,43 @@ pub struct PreparePaymentLinkResponse {
     pub service_fee_asset: Option<String>,
     pub service_fee_asset_decimals: Option<u32>,
     pub expires_at: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeFromCashAppRequest)]
+pub struct BridgeFromCashAppRequest {
+    pub address: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeFromCashAppResponse)]
+pub struct BridgeFromCashAppResponse {
+    pub url: String,
+    pub amount_sats: u64,
+    pub estimated_out: u128,
+    pub asset: String,
+    pub service_fee_amount: u128,
+    pub service_fee_asset: Option<String>,
+    pub service_fee_asset_decimals: Option<u32>,
+    pub expires_at: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeToCashAppRequest)]
+pub struct BridgeToCashAppRequest {
+    pub recipient: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub refund_address: String,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeToCashAppResponse)]
+pub struct BridgeToCashAppResponse {
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]

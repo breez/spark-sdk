@@ -23,7 +23,7 @@ pub(in crate::sdk) mod client_signing;
 pub(in crate::sdk) mod conversion;
 mod polling;
 pub(in crate::sdk) mod prepare;
-mod receive;
+pub(in crate::sdk) mod receive;
 pub(in crate::sdk) mod send;
 pub(in crate::sdk) mod validation;
 

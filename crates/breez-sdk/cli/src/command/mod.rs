@@ -8,19 +8,20 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
-    ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
-    CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePaymentLinkRequest,
-    PrepareSendBatchRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BridgeFromCashAppRequest,
+    BridgeToCashAppRequest, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
+    ClaimHtlcPaymentRequest, ClaimTransferRequest, ConversionOptions, ConversionType,
+    CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod, Fee, FeePolicy,
+    FetchClaimDepositQuoteRequest, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
+    GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendBatchRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -408,9 +409,9 @@ pub enum Command {
         #[arg(long)]
         redirect_url: Option<String>,
     },
-    /// Prepare a payment link to send USDC/USDT to an external-chain recipient
-    /// via a fiat rail
-    PreparePaymentLink {
+    /// Bridge from Cash App to USDC/USDT on an external chain. Returns a
+    /// `cash.app` link for the payer to open.
+    BridgeFromCashApp {
         /// Recipient address on the destination chain (EVM/Solana/Tron)
         recipient: String,
 
@@ -418,6 +419,29 @@ pub enum Command {
         /// USDC/USDT), so `1000000` = 1 USDC, about $1
         #[arg(long)]
         amount: u128,
+
+        /// Deduct fees from the amount instead of adding them on top
+        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
+        fees_included: bool,
+
+        /// Maximum slippage in basis points
+        #[arg(long)]
+        max_slippage_bps: Option<u32>,
+    },
+    /// Bridge USDC/USDT from an external chain to a Cash App user. Returns the
+    /// deposit for the payer to make.
+    BridgeToCashApp {
+        /// Cash App username (`alice` or `$alice`) or Cash App Lightning address
+        recipient: String,
+
+        /// Amount in the source stablecoin's base units (6 decimals for
+        /// USDC/USDT), so `1000000` = 1 USDC, about $1
+        #[arg(long)]
+        amount: u128,
+
+        /// The payer's address on the source chain, refunded if delivery fails
+        #[arg(long)]
+        refund_address: String,
 
         /// Deduct fees from the amount instead of adding them on top
         #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
@@ -743,7 +767,7 @@ pub(crate) async fn execute_command(
             println!("{}", value.url);
             Ok(true)
         }
-        Command::PreparePaymentLink {
+        Command::BridgeFromCashApp {
             recipient,
             amount,
             fees_included,
@@ -758,7 +782,10 @@ pub(crate) async fn execute_command(
             let route = select_cross_chain_route(
                 sdk,
                 rl,
-                CrossChainRouteFilter::PaymentLink { address_details },
+                CrossChainRouteFilter::Send {
+                    address_details,
+                    delivery_method: Some(DeliveryMethod::Lightning),
+                },
             )
             .await?;
             let fee_policy = if fees_included {
@@ -767,7 +794,7 @@ pub(crate) async fn execute_command(
                 None
             };
             let response = sdk
-                .prepare_payment_link(PreparePaymentLinkRequest {
+                .bridge_from_cash_app(BridgeFromCashAppRequest {
                     address,
                     route,
                     amount,
@@ -788,6 +815,57 @@ pub(crate) async fn execute_command(
                     response.service_fee_asset_decimals,
                 ),
                 response.expires_at,
+            );
+            Ok(true)
+        }
+        Command::BridgeToCashApp {
+            recipient,
+            amount,
+            refund_address,
+            fees_included,
+            max_slippage_bps,
+        } => {
+            let route = select_cross_chain_route(
+                sdk,
+                rl,
+                CrossChainRouteFilter::Receive {
+                    contract_address: None,
+                    delivery_method: Some(DeliveryMethod::Lightning),
+                },
+            )
+            .await?;
+            let fee_policy = if fees_included {
+                Some(FeePolicy::FeesIncluded)
+            } else {
+                None
+            };
+            let response = sdk
+                .bridge_to_cash_app(BridgeToCashAppRequest {
+                    recipient,
+                    route: route.clone(),
+                    amount,
+                    fee_policy,
+                    refund_address,
+                    max_slippage_bps,
+                })
+                .await?;
+            let info = response.info;
+            println!("Ask the payer to pay:");
+            println!("{}", response.payment_request);
+            println!(
+                "Deposit {} {} on {} to {}. Recipient receives ~{} sats, service fee {} {}, \
+                 expires at {}",
+                info.deposit_amount,
+                route.asset,
+                route.chain,
+                info.deposit_address,
+                info.expected_received_amount,
+                info.service_fee_amount,
+                service_fee_denomination(
+                    info.service_fee_asset.as_deref(),
+                    info.service_fee_asset_decimals,
+                ),
+                info.expires_at,
             );
             Ok(true)
         }
@@ -855,6 +933,7 @@ pub(crate) async fn execute_command(
                     })?;
                     let filter = breez_sdk_spark::CrossChainRouteFilter::Receive {
                         contract_address: None,
+                        delivery_method: None,
                     };
                     let route = select_cross_chain_route(sdk, rl, filter).await?;
                     let fee_mode = if cross_chain_fees_included {
@@ -934,7 +1013,10 @@ pub(crate) async fn execute_command(
                     let route = select_cross_chain_route(
                         sdk,
                         rl,
-                        CrossChainRouteFilter::Send { address_details },
+                        CrossChainRouteFilter::Send {
+                            address_details,
+                            delivery_method: None,
+                        },
                     )
                     .await?;
                     PaymentRequest::CrossChain {

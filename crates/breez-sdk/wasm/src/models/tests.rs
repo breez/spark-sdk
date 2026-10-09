@@ -62,10 +62,12 @@ fn route_filter_accepts_address_details_with_an_amount() {
             chain_id: Some(1),
             amount: Some(5_000_000),
         },
+        delivery_method: None,
     };
     let js = filter.into_js().unwrap();
-    let CrossChainRouteFilter::Send { address_details } =
-        CrossChainRouteFilter::from_js(js).unwrap()
+    let CrossChainRouteFilter::Send {
+        address_details, ..
+    } = CrossChainRouteFilter::from_js(js).unwrap()
     else {
         panic!("expected a send filter");
     };

@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    cross_chain::{CrossChainReceivePrepared, CrossChainRoutePair, SparkAsset},
+    cross_chain::{CrossChainReceivePrepared, CrossChainRoutePair, DeliveryMethod, SparkAsset},
     error::SdkError,
     models::{Payment, ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
 };
@@ -103,31 +103,53 @@ pub(super) async fn receive_payment(
             fee_mode,
             max_slippage_bps,
             target_overpay_bps,
-        } => {
-            receive_cross_chain(
-                sdk,
-                route,
-                amount,
-                destination,
-                fee_mode,
-                max_slippage_bps,
-                target_overpay_bps,
-            )
-            .await
+        } => receive_cross_chain(
+            sdk,
+            route,
+            amount,
+            CrossChainReceiveTarget::Wallet { destination },
+            fee_mode,
+            max_slippage_bps,
+            target_overpay_bps,
+        )
+        .await
+        .map(Into::into),
+    }
+}
+
+impl From<CrossChainReceivePrepared> for ReceivePaymentResponse {
+    fn from(prepared: CrossChainReceivePrepared) -> Self {
+        ReceivePaymentResponse {
+            payment_request: prepared.payment_request,
+            fee: 0,
+            cross_chain_info: Some(prepared.info),
         }
     }
 }
 
+/// Where a cross-chain receive delivers.
+pub(in crate::sdk) enum CrossChainReceiveTarget {
+    /// This wallet, tracked as a payment. `destination` picks the Spark-side
+    /// asset, defaulting as [`resolve_receive_destination`] describes.
+    Wallet { destination: Option<SparkAsset> },
+    /// A Lightning address the provider pays directly, untracked. A failed
+    /// delivery is refunded to `refund_address` on the source chain.
+    LightningAddress {
+        address: String,
+        refund_address: String,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
-async fn receive_cross_chain(
+pub(in crate::sdk) async fn receive_cross_chain(
     sdk: &BreezSdk,
     route: CrossChainRoutePair,
     amount: u128,
-    destination: Option<SparkAsset>,
+    target: CrossChainReceiveTarget,
     fee_mode: Option<crate::cross_chain::CrossChainFeeMode>,
     max_slippage_bps: Option<u32>,
     target_overpay_bps: Option<u32>,
-) -> Result<ReceivePaymentResponse, SdkError> {
+) -> Result<CrossChainReceivePrepared, SdkError> {
     if amount == 0 {
         return Err(SdkError::InvalidInput(
             "Cross-chain receive amount must be greater than zero.".to_string(),
@@ -158,7 +180,20 @@ async fn receive_cross_chain(
             .and_then(|c| c.default_target_overpay_bps),
     )?;
 
-    let resolved_destination = resolve_receive_destination(sdk, &route, destination).await?;
+    let delivery_method = match &target {
+        CrossChainReceiveTarget::Wallet { .. } => DeliveryMethod::Spark,
+        CrossChainReceiveTarget::LightningAddress { .. } => DeliveryMethod::Lightning,
+    };
+    crate::cross_chain::ensure_route_delivers_over(&route, delivery_method)?;
+
+    let resolved_destination = match &target {
+        CrossChainReceiveTarget::Wallet { destination } => {
+            resolve_receive_destination(sdk, &route, destination.clone()).await?
+        }
+        CrossChainReceiveTarget::LightningAddress { .. } => {
+            resolve_receive_destination(sdk, &route, Some(SparkAsset::Bitcoin)).await?
+        }
+    };
 
     let provider_amount = convert_receive_amount_to_provider_units(
         sdk,
@@ -177,13 +212,22 @@ async fn receive_cross_chain(
 
     let service = sdk.cross_chain_context.get(route.provider)?.clone();
 
-    let recipient = sdk
-        .spark_wallet
-        .get_spark_address()?
-        .to_address_string()
-        .map_err(|e| {
-            SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
-        })?;
+    let (recipient, refund_address) = match target {
+        CrossChainReceiveTarget::Wallet { .. } => {
+            let address = sdk
+                .spark_wallet
+                .get_spark_address()?
+                .to_address_string()
+                .map_err(|e| {
+                    SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
+                })?;
+            (address, None)
+        }
+        CrossChainReceiveTarget::LightningAddress {
+            address,
+            refund_address,
+        } => (address, Some(refund_address)),
+    };
 
     debug!(
         "Cross-chain receive: fee_mode={fee_mode:?} source_amount={amount} \
@@ -192,10 +236,7 @@ async fn receive_cross_chain(
         route.decimals,
     );
 
-    let CrossChainReceivePrepared {
-        payment_request,
-        info,
-    } = service
+    service
         .prepare_receive(
             &route,
             &recipient,
@@ -204,14 +245,10 @@ async fn receive_cross_chain(
             &resolved_destination,
             fee_mode,
             overpay_bps,
+            delivery_method,
+            refund_address.as_deref(),
         )
-        .await?;
-
-    Ok(ReceivePaymentResponse {
-        payment_request,
-        fee: 0,
-        cross_chain_info: Some(info),
-    })
+        .await
 }
 
 /// Converts the caller-facing receive amount (in `route.decimals` base

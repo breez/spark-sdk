@@ -1575,6 +1575,8 @@ pub struct RefundPendingConversionsResponse {
     pub failed: u32,
 }
 
+/// **Deprecated.** Use [`BridgeFromCashAppRequest`].
+///
 /// Request for a payment link that sends USDC/USDT to an external-chain
 /// recipient, funded by Cash App over Lightning.
 ///
@@ -1605,6 +1607,8 @@ pub struct PreparePaymentLinkRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
+/// **Deprecated.** Use [`BridgeFromCashAppResponse`].
+///
 /// Response to a [`PreparePaymentLinkRequest`]. Mirrors `BuyBitcoinResponse`
 /// (a payable `url`) plus the quote so the caller can display the expected
 /// delivery and fees.
@@ -1631,6 +1635,139 @@ pub struct PreparePaymentLinkResponse {
     pub service_fee_asset_decimals: Option<u32>,
     /// RFC3339 timestamp after which the quote is no longer valid.
     pub expires_at: String,
+}
+
+/// Request to bridge from Cash App to USDC/USDT on an external chain.
+///
+/// The payer pays the returned URL in Cash App over Lightning, and the
+/// cross-chain provider delivers the stablecoin to `address`. No funds move
+/// through the Spark wallet. Only available on mainnet.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BridgeFromCashAppRequest {
+    /// Recipient address on the destination chain (e.g. an EVM `0x...` address).
+    pub address: String,
+    /// The destination route from calling `get_cross_chain_routes()` with the
+    /// `CrossChainRouteFilter::Send` filter and its `delivery_method` set to
+    /// `Lightning`. Selects the destination chain + asset (e.g. USDC on Base).
+    pub route: CrossChainRoutePair,
+    /// Amount in the destination asset's base units, per the route's
+    /// `decimals`. These routes deliver USD-pegged stablecoins, so at parity
+    /// this is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1.
+    ///
+    /// With the default fee policy the recipient receives this net amount.
+    /// With `FeesIncluded` it is the amount the payer deposits.
+    pub amount: u128,
+    /// Whether fees are added on top of `amount` (`FeesExcluded`, the default)
+    /// or deducted from it (`FeesIncluded`).
+    pub fee_policy: Option<FeePolicy>,
+    /// Maximum slippage tolerance in basis points. Falls back to the SDK
+    /// default when unset.
+    pub max_slippage_bps: Option<u32>,
+}
+
+/// Response to a [`BridgeFromCashAppRequest`]: the URL to pay plus the quote,
+/// so the caller can display the expected delivery and fees.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BridgeFromCashAppResponse {
+    /// The `cash.app` URL to open. Paying it delivers the stablecoin.
+    pub url: String,
+    /// Sats the payer deposits through Cash App.
+    pub amount_sats: u64,
+    /// Estimated amount delivered to the recipient, in `asset` base units.
+    pub estimated_out: u128,
+    /// The destination stablecoin symbol (e.g. `USDC`). `estimated_out` is
+    /// denominated in it.
+    pub asset: String,
+    /// Provider service fee, including the partner fee when one is set, in
+    /// `service_fee_asset` base units.
+    pub service_fee_amount: u128,
+    /// Denomination of `service_fee_amount`. Unset means sats.
+    pub service_fee_asset: Option<String>,
+    /// Decimals of `service_fee_asset`, for formatting `service_fee_amount`.
+    /// Unset when the fee is in sats or the provider did not report them.
+    pub service_fee_asset_decimals: Option<u32>,
+    /// Quote expiry as a Unix timestamp in seconds.
+    pub expires_at: u64,
+}
+
+impl From<PreparePaymentLinkRequest> for BridgeFromCashAppRequest {
+    fn from(request: PreparePaymentLinkRequest) -> Self {
+        BridgeFromCashAppRequest {
+            address: request.address,
+            route: request.route,
+            amount: request.amount,
+            fee_policy: request.fee_policy,
+            max_slippage_bps: request.max_slippage_bps,
+        }
+    }
+}
+
+impl From<BridgeFromCashAppResponse> for PreparePaymentLinkResponse {
+    fn from(response: BridgeFromCashAppResponse) -> Self {
+        PreparePaymentLinkResponse {
+            url: response.url,
+            amount_sats: response.amount_sats,
+            estimated_out: response.estimated_out,
+            asset: response.asset,
+            service_fee_amount: response.service_fee_amount,
+            service_fee_asset: response.service_fee_asset,
+            service_fee_asset_decimals: response.service_fee_asset_decimals,
+            expires_at: i64::try_from(response.expires_at)
+                .ok()
+                .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+                .map_or_else(
+                    || response.expires_at.to_string(),
+                    |dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                ),
+        }
+    }
+}
+
+/// Request to bridge USDC/USDT from an external chain to a Cash App user.
+///
+/// The payer deposits the stablecoin to the returned address, and the
+/// cross-chain provider pays the recipient in Bitcoin over Lightning. No funds
+/// move through the Spark wallet. Only available on mainnet.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BridgeToCashAppRequest {
+    /// The Cash App user, as a username (`alice` or `$alice`) or a Cash App
+    /// Lightning address (`alice@cash.app`).
+    pub recipient: String,
+    /// The source route from calling `get_cross_chain_routes()` with the
+    /// `CrossChainRouteFilter::Receive` filter and its `delivery_method` set to
+    /// `Lightning`. Selects the source chain + asset (e.g. USDC on Base).
+    pub route: CrossChainRoutePair,
+    /// Amount in the source asset's base units, per the route's `decimals`.
+    /// These routes carry USD-pegged stablecoins, so at parity this is the USD
+    /// value: `1_000_000` is 1 USDC (6 decimals), about $1.
+    ///
+    /// With the default fee policy the recipient receives about this value in
+    /// Bitcoin. With `FeesIncluded` it is the amount the payer deposits.
+    pub amount: u128,
+    /// Whether fees are added on top of `amount` (`FeesExcluded`, the default)
+    /// or deducted from it (`FeesIncluded`).
+    pub fee_policy: Option<FeePolicy>,
+    /// The payer's address on the source chain. The deposit is refunded here
+    /// if the recipient can't be paid.
+    pub refund_address: String,
+    /// Maximum slippage tolerance in basis points. Falls back to the SDK
+    /// default when unset.
+    pub max_slippage_bps: Option<u32>,
+}
+
+/// Response to a [`BridgeToCashAppRequest`].
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BridgeToCashAppResponse {
+    /// What the payer pays: an EIP-681 URI on EVM chains, otherwise the bare
+    /// deposit address.
+    pub payment_request: String,
+    /// The deposit and the expected delivery. `expected_received_amount` is
+    /// in sats.
+    pub info: crate::cross_chain::CrossChainReceiveInfo,
 }
 
 impl std::fmt::Display for MaxFee {
@@ -3375,6 +3512,54 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn payment_link_types_map_to_bridge_from_cash_app() {
+        let route = crate::CrossChainRoutePair {
+            provider: crate::CrossChainProvider::Orchestra,
+            chain: "base".to_string(),
+            chain_id: None,
+            asset: "USDC".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            accepted_assets: Vec::new(),
+            delivery_methods: Vec::new(),
+        };
+        let request: BridgeFromCashAppRequest = PreparePaymentLinkRequest {
+            address: "0xabc".to_string(),
+            route: route.clone(),
+            amount: 1_000_000,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+            max_slippage_bps: Some(50),
+        }
+        .into();
+        assert_eq!(request.address, "0xabc");
+        assert_eq!(request.route, route);
+        assert_eq!(request.amount, 1_000_000);
+        assert_eq!(request.fee_policy, Some(FeePolicy::FeesIncluded));
+        assert_eq!(request.max_slippage_bps, Some(50));
+
+        let response: PreparePaymentLinkResponse = BridgeFromCashAppResponse {
+            url: "https://cash.app/launch/lightning/lnbc1".to_string(),
+            amount_sats: 1_500,
+            estimated_out: 990_000,
+            asset: "USDC".to_string(),
+            service_fee_amount: 10_000,
+            service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
+            expires_at: 1_791_374_400,
+        }
+        .into();
+        assert_eq!(response.url, "https://cash.app/launch/lightning/lnbc1");
+        assert_eq!(response.amount_sats, 1_500);
+        assert_eq!(response.estimated_out, 990_000);
+        assert_eq!(response.asset, "USDC");
+        assert_eq!(response.service_fee_amount, 10_000);
+        assert_eq!(response.service_fee_asset.as_deref(), Some("USDC"));
+        assert_eq!(response.service_fee_asset_decimals, Some(6));
+        assert_eq!(response.expires_at, "2026-10-07T12:00:00Z");
+    }
 
     fn spark_payment(conversion_info: Option<ConversionInfo>) -> Payment {
         Payment {

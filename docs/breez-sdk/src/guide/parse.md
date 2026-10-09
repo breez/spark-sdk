@@ -6,6 +6,8 @@ Natively supported formats include: BOLT11 invoices, LNURLs of different types, 
 
 Cross-chain destinations on EVM, Solana, and Tron — bare addresses or chain-prefixed URIs — parse to {{#enum InputType::CrossChainAddress}}, carrying the parsed address family along with any token contract address and amount embedded in the URI. Use the resulting {{#name CrossChainAddressDetails}} to discover available routes; see [Send USDC/USDT](./send_payment.md#usdc-usdt) for the send flow.
 
+A Cash App username prefixed with `$` (e.g. `$alice`) parses to {{#enum InputType::LightningAddress}} for the user's Lightning address, `alice@cash.app`.
+
 <div class="warning">
 <h4>Developer note</h4>
 The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL) are denominated in millisatoshi.

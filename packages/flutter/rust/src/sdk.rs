@@ -416,11 +416,26 @@ impl BreezSdk {
         self.inner.buy_bitcoin(request).await
     }
 
+    /// **Deprecated.** Use `bridge_from_cash_app`.
     pub async fn prepare_payment_link(
         &self,
         request: PreparePaymentLinkRequest,
     ) -> Result<PreparePaymentLinkResponse, SdkError> {
         self.inner.prepare_payment_link(request).await
+    }
+
+    pub async fn bridge_from_cash_app(
+        &self,
+        request: BridgeFromCashAppRequest,
+    ) -> Result<BridgeFromCashAppResponse, SdkError> {
+        self.inner.bridge_from_cash_app(request).await
+    }
+
+    pub async fn bridge_to_cash_app(
+        &self,
+        request: BridgeToCashAppRequest,
+    ) -> Result<BridgeToCashAppResponse, SdkError> {
+        self.inner.bridge_to_cash_app(request).await
     }
 
     pub async fn register_webhook(

@@ -628,9 +628,11 @@ pub enum _CrossChainProviderContext {
 pub enum _CrossChainRouteFilter {
     Send {
         address_details: CrossChainAddressDetails,
+        delivery_method: Option<DeliveryMethod>,
     },
     Receive {
         contract_address: Option<String>,
+        delivery_method: Option<DeliveryMethod>,
     },
     PaymentLink {
         address_details: CrossChainAddressDetails,
@@ -2084,6 +2086,43 @@ pub struct _PreparePaymentLinkResponse {
     pub service_fee_asset: Option<String>,
     pub service_fee_asset_decimals: Option<u32>,
     pub expires_at: String,
+}
+
+#[frb(mirror(BridgeFromCashAppRequest))]
+pub struct _BridgeFromCashAppRequest {
+    pub address: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[frb(mirror(BridgeFromCashAppResponse))]
+pub struct _BridgeFromCashAppResponse {
+    pub url: String,
+    pub amount_sats: u64,
+    pub estimated_out: u128,
+    pub asset: String,
+    pub service_fee_amount: u128,
+    pub service_fee_asset: Option<String>,
+    pub service_fee_asset_decimals: Option<u32>,
+    pub expires_at: u64,
+}
+
+#[frb(mirror(BridgeToCashAppRequest))]
+pub struct _BridgeToCashAppRequest {
+    pub recipient: String,
+    pub route: CrossChainRoutePair,
+    pub amount: u128,
+    pub fee_policy: Option<FeePolicy>,
+    pub refund_address: String,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[frb(mirror(BridgeToCashAppResponse))]
+pub struct _BridgeToCashAppResponse {
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
 }
 
 #[frb(mirror(ServiceStatus))]

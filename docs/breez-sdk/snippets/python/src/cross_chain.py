@@ -25,7 +25,9 @@ async def get_cross_chain_routes(sdk: BreezSdk):
         address_details = parsed[0]
 
         routes = await sdk.get_cross_chain_routes(
-            filter=CrossChainRouteFilter.SEND(address_details=address_details)
+            filter=CrossChainRouteFilter.SEND(
+                address_details=address_details, delivery_method=None
+            )
         )
 
         for route in routes:
@@ -111,7 +113,9 @@ async def get_cross_chain_receive_routes(sdk: BreezSdk):
     # ANCHOR: cross-chain-get-receive-routes
     try:
         routes = await sdk.get_cross_chain_routes(
-            filter=CrossChainRouteFilter.RECEIVE(contract_address=None)
+            filter=CrossChainRouteFilter.RECEIVE(
+                contract_address=None, delivery_method=None
+            )
         )
 
         for route in routes:
