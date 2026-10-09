@@ -12,7 +12,7 @@ use bitcoin::{
 use spark_wallet::{
     ChainQuery, ChainResult, Observation, TreeNode, TreeNodeId, TreeNodeStatus,
     UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput,
-    build_watchtower_exit_recovery, scan_watchtower_exits,
+    assumed_watchtower_exit_output, build_watchtower_exit_recovery, scan_watchtower_exits,
 };
 use tracing::warn;
 
@@ -48,8 +48,17 @@ pub(super) struct WatchtowerExit {
 #[derive(Default)]
 pub(super) struct WatchtowerExits {
     pub(super) exits: HashMap<String, WatchtowerExit>,
-    /// The lookup of each leaf that has no output to recover.
-    pub(super) missing: HashMap<String, WatchtowerExitLookup>,
+    /// Each leaf that has no output to recover.
+    pub(super) missing: HashMap<String, MissingExit>,
+}
+
+/// A leaf whose lookup gave no output to recover.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MissingExit {
+    pub(super) lookup: WatchtowerExitLookup,
+    /// The output for the leaf in the direct tx its nearest on-chain ancestor
+    /// holds, when the SDK has that ancestor.
+    pub(super) assumed: Option<WatchtowerExitOutput>,
 }
 
 /// What the chain service says spent an output.
@@ -706,7 +715,10 @@ async fn store_watchtower_exit_lookups(
                 found.exits.insert(leaf_id, exit);
             }
             Err(lookup) => {
-                found.missing.insert(leaf_id, lookup);
+                let assumed = assumed_watchtower_exit_output(leaf, nodes);
+                found
+                    .missing
+                    .insert(leaf_id, MissingExit { lookup, assumed });
             }
         }
     }
@@ -2155,9 +2167,13 @@ mod tests {
                 split.status = TreeNodeStatus::SplitLocked;
             }
             let found = lookup(stale.clone(), false).await;
-            assert_eq!(found.missing[LEAF_ID], WatchtowerExitLookup::Pending);
+            assert_eq!(found.missing[LEAF_ID].lookup, WatchtowerExitLookup::Pending);
+            assert_eq!(found.missing[LEAF_ID].assumed, None);
             let found = lookup(stale, true).await;
-            assert_eq!(found.missing[LEAF_ID], WatchtowerExitLookup::NotFound);
+            assert_eq!(
+                found.missing[LEAF_ID].lookup,
+                WatchtowerExitLookup::NotFound
+            );
         }
 
         #[tokio::test]

@@ -79,7 +79,8 @@ pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
 pub use watchtower_exit::{
     UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput, WatchtowerExitScan,
-    build_watchtower_exit_recovery, scan_watchtower_exits, watchtower_exit_recovery_payout,
+    assumed_watchtower_exit_output, build_watchtower_exit_recovery, scan_watchtower_exits,
+    watchtower_exit_recovery_payout,
 };
 
 #[cfg(feature = "test-utils")]
