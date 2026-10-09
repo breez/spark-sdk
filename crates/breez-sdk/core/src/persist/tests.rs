@@ -1875,9 +1875,17 @@ pub async fn test_deposit_max_claim_fee(storage: Box<dyn Storage>) {
     // the others would leave two encodings unexercised.
     for max_fee in [
         MaxFee::Fixed { amount: 25_000 },
-        MaxFee::Rate { sat_per_vbyte: 12 },
+        MaxFee::Rate {
+            sat_per_vbyte: 12,
+            proportional_ppm: None,
+        },
+        MaxFee::Rate {
+            sat_per_vbyte: 12,
+            proportional_ppm: Some(750),
+        },
         MaxFee::NetworkRecommended {
             leeway_sat_per_vbyte: 3,
+            proportional_ppm: Some(1_000),
         },
     ] {
         storage

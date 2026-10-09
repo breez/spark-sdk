@@ -10,9 +10,10 @@ Future<void> configureMaxDepositClaimFee() async {
   // Disable automatic claiming
   config = config.copyWith(maxDepositClaimFee: null);
 
-  // Set a maximum feerate of 10 sat/vB
+  // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
   config = config.copyWith(
-      maxDepositClaimFee: MaxFee.rate(satPerVbyte: BigInt.from(10)));
+      maxDepositClaimFee:
+          MaxFee.rate(satPerVbyte: BigInt.from(10), proportionalPpm: 1000));
 
   // Set a maximum fee of 1000 sat
   config = config.copyWith(
@@ -21,8 +22,8 @@ Future<void> configureMaxDepositClaimFee() async {
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte
   config = config.copyWith(
-      maxDepositClaimFee:
-          MaxFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)));
+      maxDepositClaimFee: MaxFee.networkRecommended(
+          leewaySatPerVbyte: BigInt.from(1), proportionalPpm: null));
   // ANCHOR_END: max-deposit-claim-fee
   print(config);
 }

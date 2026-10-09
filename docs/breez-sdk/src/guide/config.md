@@ -10,13 +10,15 @@ Receiving Bitcoin payments through on-chain deposits may involve fees. This opti
 - Feerate in sats/vbyte
 - Fastest network recommended fee at the time of claim, with a leeway in sats/vbyte
 
+The feerate and the network recommended fee can also allow a share of the deposit amount on top, set as {{#name proportional_ppm}} in parts per million (1000 ppm is 0.1%). This covers a provider fee that grows with the deposit, which a feerate alone cannot: without it, a large deposit can exceed the ceiling even when on-chain fees are low. The absolute amount is a cap on the total and takes no share.
+
 You can also disable automatic claiming entirely. Deposits that are not automatically claimed require manual intervention.
 
-By default, automatic claiming is enabled with a maximum feerate of 1 sat/vbyte.
+By default, automatic claiming is enabled with a maximum feerate of 1 sat/vbyte plus 0.1% of the deposit amount.
 
-This ceiling also caps what the Spark Service Provider may charge to credit a deposit before its third confirmation, through an [instant or expedited claim](./onchain_claims.md#instant-expedited-claims). Raising it both tolerates higher on-chain fees and lets deposits reach the balance sooner. The default is far below any instant claim fee, so deposits wait for the standard claim at 3 confirmations until it is raised. That fee grows with the deposit, so a ceiling generous enough to credit a small deposit instantly may still leave a large one waiting.
+This ceiling also caps what the Spark Service Provider may charge to credit a deposit before its third confirmation, through an [instant or expedited claim](./onchain_claims.md#how-deposits-are-claimed). Raising it both tolerates higher on-chain fees and lets deposits reach the balance sooner. The default is sized for the standard claim, so deposits usually wait for the standard claim at 3 confirmations until it is raised.
 
-This ceiling applies to every deposit. A single deposit can be given [a ceiling of its own](./onchain_claims.md#giving-one-deposit-its-own-max-fee), which then governs it instead.
+This ceiling applies to every deposit. A single deposit can be given [a ceiling of its own](./onchain_manual_claims.md#giving-one-deposit-its-own-max-fee), which then governs it instead.
 
 More information can be found in the [Claiming on-chain deposits](./onchain_claims.md) page.
 

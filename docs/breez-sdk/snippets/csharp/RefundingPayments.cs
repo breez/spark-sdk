@@ -19,21 +19,9 @@ namespace BreezSdkSnippets
                 {
                     if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
                     {
-                        var maxFeeStr = "none";
-                        if (exceeded.maxFee != null)
-                        {
-                            if (exceeded.maxFee is Fee.Fixed fixedFee)
-                            {
-                                maxFeeStr = $"{fixedFee.amount} sats";
-                            }
-                            else if (exceeded.maxFee is Fee.Rate rateFee)
-                            {
-                                maxFeeStr = $"{rateFee.satPerVbyte} sats/vByte";
-                            }
-                        }
-                        Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
-                                        $"Required: {exceeded.requiredFeeSats} sats or " +
-                                        $"{exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
+                        var maxFeeStr = exceeded.maxFeeSats is ulong sats ? $"{sats} sats" : "none";
+                        Console.WriteLine($"Max claim fee exceeded. Max: {maxFeeStr}, " +
+                                        $"Required: {exceeded.requiredFeeSats} sats");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {
@@ -156,8 +144,14 @@ namespace BreezSdkSnippets
             };
 
             // Set the maximum fee to the fastest network recommended fee at the time of claim
-            // with a leeway of 1 sats/vbyte
-            config = config with { maxDepositClaimFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: 1) };
+            // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+            config = config with
+            {
+                maxDepositClaimFee = new MaxFee.NetworkRecommended(
+                    leewaySatPerVbyte: 1,
+                    proportionalPpm: 1000
+                )
+            };
             // ANCHOR_END: set-max-fee-to-recommended-fees
             Console.WriteLine($"Config: {config}");
         }
@@ -167,16 +161,15 @@ namespace BreezSdkSnippets
             // ANCHOR: custom-claim-logic
             if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
             {
-                var requiredFeeRate = exceeded.requiredFeeRateSatPerVbyte;
+                var requiredFee = exceeded.requiredFeeSats;
 
-                var recommendedFees = await sdk.RecommendedFees();
-
-                if (requiredFeeRate <= recommendedFees.fastestFee)
+                // Claim only if the fee is at most 1% of the deposit amount
+                if (requiredFee * 100 <= deposit.amountSats)
                 {
                     var claimRequest = new ClaimDepositRequest(
                         txid: deposit.txid,
                         vout: deposit.vout,
-                        maxFee: new MaxFee.Rate(satPerVbyte: requiredFeeRate)
+                        maxFee: new MaxFee.Fixed(amount: requiredFee)
                     );
                     await sdk.ClaimDeposit(request: claimRequest);
                 }

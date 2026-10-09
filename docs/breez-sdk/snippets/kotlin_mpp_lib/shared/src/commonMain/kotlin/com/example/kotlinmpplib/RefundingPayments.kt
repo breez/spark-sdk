@@ -16,15 +16,9 @@ class RefundingPayments {
                 deposit.claimError?.let { claimError ->
                     when (claimError) {
                         is DepositClaimError.MaxDepositClaimFeeExceeded -> {
-                            val maxFee = claimError.maxFee
-                            val maxFeeStr = when (maxFee) {
-                                is Fee.Fixed -> "${maxFee.amount} sats"
-                                is Fee.Rate -> "${maxFee.satPerVbyte} sats/vByte"
-                                null -> "none"
-                            }
+                            val maxFeeStr = claimError.maxFeeSats?.let { "$it sats" } ?: "none"
                             // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr,
-                            // Required: ${claimError.requiredFeeSats} sats or
-                            // ${claimError.requiredFeeRateSatPerVbyte} sats/vByte")
+                            // Required: ${claimError.requiredFeeSats} sats")
                         }
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")
@@ -154,8 +148,11 @@ class RefundingPayments {
         config.apiKey = "<breez api key>"
 
         // Set the maximum fee to the fastest network recommended fee at the time of claim
-        // with a leeway of 1 sats/vbyte
-        config.maxDepositClaimFee = MaxFee.NetworkRecommended(leewaySatPerVbyte = 1u)
+        // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+        config.maxDepositClaimFee = MaxFee.NetworkRecommended(
+            leewaySatPerVbyte = 1u,
+            proportionalPpm = 1000u
+        )
         // ANCHOR_END: set-max-fee-to-recommended-fees
         println("Config: $config")
     }
@@ -165,15 +162,14 @@ class RefundingPayments {
         try {
             val claimError = deposit.claimError
             if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
-                val requiredFeeRate = claimError.requiredFeeRateSatPerVbyte
+                val requiredFee = claimError.requiredFeeSats
 
-                val recommendedFees = sdk.recommendedFees()
-
-                if (requiredFeeRate <= recommendedFees.fastestFee) {
+                // Claim only if the fee is at most 1% of the deposit amount
+                if (requiredFee * 100uL <= deposit.amountSats) {
                     val claimRequest = ClaimDepositRequest(
                         txid = deposit.txid,
                         vout = deposit.vout,
-                        maxFee = MaxFee.Rate(requiredFeeRate)
+                        maxFee = MaxFee.Fixed(requiredFee)
                     )
                     sdk.claimDeposit(claimRequest)
                 }

@@ -16,8 +16,12 @@ func ConfigureSdk() {
 	// Disable automatic claiming
 	config.MaxDepositClaimFee = nil
 
-	// Set a maximum feerate of 10 sat/vB
-	feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{SatPerVbyte: 10})
+	// Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
+	proportionalPpm := uint32(1000)
+	feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{
+		SatPerVbyte:     10,
+		ProportionalPpm: &proportionalPpm,
+	})
 	config.MaxDepositClaimFee = &feeRateInterface
 
 	// Set a maximum fee of 1000 sat

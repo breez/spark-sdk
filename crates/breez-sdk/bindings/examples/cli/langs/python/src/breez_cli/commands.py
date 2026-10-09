@@ -711,14 +711,16 @@ async def _handle_claim_deposit(sdk, _token_issuer, _session, args):
         if args.fee_sat is not None or args.sat_per_vbyte is not None:
             print("Cannot specify fee_sat or sat_per_vbyte when using recommended fee")
             return
-        max_fee = MaxFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=args.recommended_fee_leeway)
+        max_fee = MaxFee.NETWORK_RECOMMENDED(
+            leeway_sat_per_vbyte=args.recommended_fee_leeway, proportional_ppm=None
+        )
     elif args.fee_sat is not None and args.sat_per_vbyte is not None:
         print("Cannot specify both fee_sat and sat_per_vbyte")
         return
     elif args.fee_sat is not None:
         max_fee = MaxFee.FIXED(amount=args.fee_sat)
     elif args.sat_per_vbyte is not None:
-        max_fee = MaxFee.RATE(sat_per_vbyte=args.sat_per_vbyte)
+        max_fee = MaxFee.RATE(sat_per_vbyte=args.sat_per_vbyte, proportional_ppm=None)
     else:
         max_fee = None
 

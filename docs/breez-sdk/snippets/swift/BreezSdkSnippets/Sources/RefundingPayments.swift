@@ -11,23 +11,11 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
 
         if let claimError = deposit.claimError {
             switch claimError {
-            case .maxDepositClaimFeeExceeded(
-                let tx, let vout, let maxFee, let requiredFeeSats, let requiredFeeRateSatPerVbyte):
-                let maxFeeStr: String
-                if let maxFee = maxFee {
-                    switch maxFee {
-                    case .fixed(let amount):
-                        maxFeeStr = "\(amount) sats"
-                    case .rate(let satPerVbyte):
-                        maxFeeStr = "\(satPerVbyte) sats/vByte"
-                    }
-                } else {
-                    maxFeeStr = "none"
-                }
+            case .maxDepositClaimFeeExceeded(let tx, let vout, let maxFeeSats, let requiredFeeSats):
+                let maxFeeStr = maxFeeSats.map { "\($0) sats" } ?? "none"
                 print(
                     "Max claim fee exceeded. Max: \(maxFeeStr), "
-                        + "Required: \(requiredFeeSats) sats or "
-                        + "\(requiredFeeRateSatPerVbyte) sats/vByte"
+                        + "Required: \(requiredFeeSats) sats"
                 )
             case .missingUtxo(let tx, let vout):
                 print("UTXO not found when claiming deposit")
@@ -57,7 +45,7 @@ func listPendingDeposits(sdk: BreezSdk) async throws {
 
 func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: handle-fee-exceeded
-    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats, _) = deposit.claimError {
+    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats) = deposit.claimError {
         // Show UI to user with the required fee and get approval
         let userApproved = true  // Replace with actual user approval logic
 
@@ -130,24 +118,22 @@ func setMaxFeeToRecommendedFees() async throws {
     config.apiKey = "<breez api key>"
 
     // Set the maximum fee to the fastest network recommended fee at the time of claim
-    // with a leeway of 1 sats/vbyte
-    config.maxDepositClaimFee = MaxFee.networkRecommended(leewaySatPerVbyte: 1)
+    // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+    config.maxDepositClaimFee = MaxFee.networkRecommended(
+        leewaySatPerVbyte: 1, proportionalPpm: 1000)
     // ANCHOR_END: set-max-fee-to-recommended-fees
     print("Config: \(config)")
 }
 
 func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: custom-claim-logic
-    if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) =
-        deposit.claimError
-    {
-        let recommendedFees = try await sdk.recommendedFees()
-
-        if requiredFeeRateSatPerVbyte <= recommendedFees.fastestFee {
+    if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats) = deposit.claimError {
+        // Claim only if the fee is at most 1% of the deposit amount
+        if requiredFeeSats * 100 <= deposit.amountSats {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,
-                maxFee: MaxFee.rate(satPerVbyte: requiredFeeRateSatPerVbyte)
+                maxFee: MaxFee.fixed(amount: requiredFeeSats)
             )
             try await sdk.claimDeposit(request: claimRequest)
         }

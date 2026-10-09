@@ -5,15 +5,15 @@ use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType,
+    BreezSdk, SYNC_PAGING_LIMIT, SyncType,
     deposits::{
-        InstantClaimOutcome, claim_already_made, is_already_claimed_error, larger_ceiling,
-        mature_quote_error, needs_own_ceiling_resolution,
+        InstantClaimOutcome, ResolvedMaxFee, claim_already_made, is_already_claimed_error,
+        larger_ceiling, mature_quote_error, needs_own_ceiling_resolution,
     },
 };
 use crate::utils::time::now_secs;
 use crate::{
-    DepositInfo, Fee, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -412,7 +412,8 @@ impl BreezSdk {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
-                    self.mature_claim_ceiling(stored_max_fee).await,
+                    self.mature_claim_ceiling(stored_max_fee, detailed_utxo.value)
+                        .await,
                     stored_max_fee.cloned(),
                     &mut claimed_deposits,
                     &mut unclaimed_deposits,
@@ -453,7 +454,7 @@ impl BreezSdk {
                 if !instant_claim_worth_attempting(
                     instant_status.as_ref(),
                     confirmations,
-                    ceiling.1,
+                    ceiling.ceiling_sats(detailed_utxo.value),
                 ) {
                     continue;
                 }
@@ -497,13 +498,17 @@ impl BreezSdk {
     /// The ceiling a mature deposit's automatic claim runs under. Both sides are
     /// resolved here because comparing them needs sats, and a ceiling that will not
     /// resolve leaves the deposit on its own, which is what was asked for.
-    async fn mature_claim_ceiling(&self, stored: Option<&MaxFee>) -> Option<MaxFee> {
+    async fn mature_claim_ceiling(
+        &self,
+        stored: Option<&MaxFee>,
+        deposit_sats: u64,
+    ) -> Option<MaxFee> {
         let config_default = self.config.max_deposit_claim_fee.as_ref();
         let (Some(stored), Some(config_default)) = (stored, config_default) else {
             return stored.or(config_default).cloned();
         };
-        let stored_sats = self.ceiling_sats(stored).await;
-        let config_sats = self.ceiling_sats(config_default).await;
+        let stored_sats = self.ceiling_sats(stored, deposit_sats).await;
+        let config_sats = self.ceiling_sats(config_default, deposit_sats).await;
         match (stored_sats, config_sats) {
             (Some(stored_sats), Some(config_sats)) => Some(larger_ceiling(
                 stored,
@@ -515,14 +520,15 @@ impl BreezSdk {
         }
     }
 
-    /// One ceiling in sats, or `None` when it cannot be resolved.
-    async fn ceiling_sats(&self, max_fee: &MaxFee) -> Option<u64> {
+    /// One ceiling in sats for a deposit worth `deposit_sats`, or `None` when it
+    /// cannot be resolved.
+    async fn ceiling_sats(&self, max_fee: &MaxFee, deposit_sats: u64) -> Option<u64> {
         self.resolve_max_claim_fee(Some(max_fee.clone()))
             .await
             .inspect_err(|e| warn!("Could not resolve a max claim fee: {e}"))
             .ok()
             .flatten()
-            .map(|(_, sats)| sats)
+            .map(|max_fee| max_fee.ceiling_sats(deposit_sats))
     }
 
     async fn claim_utxo_and_resolve_deposit(
@@ -579,7 +585,7 @@ impl BreezSdk {
     async fn instant_claim_utxo_and_resolve_deposit(
         &self,
         detailed_utxo: &DetailedUtxo,
-        resolved_max_fee: Option<(Fee, u64)>,
+        resolved_max_fee: Option<ResolvedMaxFee>,
         confirmations: u32,
         stored_max_fee: Option<MaxFee>,
         claimed_deposits: &mut Vec<DepositInfo>,
@@ -709,19 +715,20 @@ impl BreezSdk {
         Ok(())
     }
 
-    /// Resolves an on-chain max claim fee to `(fee, ceiling_sats)`, where the sat
-    /// ceiling is computed over the claim tx size. `None` means no ceiling is set,
-    /// which the caller treats as rejecting the claim.
+    /// Prices a max claim fee's on-chain part at the current fee market. `None`
+    /// means no ceiling is set, which the caller treats as rejecting the claim.
     pub(super) async fn resolve_max_claim_fee(
         &self,
         max_claim_fee: Option<MaxFee>,
-    ) -> Result<Option<(Fee, u64)>, SdkError> {
+    ) -> Result<Option<ResolvedMaxFee>, SdkError> {
         match max_claim_fee {
             None => Ok(None),
             Some(max_fee) => {
-                let fee = max_fee.to_fee(self.chain_service.as_ref()).await?;
-                let sats = fee.to_sats(CLAIM_TX_SIZE_VBYTES);
-                Ok(Some((fee, sats)))
+                let onchain = max_fee.to_fee(self.chain_service.as_ref()).await?;
+                Ok(Some(ResolvedMaxFee::new(
+                    onchain,
+                    max_fee.proportional_ppm(),
+                )))
             }
         }
     }
@@ -759,26 +766,25 @@ impl BreezSdk {
                 ))
             })?;
 
-        let spark_requested_fee_rate = spark_requested_fee_sats.div_ceil(CLAIM_TX_SIZE_VBYTES);
-
         let resolved_max_fee = self.resolve_max_claim_fee(max_claim_fee).await?;
-        if let Some((_, max_fee_sats)) = &resolved_max_fee {
+        let max_fee_sats = resolved_max_fee
+            .as_ref()
+            .map(|max_fee| max_fee.ceiling_sats(detailed_utxo.value));
+        if let Some(max_fee_sats) = max_fee_sats {
             info!(
                 "Claiming {}:{} under a {max_fee_sats} sat ceiling, \
                  provider asks {spark_requested_fee_sats} sats",
                 detailed_utxo.txid, detailed_utxo.vout
             );
         }
-        let within_limit = resolved_max_fee
-            .as_ref()
-            .is_some_and(|(_, max_fee_sats)| spark_requested_fee_sats <= *max_fee_sats);
+        let within_limit =
+            max_fee_sats.is_some_and(|max_fee_sats| spark_requested_fee_sats <= max_fee_sats);
         if !within_limit {
             return Err(SdkError::MaxDepositClaimFeeExceeded {
                 tx: detailed_utxo.txid.to_string(),
                 vout: detailed_utxo.vout,
-                max_fee: resolved_max_fee.map(|(fee, _)| fee),
+                max_fee_sats,
                 required_fee_sats: spark_requested_fee_sats,
-                required_fee_rate_sat_per_vbyte: spark_requested_fee_rate,
             });
         }
 

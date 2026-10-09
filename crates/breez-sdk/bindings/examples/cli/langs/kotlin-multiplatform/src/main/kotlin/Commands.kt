@@ -826,14 +826,14 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
                 println("Cannot specify fee_sat or sat_per_vbyte when using recommended fee")
                 return
             }
-            MaxFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway)
+            MaxFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway, proportionalPpm = null)
         }
         feeSat != null && satPerVbyte != null -> {
             println("Cannot specify both --fee-sat and --sat-per-vbyte")
             return
         }
         feeSat != null -> MaxFee.Fixed(amount = feeSat)
-        satPerVbyte != null -> MaxFee.Rate(satPerVbyte = satPerVbyte)
+        satPerVbyte != null -> MaxFee.Rate(satPerVbyte = satPerVbyte, proportionalPpm = null)
         else -> null
     }
 

@@ -23,17 +23,12 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
       switch (deposit.claimError.type) {
         case 'maxDepositClaimFeeExceeded': {
           let maxFeeStr = 'none'
-          if (deposit.claimError.maxFee != null) {
-            if (deposit.claimError.maxFee.type === 'fixed') {
-              maxFeeStr = `${deposit.claimError.maxFee.amount} sats`
-            } else if (deposit.claimError.maxFee.type === 'rate') {
-              maxFeeStr = `${deposit.claimError.maxFee.satPerVbyte} sats/vByte`
-            }
+          if (deposit.claimError.maxFeeSats != null) {
+            maxFeeStr = `${deposit.claimError.maxFeeSats} sats`
           }
           console.log(
             `Max claim fee exceeded. Max: ${maxFeeStr}, ` +
-            `Required: ${deposit.claimError.requiredFeeSats} sats or ` +
-            `${deposit.claimError.requiredFeeRateSatPerVbyte} sats/vByte`
+            `Required: ${deposit.claimError.requiredFeeSats} sats`
           )
           break
         }
@@ -148,8 +143,12 @@ const setMaxFeeToRecommendedFees = () => {
   config.apiKey = '<breez api key>'
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
-  // with a leeway of 1 sats/vbyte
-  config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
+  // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+  config.maxDepositClaimFee = {
+    type: 'networkRecommended',
+    leewaySatPerVbyte: 1,
+    proportionalPpm: 1000
+  }
   // ANCHOR_END: set-max-fee-to-recommended-fees
   console.log('Config:', config)
 }
@@ -157,15 +156,14 @@ const setMaxFeeToRecommendedFees = () => {
 const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: custom-claim-logic
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
-    const requiredFeeRate = deposit.claimError.requiredFeeRateSatPerVbyte
+    const requiredFee = deposit.claimError.requiredFeeSats
 
-    const recommendedFees = await sdk.recommendedFees()
-
-    if (requiredFeeRate <= recommendedFees.fastestFee) {
+    // Claim only if the fee is at most 1% of the deposit amount
+    if (requiredFee * 100 <= deposit.amountSats) {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: { type: 'rate', satPerVbyte: requiredFeeRate }
+        maxFee: { type: 'fixed', amount: requiredFee }
       }
       await sdk.claimDeposit(claimRequest)
     }

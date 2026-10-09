@@ -1239,26 +1239,54 @@ impl Config {
     }
 }
 
+/// The most a deposit claim may cost.
+///
+/// `Rate` and `NetworkRecommended` can add a share of the deposit amount,
+/// `proportional_ppm` in parts per million (100 ppm is 0.01%), to allow for a
+/// provider fee that grows with the deposit. Unset adds nothing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum MaxFee {
-    // Fixed fee amount in sats
+    /// An absolute cap on the total fee, in sats, whatever the deposit amount.
     Fixed { amount: u64 },
-    // Relative fee rate in satoshis per vbyte
-    Rate { sat_per_vbyte: u64 },
-    // Fastest network recommended fee at the time of claim, with a leeway in satoshis per vbyte
-    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+    /// A fee rate in sats per vbyte, plus the optional share of the deposit.
+    Rate {
+        sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
+    /// The fastest recommended fee rate at the time of the claim plus a leeway in
+    /// sats per vbyte, plus the optional share of the deposit.
+    NetworkRecommended {
+        leeway_sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
 }
 
 impl MaxFee {
+    /// The share of the deposit amount allowed on top of the on-chain part, in
+    /// parts per million.
+    pub(crate) fn proportional_ppm(&self) -> u32 {
+        match self {
+            MaxFee::Fixed { .. } => 0,
+            MaxFee::Rate {
+                proportional_ppm, ..
+            }
+            | MaxFee::NetworkRecommended {
+                proportional_ppm, ..
+            } => proportional_ppm.unwrap_or(0),
+        }
+    }
+
+    /// The on-chain part of the ceiling, priced at the current fee market.
     pub(crate) async fn to_fee(&self, client: &dyn BitcoinChainService) -> Result<Fee, SdkError> {
         match self {
             MaxFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
-            MaxFee::Rate { sat_per_vbyte } => Ok(Fee::Rate {
+            MaxFee::Rate { sat_per_vbyte, .. } => Ok(Fee::Rate {
                 sat_per_vbyte: *sat_per_vbyte,
             }),
             MaxFee::NetworkRecommended {
                 leeway_sat_per_vbyte,
+                ..
             } => {
                 let recommended_fees = client.recommended_fees().await?;
                 let max_fee_rate = recommended_fees
@@ -1636,11 +1664,16 @@ pub struct PreparePaymentLinkResponse {
 impl std::fmt::Display for MaxFee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MaxFee::Fixed { amount } => write!(f, "Fixed: {amount}"),
-            MaxFee::Rate { sat_per_vbyte } => write!(f, "Rate: {sat_per_vbyte}"),
+            MaxFee::Fixed { amount } => write!(f, "Fixed: {amount}")?,
+            MaxFee::Rate { sat_per_vbyte, .. } => write!(f, "Rate: {sat_per_vbyte}")?,
             MaxFee::NetworkRecommended {
                 leeway_sat_per_vbyte,
-            } => write!(f, "NetworkRecommended: {leeway_sat_per_vbyte}"),
+                ..
+            } => write!(f, "NetworkRecommended: {leeway_sat_per_vbyte}")?,
+        }
+        match self.proportional_ppm() {
+            0 => Ok(()),
+            ppm => write!(f, " + {ppm} ppm"),
         }
     }
 }
@@ -3441,5 +3474,43 @@ mod tests {
         assert!(!spark_payment(Some(orchestra_info())).is_conversion_child());
 
         assert!(!spark_payment(None).is_conversion_child());
+    }
+
+    #[test_all]
+    fn claim_error_stored_with_a_fee_and_rate_still_loads() {
+        let stored = r#"{"MaxDepositClaimFeeExceeded":{"tx":"tx","vout":1,
+            "max_fee":{"Rate":{"sat_per_vbyte":2}},"required_fee_sats":500,
+            "required_fee_rate_sat_per_vbyte":6}}"#;
+        let error: crate::DepositClaimError = serde_json::from_str(stored).unwrap();
+        assert_eq!(
+            error,
+            crate::DepositClaimError::MaxDepositClaimFeeExceeded {
+                tx: "tx".to_string(),
+                vout: 1,
+                max_fee_sats: None,
+                required_fee_sats: 500,
+            }
+        );
+    }
+
+    #[test_all]
+    fn max_fee_stored_without_a_proportional_part_still_loads() {
+        let rate: MaxFee = serde_json::from_str(r#"{"Rate":{"sat_per_vbyte":12}}"#).unwrap();
+        assert_eq!(
+            rate,
+            MaxFee::Rate {
+                sat_per_vbyte: 12,
+                proportional_ppm: None,
+            }
+        );
+        let recommended: MaxFee =
+            serde_json::from_str(r#"{"NetworkRecommended":{"leeway_sat_per_vbyte":3}}"#).unwrap();
+        assert_eq!(
+            recommended,
+            MaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte: 3,
+                proportional_ppm: None,
+            }
+        );
     }
 }
