@@ -35,6 +35,9 @@ pub(super) struct WatchtowerExit {
     recoveries: Vec<Transaction>,
     /// Whether a recovery of `output` is in a block.
     pub(super) recovered: bool,
+    /// Whether the operators co-signed a recovery of `output` before. Only then
+    /// can a transaction have `output` as an input.
+    recovery_cosigned: bool,
 }
 
 /// The result of looking up watchtower exits, by leaf id.
@@ -195,11 +198,7 @@ impl BreezSdk {
         }
         let unsigned = build_recovery(&exit.output, destination, fee_rate_sat_per_vbyte)
             .ok_or_else(|| generic("The output is too small to pay this fee"))?;
-        let outspend = ChainQuery::Outspend(exit.output.outpoint);
-        queries
-            .resolve(|observed| ((), without_result(vec![outspend.clone()], observed)))
-            .await;
-        let spend = output_spend(queries.observed(), exit.output.outpoint);
+        let spend = exit_output_spend(exit, queries).await;
         if let OutputSpend::InBlock { .. } = spend {
             if let Some(spend) = spend.in_block() {
                 self.store_leaf_recovery(UpdateLeafRecovery {
@@ -275,6 +274,7 @@ impl WatchtowerExit {
         output: WatchtowerExitOutput,
         stored: Option<&LeafRecovery>,
         spend: &OutputSpend,
+        recovery_cosigned: bool,
     ) -> Self {
         let recoveries = stored
             .into_iter()
@@ -300,11 +300,13 @@ impl WatchtowerExit {
             output,
             recoveries,
             recovered: stored_spend || matches!(spend, OutputSpend::InBlock { .. }),
+            recovery_cosigned,
         }
     }
 
     /// The exit of a leaf from its stored output alone. `None` when none is
-    /// stored.
+    /// stored. Without the leaf the SDK does not know whether the operators
+    /// co-signed a recovery, so it takes that they did.
     pub(super) fn from_stored(
         value_sats: u64,
         stored: &LeafRecovery,
@@ -319,6 +321,7 @@ impl WatchtowerExit {
             output,
             Some(stored),
             &OutputSpend::Unknown,
+            true,
         )))
     }
 
@@ -346,20 +349,40 @@ impl WatchtowerExit {
     }
 }
 
+/// What spent the output of `exit`. No transaction has it as an input before
+/// the operators co-sign a recovery, so the SDK sends no request until then.
+async fn exit_output_spend(exit: &WatchtowerExit, queries: &mut ChainQueries) -> OutputSpend {
+    if !exit.recovery_cosigned {
+        return OutputSpend::Unspent;
+    }
+    let outspend = ChainQuery::Outspend(exit.output.outpoint);
+    queries
+        .resolve(|observed| ((), without_result(vec![outspend.clone()], observed)))
+        .await;
+    output_spend(queries.observed(), exit.output.outpoint)
+}
+
+/// Whether the operators report `leaf` as recovered: they co-signed a recovery
+/// of its output. `nodes` holds the leaf as the operators last returned it.
+fn is_recovered(leaf: &TreeNode, nodes: &HashMap<TreeNodeId, TreeNode>) -> bool {
+    nodes.get(&leaf.id).unwrap_or(leaf).status == TreeNodeStatus::WatchtowerExitRecovered
+}
+
 /// The lookup of each leaf's output over `observed`, and the queries the caller
-/// has yet to execute: those of the scan, and what spent each output it found.
-/// Such an output is an input of recoveries only.
+/// has yet to execute: those of the scan, and what spent the output it found
+/// for a recovered leaf. Such an output is an input of recoveries only, and the
+/// operators report a leaf as recovered from the moment they co-sign one.
 fn scan_outputs(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
     observed: &[Observation],
 ) -> (HashMap<TreeNodeId, WatchtowerExitLookup>, Vec<ChainQuery>) {
     let scan = scan_watchtower_exits(leaves, nodes, observed);
-    let outspends = scan
-        .lookups
-        .values()
-        .filter_map(|lookup| match lookup {
-            WatchtowerExitLookup::Found { output, .. } => {
+    let outspends = leaves
+        .iter()
+        .filter(|leaf| is_recovered(leaf, nodes))
+        .filter_map(|leaf| match scan.lookups.get(&leaf.id) {
+            Some(WatchtowerExitLookup::Found { output, .. }) => {
                 Some(ChainQuery::Outspend(output.outpoint))
             }
             _ => None,
@@ -397,8 +420,10 @@ struct LookedUpExit {
     update: Option<UpdateLeafRecovery>,
 }
 
+/// `recovered` is whether the operators report `leaf` as recovered.
 fn looked_up_exit(
     leaf: &TreeNode,
+    recovered: bool,
     lookup: WatchtowerExitLookup,
     stored: Option<&LeafRecovery>,
     observed: &[Observation],
@@ -419,6 +444,8 @@ fn looked_up_exit(
             // The SDK stores a spend only when storage holds its output.
             let spent_output_stored = in_block.is_some()
                 || stored_output.is_none_or(|stored| same_outpoint(stored, &output));
+            // Only a recovered leaf has a spend to check.
+            let complete = !recovered || spend.is_known();
             let update = UpdateLeafRecovery {
                 leaf_id: leaf_id.clone(),
                 chain_checked_at: Some(now),
@@ -439,7 +466,6 @@ fn looked_up_exit(
             // A quote stores what it found only once its check of the leaf is
             // complete, so a stored output without a check time is one a sync
             // has yet to finish checking.
-            let complete = spend.is_known();
             (output, spend, (new && complete).then_some(update))
         }
         // An output the chain service reported earlier takes precedence over
@@ -459,7 +485,7 @@ fn looked_up_exit(
     };
     Ok(LookedUpExit {
         exit: Ok(WatchtowerExit::new(
-            leaf_id, leaf.value, output, stored, &spend,
+            leaf_id, leaf.value, output, stored, &spend, recovered,
         )),
         update,
     })
@@ -492,8 +518,14 @@ async fn store_watchtower_exit_lookups(
                  tx in a block above it has no output for the leaf's key"
             );
         }
-        let looked_up =
-            looked_up_exit(leaf, lookup, stored.get(&leaf_id), queries.observed(), now)?;
+        let looked_up = looked_up_exit(
+            leaf,
+            is_recovered(leaf, nodes),
+            lookup,
+            stored.get(&leaf_id),
+            queries.observed(),
+            now,
+        )?;
         if let Some(update) = looked_up.update {
             store_update(storage, update).await;
         }
@@ -819,6 +851,7 @@ mod tests {
             output,
             stored,
             &OutputSpend::Unspent,
+            true,
         )
     }
 
@@ -912,7 +945,7 @@ mod tests {
     #[test]
     fn a_spend_the_chain_service_shows_in_a_block_recovered_the_exit() {
         let recovered = |spend: &OutputSpend| {
-            WatchtowerExit::new(LEAF_ID.to_string(), 10_955, output(), None, spend).recovered
+            WatchtowerExit::new(LEAF_ID.to_string(), 10_955, output(), None, spend, true).recovered
         };
 
         assert!(recovered(&in_block(Some(101))));
@@ -1121,8 +1154,8 @@ mod tests {
     }
 
     #[test]
-    fn a_found_output_is_checked_for_a_spend() {
-        let exited = exited_leaf(TreeNodeStatus::OnChain);
+    fn a_found_output_of_a_recovered_leaf_is_checked_for_a_spend() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
         let leaves = [exited.leaf.clone()];
         let mut observed = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
 
@@ -1144,6 +1177,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_found_output_of_a_leaf_that_is_not_recovered_is_not_checked_for_a_spend() {
+        let exited = exited_leaf(TreeNodeStatus::OnChain);
+        let leaves = [exited.leaf.clone()];
+        let observed = vec![exited.parent_spent.clone(), exited.direct_tx.clone()];
+
+        let (lookups, pending) = scan_outputs(&leaves, &HashMap::new(), &observed);
+        assert_eq!(lookups[&exited.leaf.id], found(&exited, Some(100)));
+        assert!(pending.is_empty());
+
+        // The operators report the leaf as recovered since the wallet last
+        // listed it.
+        let mut recovered = exited.leaf.clone();
+        recovered.status = TreeNodeStatus::WatchtowerExitRecovered;
+        let nodes = HashMap::from([(recovered.id.clone(), recovered)]);
+        assert_eq!(
+            scan_outputs(&leaves, &nodes, &observed).1,
+            vec![ChainQuery::Outspend(exited.found.outpoint)]
+        );
+    }
+
     fn found(exited: &ExitedLeaf, block_height: Option<u32>) -> WatchtowerExitLookup {
         WatchtowerExitLookup::Found {
             output: exited.found.clone(),
@@ -1160,11 +1214,12 @@ mod tests {
 
     #[test]
     fn an_output_found_in_a_block_is_stored_with_the_recovery_in_a_block() {
-        let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
         let in_block_output = stored_output_of(&exited.found, 100);
         let looked_up = |stored: Option<&LeafRecovery>, observed: &[Observation]| {
             looked_up_exit(
                 &exited.leaf,
+                true,
                 found(&exited, Some(100)),
                 stored,
                 observed,
@@ -1220,13 +1275,40 @@ mod tests {
     }
 
     #[test]
-    fn a_spend_is_only_stored_with_the_output_it_spends() {
+    fn the_check_of_a_leaf_that_is_not_recovered_is_complete_once_its_output_is_found() {
         let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+
+        let looked_up = looked_up_exit(
+            &exited.leaf,
+            false,
+            found(&exited, Some(100)),
+            None,
+            &[],
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(
+            looked_up.update,
+            Some(UpdateLeafRecovery {
+                leaf_id: LEAF_ID.to_string(),
+                chain_checked_at: Some(1_000),
+                watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+                ..Default::default()
+            })
+        );
+        assert!(!looked_up.exit.unwrap().recovered);
+    }
+
+    #[test]
+    fn a_spend_is_only_stored_with_the_output_it_spends() {
+        let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
         let spend_in_block = [spent(&exited.found, true, Some(101))];
         // The chain service did not name the block of the output's transaction.
         let looked_up = |stored: Option<&LeafRecovery>| {
             looked_up_exit(
                 &exited.leaf,
+                true,
                 found(&exited, None),
                 stored,
                 &spend_in_block,
@@ -1257,7 +1339,7 @@ mod tests {
         let held = output_at("05", 9_800);
         let stored = stored_with(Some(stored_output_of(&exited.found, 100)));
         let looked_up = |lookup: WatchtowerExitLookup, stored: Option<&LeafRecovery>| {
-            looked_up_exit(&exited.leaf, lookup, stored, &[], 1_000).unwrap()
+            looked_up_exit(&exited.leaf, false, lookup, stored, &[], 1_000).unwrap()
         };
 
         for lookup in [
@@ -1286,9 +1368,15 @@ mod tests {
             WatchtowerExitLookup::Pending,
         ] {
             for stored in [None, Some(stored_with(None))] {
-                let found =
-                    looked_up_exit(&exited.leaf, lookup.clone(), stored.as_ref(), &[], 1_000)
-                        .unwrap();
+                let found = looked_up_exit(
+                    &exited.leaf,
+                    false,
+                    lookup.clone(),
+                    stored.as_ref(),
+                    &[],
+                    1_000,
+                )
+                .unwrap();
                 assert_eq!(found.update, None);
                 assert_eq!(found.exit, Err(lookup.clone()));
             }
@@ -1549,6 +1637,31 @@ mod tests {
                     block_height: 101,
                 })
             );
+        }
+
+        #[tokio::test]
+        async fn the_spend_of_an_output_is_requested_only_once_a_recovery_is_cosigned() {
+            let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+            let exit = |recovery_cosigned| {
+                WatchtowerExit::new(
+                    LEAF_ID.to_string(),
+                    exited.leaf.value,
+                    exited.found.clone(),
+                    None,
+                    &OutputSpend::Unknown,
+                    recovery_cosigned,
+                )
+            };
+            let chain = chain_knowing(&[spent(&exited.found, true, Some(101))]);
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let spend = exit_output_spend(&exit(false), &mut queries).await;
+            assert_eq!(spend, OutputSpend::Unspent);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 0);
+
+            let spend = exit_output_spend(&exit(true), &mut queries).await;
+            assert!(matches!(spend, OutputSpend::InBlock { .. }));
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
         }
 
         #[tokio::test]
