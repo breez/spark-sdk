@@ -27,16 +27,11 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
                 if isinstance(
                     deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
                 ):
-                    max_fee_str = "none"
-                    if deposit.claim_error.max_fee is not None:
-                        if isinstance(deposit.claim_error.max_fee, Fee.FIXED):
-                            max_fee_str = f"{deposit.claim_error.max_fee.amount} sats"
-                        elif isinstance(deposit.claim_error.max_fee, Fee.RATE):
-                            max_fee_str = f"{deposit.claim_error.max_fee.sat_per_vbyte} sats/vByte"
+                    max_fee_sats = deposit.claim_error.max_fee_sats
+                    max_fee_str = "none" if max_fee_sats is None else f"{max_fee_sats} sats"
                     logging.info(
-                        f"Claim failed: Fee exceeded. Max: {max_fee_str}, "
-                        f"Required: {deposit.claim_error.required_fee_sats} sats "
-                        f"or {deposit.claim_error.required_fee_rate_sat_per_vbyte} sats/vByte"
+                        f"Max claim fee exceeded. Max: {max_fee_str}, "
+                        f"Required: {deposit.claim_error.required_fee_sats} sats"
                     )
                 elif isinstance(deposit.claim_error, DepositClaimError.MISSING_UTXO):
                     logging.info("Claim failed: UTXO not found")
@@ -82,7 +77,7 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
                 claim_request = ClaimDepositRequest(
                     txid=deposit.txid,
                     vout=deposit.vout,
-                    max_fee=Fee.FIXED(amount=required_fee),
+                    max_fee=MaxFee.FIXED(amount=required_fee),
                 )
                 await sdk.claim_deposit(request=claim_request)
     except Exception as error:
@@ -152,8 +147,10 @@ async def set_max_fee_to_recommended_fees():
     config.api_key = "<breez api key>"
 
     # Set the maximum fee to the fastest network recommended fee at the time of claim
-    # with a leeway of 1 sats/vbyte
-    config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1)
+    # with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+    config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(
+        leeway_sat_per_vbyte=1, proportional_ppm=1000
+    )
     # ANCHOR_END: set-max-fee-to-recommended-fees
     logging.info(f"Config: {config}")
 
@@ -164,15 +161,14 @@ async def custom_claim_logic(sdk: BreezSdk, deposit):
         if isinstance(
             deposit.claim_error, DepositClaimError.MAX_DEPOSIT_CLAIM_FEE_EXCEEDED
         ):
-            required_fee_rate = deposit.claim_error.required_fee_rate_sat_per_vbyte
+            required_fee = deposit.claim_error.required_fee_sats
 
-            recommended_fees = await sdk.recommended_fees()
-
-            if required_fee_rate <= recommended_fees.fastest_fee:
+            # Claim only if the fee is at most 1% of the deposit amount
+            if required_fee * 100 <= deposit.amount_sats:
                 claim_request = ClaimDepositRequest(
                     txid=deposit.txid,
                     vout=deposit.vout,
-                    max_fee=MaxFee.RATE(sat_per_vbyte=required_fee_rate),
+                    max_fee=MaxFee.FIXED(amount=required_fee),
                 )
                 await sdk.claim_deposit(request=claim_request)
     except Exception as error:

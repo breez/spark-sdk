@@ -831,14 +831,14 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
             print("Cannot specify fee-sat or sat-per-vbyte when using recommended fee")
             return
         }
-        maxFee = .networkRecommended(leewaySatPerVbyte: leeway)
+        maxFee = .networkRecommended(leewaySatPerVbyte: leeway, proportionalPpm: nil)
     } else if let feeSat, satPerVbyte != nil {
         print("Cannot specify both fee-sat and sat-per-vbyte")
         return
     } else if let feeSat {
         maxFee = .fixed(amount: feeSat)
     } else if let satPerVbyte {
-        maxFee = .rate(satPerVbyte: satPerVbyte)
+        maxFee = .rate(satPerVbyte: satPerVbyte, proportionalPpm: nil)
     } else {
         maxFee = nil
     }

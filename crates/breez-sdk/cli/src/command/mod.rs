@@ -363,6 +363,10 @@ pub enum Command {
         /// If provided, the max fee per vbyte will be set to the fastest recommended fee at time of claim, plus the leeway.
         #[arg(long)]
         recommended_fee_leeway: Option<u64>,
+
+        /// A share of the deposit amount, in parts per million, allowed on top of the max fee per vbyte or the recommended fee
+        #[arg(long)]
+        proportional_ppm: Option<u32>,
     },
     /// Quote both ways of claiming a deposit
     FetchClaimDepositQuote {
@@ -645,7 +649,16 @@ pub(crate) async fn execute_command(
             fee_sat,
             sat_per_vbyte,
             recommended_fee_leeway,
+            proportional_ppm,
         } => {
+            if proportional_ppm.is_some()
+                && sat_per_vbyte.is_none()
+                && recommended_fee_leeway.is_none()
+            {
+                return Err(anyhow::anyhow!(
+                    "proportional_ppm requires sat_per_vbyte or recommended_fee_leeway"
+                ));
+            }
             let max_fee = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
                 if fee_sat.is_some() || sat_per_vbyte.is_some() {
                     return Err(anyhow::anyhow!(
@@ -654,6 +667,7 @@ pub(crate) async fn execute_command(
                 }
                 Some(MaxFee::NetworkRecommended {
                     leeway_sat_per_vbyte: recommended_fee_leeway,
+                    proportional_ppm,
                 })
             } else {
                 match (fee_sat, sat_per_vbyte) {
@@ -663,7 +677,10 @@ pub(crate) async fn execute_command(
                         ));
                     }
                     (Some(fee_sat), None) => Some(MaxFee::Fixed { amount: fee_sat }),
-                    (None, Some(sat_per_vbyte)) => Some(MaxFee::Rate { sat_per_vbyte }),
+                    (None, Some(sat_per_vbyte)) => Some(MaxFee::Rate {
+                        sat_per_vbyte,
+                        proportional_ppm,
+                    }),
                     (None, None) => None,
                 }
             };

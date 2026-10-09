@@ -1039,7 +1039,7 @@ public static class Commands
                 Console.WriteLine("Cannot specify fee-sat or sat-per-vbyte when using recommended fee");
                 return;
             }
-            maxFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr));
+            maxFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr), proportionalPpm: null);
         }
         else if (feeSatStr != null && satPerVbyteStr != null)
         {
@@ -1052,7 +1052,7 @@ public static class Commands
         }
         else if (satPerVbyteStr != null)
         {
-            maxFee = new MaxFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr));
+            maxFee = new MaxFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr), proportionalPpm: null);
         }
 
         var result = await sdk.ClaimDeposit(new ClaimDepositRequest(

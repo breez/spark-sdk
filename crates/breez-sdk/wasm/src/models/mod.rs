@@ -244,9 +244,8 @@ pub enum DepositClaimError {
     MaxDepositClaimFeeExceeded {
         tx: String,
         vout: u32,
-        max_fee: Option<Fee>,
+        max_fee_sats: Option<u64>,
         required_fee_sats: u64,
-        required_fee_rate_sat_per_vbyte: u64,
     },
     MissingUtxo {
         tx: String,
@@ -848,9 +847,17 @@ pub struct StableBalanceConfig {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
 pub enum MaxFee {
-    Fixed { amount: u64 },
-    Rate { sat_per_vbyte: u64 },
-    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+    Fixed {
+        amount: u64,
+    },
+    Rate {
+        sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
+    NetworkRecommended {
+        leeway_sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

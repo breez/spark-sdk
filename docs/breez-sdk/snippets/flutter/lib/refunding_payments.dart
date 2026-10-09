@@ -11,14 +11,10 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
 
     final claimError = deposit.claimError;
     if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
-      final maxFeeStr = claimError.maxFee != null
-          ? (claimError.maxFee is Fee_Fixed
-              ? '${(claimError.maxFee as Fee_Fixed).amount} sats'
-              : '${(claimError.maxFee as Fee_Rate).satPerVbyte} sats/vByte')
-          : 'none';
+      final maxFee = claimError.maxFeeSats;
+      final maxFeeStr = maxFee != null ? '$maxFee sats' : 'none';
       print("Max claim fee exceeded. Max: $maxFeeStr, "
-          "Required: ${claimError.requiredFeeSats} sats or "
-          "${claimError.requiredFeeRateSatPerVbyte} sats/vByte");
+          "Required: ${claimError.requiredFeeSats} sats");
     } else if (claimError is DepositClaimError_MissingUtxo) {
       print("UTXO not found when claiming deposit");
     } else if (claimError is DepositClaimError_DepositTooSmall) {
@@ -126,10 +122,10 @@ Future<void> setMaxFeeToRecommendedFees() async {
   config = config.copyWith(apiKey: "<breez api key>");
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
-  // with a leeway of 1 sats/vbyte
+  // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
   config = config.copyWith(
-      maxDepositClaimFee:
-          MaxFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)));
+      maxDepositClaimFee: MaxFee.networkRecommended(
+          leewaySatPerVbyte: BigInt.from(1), proportionalPpm: 1000));
   // ANCHOR_END: set-max-fee-to-recommended-fees
   print("Config: $config");
 }
@@ -138,15 +134,14 @@ Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR: custom-claim-logic
   final claimError = deposit.claimError;
   if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
-    final requiredFeeRate = claimError.requiredFeeRateSatPerVbyte;
+    final requiredFee = claimError.requiredFeeSats;
 
-    final recommendedFees = await sdk.recommendedFees();
-
-    if (requiredFeeRate <= recommendedFees.fastestFee) {
+    // Claim only if the fee is at most 1% of the deposit amount
+    if (requiredFee * BigInt.from(100) <= deposit.amountSats) {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: MaxFee.rate(satPerVbyte: requiredFeeRate),
+        maxFee: MaxFee.fixed(amount: requiredFee),
       );
       await sdk.claimDeposit(request: claimRequest);
     }

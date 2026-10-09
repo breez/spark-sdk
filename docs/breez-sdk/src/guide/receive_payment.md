@@ -27,7 +27,7 @@ For on-chain payments you can generate a Bitcoin deposit address to receive paym
 On-chain deposits go through the following lifecycle:
 
 1. **Detected**: The SDK detects the deposit, often while it is still in the mempool, and emits a {{#enum SdkEvent::NewDeposits}} event.
-2. **Claimed automatically**: After **3 on-chain confirmations** the SDK attempts a standard claim. With a high enough [max claim fee](/guide/config.md#max-deposit-claim-fee) it can credit the deposit sooner, even before it confirms, through an [instant or expedited claim](/guide/onchain_claims.md#instant-expedited-claims).
+2. **Claimed automatically**: After **3 on-chain confirmations** the SDK attempts a standard claim. With a high enough [max claim fee](/guide/config.md#max-deposit-claim-fee) it can credit the deposit sooner, even before it confirms, through an [instant or expedited claim](/guide/onchain_claims.md#how-deposits-are-claimed).
 3. **Claimed or unclaimed**: If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
 
 {{#tabs receive_payment:receive-payment-onchain}}

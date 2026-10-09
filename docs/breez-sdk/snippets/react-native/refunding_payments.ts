@@ -6,7 +6,6 @@ import {
   DepositClaimError_Tags,
   Fee,
   type DepositInfo,
-  Fee_Tags,
   defaultConfig,
   Network,
   MaxFee
@@ -24,17 +23,12 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
     if (deposit.claimError != null) {
       if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
         let maxFeeStr = 'none'
-        if (deposit.claimError.inner.maxFee != null) {
-          if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Fixed) {
-            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.amount} sats`
-          } else if (deposit.claimError.inner.maxFee.tag === Fee_Tags.Rate) {
-            maxFeeStr = `${deposit.claimError.inner.maxFee.inner.satPerVbyte} sats/vByte`
-          }
+        if (deposit.claimError.inner.maxFeeSats != null) {
+          maxFeeStr = `${deposit.claimError.inner.maxFeeSats} sats`
         }
         console.log(
-          `Max claim fee exceeded. Max: ${maxFeeStr}, 
-          Required: ${deposit.claimError.inner.requiredFeeSats} sats 
-          or ${deposit.claimError.inner.requiredFeeRateSatPerVbyte} sats/vByte`
+          `Max claim fee exceeded. Max: ${maxFeeStr}, ` +
+          `Required: ${deposit.claimError.inner.requiredFeeSats} sats`
         )
       } else if (deposit.claimError?.tag === DepositClaimError_Tags.MissingUtxo) {
         console.log('UTXO not found when claiming deposit')
@@ -136,8 +130,11 @@ const setMaxFeeToRecommendedFees = () => {
   config.apiKey = '<breez api key>'
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
-  // with a leeway of 1 sats/vbyte
-  config.maxDepositClaimFee = new MaxFee.NetworkRecommended({ leewaySatPerVbyte: BigInt(1) })
+  // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
+  config.maxDepositClaimFee = new MaxFee.NetworkRecommended({
+    leewaySatPerVbyte: BigInt(1),
+    proportionalPpm: 1000
+  })
   // ANCHOR_END: set-max-fee-to-recommended-fees
   console.log('Config:', config)
 }
@@ -145,15 +142,14 @@ const setMaxFeeToRecommendedFees = () => {
 const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: custom-claim-logic
   if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
-    const requiredFeeRate = deposit.claimError.inner.requiredFeeRateSatPerVbyte
+    const requiredFee = deposit.claimError.inner.requiredFeeSats
 
-    const recommendedFees = await sdk.recommendedFees()
-
-    if (requiredFeeRate <= recommendedFees.fastestFee) {
+    // Claim only if the fee is at most 1% of the deposit amount
+    if (requiredFee * BigInt(100) <= deposit.amountSats) {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate })
+        maxFee: new MaxFee.Fixed({ amount: requiredFee })
       }
       await sdk.claimDeposit(claimRequest)
     }
