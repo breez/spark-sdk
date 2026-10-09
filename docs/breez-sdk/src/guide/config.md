@@ -16,7 +16,7 @@ You can also disable automatic claiming entirely. Deposits that are not automati
 
 By default, automatic claiming is enabled with a maximum feerate of 1 sat/vbyte plus 0.1% of the deposit amount.
 
-This ceiling also caps what the Spark Service Provider may charge to credit a deposit before its third confirmation, through an [instant or expedited claim](./onchain_claims.md#how-deposits-are-claimed). Raising it both tolerates higher on-chain fees and lets deposits reach the balance sooner. The default is sized for the standard claim, so deposits usually wait for the standard claim at 3 confirmations until it is raised. The instant claim fee grows with the deposit, so a ceiling without a share of the deposit that is generous enough to credit a small deposit instantly may still leave a large one waiting.
+This ceiling also caps what the Spark Service Provider may charge to credit a deposit before its third confirmation, through an [instant or expedited claim](./onchain_claims.md#how-deposits-are-claimed). Raising it both tolerates higher on-chain fees and lets deposits reach the balance sooner. The default is sized for the standard claim, so deposits usually wait for the standard claim at 3 confirmations until it is raised.
 
 This ceiling applies to every deposit. A single deposit can be given [a ceiling of its own](./onchain_manual_claims.md#giving-one-deposit-its-own-max-fee), which then governs it instead.
 
