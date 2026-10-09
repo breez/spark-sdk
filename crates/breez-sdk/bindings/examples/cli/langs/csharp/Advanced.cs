@@ -204,9 +204,8 @@ public static class AdvancedCommands
         var prepared = await sdk.PrepareRecoverFunds(request: request);
         if (prepared.leaves.Length == 0)
         {
-            Console.WriteLine(
-                "Nothing to recover: each selected leaf is finished, not worth recovering at this " +
-                "fee rate, or its funds were not found.");
+            Console.WriteLine("Nothing to recover.");
+            PrintSkipped(prepared.skipped);
             return;
         }
         PrintQuote(prepared);
@@ -287,6 +286,23 @@ public static class AdvancedCommands
             $"{prepared.leaves.Length} leaf(s), {cooperative} cooperative and " +
             $"{prepared.leaves.Length - cooperative} unilateral: " +
             $"recovering {prepared.recoverableValueSats} sats for {prepared.totalFeeSats} sats in fees");
+        PrintSkipped(prepared.skipped);
+    }
+
+    private static void PrintSkipped(SkippedLeaf[] skipped)
+    {
+        foreach (var leaf in skipped)
+        {
+            var reason = leaf.reason switch
+            {
+                SkippedLeafReason.FeeExceedsValue => "recovering it costs too much at this fee rate",
+                SkippedLeafReason.FundsNotFound => "its funds were not found on-chain",
+                SkippedLeafReason.Unverified => "its funds could not be looked up",
+                SkippedLeafReason.NotRecoverable nr => nr.message,
+                _ => leaf.reason.ToString()
+            };
+            Console.WriteLine($"Left out: leaf {leaf.leafId} ({leaf.valueSats} sats): {reason}");
+        }
     }
 
     private static ExitLeafSelection RecoverySelection(bool all, string[] leafIds)

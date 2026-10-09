@@ -6,6 +6,21 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import org.jline.reader.LineReader
 
+private fun skippedLeafMessage(reason: SkippedLeafReason): String {
+    return when (reason) {
+        is SkippedLeafReason.FeeExceedsValue -> "recovering it costs too much at this fee rate"
+        is SkippedLeafReason.FundsNotFound -> "its funds were not found on-chain"
+        is SkippedLeafReason.Unverified -> "its funds could not be looked up"
+        is SkippedLeafReason.NotRecoverable -> reason.message
+    }
+}
+
+fun printSkipped(skipped: List<SkippedLeaf>) {
+    for (leaf in skipped) {
+        println("Left out: leaf ${leaf.leafId} (${leaf.valueSats} sats): ${skippedLeafMessage(leaf.reason)}")
+    }
+}
+
 /**
  * Represents a single advanced subcommand.
  */
@@ -217,10 +232,8 @@ suspend fun recoverFunds(
 ) {
     var prepared = sdk.prepareRecoverFunds(request)
     if (prepared.leaves.isEmpty()) {
-        println(
-            "Nothing to recover: each selected leaf is finished, not worth recovering at this fee " +
-            "rate, or its funds were not found."
-        )
+        println("Nothing to recover.")
+        printSkipped(prepared.skipped)
         return
     }
     printQuote(prepared)
@@ -298,6 +311,7 @@ fun printQuote(prepared: PrepareRecoverFundsResponse) {
         "${prepared.leaves.size - cooperative} unilateral: " +
         "recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees"
     )
+    printSkipped(prepared.skipped)
 }
 
 fun recoverySelection(all: Boolean, leafIds: List<String>): ExitLeafSelection {

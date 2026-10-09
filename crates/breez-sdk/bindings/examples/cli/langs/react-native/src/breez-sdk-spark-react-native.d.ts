@@ -122,6 +122,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type RecoveryVerdict = any;
   export const RecoveryRedoReason: any;
   export type RecoveryRedoReason = any;
+  export type SkippedLeaf = any;
+  export const SkippedLeafReason_Tags: any;
+  export type SkippedLeafReason = any;
 
   // --- proxy ---
   export type ProxyConfig = any;
