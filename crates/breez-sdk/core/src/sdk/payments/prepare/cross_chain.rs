@@ -180,6 +180,7 @@ pub(crate) async fn prepare(
     max_slippage_bps: Option<u32>,
     target_overpay_bps: Option<u32>,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
+    sdk.cross_chain_context.ensure_enabled()?;
     validate_request(amount, conversion_options.as_ref())?;
 
     let address_family = input::detect_address_family(address).ok_or_else(|| {
