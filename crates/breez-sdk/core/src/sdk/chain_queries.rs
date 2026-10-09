@@ -61,6 +61,16 @@ pub(crate) struct ChainQueries {
     stops_after_failure: bool,
     /// Set once the chain service failed a request.
     failed: bool,
+    /// A call requests the tip height once.
+    tip: Tip,
+}
+
+#[derive(Clone, Copy)]
+enum Tip {
+    NotRequested,
+    /// The chain service failed the request.
+    Unavailable,
+    At(u32),
 }
 
 impl ChainQueries {
@@ -72,6 +82,7 @@ impl ChainQueries {
             observed: Vec::new(),
             stops_after_failure: false,
             failed: false,
+            tip: Tip::NotRequested,
         }
     }
 
@@ -155,13 +166,19 @@ impl ChainQueries {
             .collect()
     }
 
-    async fn tip_height(&self) -> Option<u32> {
-        match self.chain.tip_height().await {
-            Ok(tip) => Some(tip),
-            Err(e) => {
-                warn!("Failed to read the tip height: {e}");
-                None
-            }
+    async fn tip_height(&mut self) -> Option<u32> {
+        if matches!(self.tip, Tip::NotRequested) {
+            self.tip = match self.chain.tip_height().await {
+                Ok(tip) => Tip::At(tip),
+                Err(e) => {
+                    warn!("Failed to read the tip height: {e}");
+                    Tip::Unavailable
+                }
+            };
+        }
+        match self.tip {
+            Tip::At(tip) => Some(tip),
+            Tip::NotRequested | Tip::Unavailable => None,
         }
     }
 
@@ -656,6 +673,11 @@ mod tests {
         let mut queries = ChainQueries::new(chain.clone());
         queries.check_stored_in_block(&transactions[3..]).await;
         assert_eq!(chain.requests.load(Ordering::SeqCst), 3);
+
+        // A call requests the tip height once, also when the request fails.
+        queries.check_stored_in_block(&transactions).await;
+        queries.check_stored_in_block(&transactions).await;
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 4);
     }
 
     #[macros::async_test_all]

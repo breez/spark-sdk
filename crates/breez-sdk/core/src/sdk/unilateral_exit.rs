@@ -89,6 +89,7 @@ impl BreezSdk {
             .spark_wallet
             .load_selected_exit_context(selection)
             .await?;
+        let swept = leaves_with_stored_sweep(&context.leaf_ids, stored);
         // The chain walk below drops them as well, but only while the chain can
         // be read.
         context
@@ -183,7 +184,7 @@ impl BreezSdk {
                 single_utxo_sats: quote.single_utxo_funding_sat,
                 per_branch,
             }),
-            exit_chain_state: exit_chain_state_model(exit_chain_state),
+            exit_chain_state: exit_chain_state_model(with_swept_refunds(exit_chain_state, swept)),
         })
     }
 
@@ -514,6 +515,44 @@ fn sweep_in_block(sweep: &RefundSweep) -> Option<ChainTransaction> {
         txid: sweep.txid.to_string(),
         block_height,
     })
+}
+
+pub(super) fn has_stored_sweep(stored: &HashMap<String, LeafRecovery>, leaf_id: &str) -> bool {
+    stored
+        .get(leaf_id)
+        .is_some_and(|leaf| leaf.unilateral_exit_sweep.is_some())
+}
+
+/// The leaves among `leaf_ids` whose sweep storage holds.
+fn leaves_with_stored_sweep(
+    leaf_ids: &[TreeNodeId],
+    stored: &HashMap<String, LeafRecovery>,
+) -> Vec<TreeNodeId> {
+    leaf_ids
+        .iter()
+        .filter(|leaf_id| has_stored_sweep(stored, &leaf_id.to_string()))
+        .cloned()
+        .collect()
+}
+
+/// `state` with the refund of each leaf in `swept` reported as swept. The SDK
+/// does not read the exit of such a leaf from the chain: storage holds its
+/// sweep.
+fn with_swept_refunds(
+    mut state: WalletExitChainState,
+    swept: Vec<TreeNodeId>,
+) -> WalletExitChainState {
+    state
+        .refunds
+        .retain(|refund| !swept.contains(&refund.leaf_id));
+    state
+        .refunds
+        .extend(swept.into_iter().map(|leaf_id| WalletExitRefund {
+            leaf_id,
+            state: WalletExitRefundState::Swept,
+        }));
+    state.refunds.sort_by(|a, b| a.leaf_id.cmp(&b.leaf_id));
+    state
 }
 
 /// The leaves of `before` that `context` dropped although their exit did not
@@ -1249,6 +1288,38 @@ mod tests {
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
         }
+    }
+
+    #[test]
+    fn a_leaf_with_a_stored_sweep_is_reported_as_swept() {
+        let id = |n: u8| {
+            TreeNodeId::from_str(&format!("00000000-0000-0000-0000-0000000000{n:02}")).unwrap()
+        };
+        let stored = HashMap::from([(
+            id(1).to_string(),
+            LeafRecovery {
+                leaf_id: id(1).to_string(),
+                chain_checked_at: Some(900),
+                watchtower_exit_output: None,
+                watchtower_exit_recoveries: Vec::new(),
+                watchtower_exit_spend: None,
+                unilateral_exit_sweep: Some(ChainTransaction {
+                    txid: "sweep".to_string(),
+                    block_height: 100,
+                }),
+            },
+        )]);
+
+        let swept = leaves_with_stored_sweep(&[id(1), id(2)], &stored);
+        assert_eq!(swept, vec![id(1)]);
+
+        let state = with_swept_refunds(WalletExitChainState::default(), swept);
+        assert_eq!(state.refunds.len(), 1);
+        assert_eq!(state.refunds[0].leaf_id, id(1));
+        assert!(matches!(
+            state.refunds[0].state,
+            WalletExitRefundState::Swept
+        ));
     }
 
     #[test]
