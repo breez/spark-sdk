@@ -6,6 +6,7 @@ This directory contains the integration tests for the Spark SDK. These tests run
 
 - **Docker**: Must be installed and running
 - **Internet connection**: Only needed for pulling Docker images during the first run
+- **The operator image**: the operator runs from `ghcr.io/breez/spark-operator`, which is private. Build it locally with `breez/publish-image.sh --local` from github.com/breez/spark-breez, at the commit `docker/spark-so-private.dockerfile` pins, or `docker login ghcr.io` to pull it
 
 ## Running the Tests
 

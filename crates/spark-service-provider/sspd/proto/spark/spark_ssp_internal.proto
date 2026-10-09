@@ -1,6 +1,6 @@
-// Vendored from breez/spark (branch ssp-enabled, commit 42afde75a),
-// protos/spark_ssp_internal.proto, with the common.proto and spark.proto imports
-// changed to resolve against the spark crate's protos.
+// Vendored from breez/spark-breez (branch breez), protos/spark_ssp_internal.proto,
+// with the common.proto and spark.proto imports changed to resolve against the
+// spark crate's protos.
 syntax = "proto3";
 
 package spark_ssp_internal;
@@ -16,6 +16,8 @@ import "validate/validate.proto";
 service SparkSspInternalService {
     rpc prepare_tree_address(spark.PrepareTreeAddressRequest) returns (spark.PrepareTreeAddressResponse) {}
     rpc create_tree(spark.CreateTreeRequest) returns (spark.CreateTreeResponse) {}
+    rpc finalize_node_signatures(spark.FinalizeNodeSignaturesRequest) returns (spark.FinalizeNodeSignaturesResponse) {}
+    rpc query_nodes(spark.QueryNodesRequest) returns (spark.QueryNodesResponse) {}
     rpc initiate_counter_transfer(CounterTransferRequest) returns (spark.StartTransferResponse) {}
     rpc return_stuck_transfer(ReturnStuckTransferRequest) returns (ReturnStuckTransferResponse) {}
     rpc initiate_static_deposit_utxo_swap(InitiateStaticDepositUtxoSwapRequest) returns (InitiateStaticDepositUtxoSwapResponse) {}

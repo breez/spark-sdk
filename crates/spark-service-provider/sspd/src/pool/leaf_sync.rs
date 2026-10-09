@@ -137,6 +137,13 @@ impl LeavesToStore {
             .chain(unreported_before.map(|leaf| (leaf, true)))
         {
             if let Some(current) = reported.remove(&stored.id) {
+                // A leaf that left the pool and came back while the coordinator
+                // answered is stored with a later refund than the answer shows.
+                let current = if is_older(&current, stored) {
+                    stored.clone()
+                } else {
+                    current
+                };
                 to_store.changed |= was_unreported || differs(stored, &current);
                 to_store.ours.push(current);
             } else if was_unreported || asked.contains(&stored.id) {
@@ -160,10 +167,28 @@ fn differs(stored: &TreeNode, current: &TreeNode) -> bool {
         || stored.refund_tx != current.refund_tx
 }
 
+/// Whether `reported` is a copy of `stored` from before its last transfer. Each
+/// transfer lowers the refund's timelock, so for the same node transaction the
+/// higher timelock is the older copy.
+fn is_older(reported: &TreeNode, stored: &TreeNode) -> bool {
+    if reported.node_tx != stored.node_tx {
+        return false;
+    }
+    match (refund_timelock(reported), refund_timelock(stored)) {
+        (Some(reported), Some(stored)) => reported > stored,
+        _ => false,
+    }
+}
+
+fn refund_timelock(node: &TreeNode) -> Option<u32> {
+    let input = node.refund_tx.as_ref()?.input.first()?;
+    Some(input.sequence.to_consensus_u32() & 0xFFFF)
+}
+
 #[cfg(test)]
 mod tests {
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
-    use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use bitcoin::{Sequence, Transaction, TxIn, absolute::LockTime, transaction::Version};
     use spark::tree::SigningKeyshare;
 
     use super::*;
@@ -317,5 +342,53 @@ mod tests {
             vec![],
         );
         assert!(LeavesToStore::new(&gone, &asked(&gone), vec![], &ssp).changed);
+    }
+
+    fn with_refund_timelock(mut node: TreeNode, timelock: u32) -> TreeNode {
+        node.refund_tx = Some(Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                sequence: Sequence::from_consensus(timelock),
+                ..TxIn::default()
+            }],
+            output: vec![],
+        });
+        node
+    }
+
+    #[test]
+    fn a_leaf_that_came_back_during_the_sync_keeps_its_later_refund() {
+        let ssp = key(1);
+        let returned = with_refund_timelock(node("leaf", ssp, TreeNodeStatus::Available), 1_800);
+        let stored = leaves(vec![returned.clone()], vec![], vec![]);
+        let reported = vec![with_refund_timelock(
+            node("leaf", ssp, TreeNodeStatus::Available),
+            2_000,
+        )];
+
+        let to_store = LeavesToStore::new(&stored, &asked(&stored), reported, &ssp);
+
+        assert!(!to_store.changed);
+        assert_eq!(to_store.ours[0].refund_tx, returned.refund_tx);
+    }
+
+    #[test]
+    fn a_later_refund_from_the_coordinator_replaces_the_stored_one() {
+        let ssp = key(1);
+        let stored = leaves(
+            vec![with_refund_timelock(
+                node("leaf", ssp, TreeNodeStatus::Available),
+                2_000,
+            )],
+            vec![],
+            vec![],
+        );
+        let current = with_refund_timelock(node("leaf", ssp, TreeNodeStatus::Available), 1_900);
+
+        let to_store = LeavesToStore::new(&stored, &asked(&stored), vec![current.clone()], &ssp);
+
+        assert!(to_store.changed);
+        assert_eq!(to_store.ours[0].refund_tx, current.refund_tx);
     }
 }

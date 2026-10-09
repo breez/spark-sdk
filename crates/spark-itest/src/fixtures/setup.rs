@@ -11,6 +11,7 @@ use tracing::info;
 
 use crate::fixtures::{
     bitcoind::BitcoindFixture,
+    network::ClusterNetwork,
     spark_so::{OperatorFixture, SparkSoFixture},
     sspd::{LdkSettings, SspdFixture},
     state_snapshot,
@@ -26,6 +27,8 @@ pub struct TestFixtures {
     pub bitcoind: BitcoindFixture,
     pub spark_so: SparkSoFixture,
     sspd: OnceCell<SspdFixture>,
+    // Last, so it is dropped after the containers on it.
+    _network: ClusterNetwork,
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +76,7 @@ impl TestFixtures {
     pub async fn new() -> Result<Self> {
         state_snapshot::check()?;
         let fixture_id = FixtureId::new();
+        let network = ClusterNetwork::create(&fixture_id)?;
 
         let mut bitcoind =
             BitcoindFixture::restored(&fixture_id, &state_snapshot::bitcoind_datadir()).await?;
@@ -89,6 +93,7 @@ impl TestFixtures {
             bitcoind,
             spark_so,
             sspd: OnceCell::new(),
+            _network: network,
         })
     }
 
