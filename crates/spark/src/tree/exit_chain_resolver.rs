@@ -12,9 +12,12 @@ use std::time::Duration;
 
 use platform_utils::time::SystemTime;
 use platform_utils::tokio::sync::Mutex;
-use tracing::trace;
+use tracing::{trace, warn};
 
-use crate::tree::{LeafPedigree, TreeNodeId, TreeService, TreeServiceError, chain_reaches_root};
+use crate::tree::{
+    LeafPedigree, TreeNode, TreeNodeId, TreeService, TreeServiceError, assemble_exit_chains,
+    chain_reaches_root,
+};
 
 /// Delay before a leaf whose chain the operators did not complete is tried again.
 /// Doubles per consecutive failure up to [`MAX_RETRY_DELAY`].
@@ -72,6 +75,75 @@ impl ExitChainResolver {
     /// often this runs it cannot re-pace [`Self::resolve_missing_chains`].
     pub async fn resolve_all_missing_chains(&self) -> Result<(), TreeServiceError> {
         self.resolve(false).await
+    }
+
+    /// The nodes of `leaf_ids` with their ancestors, as the operators hold them.
+    /// Stores the chains among them that changed, so that
+    /// [`Self::stored_nodes_with_ancestors`] returns them when the operators
+    /// cannot be reached.
+    pub async fn fetch_nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, TreeServiceError> {
+        let nodes: HashMap<TreeNodeId, TreeNode> = self
+            .tree_service
+            .fetch_nodes(leaf_ids, true)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect();
+        self.store_changed_chains(&nodes, leaf_ids).await;
+        Ok(nodes)
+    }
+
+    /// The nodes of `leaf_ids` with their ancestors, as the wallet stored them.
+    /// Their statuses are those of the last fetch.
+    pub async fn stored_nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, TreeServiceError> {
+        let stored = self.tree_service.load_exit_chains(leaf_ids).await?;
+        Ok(stored
+            .into_iter()
+            .flat_map(|pedigree| std::iter::once(pedigree.leaf).chain(pedigree.ancestors))
+            .map(|node| (node.id.clone(), node))
+            .collect())
+    }
+
+    /// Stores each complete chain among `nodes` that differs from the stored
+    /// one. Storing a chain announces a change of the exit state, so one that
+    /// did not change is left alone.
+    async fn store_changed_chains(
+        &self,
+        nodes: &HashMap<TreeNodeId, TreeNode>,
+        leaf_ids: &[TreeNodeId],
+    ) {
+        let fetched: Vec<LeafPedigree> = assemble_exit_chains(nodes, leaf_ids)
+            .into_iter()
+            .filter(|pedigree| !pedigree.ancestors.is_empty() && is_complete(pedigree))
+            .collect();
+        if fetched.is_empty() {
+            return;
+        }
+        let fetched_ids: Vec<TreeNodeId> = fetched.iter().map(|p| p.leaf.id.clone()).collect();
+        let stored: HashMap<TreeNodeId, Vec<TreeNode>> =
+            match self.tree_service.load_exit_chains(&fetched_ids).await {
+                Ok(stored) => stored
+                    .into_iter()
+                    .map(|pedigree| (pedigree.leaf.id, pedigree.ancestors))
+                    .collect(),
+                Err(e) => {
+                    warn!("Failed to read the stored exit chains: {e:?}");
+                    return;
+                }
+            };
+        let changed: Vec<LeafPedigree> = fetched
+            .into_iter()
+            .filter(|pedigree| stored.get(&pedigree.leaf.id) != Some(&pedigree.ancestors))
+            .collect();
+        if let Err(e) = self.tree_service.store_exit_chains(&changed).await {
+            warn!("Failed to store the fetched exit chains: {e:?}");
+        }
     }
 
     async fn resolve(&self, honor_backoff: bool) -> Result<(), TreeServiceError> {
@@ -234,9 +306,12 @@ mod tests {
         fetch_calls: Vec<Vec<TreeNodeId>>,
         /// Pedigrees passed to `store_exit_chains`, accumulated across calls.
         stored: Vec<LeafPedigree>,
+        /// What `fetch_nodes` returns. Unset when the operators cannot be
+        /// reached.
+        operator_nodes: Option<Vec<TreeNode>>,
     }
 
-    /// Backs the three `TreeService` methods the resolver calls, recording each
+    /// Backs the `TreeService` methods the resolver calls, recording each
     /// request so tests can assert on it. Every other method is unreachable from
     /// this worker and panics if called.
     #[derive(Default)]
@@ -257,6 +332,10 @@ mod tests {
                 .await
                 .operator_responses
                 .insert(leaf_id, pedigree);
+        }
+
+        async fn set_operator_nodes(&self, nodes: Option<Vec<TreeNode>>) {
+            self.state.lock().await.operator_nodes = nodes;
         }
 
         async fn fetch_call_count(&self) -> usize {
@@ -305,14 +384,23 @@ mod tests {
             _node_ids: &[TreeNodeId],
             _include_parents: bool,
         ) -> Result<Vec<TreeNode>, TreeServiceError> {
-            unimplemented!("not exercised by ExitChainResolver")
+            self.state
+                .lock()
+                .await
+                .operator_nodes
+                .clone()
+                .ok_or_else(|| TreeServiceError::Generic("operators unreachable".to_string()))
         }
 
         async fn load_exit_chains(
             &self,
-            _leaf_ids: &[TreeNodeId],
+            leaf_ids: &[TreeNodeId],
         ) -> Result<Vec<LeafPedigree>, TreeServiceError> {
-            unimplemented!("not exercised by ExitChainResolver")
+            let state = self.state.lock().await;
+            Ok(leaf_ids
+                .iter()
+                .filter_map(|id| state.stored_chains.get(id).cloned())
+                .collect())
         }
 
         async fn leaves_missing_exit_chains(&self) -> Result<Vec<TreeNodeId>, TreeServiceError> {
@@ -417,6 +505,69 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
     }
+    #[async_test_all]
+    async fn test_fetched_ancestors_are_stored_when_they_changed() {
+        let leaf =
+            create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::WatchtowerExited);
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::Available);
+        let on_chain_root = create_test_node_with_parent("root", None, TreeNodeStatus::OnChain);
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, vec![root]))
+            .await;
+        mock.set_operator_nodes(Some(vec![leaf.clone(), on_chain_root.clone()]))
+            .await;
+        let resolver = ExitChainResolver::new(mock.clone());
+
+        let nodes = resolver
+            .fetch_nodes_with_ancestors(std::slice::from_ref(&leaf.id))
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[&on_chain_root.id].status, TreeNodeStatus::OnChain);
+        let stored = mock.stored().await;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].ancestors, vec![on_chain_root]);
+
+        // The operators return the same ancestors again.
+        resolver
+            .fetch_nodes_with_ancestors(std::slice::from_ref(&leaf.id))
+            .await
+            .unwrap();
+        assert_eq!(mock.stored().await.len(), 1);
+    }
+
+    #[async_test_all]
+    async fn test_stored_ancestors_are_read_when_the_operators_cannot_be_reached() {
+        let leaf =
+            create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::WatchtowerExited);
+        let root = create_test_node_with_parent("root", None, TreeNodeStatus::OnChain);
+        let mock = Arc::new(MockTreeService::default());
+        mock.seed_leaf(leaf.clone(), pedigree(&leaf, vec![root.clone()]))
+            .await;
+        let resolver = ExitChainResolver::new(mock.clone());
+        let leaf_ids = std::slice::from_ref(&leaf.id);
+
+        assert!(resolver.fetch_nodes_with_ancestors(leaf_ids).await.is_err());
+        let nodes = resolver
+            .stored_nodes_with_ancestors(leaf_ids)
+            .await
+            .unwrap();
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[&root.id], root);
+        assert!(mock.stored().await.is_empty());
+
+        // The wallet holds no chain for this leaf.
+        let unknown =
+            create_test_node_with_parent("other", Some("root"), TreeNodeStatus::WatchtowerExited);
+        let nodes = resolver
+            .stored_nodes_with_ancestors(&[unknown.id])
+            .await
+            .unwrap();
+        assert!(nodes.is_empty());
+    }
+
     #[async_test_all]
     async fn test_incomplete_stored_chain_is_fetched_and_stored() {
         let leaf = create_test_node_with_parent("leaf", Some("root"), TreeNodeStatus::Available);

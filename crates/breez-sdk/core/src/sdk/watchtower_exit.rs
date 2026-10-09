@@ -141,6 +141,29 @@ impl BreezSdk {
             .await
     }
 
+    /// The nodes of `leaf_ids` with their ancestors, and whether they are the
+    /// operators' current ones. When the operators cannot be reached, they are
+    /// the ones the wallet stored at an earlier fetch.
+    async fn nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> (HashMap<TreeNodeId, TreeNode>, bool) {
+        let fetch_error = match self.spark_wallet.fetch_nodes_with_ancestors(leaf_ids).await {
+            Ok(nodes) => return (nodes, true),
+            Err(e) => e,
+        };
+        warn!("Failed to fetch the ancestors of watchtower-exited leaves: {fetch_error}");
+        let stored = self
+            .spark_wallet
+            .stored_nodes_with_ancestors(leaf_ids)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Failed to read the stored ancestors of watchtower-exited leaves: {e}");
+                HashMap::new()
+            });
+        (stored, false)
+    }
+
     /// Looks up the output each of `leaves` is recovered from and whether a
     /// recovery of it is in a block, and stores what the chain service showed
     /// in a block.
@@ -160,21 +183,15 @@ impl BreezSdk {
             .filter(|leaf| leaf.status != TreeNodeStatus::OnChain)
             .map(|leaf| leaf.id.clone())
             .collect();
-        let (nodes, ancestors_known) = if exited.is_empty() {
+        let (nodes, ancestors_current) = if exited.is_empty() {
             (HashMap::new(), true)
         } else {
-            match self.spark_wallet.fetch_nodes_with_ancestors(&exited).await {
-                Ok(nodes) => (nodes, true),
-                Err(e) => {
-                    warn!("Failed to fetch the ancestors of watchtower-exited leaves: {e}");
-                    (HashMap::new(), false)
-                }
-            }
+            self.nodes_with_ancestors(&exited).await
         };
         store_watchtower_exit_lookups(
             leaves,
             &nodes,
-            ancestors_known,
+            ancestors_current,
             stored,
             queries,
             self.storage.as_ref(),
@@ -393,17 +410,18 @@ fn scan_outputs(
     (scan.lookups, pending)
 }
 
-/// The lookup of `leaf`. Without the leaf's ancestors `scan_watchtower_exits`
-/// cannot look for its output, unless the leaf is on-chain: its output is in
-/// its own direct tx.
+/// The lookup of `leaf`. Over ancestors that are not the operators' current
+/// ones, a lookup that found no output does not show that there is none: a
+/// stored ancestor has the status of the last fetch, or is missing. An on-chain
+/// leaf needs no ancestors: its output is in its own direct tx.
 fn lookup_with(
     lookup: Option<WatchtowerExitLookup>,
     leaf: &TreeNode,
-    ancestors_known: bool,
+    ancestors_current: bool,
 ) -> WatchtowerExitLookup {
     match lookup {
         Some(WatchtowerExitLookup::NotFound)
-            if !ancestors_known && leaf.status != TreeNodeStatus::OnChain =>
+            if !ancestors_current && leaf.status != TreeNodeStatus::OnChain =>
         {
             WatchtowerExitLookup::Pending
         }
@@ -491,12 +509,12 @@ fn looked_up_exit(
 }
 
 /// Looks up the watchtower exit of each of `leaves` and stores what the chain
-/// service showed in a block. `nodes` holds the ancestors of the leaves when
-/// `ancestors_known`.
+/// service showed in a block. `nodes` holds the ancestors of the leaves: the
+/// operators' current ones when `ancestors_current`, else the stored ones.
 async fn store_watchtower_exit_lookups(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
-    ancestors_known: bool,
+    ancestors_current: bool,
     stored: &HashMap<String, LeafRecovery>,
     queries: &mut ChainQueries,
     storage: &dyn Storage,
@@ -510,7 +528,7 @@ async fn store_watchtower_exit_lookups(
     let now = now_secs();
     for leaf in leaves {
         let leaf_id = leaf.id.to_string();
-        let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_known);
+        let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_current);
         if lookup == WatchtowerExitLookup::Unrecoverable {
             warn!(
                 "Watchtower-exited leaf {leaf_id} has no cooperative recovery: the direct \
@@ -1747,18 +1765,33 @@ mod tests {
             assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
         }
 
-        #[tokio::test]
-        async fn a_recovered_leaf_below_an_on_chain_split_node_takes_two_requests() {
+        /// A leaf below an on-chain split node whose direct tx has an output for
+        /// the leaf's key.
+        struct BelowSplitNode {
+            leaf: TreeNode,
+            split: TreeNode,
+            /// The output for the leaf in the direct tx the split node holds.
+            held: WatchtowerExitOutput,
+            /// The spend of the split node's input by that direct tx, in a block.
+            split_spent: Observation,
+        }
+
+        impl BelowSplitNode {
+            fn nodes(&self) -> HashMap<TreeNodeId, TreeNode> {
+                HashMap::from([
+                    (self.leaf.id.clone(), self.leaf.clone()),
+                    (self.split.id.clone(), self.split.clone()),
+                ])
+            }
+        }
+
+        fn below_split_node(leaf_status: TreeNodeStatus) -> BelowSplitNode {
             let split_id = "00000000-0000-0000-0000-00000000000c";
             let outpoint = |byte: &str| OutPoint {
                 txid: Txid::from_str(&byte.repeat(32)).unwrap(),
                 vout: 0,
             };
-            let mut leaf = create_test_node_with_parent(
-                LEAF_ID,
-                Some(split_id),
-                TreeNodeStatus::WatchtowerExitRecovered,
-            );
+            let mut leaf = create_test_node_with_parent(LEAF_ID, Some(split_id), leaf_status);
             let leaf_script = ScriptBuf::new_p2tr(
                 &bitcoin::secp256k1::Secp256k1::verification_only(),
                 leaf.verifying_public_key.x_only_public_key().0,
@@ -1767,38 +1800,46 @@ mod tests {
             let mut own = tx_paying(outpoint("05"), 9_800);
             own.output[0].script_pubkey = leaf_script.clone();
             leaf.direct_tx = Some(own);
-            let mut held = tx_paying(outpoint("06"), 9_900);
-            held.output[0].script_pubkey = leaf_script;
+            let mut direct_tx = tx_paying(outpoint("06"), 9_900);
+            direct_tx.output[0].script_pubkey = leaf_script;
             let mut split = create_test_node_with_parent(split_id, None, TreeNodeStatus::OnChain);
-            split.direct_tx = Some(held.clone());
-            let found = WatchtowerExitOutput {
+            split.direct_tx = Some(direct_tx.clone());
+            let held = WatchtowerExitOutput {
                 leaf_id: leaf.id.clone(),
                 outpoint: OutPoint {
-                    txid: held.compute_txid(),
+                    txid: direct_tx.compute_txid(),
                     vout: 0,
                 },
-                tx_out: held.output[0].clone(),
+                tx_out: direct_tx.output[0].clone(),
             };
-            let nodes = HashMap::from([(leaf.id.clone(), leaf.clone()), (split.id.clone(), split)]);
+            let split_spent = Observation {
+                query: ChainQuery::Outspend(outpoint("06")),
+                result: ChainResult::Spend(Some(SpendInfo {
+                    spender_txid: direct_tx.compute_txid(),
+                    confirmed: true,
+                    block_height: Some(100),
+                })),
+            };
+            BelowSplitNode {
+                leaf,
+                split,
+                held,
+                split_spent,
+            }
+        }
+
+        #[tokio::test]
+        async fn a_recovered_leaf_below_an_on_chain_split_node_takes_two_requests() {
+            let exited = below_split_node(TreeNodeStatus::WatchtowerExitRecovered);
             // The split node's direct tx is in a block, and nothing spent its
             // output.
-            let chain = chain_knowing(&[
-                Observation {
-                    query: ChainQuery::Outspend(outpoint("06")),
-                    result: ChainResult::Spend(Some(SpendInfo {
-                        spender_txid: held.compute_txid(),
-                        confirmed: true,
-                        block_height: Some(100),
-                    })),
-                },
-                unspent(&found),
-            ]);
+            let chain = chain_knowing(&[exited.split_spent.clone(), unspent(&exited.held)]);
             let storage = temp_storage();
             let mut queries = ChainQueries::for_sync(chain.clone());
 
             let complete = store_recovered_leaf_checks(
-                &[leaf],
-                &nodes,
+                std::slice::from_ref(&exited.leaf),
+                &exited.nodes(),
                 &HashMap::new(),
                 &mut queries,
                 &storage,
@@ -1810,8 +1851,46 @@ mod tests {
             assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
             assert_eq!(
                 stored_in(&storage).await[LEAF_ID].watchtower_exit_output,
-                Some(stored_output_of(&found, 100))
+                Some(stored_output_of(&exited.held, 100))
             );
+        }
+
+        #[tokio::test]
+        async fn a_lookup_over_stored_ancestors_assumes_an_output_and_rules_none_out() {
+            let exited = below_split_node(TreeNodeStatus::WatchtowerExited);
+            let leaves = std::slice::from_ref(&exited.leaf);
+            let storage = temp_storage();
+            // The chain service fails every request.
+            let lookup = |nodes: HashMap<TreeNodeId, TreeNode>, ancestors_current: bool| {
+                let storage = &storage;
+                async move {
+                    let mut queries = ChainQueries::new(chain_knowing(&[]));
+                    store_watchtower_exit_lookups(
+                        leaves,
+                        &nodes,
+                        ancestors_current,
+                        &HashMap::new(),
+                        &mut queries,
+                        storage,
+                    )
+                    .await
+                    .unwrap()
+                }
+            };
+
+            let found = lookup(exited.nodes(), false).await;
+            assert_eq!(found.exits[LEAF_ID].output, exited.held);
+            assert!(stored_in(&storage).await.is_empty());
+
+            // The stored split node has the status of before the exit.
+            let mut stale = exited.nodes();
+            if let Some(split) = stale.get_mut(&exited.split.id) {
+                split.status = TreeNodeStatus::SplitLocked;
+            }
+            let found = lookup(stale.clone(), false).await;
+            assert_eq!(found.missing[LEAF_ID], WatchtowerExitLookup::Pending);
+            let found = lookup(stale, true).await;
+            assert_eq!(found.missing[LEAF_ID], WatchtowerExitLookup::NotFound);
         }
 
         #[tokio::test]
