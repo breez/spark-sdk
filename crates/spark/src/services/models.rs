@@ -777,7 +777,7 @@ impl TryFrom<operator_rpc::spark::SigningKeyshare> for SigningKeyshare {
     fn try_from(keyshare: operator_rpc::spark::SigningKeyshare) -> Result<Self, Self::Error> {
         use frost_secp256k1_tr::Identifier;
 
-        let owner_identifiers = keyshare
+        let mut owner_identifiers = keyshare
             .owner_identifiers
             .into_iter()
             .map(|id_hex| {
@@ -787,6 +787,9 @@ impl TryFrom<operator_rpc::spark::SigningKeyshare> for SigningKeyshare {
                     .map_err(|_| ServiceError::Generic("Invalid identifier".to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // The operators return the owners in no particular order. Sorted, two
+        // responses for the same keyshare compare equal.
+        owner_identifiers.sort();
 
         let public_key = PublicKey::from_slice(&keyshare.public_key)
             .map_err(|_| ServiceError::Generic("Invalid public key".to_string()))?;
@@ -1729,6 +1732,24 @@ mod tests {
             tree_node.owner_identity_public_key,
             Some(PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap())
         );
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_sorts_the_keyshare_owners() {
+        let node = |owners: [u16; 3]| {
+            let mut proto_node = create_proto_tree_node(TEST_PUBKEY_BYTES.to_vec());
+            proto_node
+                .signing_keyshare
+                .as_mut()
+                .unwrap()
+                .owner_identifiers = owners
+                .iter()
+                .map(|owner| hex::encode(Identifier::try_from(*owner).unwrap().serialize()))
+                .collect();
+            TreeNode::try_from(proto_node).unwrap()
+        };
+
+        assert_eq!(node([1, 2, 3]), node([3, 1, 2]));
     }
 
     #[test_all]
