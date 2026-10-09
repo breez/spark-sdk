@@ -58,7 +58,7 @@ Spark invoices are single-use and may impose restrictions on the payment, such a
 
 Cross-chain receive is supported only via the Orchestra provider. Receive USDC or USDT from a sender on one of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The receiver lands either BTC sats or [USDB](./stable_balance.md) (a 6-decimal USD-pegged token on Spark) on the Spark side. This feature must be enabled in [the SDK configuration](./config.md#usdc-usdt) before using. See [USDC/USDT](./cross_chain.md) for provider details and the status lifecycle.
 
-Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receive}} to discover supported source assets. Each {{#name CrossChainRoutePair}} names the provider, source chain and asset, decimals, optional token contract address, and the Spark-side destinations the route lands ({{#name CrossChainRoutePair.accepted_assets}}).
+Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receive}} to discover supported source assets. Leave its {{#name delivery_method}} unset to list the routes that deliver to this wallet. Each {{#name CrossChainRoutePair}} names the provider, source chain and asset, decimals, optional token contract address, and the Spark-side destinations the route lands ({{#name CrossChainRoutePair.accepted_assets}}).
 
 {{#tabs cross_chain:cross-chain-get-receive-routes}}
 

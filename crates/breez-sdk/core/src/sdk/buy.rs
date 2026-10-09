@@ -124,6 +124,7 @@ impl BreezSdk {
         let route = service
             .get_routes(&CrossChainRouteFilter::Receive {
                 contract_address: None,
+                delivery_method: None,
             })
             .await?
             .into_iter()

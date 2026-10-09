@@ -38,6 +38,13 @@
 //!   Spark wallet as USDB. Counters test 02 so the USDB Alice spent to build
 //!   the USDC stash comes back here.
 //!
+//! ## Bridge test (quote only)
+//!
+//! - `test_cross_chain_06_bridge_to_cash_app_quote`: quotes USDC on Arbitrum
+//!   to the `$cashapp` Cash App account, refunding the deterministic EVM
+//!   wallet. Nothing is funded. Also checks an unknown cashtag fails before
+//!   quoting.
+//!
 //! Receive tests need Arbitrum ETH at the deterministic EVM address to pay gas
 //! for the ERC-20 transfer. The tests read the balance and skip loudly (never
 //! hard-fail) if it's below the threshold. Roadmap: when a second cross-chain
@@ -547,6 +554,67 @@ async fn test_cross_chain_05_orchestra_receive_fees_included_evm() -> Result<()>
     Ok(())
 }
 
+/// Quotes a $1 USDC (Arbitrum) bridge to the `$cashapp` Cash App account
+/// without funding it, then checks an unknown cashtag is rejected up front.
+#[test_log::test(tokio::test)]
+async fn test_cross_chain_06_bridge_to_cash_app_quote() -> Result<()> {
+    let Some((alice, _, mnemonic)) = mainnet_cross_chain_setup().await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_cross_chain_06_bridge_to_cash_app_quote ===");
+    let (refund_address, _) = mainnet_evm_recipient(&mnemonic)?;
+
+    let routes = alice
+        .sdk
+        .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
+            contract_address: None,
+            delivery_method: Some(DeliveryMethod::Lightning),
+        })
+        .await?;
+    let Some(route) = routes
+        .into_iter()
+        .find(|r| is_target_chain(r) && r.asset.eq_ignore_ascii_case("USDC"))
+    else {
+        anyhow::bail!("No Orchestra USDC route on Arbitrum One delivers over Lightning");
+    };
+    assert_publishes_limits(&route, &SparkAsset::Bitcoin)?;
+
+    let request = |recipient: &str| BridgeToCashAppRequest {
+        recipient: recipient.to_string(),
+        route: route.clone(),
+        amount: 1_000_000,
+        fee_policy: None,
+        refund_address: refund_address.clone(),
+        max_slippage_bps: None,
+    };
+
+    let response = alice.sdk.bridge_to_cash_app(request("$cashapp")).await?;
+    info!("Bridge quote: {response:?}");
+    let info = response.info;
+    assert!(info.deposit_amount > 0, "quote asks for no deposit");
+    assert!(info.expected_received_amount > 0, "quote delivers no sats");
+    assert_eq!(info.destination_asset, "BTC");
+    assert!(
+        response
+            .payment_request
+            .to_lowercase()
+            .contains(&info.deposit_address.to_lowercase()),
+        "payment request {} does not pay the deposit address {}",
+        response.payment_request,
+        info.deposit_address
+    );
+
+    let unknown = alice
+        .sdk
+        .bridge_to_cash_app(request("$zzqxnonexistent987"))
+        .await;
+    assert!(
+        matches!(unknown, Err(SdkError::InvalidInput(_))),
+        "unknown cashtag should fail before quoting, got {unknown:?}"
+    );
+    Ok(())
+}
+
 /// Shared flow: discover the route, baseline the recipient's on-chain balance,
 /// prepare+send fees-excluded, wait for the SDK to report `Completed`, then
 /// verify the on-chain receipt. Skips (warn + `Ok`) when no matching route
@@ -584,7 +652,10 @@ async fn run_cross_chain_evm_send(
     };
     let routes = alice
         .sdk
-        .get_cross_chain_routes(&CrossChainRouteFilter::Send { address_details })
+        .get_cross_chain_routes(&CrossChainRouteFilter::Send {
+            address_details,
+            delivery_method: None,
+        })
         .await?;
     let Some(route) = routes.into_iter().find(|r| {
         r.provider == provider && is_target_chain(r) && r.asset.eq_ignore_ascii_case(asset)
@@ -863,6 +934,7 @@ async fn run_cross_chain_evm_receive(
         .sdk
         .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
             contract_address: None,
+            delivery_method: None,
         })
         .await?;
     let Some(route) = routes.into_iter().find(|r| {

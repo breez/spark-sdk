@@ -16,7 +16,10 @@ namespace BreezSdkSnippets
             }
             var addressDetails = crossChain.v1;
 
-            var filter = new CrossChainRouteFilter.Send(addressDetails: addressDetails);
+            var filter = new CrossChainRouteFilter.Send(
+                addressDetails: addressDetails,
+                deliveryMethod: null
+            );
             var routes = await sdk.GetCrossChainRoutes(filter: filter);
 
             foreach (var route in routes)
@@ -90,7 +93,10 @@ namespace BreezSdkSnippets
         async Task GetCrossChainReceiveRoutes(BreezSdk sdk)
         {
             // ANCHOR: cross-chain-get-receive-routes
-            var filter = new CrossChainRouteFilter.Receive(contractAddress: null);
+            var filter = new CrossChainRouteFilter.Receive(
+                contractAddress: null,
+                deliveryMethod: null
+            );
             var routes = await sdk.GetCrossChainRoutes(filter: filter);
 
             foreach (var route in routes)

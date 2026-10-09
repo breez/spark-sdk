@@ -9,6 +9,7 @@ use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
 
 use crate::{
+    buy::cashapp::cash_app_lightning_address,
     dns::DnsResolver,
     input::{
         Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
@@ -95,6 +96,18 @@ where
     }
 
     pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
+        // No other supported format starts with `$`, including BIP-353, whose
+        // user part is a DNS label.
+        if input.starts_with('$') {
+            let Some(address) = cash_app_lightning_address(input) else {
+                return Ok(None);
+            };
+            return Ok(self
+                .parse_lightning_address(&address)
+                .await
+                .map(InputType::LightningAddress));
+        }
+
         if input.contains('@') {
             if let Some(lightning_address) = self.parse_lightning_address(input).await {
                 return Ok(Some(InputType::LightningAddress(lightning_address)));

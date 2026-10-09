@@ -603,7 +603,7 @@ public static class Commands
                     return;
                 }
                 var crossChainAmount = BigInteger.Parse(amountStr);
-                var filter = new CrossChainRouteFilter.Receive(contractAddress: null);
+                var filter = new CrossChainRouteFilter.Receive(contractAddress: null, deliveryMethod: null);
                 var route = await SelectCrossChainRoute(sdk, readline, filter);
                 if (route == null) return;
                 CrossChainFeeMode? feeMode = crossChainFeesIncluded
@@ -686,7 +686,7 @@ public static class Commands
         if (parsed is InputType.CrossChainAddress crossChainAddr)
         {
             var address = crossChainAddr.v1.address;
-            var route = await SelectCrossChainRoute(sdk, readline, new CrossChainRouteFilter.Send(addressDetails: crossChainAddr.v1));
+            var route = await SelectCrossChainRoute(sdk, readline, new CrossChainRouteFilter.Send(addressDetails: crossChainAddr.v1, deliveryMethod: null));
             if (route == null) return;
             paymentRequest = new PaymentRequest.CrossChain(
                 address: address,

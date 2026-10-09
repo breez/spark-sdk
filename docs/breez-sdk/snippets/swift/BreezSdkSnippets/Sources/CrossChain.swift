@@ -11,7 +11,7 @@ func getCrossChainRoutes(sdk: BreezSdk) async throws {
     }
 
     let routes = try await sdk.getCrossChainRoutes(
-        filter: .send(addressDetails: addressDetails))
+        filter: .send(addressDetails: addressDetails, deliveryMethod: nil))
 
     for route in routes {
         print("Route via \(route.provider): \(route.chain)/\(route.asset)")
@@ -83,7 +83,7 @@ func sendPaymentCrossChain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentRes
 func getCrossChainReceiveRoutes(sdk: BreezSdk) async throws {
     // ANCHOR: cross-chain-get-receive-routes
     let routes = try await sdk.getCrossChainRoutes(
-        filter: .receive(contractAddress: nil))
+        filter: .receive(contractAddress: nil, deliveryMethod: nil))
 
     for route in routes {
         print("Route via \(route.provider): \(route.chain)/\(route.asset) -> Spark")

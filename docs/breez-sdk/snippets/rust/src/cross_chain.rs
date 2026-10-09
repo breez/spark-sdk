@@ -12,6 +12,7 @@ async fn get_cross_chain_routes(sdk: &BreezSdk) -> Result<()> {
     let routes = sdk
         .get_cross_chain_routes(&CrossChainRouteFilter::Send {
             address_details: address_details.clone(),
+            delivery_method: None,
         })
         .await?;
 
@@ -102,6 +103,7 @@ async fn get_cross_chain_receive_routes(sdk: &BreezSdk) -> Result<()> {
     let routes = sdk
         .get_cross_chain_routes(&CrossChainRouteFilter::Receive {
             contract_address: None,
+            delivery_method: None,
         })
         .await?;
 
