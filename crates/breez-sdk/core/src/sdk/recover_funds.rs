@@ -32,7 +32,9 @@ use super::{
         UnilateralBuild, UnilateralQuote, check_recovery_transactions, node_ids,
         store_exited_leaf_checks,
     },
-    watchtower_exit::{OutputSpend, WatchtowerExit, build_recovery, output_spend},
+    watchtower_exit::{
+        OutputSpend, WatchtowerExit, build_recovery, output_spend, outputs_from_storage,
+    },
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -541,8 +543,18 @@ impl BreezSdk {
                 leaves.iter().any(|quoted| quoted.leaf_id == leaf_id)
             })
             .collect();
+        // The recovery takes every stored output as it is: prepare checked it.
+        let from_storage: HashSet<String> = listed
+            .iter()
+            .map(|leaf| leaf.id.to_string())
+            .filter(|leaf_id| {
+                stored
+                    .get(leaf_id)
+                    .is_some_and(|stored| stored.watchtower_exit_output.is_some())
+            })
+            .collect();
         let mut found = self
-            .lookup_watchtower_exits(&listed, &stored, queries)
+            .lookup_watchtower_exits(&listed, &stored, &from_storage, queries)
             .await?;
         let mut exits = Vec::with_capacity(leaves.len());
         for leaf in leaves {
@@ -589,8 +601,10 @@ impl BreezSdk {
             })
             .collect();
         let (finished, selected) = finished_and_open(candidates, stored);
+        let from_storage =
+            outputs_from_storage(&selected, stored, queries, self.storage.as_ref()).await;
         let mut found = self
-            .lookup_watchtower_exits(&selected, stored, queries)
+            .lookup_watchtower_exits(&selected, stored, &from_storage, queries)
             .await?;
 
         let mut not_unilateral: HashSet<String> = selected

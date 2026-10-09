@@ -2,7 +2,7 @@
 //! every other lookup.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -15,6 +15,8 @@ pub(crate) struct ChainStub {
     pub(crate) tip: Option<u32>,
     /// Confirmation heights, by txid.
     pub(crate) heights: HashMap<String, u32>,
+    /// The txids of transactions that are in no block.
+    pub(crate) not_in_block: HashSet<String>,
     pub(crate) outspends: HashMap<(String, u32), Outspend>,
     pub(crate) transactions: HashMap<String, String>,
     /// Every output paid to an address, by address.
@@ -72,6 +74,13 @@ impl BitcoinChainService for ChainStub {
 
     async fn get_transaction_status(&self, txid: String) -> Result<TxStatus, ChainServiceError> {
         self.requests.fetch_add(1, Ordering::SeqCst);
+        if self.not_in_block.contains(&txid) {
+            return Ok(TxStatus {
+                confirmed: false,
+                block_height: None,
+                block_time: None,
+            });
+        }
         self.heights
             .get(&txid)
             .map(|height| TxStatus {
@@ -83,6 +92,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn tip_height(&self) -> Result<u32, ChainServiceError> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         self.tip.ok_or_else(unreachable_chain)
     }
 

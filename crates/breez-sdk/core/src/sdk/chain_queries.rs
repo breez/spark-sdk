@@ -1,4 +1,8 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+};
 
 use bitcoin::{Address, OutPoint, Transaction, Txid, consensus::encode::deserialize_hex};
 use futures::StreamExt;
@@ -9,6 +13,33 @@ use crate::chain::{BitcoinChainService, ChainServiceError, Outspend, Utxo};
 
 /// How many requests the SDK has open at the chain service at the same time.
 const CONCURRENT_CHAIN_REQUESTS: usize = 10;
+
+/// From this many blocks deep on, the SDK takes a transaction to stay in its
+/// block.
+const SETTLED_DEPTH: u32 = 6;
+
+/// A transaction storage holds as being in a block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoredInBlock {
+    pub(crate) txid: String,
+    pub(crate) block_height: u32,
+    /// Whether the SDK checks the transaction however deep it is.
+    pub(crate) check_always: bool,
+}
+
+/// What the chain service shows of a transaction storage holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StoredCheck {
+    /// At `block_height`, where the chain service reported one.
+    InBlock {
+        block_height: Option<u32>,
+    },
+    NotInBlock,
+}
+
+fn is_settled(block_height: u32, tip: u32) -> bool {
+    tip.saturating_sub(block_height).saturating_add(1) >= SETTLED_DEPTH
+}
 
 /// The batches in which a sync checks `leaves`, one after the other: as many
 /// leaves per batch as the SDK has requests open. A failed request then costs
@@ -74,6 +105,64 @@ impl ChainQueries {
             .filter(|observation| !matches!(observation.result, ChainResult::Unavailable))
             .cloned()
             .collect()
+    }
+
+    /// Checks whether the transactions of `stored` are still in a block, and
+    /// returns what the chain service showed, by txid. The SDK checks a
+    /// transaction fewer than [`SETTLED_DEPTH`] blocks deep, and one to check
+    /// always. Without the tip height it cannot tell the depth, and checks only
+    /// the latter. A transaction without a result is not in the map.
+    pub(crate) async fn check_stored_in_block(
+        &mut self,
+        stored: &[StoredInBlock],
+    ) -> HashMap<String, StoredCheck> {
+        let tip = if stored.iter().all(|transaction| transaction.check_always) {
+            None
+        } else {
+            self.tip_height().await
+        };
+        let checked: Vec<(&str, ChainQuery)> = stored
+            .iter()
+            .filter(|transaction| {
+                transaction.check_always
+                    || tip.is_some_and(|tip| !is_settled(transaction.block_height, tip))
+            })
+            .filter_map(|transaction| {
+                let txid = Txid::from_str(&transaction.txid).ok()?;
+                Some((transaction.txid.as_str(), ChainQuery::TxConfirmed(txid)))
+            })
+            .collect();
+        let queries: Vec<ChainQuery> = checked.iter().map(|(_, query)| query.clone()).collect();
+        self.resolve(|observed| ((), without_result(queries.clone(), observed)))
+            .await;
+        checked
+            .into_iter()
+            .filter_map(|(txid, query)| {
+                let check = match result_of(&self.observed, &query)? {
+                    ChainResult::Confirmed {
+                        confirmed: true,
+                        block_height,
+                    } => StoredCheck::InBlock {
+                        block_height: *block_height,
+                    },
+                    ChainResult::Confirmed {
+                        confirmed: false, ..
+                    } => StoredCheck::NotInBlock,
+                    _ => return None,
+                };
+                Some((txid.to_string(), check))
+            })
+            .collect()
+    }
+
+    async fn tip_height(&self) -> Option<u32> {
+        match self.chain.tip_height().await {
+            Ok(tip) => Some(tip),
+            Err(e) => {
+                warn!("Failed to read the tip height: {e}");
+                None
+            }
+        }
     }
 
     /// Runs `scan` over the results so far, executes the queries it returns, and
@@ -284,7 +373,7 @@ mod tests {
 
     use bitcoin::hashes::Hash;
 
-    use crate::chain::{RecommendedFees, TxStatus, Utxo};
+    use crate::chain::{RecommendedFees, TxStatus, Utxo, stub::ChainStub};
 
     use super::*;
 
@@ -512,6 +601,61 @@ mod tests {
             .resolve(|observed| ((), without_result(vec![query(40)], observed)))
             .await;
         assert_eq!(chain.requests.load(Ordering::SeqCst), requests);
+    }
+
+    #[macros::async_test_all]
+    async fn a_stored_transaction_is_checked_while_it_is_not_settled() {
+        let txid = |byte: u8| txid_of(byte).to_string();
+        let stored = |byte: u8, block_height: u32, check_always: bool| StoredInBlock {
+            txid: txid(byte),
+            block_height,
+            check_always,
+        };
+        let transactions = [
+            stored(1, 100, false),
+            stored(2, 101, false),
+            stored(3, 103, false),
+            stored(4, 50, true),
+        ];
+        let heights = HashMap::from([(txid(2), 101), (txid(4), 50)]);
+        let in_block = |block_height: u32| StoredCheck::InBlock {
+            block_height: Some(block_height),
+        };
+
+        // The tip is at 105, so the transaction at 100 is six blocks deep.
+        let chain = Arc::new(ChainStub {
+            tip: Some(105),
+            heights: heights.clone(),
+            not_in_block: HashSet::from([txid(3)]),
+            ..Default::default()
+        });
+        let mut queries = ChainQueries::new(chain.clone());
+        let checks = queries.check_stored_in_block(&transactions).await;
+        assert_eq!(
+            checks,
+            HashMap::from([
+                (txid(2), in_block(101)),
+                (txid(3), StoredCheck::NotInBlock),
+                (txid(4), in_block(50)),
+            ])
+        );
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 4);
+
+        // Without the tip height the SDK checks only the transaction it
+        // checks however deep it is.
+        let chain = Arc::new(ChainStub {
+            heights,
+            ..Default::default()
+        });
+        let mut queries = ChainQueries::new(chain.clone());
+        let checks = queries.check_stored_in_block(&transactions).await;
+        assert_eq!(checks, HashMap::from([(txid(4), in_block(50))]));
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
+
+        // It needs no tip height for that one alone.
+        let mut queries = ChainQueries::new(chain.clone());
+        queries.check_stored_in_block(&transactions[3..]).await;
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 3);
     }
 
     #[macros::async_test_all]
