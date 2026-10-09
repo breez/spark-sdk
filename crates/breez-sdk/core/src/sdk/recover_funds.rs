@@ -279,12 +279,12 @@ struct NewLeaves {
     /// without a chain check.
     to_recover: Vec<UpdateLeafRecovery>,
     /// Leaves whose check is not complete. The SDK checks these with the chain
-    /// service first: the operators report a recovered leaf the same whether
-    /// or not its recovery is in a block.
+    /// service: the operators report a recovered leaf the same whether or not
+    /// its recovery is in a block.
     recovered: Vec<TreeNode>,
     /// Leaves without a stored recovery. The SDK checks these with the chain
-    /// service first: the operators report an exited leaf the same whether or
-    /// not a sweep of its refund is in a block.
+    /// service: the operators report an exited leaf the same whether or not a
+    /// sweep of its refund is in a block.
     exited: Vec<TreeNode>,
 }
 
@@ -311,13 +311,13 @@ impl BreezSdk {
     }
 
     /// Stores the recovery of each leaf that has none stored, then the total of the
-    /// funds to recover, and emits `RecoverableFunds` when it stored a leaf with
-    /// funds still to recover. A recovered or exited leaf counts once the SDK
-    /// knows from the chain service whether a recovery or sweep of the leaf's
-    /// funds is in a block, or at once when the leaf is too small to send out.
-    /// The SDK checks such leaves in batches and stores what each batch
-    /// established, so a later sync continues where a failed request stopped
-    /// this one.
+    /// funds to recover: the value of every leaf whose recovery or sweep the SDK
+    /// has not seen in a block. The funds of a recovered or exited leaf may have
+    /// left already, so the SDK checks such leaves with the chain service, in
+    /// batches, and stores what each batch established: a later sync continues
+    /// where a failed request stopped this one. Emits `RecoverableFunds` for a
+    /// leaf it stored without a check, or whose check it completed with funds
+    /// still to recover.
     pub(super) async fn sync_recoverable_funds(&self) {
         let statuses = [EXITING_STATUSES.as_slice(), &WATCHTOWER_EXITED_STATUSES].concat();
         let leaves = match self.spark_wallet.list_leaves_with_status(&statuses).await {
@@ -748,9 +748,9 @@ fn can_be_sent_out(leaf: &TreeNode) -> bool {
     }
 }
 
-/// The value of the leaves whose stored recovery holds neither a watchtower exit
-/// spend nor a sweep, and how many of them are among `new_leaf_ids`. A leaf
-/// whose check is not complete is left out.
+/// The value of the leaves without a stored watchtower exit spend or sweep, and
+/// how many of them are among `new_leaf_ids`. A leaf whose check is not
+/// complete has neither, so it is counted.
 fn recoverable_funds(
     leaves: &[TreeNode],
     stored: &HashMap<String, LeafRecovery>,
@@ -760,10 +760,7 @@ fn recoverable_funds(
     let mut found: usize = 0;
     for leaf in leaves {
         let leaf_id = leaf.id.to_string();
-        let unfinished = stored
-            .get(&leaf_id)
-            .is_some_and(|leaf| !is_finished(leaf) && !check_incomplete(leaf));
-        if !unfinished {
+        if stored.get(&leaf_id).is_some_and(is_finished) {
             continue;
         }
         funds = funds.saturating_add(leaf.value);
@@ -1040,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn the_funds_to_recover_are_those_of_stored_leaves_not_taken_out() {
+    fn the_funds_to_recover_are_those_of_leaves_not_taken_out() {
         let leaf = |leaf_id: &str| {
             create_test_node_with_parent(leaf_id, None, TreeNodeStatus::WatchtowerExited)
         };
@@ -1062,9 +1059,9 @@ mod tests {
             "a leaf stored before is not found again"
         );
         assert_eq!(
-            funds(None, &new_leaf_ids),
-            (value, 1),
-            "a leaf without a result from the chain service is left out"
+            funds(None, &HashSet::from([LEAF_ID.to_string()])),
+            (value.saturating_mul(2), 1),
+            "a leaf without a stored recovery is counted"
         );
         let recovered = LeafRecovery {
             watchtower_exit_spend: Some(in_block("recovery")),
@@ -1089,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leaf_with_a_stored_output_and_no_check_time_is_checked_again_and_not_counted() {
+    fn a_leaf_with_a_stored_output_and_no_check_time_is_counted_and_checked_again() {
         let leaf =
             create_test_node_with_parent(LEAF_ID, None, TreeNodeStatus::WatchtowerExitRecovered);
         let leaves = std::slice::from_ref(&leaf);
@@ -1106,7 +1103,10 @@ mod tests {
         let new = new_leaves(leaves, &stored);
         assert_eq!(new.recovered.len(), 1);
         assert!(new.to_recover.is_empty() && new.exited.is_empty());
-        assert_eq!(recoverable_funds(leaves, &stored, &HashSet::new()).0, 0);
+        assert_eq!(
+            recoverable_funds(leaves, &stored, &HashSet::new()).0,
+            leaf.value
+        );
 
         let stored = by_leaf_id(vec![complete]);
         let new = new_leaves(leaves, &stored);
