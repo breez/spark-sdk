@@ -8,6 +8,7 @@ Integrating Breez SDK into your application takes just a few minutes. Follow the
   - **[Customizing the SDK](/guide/customizing.md)**
 - **[Getting the SDK info](/guide/get_info.md)**
 - **[Listening to events](/guide/events.md)**
+- **[Handling errors](/guide/errors.md)**
 - **[Adding logging](/guide/logging.md)**
 - **[Spark status](/guide/spark_status.md)**
 

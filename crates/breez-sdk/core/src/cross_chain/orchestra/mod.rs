@@ -1563,12 +1563,7 @@ fn attach_route_limits(
         (Some(l), false) => (l.max_amount, l.max_usd_cents),
         (None, _) => (None, None),
     };
-    SdkError::CrossChainAmountOutOfRange {
-        reason,
-        too_small,
-        bound_amount,
-        bound_usd_cents,
-    }
+    SdkError::cross_chain_amount_out_of_range(reason, too_small, bound_amount, bound_usd_cents)
 }
 
 /// Narrow an Orchestra [`RouteLimits`] to the bounds the SDK surfaces.
@@ -3391,12 +3386,12 @@ mod tests {
         );
 
         let enriched = attach_route_limits(
-            SdkError::CrossChainAmountOutOfRange {
-                reason: "Amount too small".to_string(),
-                too_small: true,
-                bound_amount: None,
-                bound_usd_cents: None,
-            },
+            SdkError::cross_chain_amount_out_of_range(
+                "Amount too small".to_string(),
+                true,
+                None,
+                None,
+            ),
             &pairs[0],
             &SparkAsset::Bitcoin,
         );

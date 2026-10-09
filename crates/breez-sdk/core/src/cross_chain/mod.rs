@@ -403,7 +403,7 @@ impl CrossChainContext {
     /// registered, which happens only when `cross_chain_config` is unset.
     pub fn ensure_enabled(&self) -> Result<(), SdkError> {
         if self.providers.is_empty() {
-            return Err(SdkError::CrossChainDisabled);
+            return Err(SdkError::cross_chain_disabled());
         }
         Ok(())
     }
@@ -927,11 +927,11 @@ mod tests {
         let context = CrossChainContext::new(Arc::new(NoFiat));
         assert!(matches!(
             context.ensure_enabled(),
-            Err(SdkError::CrossChainDisabled)
+            Err(SdkError::CrossChainDisabled { .. })
         ));
         assert!(matches!(
             context.get(CrossChainProvider::Orchestra),
-            Err(SdkError::CrossChainDisabled)
+            Err(SdkError::CrossChainDisabled { .. })
         ));
     }
 
