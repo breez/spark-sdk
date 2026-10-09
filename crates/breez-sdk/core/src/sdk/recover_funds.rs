@@ -692,7 +692,7 @@ fn finished_and_open(
         .partition(|leaf| stored.get(&leaf.id.to_string()).is_some_and(is_finished))
 }
 
-/// Whether a sync found the leaf's output and has yet to learn whether that
+/// Whether the SDK found the leaf's output and has yet to learn whether that
 /// output is spent.
 fn check_incomplete(stored: &LeafRecovery) -> bool {
     stored.chain_checked_at.is_none() && stored.watchtower_exit_output.is_some()
