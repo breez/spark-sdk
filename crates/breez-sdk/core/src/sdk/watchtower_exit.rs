@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    str::FromStr,
+};
 
 use bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
@@ -21,7 +25,7 @@ use crate::{
 
 use super::{
     BreezSdk,
-    chain_queries::{ChainQueries, batches, result_of, without_result},
+    chain_queries::{ChainQueries, StoredCheck, StoredInBlock, batches, result_of, without_result},
     recover_funds::{store_checks, store_update},
 };
 
@@ -166,21 +170,24 @@ impl BreezSdk {
 
     /// Looks up the output each of `leaves` is recovered from and whether a
     /// recovery of it is in a block, and stores what the chain service showed
-    /// in a block.
+    /// in a block. For a leaf in `from_storage` it takes the stored output
+    /// without a lookup.
     pub(super) async fn lookup_watchtower_exits(
         &self,
         leaves: &[TreeNode],
         stored: &HashMap<String, LeafRecovery>,
+        from_storage: &HashSet<String>,
         queries: &mut ChainQueries,
     ) -> Result<WatchtowerExits, SdkError> {
         if leaves.is_empty() {
             return Ok(WatchtowerExits::default());
         }
         // The output of an on-chain leaf is in its own direct tx, so only the
-        // others need their ancestors.
+        // other leaves the SDK looks up need their ancestors.
         let exited: Vec<TreeNodeId> = leaves
             .iter()
             .filter(|leaf| leaf.status != TreeNodeStatus::OnChain)
+            .filter(|leaf| !from_storage.contains(&leaf.id.to_string()))
             .map(|leaf| leaf.id.clone())
             .collect();
         let (nodes, ancestors_current) = if exited.is_empty() {
@@ -193,6 +200,7 @@ impl BreezSdk {
             &nodes,
             ancestors_current,
             stored,
+            from_storage,
             queries,
             self.storage.as_ref(),
         )
@@ -480,12 +488,8 @@ fn looked_up_exit(
             update,
         });
     }
-    if let Some(stored_output) = stored.and_then(|stored| stored.watchtower_exit_output.as_ref()) {
-        let output = exited_output(&leaf_id, stored_output)?;
-        return Ok(LookedUpExit {
-            exit: Ok(exit(output, &OutputSpend::Unknown)),
-            update: None,
-        });
+    if let Some(stored_exit) = stored_exit(leaf, recovered, stored, observed, now)? {
+        return Ok(stored_exit);
     }
     let WatchtowerExitLookup::Unconfirmed(output) = lookup else {
         return Ok(LookedUpExit {
@@ -496,6 +500,52 @@ fn looked_up_exit(
     Ok(LookedUpExit {
         exit: Ok(exit(output, &OutputSpend::Unknown)),
         update: None,
+    })
+}
+
+/// The exit of `leaf` from the output `stored` holds, with the spend of that
+/// output as far as `observed` shows it. `None` when `stored` holds no output.
+fn stored_exit(
+    leaf: &TreeNode,
+    recovered: bool,
+    stored: Option<&LeafRecovery>,
+    observed: &[Observation],
+    now: u64,
+) -> Result<Option<LookedUpExit>, SdkError> {
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+    let Some(stored_output) = stored.watchtower_exit_output.as_ref() else {
+        return Ok(None);
+    };
+    let leaf_id = leaf.id.to_string();
+    let output = exited_output(&leaf_id, stored_output)?;
+    let spend = output_spend(observed, output.outpoint);
+    let update = stored_output_update(stored, &spend, now);
+    let exit = WatchtowerExit::new(leaf_id, leaf.value, output, Some(stored), &spend, recovered);
+    Ok(Some(LookedUpExit {
+        exit: Ok(exit),
+        update,
+    }))
+}
+
+/// What to store for a leaf once the chain service showed the `spend` of its
+/// stored output: a spend in a block that `stored` does not hold, and the check
+/// time when `stored` has none.
+fn stored_output_update(
+    stored: &LeafRecovery,
+    spend: &OutputSpend,
+    now: u64,
+) -> Option<UpdateLeafRecovery> {
+    let in_block = spend
+        .in_block()
+        .filter(|spend| stored.watchtower_exit_spend.as_ref() != Some(spend));
+    let first_check = spend.is_known() && stored.chain_checked_at.is_none();
+    (in_block.is_some() || first_check).then(|| UpdateLeafRecovery {
+        leaf_id: stored.leaf_id.clone(),
+        chain_checked_at: Some(now),
+        watchtower_exit_spend: in_block,
+        ..Default::default()
     })
 }
 
@@ -541,26 +591,97 @@ fn found_output_update(
     new.then_some(update)
 }
 
+/// The leaves among `leaves` whose stored output prepare takes without looking
+/// it up again: every one with a stored output, unless the chain service no
+/// longer shows that output's transaction in a block. The SDK checks that only
+/// while the transaction is not settled.
+pub(super) async fn outputs_from_storage(
+    leaves: &[TreeNode],
+    stored: &HashMap<String, LeafRecovery>,
+    queries: &mut ChainQueries,
+    storage: &dyn Storage,
+) -> HashSet<String> {
+    let outputs: Vec<(String, &StoredWatchtowerExitOutput)> = leaves
+        .iter()
+        .filter_map(|leaf| {
+            let leaf_id = leaf.id.to_string();
+            let output = stored.get(&leaf_id)?.watchtower_exit_output.as_ref()?;
+            Some((leaf_id, output))
+        })
+        .collect();
+    let transactions: Vec<StoredInBlock> = outputs
+        .iter()
+        .map(|(_, output)| StoredInBlock {
+            txid: output.txid.clone(),
+            block_height: output.block_height,
+            check_always: false,
+        })
+        .collect();
+    let checks = queries.check_stored_in_block(&transactions).await;
+    let mut from_storage = HashSet::new();
+    for (leaf_id, output) in outputs {
+        match checks.get(&output.txid) {
+            Some(StoredCheck::NotInBlock) => continue,
+            Some(StoredCheck::InBlock {
+                block_height: Some(block_height),
+            }) if *block_height != output.block_height => {
+                let moved = UpdateLeafRecovery {
+                    leaf_id: leaf_id.clone(),
+                    watchtower_exit_output: Some(StoredWatchtowerExitOutput {
+                        block_height: *block_height,
+                        ..output.clone()
+                    }),
+                    ..Default::default()
+                };
+                store_update(storage, moved).await;
+            }
+            _ => {}
+        }
+        from_storage.insert(leaf_id);
+    }
+    from_storage
+}
+
 /// Looks up the watchtower exit of each of `leaves` and stores what the chain
 /// service showed in a block. `nodes` holds the ancestors of the leaves: the
-/// operators' current ones when `ancestors_current`, else the stored ones.
+/// operators' current ones when `ancestors_current`, else the stored ones. For
+/// a leaf in `from_storage` the SDK takes the stored output without a lookup,
+/// and only checks what spent it.
 async fn store_watchtower_exit_lookups(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
     ancestors_current: bool,
     stored: &HashMap<String, LeafRecovery>,
+    from_storage: &HashSet<String>,
     queries: &mut ChainQueries,
     storage: &dyn Storage,
 ) -> Result<WatchtowerExits, SdkError> {
+    let (taken, looked_up): (Vec<TreeNode>, Vec<TreeNode>) = leaves
+        .iter()
+        .cloned()
+        .partition(|leaf| from_storage.contains(&leaf.id.to_string()));
+    let stored_spends: Vec<ChainQuery> = taken
+        .iter()
+        .filter(|leaf| is_recovered(leaf, nodes))
+        .filter_map(|leaf| stored_outpoint(stored, leaf))
+        .map(ChainQuery::Outspend)
+        .collect();
     queries
-        .resolve(|observed| ((), scan_outputs(leaves, nodes, observed).1))
+        .resolve(|observed| {
+            let mut pending = scan_outputs(&looked_up, nodes, observed).1;
+            pending.extend(without_result(stored_spends.clone(), observed));
+            ((), pending)
+        })
         .await;
-    let (mut lookups, _) = scan_outputs(leaves, nodes, queries.observed());
+    let (mut lookups, _) = scan_outputs(&looked_up, nodes, queries.observed());
 
     let mut found = WatchtowerExits::default();
     let now = now_secs();
     for leaf in leaves {
         let leaf_id = leaf.id.to_string();
+        let recovered = is_recovered(leaf, nodes);
+        let stored = stored.get(&leaf_id);
+        let observed = queries.observed();
         let lookup = lookup_with(lookups.remove(&leaf.id), leaf, ancestors_current);
         if lookup == WatchtowerExitLookup::Unrecoverable {
             warn!(
@@ -568,14 +689,15 @@ async fn store_watchtower_exit_lookups(
                  tx in a block above it has no output for the leaf's key"
             );
         }
-        let looked_up = looked_up_exit(
-            leaf,
-            is_recovered(leaf, nodes),
-            lookup,
-            stored.get(&leaf_id),
-            queries.observed(),
-            now,
-        )?;
+        let taken = if from_storage.contains(&leaf_id) {
+            stored_exit(leaf, recovered, stored, observed, now)?
+        } else {
+            None
+        };
+        let looked_up = match taken {
+            Some(taken) => taken,
+            None => looked_up_exit(leaf, recovered, lookup, stored, observed, now)?,
+        };
         if let Some(update) = looked_up.update {
             store_update(storage, update).await;
         }
@@ -1739,6 +1861,7 @@ mod tests {
                 &HashMap::new(),
                 true,
                 &HashMap::new(),
+                &HashSet::new(),
                 &mut queries,
                 &storage,
             )
@@ -1762,6 +1885,7 @@ mod tests {
                 &HashMap::new(),
                 true,
                 &stored,
+                &HashSet::new(),
                 &mut queries,
                 &storage,
             )
@@ -1771,6 +1895,115 @@ mod tests {
             assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
             assert_eq!(found.exits[LEAF_ID].output, exited.found);
             assert!(found.missing.is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_lookup_takes_a_stored_output_and_only_checks_its_spend() {
+            let exited = exited_leaf(TreeNodeStatus::WatchtowerExitRecovered);
+            let mut not_recovered = exited.leaf.clone();
+            not_recovered.status = TreeNodeStatus::WatchtowerExited;
+            let storage = temp_storage();
+            storage
+                .update_leaf_recovery(UpdateLeafRecovery {
+                    leaf_id: LEAF_ID.to_string(),
+                    chain_checked_at: Some(900),
+                    watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let stored = stored_in(&storage).await;
+            let from_storage = HashSet::from([LEAF_ID.to_string()]);
+            let lookup = |leaf: TreeNode, chain: Arc<ChainStub>| {
+                let (stored, from_storage, storage) = (&stored, &from_storage, &storage);
+                async move {
+                    let mut queries = ChainQueries::new(chain);
+                    store_watchtower_exit_lookups(
+                        &[leaf],
+                        &HashMap::new(),
+                        true,
+                        stored,
+                        from_storage,
+                        &mut queries,
+                        storage,
+                    )
+                    .await
+                    .unwrap()
+                }
+            };
+
+            // No transaction has the output of a leaf that is not recovered as
+            // an input.
+            let chain = chain_knowing(&[]);
+            let found = lookup(not_recovered, chain.clone()).await;
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 0);
+            assert_eq!(found.exits[LEAF_ID].output, exited.found);
+
+            let chain = chain_knowing(&[spent(&exited.found, true, Some(101))]);
+            let found = lookup(exited.leaf.clone(), chain.clone()).await;
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+            assert!(found.exits[LEAF_ID].recovered);
+            assert_eq!(
+                stored_in(&storage).await[LEAF_ID].watchtower_exit_spend,
+                Some(ChainTransaction {
+                    txid: spender().to_string(),
+                    block_height: 101,
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn prepare_takes_a_stored_output_the_chain_still_shows_in_a_block() {
+            let settled = leaf_number(1);
+            let moved = leaf_number(2);
+            let dropped = leaf_number(3);
+            let leaves = [
+                settled.leaf.clone(),
+                moved.leaf.clone(),
+                dropped.leaf.clone(),
+            ];
+            let storage = temp_storage();
+            for (exited, block_height) in [(&settled, 100), (&moved, 103), (&dropped, 103)] {
+                storage
+                    .update_leaf_recovery(UpdateLeafRecovery {
+                        leaf_id: exited.leaf.id.to_string(),
+                        chain_checked_at: Some(900),
+                        watchtower_exit_output: Some(stored_output_of(&exited.found, block_height)),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+            let stored = stored_in(&storage).await;
+            let ids = |exited: &[&ExitedLeaf]| -> HashSet<String> {
+                exited.iter().map(|e| e.leaf.id.to_string()).collect()
+            };
+
+            // The tip is at 105, so an output at 100 is six blocks deep.
+            let chain = Arc::new(ChainStub {
+                tip: Some(105),
+                heights: HashMap::from([(moved.found.outpoint.txid.to_string(), 104)]),
+                not_in_block: HashSet::from([dropped.found.outpoint.txid.to_string()]),
+                ..Default::default()
+            });
+            let mut queries = ChainQueries::new(chain.clone());
+            let from_storage = outputs_from_storage(&leaves, &stored, &mut queries, &storage).await;
+
+            assert_eq!(from_storage, ids(&[&settled, &moved]));
+            // The tip, and the two transactions that are not settled.
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 3);
+            let moved_id = moved.leaf.id.to_string();
+            assert_eq!(
+                stored_in(&storage).await[&moved_id].watchtower_exit_output,
+                Some(stored_output_of(&moved.found, 104))
+            );
+
+            // Without the tip the SDK takes every stored output as it is.
+            let chain = Arc::new(ChainStub::default());
+            let mut queries = ChainQueries::new(chain.clone());
+            let from_storage = outputs_from_storage(&leaves, &stored, &mut queries, &storage).await;
+            assert_eq!(from_storage, ids(&[&settled, &moved, &dropped]));
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
         }
 
         #[tokio::test]
@@ -1903,6 +2136,7 @@ mod tests {
                         &nodes,
                         ancestors_current,
                         &HashMap::new(),
+                        &HashSet::new(),
                         &mut queries,
                         storage,
                     )
