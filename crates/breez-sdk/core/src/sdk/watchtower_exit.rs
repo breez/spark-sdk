@@ -331,7 +331,7 @@ impl WatchtowerExit {
         spend: &OutputSpend,
         recovery_cosigned: bool,
     ) -> Self {
-        let recoveries = stored
+        let recoveries: Vec<Transaction> = stored
             .into_iter()
             .flat_map(|stored| &stored.watchtower_exit_recoveries)
             .filter_map(|recovery| deserialize_hex::<Transaction>(&recovery.transaction_hex).ok())
@@ -341,6 +341,9 @@ impl WatchtowerExit {
                     .is_some_and(|input| input.previous_output == output.outpoint)
             })
             .collect();
+        // The SDK stores a recovery when the operators co-sign it. The wallet's
+        // copy of the leaf shows that only after a refresh.
+        let recovery_cosigned = recovery_cosigned || !recoveries.is_empty();
         // A stored spend belongs to the stored output.
         let stored_spend = stored.is_some_and(|stored| {
             stored.watchtower_exit_spend.is_some()
@@ -2075,6 +2078,66 @@ mod tests {
             let spend = exit_output_spend(&exit(true), &mut queries).await;
             assert!(matches!(spend, OutputSpend::InBlock { .. }));
             assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn a_stored_recovery_shows_a_cosign_before_the_leaf_status_does() {
+            let exited = exited_leaf(TreeNodeStatus::WatchtowerExited);
+            let first = tx_paying(exited.found.outpoint, 9_000);
+            let storage = temp_storage();
+            storage
+                .update_leaf_recovery(UpdateLeafRecovery {
+                    leaf_id: LEAF_ID.to_string(),
+                    chain_checked_at: Some(900),
+                    watchtower_exit_output: Some(stored_output_of(&exited.found, 100)),
+                    watchtower_exit_recovery: Some(stored_recovery(&first)),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let stored = stored_in(&storage).await;
+            let from_storage = HashSet::from([LEAF_ID.to_string()]);
+            let chain = chain_knowing(&[Observation {
+                query: ChainQuery::Outspend(exited.found.outpoint),
+                result: ChainResult::Spend(Some(SpendInfo {
+                    spender_txid: first.compute_txid(),
+                    confirmed: false,
+                    block_height: None,
+                })),
+            }]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let found = store_watchtower_exit_lookups(
+                std::slice::from_ref(&exited.leaf),
+                &HashMap::new(),
+                true,
+                &stored,
+                &from_storage,
+                &mut queries,
+                &storage,
+            )
+            .await
+            .unwrap();
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 0);
+
+            let spend = exit_output_spend(&found.exits[LEAF_ID], &mut queries).await;
+
+            assert_eq!(spend, OutputSpend::InMempool(first.compute_txid()));
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+
+            // A recovery of another output is no co-sign of this one.
+            let other = WatchtowerExit::new(
+                LEAF_ID.to_string(),
+                exited.leaf.value,
+                exited.found.clone(),
+                Some(&stored_leaf(&[paying(9_000)])),
+                &OutputSpend::Unknown,
+                false,
+            );
+            let chain = chain_knowing(&[]);
+            let mut queries = ChainQueries::new(chain.clone());
+            let spend = exit_output_spend(&other, &mut queries).await;
+            assert_eq!(spend, OutputSpend::Unspent);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 0);
         }
 
         /// A leaf below an on-chain split node whose direct tx has an output for
