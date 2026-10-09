@@ -10,8 +10,9 @@ use bitcoin::{
     hashes::Hash,
 };
 use spark_wallet::{
-    ChainQuery, EXITING_STATUSES, Fee, TreeNode, TreeNodeStatus, WATCHTOWER_EXITED_STATUSES,
-    WatchtowerExitLookup, refund_sweep_input_fee, watchtower_exit_recovery_payout,
+    ChainQuery, ChainResult, EXITING_STATUSES, Fee, TreeNode, TreeNodeStatus,
+    WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup, refund_sweep_input_fee,
+    watchtower_exit_recovery_payout,
 };
 use tracing::{debug, error, info};
 
@@ -27,7 +28,7 @@ use crate::{
 
 use super::{
     BreezSdk,
-    chain_queries::{ChainQueries, StoredCheck, StoredInBlock, without_result},
+    chain_queries::{ChainQueries, StoredCheck, StoredInBlock, result_of, without_result},
     unilateral_exit::{
         UnilateralBuild, UnilateralQuote, check_recovery_transactions, has_stored_sweep, node_ids,
         store_exited_leaf_checks,
@@ -222,17 +223,37 @@ impl BreezSdk {
             .iter()
             .map(recovered_output)
             .collect::<Result<Vec<OutPoint>, SdkError>>()?;
+        // The chain service reports an output of a transaction it does not know
+        // as unspent, so for an unverified recovery the SDK also checks that the
+        // output's transaction is in a block.
+        let unverified_outputs: Vec<ChainQuery> = cooperative
+            .iter()
+            .zip(&outputs)
+            .filter(|(tx, _)| tx.status == ExitTransactionStatus::Unverified)
+            .map(|(_, output)| ChainQuery::TxConfirmed(output.txid))
+            .collect();
         let mut queries = ChainQueries::new(self.chain_service.clone());
         queries
             .resolve(|observed| {
-                let outspends = outputs.iter().copied().map(ChainQuery::Outspend).collect();
-                ((), without_result(outspends, observed))
+                let outspends = outputs.iter().copied().map(ChainQuery::Outspend);
+                let wanted = outspends
+                    .chain(unverified_outputs.iter().cloned())
+                    .collect();
+                ((), without_result(wanted, observed))
             })
             .await;
         let mut recovered: Vec<(String, ChainTransaction)> = Vec::new();
         for (tx, output) in cooperative.iter_mut().zip(&outputs) {
             let spend = output_spend(queries.observed(), *output);
-            tx.status = cooperative_recovery_status(&spend, tx.status);
+            let output_in_block = tx.status != ExitTransactionStatus::Unverified
+                || matches!(
+                    result_of(queries.observed(), &ChainQuery::TxConfirmed(output.txid)),
+                    Some(ChainResult::Confirmed {
+                        confirmed: true,
+                        ..
+                    })
+                );
+            tx.status = cooperative_recovery_status(&spend, output_in_block, tx.status);
             if let (Some(leaf_id), Some(spend)) = (&tx.node_id, spend.in_block()) {
                 recovered.push((leaf_id.clone(), spend));
             }
@@ -492,11 +513,12 @@ impl BreezSdk {
                 )
                 .await
             {
-                Ok(Some((tx, fee_sats))) => {
+                Ok(Some(recovery)) => {
+                    let tx = recovery.tx;
                     recoveries.fee_sats = recoveries
                         .fee_sats
                         .saturating_add(exit.exit_fee_sats())
-                        .saturating_add(fee_sats);
+                        .saturating_add(recovery.fee_sats);
                     recoveries.leaves.push(RecoverFundsLeaf {
                         leaf_id: exit.leaf_id.clone(),
                         value_sats: exit.value_sats,
@@ -510,7 +532,11 @@ impl BreezSdk {
                         cpfp_tx_hex: None,
                         csv_timelock_blocks: None,
                         depends_on: Vec::new(),
-                        status: ExitTransactionStatus::Ready,
+                        status: if recovery.verified {
+                            ExitTransactionStatus::Ready
+                        } else {
+                            ExitTransactionStatus::Unverified
+                        },
                     });
                 }
                 Ok(None) => debug!(
@@ -729,14 +755,17 @@ fn unresolved_exit(
         WatchtowerExitLookup::Pending
         | WatchtowerExitLookup::Found { .. }
         | WatchtowerExitLookup::Unconfirmed(_) => {
-            return Ok(Unresolved::Exit(WatchtowerExit::new(
-                leaf.leaf_id.clone(),
-                leaf.value_sats,
-                assumed,
-                stored,
-                &OutputSpend::Unknown,
-                recovered,
-            )));
+            return Ok(Unresolved::Exit(
+                WatchtowerExit::new(
+                    leaf.leaf_id.clone(),
+                    leaf.value_sats,
+                    assumed,
+                    stored,
+                    &OutputSpend::Unknown,
+                    recovered,
+                )
+                .assumed(),
+            ));
         }
     };
     Ok(Unresolved::Failed(CooperativeRecoveryFailure {
@@ -1055,17 +1084,21 @@ fn recovered_output(tx: &RecoveryTransaction) -> Result<OutPoint, SdkError> {
 
 /// The status of a cooperative recovery, from the `spend` of its input:
 /// confirmed once any recovery of that output is in a block, this one or a
-/// replacement. Without a result from the chain service it stays `status`.
+/// replacement, and ready while the output is in a block and no recovery of it
+/// is. Without those results from the chain service it stays `status`.
 fn cooperative_recovery_status(
     spend: &OutputSpend,
+    output_in_block: bool,
     status: ExitTransactionStatus,
 ) -> ExitTransactionStatus {
     match spend {
         OutputSpend::InBlock { block_height, .. } => ExitTransactionStatus::Confirmed {
             block_height: *block_height,
         },
-        OutputSpend::Unspent | OutputSpend::InMempool(_) => ExitTransactionStatus::Ready,
-        OutputSpend::Unknown => status,
+        OutputSpend::Unspent | OutputSpend::InMempool(_) if output_in_block => {
+            ExitTransactionStatus::Ready
+        }
+        OutputSpend::Unspent | OutputSpend::InMempool(_) | OutputSpend::Unknown => status,
     }
 }
 
@@ -1625,22 +1658,35 @@ mod tests {
         };
 
         assert_eq!(
-            cooperative_recovery_status(&in_block, ExitTransactionStatus::Ready),
+            cooperative_recovery_status(&in_block, true, ExitTransactionStatus::Ready),
             confirmed
         );
         // Not in a block, whatever the status was before.
-        for spend in [
+        let not_in_block = [
             OutputSpend::Unspent,
             OutputSpend::InMempool(Txid::from_byte_array([8; 32])),
-        ] {
+        ];
+        for spend in &not_in_block {
             assert_eq!(
-                cooperative_recovery_status(&spend, confirmed),
+                cooperative_recovery_status(spend, true, confirmed),
                 ExitTransactionStatus::Ready
             );
         }
         // Without a result the status stays as it was.
         assert_eq!(
-            cooperative_recovery_status(&OutputSpend::Unknown, confirmed),
+            cooperative_recovery_status(&OutputSpend::Unknown, true, confirmed),
+            confirmed
+        );
+        // An unverified recovery is ready only once its output is in a block.
+        let unverified = ExitTransactionStatus::Unverified;
+        for spend in &not_in_block {
+            assert_eq!(
+                cooperative_recovery_status(spend, false, unverified),
+                unverified
+            );
+        }
+        assert_eq!(
+            cooperative_recovery_status(&in_block, false, unverified),
             confirmed
         );
     }

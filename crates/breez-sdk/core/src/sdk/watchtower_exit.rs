@@ -42,6 +42,18 @@ pub(super) struct WatchtowerExit {
     /// Whether the operators co-signed a recovery of `output` before. Only then
     /// can a transaction have `output` as an input.
     recovery_cosigned: bool,
+    /// Whether the chain service showed `output` in a block, now or when the
+    /// SDK stored it.
+    output_in_block: bool,
+}
+
+/// A signed recovery of a watchtower exit.
+pub(super) struct SignedRecovery {
+    pub(super) tx: Transaction,
+    pub(super) fee_sats: u64,
+    /// Whether the SDK saw the output in a block, and learned what spent it
+    /// when a recovery of it was co-signed before.
+    pub(super) verified: bool,
 }
 
 /// The result of looking up watchtower exits, by leaf id.
@@ -226,7 +238,7 @@ impl BreezSdk {
         fee_rate_sat_per_vbyte: u64,
         unreachable: Option<&str>,
         queries: &mut ChainQueries,
-    ) -> Result<Option<(Transaction, u64)>, CooperativeRecoveryError> {
+    ) -> Result<Option<SignedRecovery>, CooperativeRecoveryError> {
         if exit.recovered {
             return Ok(None);
         }
@@ -261,8 +273,13 @@ impl BreezSdk {
         if let Some((txid, replaced)) = recovery_to_outbid(exit, &spend, in_mempool.as_ref())? {
             outbid(&unsigned, txid, &replaced)?;
         }
+        let verified = exit.output_in_block && spend.is_known();
         if let Some(signed) = exit.signed_recovery(&unsigned.tx) {
-            return Ok(Some((signed, unsigned.fee_sat)));
+            return Ok(Some(SignedRecovery {
+                tx: signed,
+                fee_sats: unsigned.fee_sat,
+                verified,
+            }));
         }
         if let Some(message) = unreachable {
             return Err(CooperativeRecoveryError::OperatorsUnavailable {
@@ -295,7 +312,11 @@ impl BreezSdk {
             ..Default::default()
         })
         .await;
-        Ok(Some((signed, unsigned.fee_sat)))
+        Ok(Some(SignedRecovery {
+            tx: signed,
+            fee_sats: unsigned.fee_sat,
+            verified,
+        }))
     }
 }
 
@@ -335,7 +356,15 @@ impl WatchtowerExit {
             recoveries,
             recovered: stored_spend || matches!(spend, OutputSpend::InBlock { .. }),
             recovery_cosigned,
+            output_in_block: true,
         }
+    }
+
+    /// The same exit, from an output the chain service showed in no block: the
+    /// SDK assumes it from the direct tx a node holds.
+    pub(super) fn assumed(mut self) -> Self {
+        self.output_in_block = false;
+        self
     }
 
     /// The exit of a leaf from its stored output alone. `None` when none is
@@ -507,7 +536,7 @@ fn looked_up_exit(
         });
     };
     Ok(LookedUpExit {
-        exit: Ok(exit(output, &OutputSpend::Unknown)),
+        exit: Ok(exit(output, &OutputSpend::Unknown).assumed()),
         update: None,
     })
 }
@@ -1574,7 +1603,12 @@ mod tests {
 
         let unconfirmed = looked_up(WatchtowerExitLookup::Unconfirmed(held.clone()), None);
         assert_eq!(unconfirmed.update, None);
-        assert_eq!(unconfirmed.exit.unwrap().output, held);
+        let unconfirmed = unconfirmed.exit.unwrap();
+        assert_eq!(unconfirmed.output, held);
+        // The SDK saw only the stored output in a block.
+        assert!(!unconfirmed.output_in_block);
+        let stored_exit = looked_up(WatchtowerExitLookup::Pending, Some(&stored));
+        assert!(stored_exit.exit.unwrap().output_in_block);
     }
 
     #[test]
