@@ -438,7 +438,9 @@ struct LookedUpExit {
     update: Option<UpdateLeafRecovery>,
 }
 
-/// `recovered` is whether the operators report `leaf` as recovered.
+/// The exit of `leaf` from the first source that has its output: the `lookup`
+/// when it found the output in a block, then `stored`, then the direct tx the
+/// node holds. `recovered` is whether the operators report `leaf` as recovered.
 fn looked_up_exit(
     leaf: &TreeNode,
     recovered: bool,
@@ -448,64 +450,95 @@ fn looked_up_exit(
     now: u64,
 ) -> Result<LookedUpExit, SdkError> {
     let leaf_id = leaf.id.to_string();
-    let stored_output = stored.and_then(|stored| stored.watchtower_exit_output.as_ref());
-    let (output, spend, update) = match (lookup, stored_output) {
-        (
-            WatchtowerExitLookup::Found {
-                output,
-                block_height,
-            },
-            _,
-        ) => {
-            let spend = output_spend(observed, output.outpoint);
-            let in_block = block_height.map(|height| stored_output_of(&output, height));
-            // The SDK stores a spend only when storage holds its output.
-            let spent_output_stored = in_block.is_some()
-                || stored_output.is_none_or(|stored| same_outpoint(stored, &output));
-            // Only a recovered leaf has a spend to check.
-            let complete = !recovered || spend.is_known();
-            // The SDK stores the output as soon as it finds it, and the check
-            // time once the check is complete.
-            let update = UpdateLeafRecovery {
-                leaf_id: leaf_id.clone(),
-                chain_checked_at: complete.then_some(now),
-                watchtower_exit_output: in_block,
-                watchtower_exit_spend: spend.in_block().filter(|_| spent_output_stored),
-                ..Default::default()
-            };
-            let stored_spend = stored.and_then(|stored| stored.watchtower_exit_spend.as_ref());
-            let new = update
-                .watchtower_exit_output
-                .as_ref()
-                .is_some_and(|output| stored_output != Some(output))
-                || update
-                    .watchtower_exit_spend
-                    .as_ref()
-                    .is_some_and(|spend| stored_spend != Some(spend))
-                || (complete && unchecked_output(stored, &output));
-            (output, spend, new.then_some(update))
-        }
-        // An output the chain service reported earlier takes precedence over
-        // the one of the direct tx the node holds.
-        (_, Some(stored_output)) => (
-            exited_output(&leaf_id, stored_output)?,
-            OutputSpend::Unknown,
-            None,
-        ),
-        (WatchtowerExitLookup::Unconfirmed(output), None) => (output, OutputSpend::Unknown, None),
-        (lookup, None) => {
-            return Ok(LookedUpExit {
-                exit: Err(lookup),
-                update: None,
-            });
-        }
+    let exit = |output, spend| {
+        WatchtowerExit::new(
+            leaf_id.clone(),
+            leaf.value,
+            output,
+            stored,
+            spend,
+            recovered,
+        )
+    };
+    if let WatchtowerExitLookup::Found {
+        output,
+        block_height,
+    } = lookup
+    {
+        let spend = output_spend(observed, output.outpoint);
+        let update = found_output_update(
+            &leaf_id,
+            recovered,
+            &output,
+            block_height,
+            stored,
+            &spend,
+            now,
+        );
+        return Ok(LookedUpExit {
+            exit: Ok(exit(output, &spend)),
+            update,
+        });
+    }
+    if let Some(stored_output) = stored.and_then(|stored| stored.watchtower_exit_output.as_ref()) {
+        let output = exited_output(&leaf_id, stored_output)?;
+        return Ok(LookedUpExit {
+            exit: Ok(exit(output, &OutputSpend::Unknown)),
+            update: None,
+        });
+    }
+    let WatchtowerExitLookup::Unconfirmed(output) = lookup else {
+        return Ok(LookedUpExit {
+            exit: Err(lookup),
+            update: None,
+        });
     };
     Ok(LookedUpExit {
-        exit: Ok(WatchtowerExit::new(
-            leaf_id, leaf.value, output, stored, &spend, recovered,
-        )),
-        update,
+        exit: Ok(exit(output, &OutputSpend::Unknown)),
+        update: None,
     })
+}
+
+/// What to store for a leaf whose `output` the chain service showed in a
+/// block, with `spend` as what it showed of that output's spend. `None` when
+/// `stored` holds it all. `block_height` is unset when the chain service did
+/// not name the block of the output.
+fn found_output_update(
+    leaf_id: &str,
+    recovered: bool,
+    output: &WatchtowerExitOutput,
+    block_height: Option<u32>,
+    stored: Option<&LeafRecovery>,
+    spend: &OutputSpend,
+    now: u64,
+) -> Option<UpdateLeafRecovery> {
+    let stored_output = stored.and_then(|stored| stored.watchtower_exit_output.as_ref());
+    let in_block = block_height.map(|height| stored_output_of(output, height));
+    // The SDK stores a spend only when storage holds its output.
+    let spent_output_stored =
+        in_block.is_some() || stored_output.is_none_or(|stored| same_outpoint(stored, output));
+    // Only a recovered leaf has a spend to check.
+    let complete = !recovered || spend.is_known();
+    // The SDK stores the output as soon as it finds it, and the check time
+    // once the check is complete.
+    let update = UpdateLeafRecovery {
+        leaf_id: leaf_id.to_string(),
+        chain_checked_at: complete.then_some(now),
+        watchtower_exit_output: in_block,
+        watchtower_exit_spend: spend.in_block().filter(|_| spent_output_stored),
+        ..Default::default()
+    };
+    let stored_spend = stored.and_then(|stored| stored.watchtower_exit_spend.as_ref());
+    let new = update
+        .watchtower_exit_output
+        .as_ref()
+        .is_some_and(|output| stored_output != Some(output))
+        || update
+            .watchtower_exit_spend
+            .as_ref()
+            .is_some_and(|spend| stored_spend != Some(spend))
+        || (complete && unchecked_output(stored, output));
+    new.then_some(update)
 }
 
 /// Looks up the watchtower exit of each of `leaves` and stores what the chain
