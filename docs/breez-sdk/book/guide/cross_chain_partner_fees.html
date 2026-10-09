@@ -1,0 +1,317 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Earning fees on USDC/USDT payments - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <!--
+                  Breez SDK · Spark docs — brand header partial.
+                
+                  mdBook renders the `header` partial at the top of every page's content. The default
+                  theme ships an EMPTY header.hbs, which is why the reskin's styles.css and
+                  brand-header.js both reference `.brand-header` / #brand-controls but the file
+                  itself was never committed to the reskin branch. THIS is that missing file,
+                  reconstructed from the design mockup (design/Breez SDK Docs.dc.html) and the
+                  class names in styles.css.
+                
+                  Drop this at: docs/breez-sdk/theme/header.hbs
+                  It pairs with styles.css (.brand-header rules) and brand-header.js (which moves
+                  mdBook's theme/search/sidebar controls into #brand-controls at load time).
+                -->
+                <div id="brand-header" class="brand-header">
+                  <a class="brand-logo" href="../index.html" aria-label="Docs home">
+                    <img src="../assets/icons/logo-breez-header.svg" alt="Breez">
+                  </a>
+                  <span class="brand-sep"></span>
+                  <span class="brand-product">SDK Documentation</span>
+                  <span class="brand-badge">
+                    <img src="../assets/icons/spark_icon.svg" alt="">Spark
+                  </span>
+                
+                  <span class="brand-spacer"></span>
+                
+                  <nav class="brand-nav">
+                    <a href="https://breez.technology" target="_blank" rel="noopener">Home</a>
+                    <a href="https://github.com/breez/spark-sdk" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://t.me/breezsdk" target="_blank" rel="noopener" aria-label="Telegram">
+                      <img src="../assets/icons/telegram-icon.svg" alt="">
+                    </a>
+                  </nav>
+                
+                  <!-- brand-header.js relocates #sidebar-toggle, #theme-toggle, #theme-list and
+                       #search-toggle into this container so they read as one bar. -->
+                  <div id="brand-controls" class="brand-controls"></div>
+                
+                  <a class="brand-cta" href="https://breez.technology/request-api-key/#contact-us-form-sdk" target="_blank" rel="noopener">
+                    Request API Key
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                  </a>
+                </div>
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/cross_chain_partner_fees.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="earning-fees-on-usdcusdt-payments"><a class="header" href="#earning-fees-on-usdcusdt-payments">Earning fees on USDC/USDT payments</a></h1>
+<p>You can add your own fee to the <a href="./cross_chain.html">USDC/USDT payments</a> your users make through the SDK. You set the fee in the <a href="https://partners.breez.technology/">Partner portal</a>, and the SDK applies it with no code or configuration change.</p>
+<ul>
+<li>The fee applies to <a href="./send_payment.html#usdc-usdt">sends</a>, <a href="./receive_payment.html#usdc-usdt">receives</a>, and <a href="./cash_app_to_usdc_usdt.html">Cash App payment links</a> made with your API key and Breez SDK - Spark 0.27 or later.</li>
+<li>It is charged as a percentage of each payment after the provider's own fee. It is included in the <code class="lang-fn"><span class="fn-rust">service_fee_amount</span><span class="fn-python">service_fee_amount</span><span class="fn-swift">serviceFeeAmount</span><span class="fn-kotlin">serviceFeeAmount</span><span class="fn-javascript">serviceFeeAmount</span><span class="fn-react-native">serviceFeeAmount</span><span class="fn-flutter">serviceFeeAmount</span><span class="fn-go">ServiceFeeAmount</span><span class="fn-csharp">ServiceFeeAmount</span></code> the SDK returns for each payment, so users see it in the fee your app already displays.</li>
+<li>Flashnet, which processes cross-chain payments, keeps 20% of your fee, and you receive the remaining 80%. See <a href="https://docs.flashnet.xyz/orchestra/fees">Flashnet's fee documentation</a> for how fees are calculated.</li>
+<li>Until you set a fee, payments work as before.</li>
+</ul>
+<h2 id="setting-your-fee"><a class="header" href="#setting-your-fee">Setting your fee</a></h2>
+<p>In the partner portal, open <strong>Settings</strong>. The fee is set in the <strong>USDC/USDT Fee Settings</strong> card.</p>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td>Fee Percentage</td><td>0.01% to 10%, in steps of 0.01%. 0 turns the fee off.</td></tr>
+<tr><td>Payout Destination</td><td>USDC on Solana, or USDB on Spark.</td></tr>
+<tr><td>Payout Address</td><td>A Solana address, or a mainnet Spark address starting with <code>spark1</code>.</td></tr>
+</tbody></table>
+</div>
+<p>Use a payout address you control on that chain. The address is checked when you save, and an invalid address is rejected.</p>
+<h3 id="when-changes-take-effect"><a class="header" href="#when-changes-take-effect">When changes take effect</a></h3>
+<ul>
+<li><strong>A new fee</strong>: the next time the SDK starts, or within an hour for an app that is already running.</li>
+<li><strong>A new rate</strong>: from the next payment.</li>
+<li><strong>A new payout address</strong>: for fees earned after the change. Earlier fees are still paid to the address that was set when they were earned.</li>
+</ul>
+<p>You're emailed whenever your USDC/USDT fee settings change.</p>
+<h3 id="api-keys"><a class="header" href="#api-keys">API keys</a></h3>
+<p>The fee applies to payments made with the API key shown in your partner portal <strong>Settings</strong>. Each partner portal account, registered with its own email, holds one API key. If your apps use several API keys, set the fee in the account for each key. Fees earned with each key are tracked and claimed in that key's account.</p>
+<h2 id="claiming-your-fees"><a class="header" href="#claiming-your-fees">Claiming your fees</a></h2>
+<p>Fees accrue as a balance that you claim, rather than being paid out per payment. Claim them on the <strong>Fees</strong> page, in the <strong>Balances</strong> card of the <strong>USDC/USDT Fees</strong> section.</p>
+<ul>
+<li>Each balance is claimed in full, and a claim needs at least $1 (some payout routes need more). If a balance can't be claimed yet, the portal shows why.</li>
+<li>A fee becomes claimable once the provider has confirmed it. <strong>Pending payout</strong> shows claims you've made that haven't been paid out yet.</li>
+<li>A claim is paid to the payout destination that was set when the fees were earned. Conversion and payout costs can make the amount delivered slightly lower.</li>
+</ul>
+<h2 id="turning-the-fee-off"><a class="header" href="#turning-the-fee-off">Turning the fee off</a></h2>
+<p>Set the fee to 0. Claim your available balance first: the portal won't turn the fee off while any balance is claimable. Anything left (amounts under the $1 minimum, or fees not yet confirmed) can't be claimed while the fee is off, and turning the fee back on makes it claimable again.</p>
+<p>Turning the fee off takes effect from the next payment.</p>
+<h2 id="tracking-your-earnings"><a class="header" href="#tracking-your-earnings">Tracking your earnings</a></h2>
+<p>The <strong>Fees</strong> page shows, for the selected period, your fees earned (after Flashnet's share), payment volume, and payment count. It also lists your balances, a monthly earnings chart, your claim history, and recent payments with their route and your fee.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/cross_chain.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/cash_app_to_usdc_usdt.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/cross_chain.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/cash_app_to_usdc_usdt.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+        <script src="../brand-header.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
