@@ -517,7 +517,6 @@ pub enum _RecoveryVerdict {
 #[frb(mirror(RecoveryRedoReason))]
 pub enum _RecoveryRedoReason {
     OnChainStateDiverged,
-    UnreadableRecovery,
 }
 
 #[frb(mirror(GetInfoRequest))]

@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -295,11 +294,8 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "checkRecoverFunds")]
     pub async fn check_recover_funds(
         &self,
-        #[wasm_bindgen(unchecked_param_type = "CheckRecoverFundsRequest")] request: JsValue,
+        request: CheckRecoverFundsRequest,
     ) -> WasmResult<CheckRecoverFundsResponse> {
-        let Ok(request) = CheckRecoverFundsRequest::from_js(request) else {
-            return Ok(CheckRecoverFundsResponse::unreadable());
-        };
         Ok(self.sdk.check_recover_funds(request.into()).await?.into())
     }
 

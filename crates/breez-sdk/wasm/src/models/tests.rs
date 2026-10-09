@@ -5,10 +5,10 @@ use tsify_next::Tsify;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use super::{
-    CheckRecoverFundsRequest, CheckRecoverFundsResponse, CrossChainAcceptedAsset,
-    CrossChainAddressDetails, CrossChainAddressFamily, CrossChainProvider, CrossChainRouteFilter,
-    CrossChainRouteLimits, CrossChainRoutePair, DeliveryMethod, PaymentRequest, RecoverFundsLeaf,
-    RecoverFundsResponse, RecoveryMethod, RecoveryRedoReason, RecoveryVerdict, SparkAsset,
+    CheckRecoverFundsRequest, CrossChainAcceptedAsset, CrossChainAddressDetails,
+    CrossChainAddressFamily, CrossChainProvider, CrossChainRouteFilter, CrossChainRouteLimits,
+    CrossChainRoutePair, DeliveryMethod, PaymentRequest, RecoverFundsLeaf, RecoverFundsResponse,
+    RecoveryMethod, SparkAsset,
 };
 
 // Values the SDK returns must be accepted back inside an internally tagged
@@ -94,14 +94,6 @@ fn a_recovery_an_earlier_version_stored_does_not_parse() {
     .unwrap();
 
     assert!(CheckRecoverFundsRequest::from_js(request).is_err());
-    let response = CheckRecoverFundsResponse::unreadable();
-    assert!(matches!(
-        response.verdict,
-        RecoveryVerdict::Redo {
-            reason: RecoveryRedoReason::UnreadableRecovery
-        }
-    ));
-    assert!(response.recovery.leaves.is_empty());
 }
 
 #[wasm_bindgen_test]
