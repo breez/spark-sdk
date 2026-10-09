@@ -1004,17 +1004,28 @@ impl SparkWallet {
         Ok(self.tree_service.list_leaves_with_status(statuses).await?)
     }
 
+    /// The nodes of `leaf_ids` with their ancestors, as the operators hold them.
+    /// The wallet stores the ancestors it fetched.
     pub async fn fetch_nodes_with_ancestors(
         &self,
         leaf_ids: &[TreeNodeId],
     ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
         Ok(self
-            .tree_service
-            .fetch_nodes(leaf_ids, true)
-            .await?
-            .into_iter()
-            .map(|node| (node.id.clone(), node))
-            .collect())
+            .exit_chain_resolver
+            .fetch_nodes_with_ancestors(leaf_ids)
+            .await?)
+    }
+
+    /// The nodes of `leaf_ids` with their ancestors, as the wallet stored them.
+    /// Their statuses are those of the last fetch.
+    pub async fn stored_nodes_with_ancestors(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<HashMap<TreeNodeId, TreeNode>, SparkWalletError> {
+        Ok(self
+            .exit_chain_resolver
+            .stored_nodes_with_ancestors(leaf_ids)
+            .await?)
     }
 
     pub async fn cosign_watchtower_exit_recovery(
