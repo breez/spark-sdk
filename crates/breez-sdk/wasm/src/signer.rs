@@ -914,6 +914,9 @@ pub enum ExternalTokenTransactionKind {
     Freeze,
     Partial,
     Final,
+    AllowanceGrant,
+    AllowanceRevoke,
+    AllowanceSpend,
 }
 
 #[macros::extern_wasm_bindgen(

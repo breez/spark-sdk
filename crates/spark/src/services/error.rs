@@ -106,6 +106,11 @@ pub enum ServiceError {
     ServiceConnectionError(Box<OperatorRpcError>),
     #[error("transfer observer error: {0}")]
     TransferObserverError(#[from] crate::services::TransferObserverError),
+    #[error("token allowance refused: {message}")]
+    TokenAllowance {
+        failure: crate::token::TokenAllowanceFailure,
+        message: String,
+    },
     #[error("generic error: {0}")]
     Generic(String),
 }

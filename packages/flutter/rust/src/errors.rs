@@ -1,5 +1,7 @@
 pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
-pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
+pub use breez_sdk_spark::{
+    DepositClaimError, Fee, SdkError, StorageError, TokenAllowanceErrorReason,
+};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]
@@ -73,7 +75,27 @@ pub enum _SdkError {
     OptimizationAlreadyRunning,
     OptimizationCancelled,
     InsufficientCpfpFunds { required_sat: u64 },
+    TokenAllowance {
+        reason: TokenAllowanceErrorReason,
+        details: String,
+    },
     Generic(String),
+}
+
+#[frb(mirror(TokenAllowanceErrorReason))]
+pub enum _TokenAllowanceErrorReason {
+    NotEnabled,
+    NotFound,
+    Revoked,
+    Expired,
+    NotSpendable,
+    OverPerPaymentLimit,
+    OverTotalLimit,
+    RecipientNotAllowed,
+    PayerInsufficientFunds,
+    AlreadyActive,
+    QuotaExceeded,
+    PreparedPullStale,
 }
 
 #[frb(mirror(StorageError))]

@@ -55,6 +55,18 @@ class ClientSigning {
                     signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
                 )
             }
+            is UnsignedTransferPackage.TokenPull -> {
+                // Log.v("Breez", "Approve pulling ${unsigned.amount} of token " +
+                //     "${unsigned.tokenIdentifier} from ${unsigned.payerAddress}")
+                for (receiver in unsigned.receivers) {
+                    val recipient = receiver.receiverAddress
+                    // Log.v("Breez", "  ${receiver.amount} to $recipient")
+                }
+                // Log.v("Breez", "Expires at ${unsigned.expiryTime}")
+                TransferSignature.Token(
+                    signer.prepareTokenTransaction(unsigned.prepareTokenTransaction)
+                )
+            }
         }
 
         val signedPackage = SignedTransferPackage(unsigned, signature)
@@ -159,5 +171,22 @@ class ClientSigning {
             }
         }
         // ANCHOR_END: client-signing-lnurl-pay
+    }
+
+    suspend fun pullWithClientSigning(
+        sdk: BreezSdk,
+        signer: ExternalSparkSigner,
+        prepareResponse: PreparePullPaymentResponse,
+    ): PullPaymentResponse {
+        // ANCHOR: client-signing-pull
+        val unsigned = sdk.buildUnsignedPullPackage(
+            BuildUnsignedPullPackageRequest(prepareResponse)
+        )
+        val signedPackage = signPackage(signer, unsigned)
+        val response = sdk.publishSignedPullPackage(
+            PublishSignedPullPackageRequest(signedPackage)
+        )
+        // ANCHOR_END: client-signing-pull
+        return response
     }
 }

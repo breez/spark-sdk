@@ -176,6 +176,14 @@ pub(in crate::sdk::payments) async fn publish_signed_transfer_package(
 ) -> Result<PublishSignedTransferPackageResponse, SdkError> {
     if matches!(
         &signed_package.unsigned,
+        UnsignedTransferPackage::TokenPull { .. }
+    ) {
+        return Err(SdkError::InvalidInput(
+            "Pull packages must be published with publish_signed_pull_package".to_string(),
+        ));
+    }
+    if matches!(
+        &signed_package.unsigned,
         UnsignedTransferPackage::Transfer {
             target: TransferTarget::Lightning {
                 lnurl_pay: Some(_),

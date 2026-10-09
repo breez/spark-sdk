@@ -56,6 +56,7 @@
     - [Sending to multiple recipients](guide/batch_send.md)
   - [Converting tokens](guide/token_conversion.md)
   - [Issuing tokens](guide/issuing_tokens.md)
+  - [Token allowances](guide/token_allowances.md)
 - [Running on a server](guide/server_deployments.md)
   - [Multi-user configuration](guide/server_mode.md)
   - [Treasury configuration](guide/treasury.md)

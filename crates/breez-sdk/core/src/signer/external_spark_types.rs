@@ -717,6 +717,9 @@ pub enum ExternalTokenTransactionKind {
     Freeze,
     Partial,
     Final,
+    AllowanceGrant,
+    AllowanceRevoke,
+    AllowanceSpend,
 }
 
 impl ExternalTokenTransactionKind {
@@ -725,6 +728,9 @@ impl ExternalTokenTransactionKind {
             spark_wallet::TokenTransactionKind::Freeze => Self::Freeze,
             spark_wallet::TokenTransactionKind::Partial => Self::Partial,
             spark_wallet::TokenTransactionKind::Final => Self::Final,
+            spark_wallet::TokenTransactionKind::AllowanceGrant => Self::AllowanceGrant,
+            spark_wallet::TokenTransactionKind::AllowanceRevoke => Self::AllowanceRevoke,
+            spark_wallet::TokenTransactionKind::AllowanceSpend => Self::AllowanceSpend,
         }
     }
 }
@@ -834,5 +840,32 @@ mod tests {
         let ids = req.leaf_ids().unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0].to_string(), "22222222-2222-2222-2222-222222222222");
+    }
+}
+
+#[cfg(test)]
+mod allowance_kind_tests {
+    use super::ExternalTokenTransactionKind;
+
+    #[test]
+    fn allowance_kinds_map_to_external_kinds() {
+        assert!(matches!(
+            ExternalTokenTransactionKind::from_kind(
+                &spark_wallet::TokenTransactionKind::AllowanceGrant
+            ),
+            ExternalTokenTransactionKind::AllowanceGrant
+        ));
+        assert!(matches!(
+            ExternalTokenTransactionKind::from_kind(
+                &spark_wallet::TokenTransactionKind::AllowanceRevoke
+            ),
+            ExternalTokenTransactionKind::AllowanceRevoke
+        ));
+        assert!(matches!(
+            ExternalTokenTransactionKind::from_kind(
+                &spark_wallet::TokenTransactionKind::AllowanceSpend
+            ),
+            ExternalTokenTransactionKind::AllowanceSpend
+        ));
     }
 }

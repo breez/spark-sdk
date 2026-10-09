@@ -49,6 +49,17 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
         signature = TransferSignature.token(
             signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
         )
+    case let .tokenPull(
+        prepareTokenTransaction, _, payerAddress, tokenIdentifier, receivers, amount, expiryTime
+    ):
+        print("Approve pulling \(amount) of token \(tokenIdentifier) from \(payerAddress)")
+        for receiver in receivers {
+            print("  \(receiver.amount) to \(receiver.receiverAddress ?? "")")
+        }
+        print("Expires at \(expiryTime)")
+        signature = TransferSignature.token(
+            signed: try await signer.prepareTokenTransaction(request: prepareTokenTransaction)
+        )
     }
 
     let signedPackage = SignedTransferPackage(
@@ -149,4 +160,17 @@ func lnurlPayWithClientSigning(
         }
     }
     // ANCHOR_END: client-signing-lnurl-pay
+}
+
+func pullWithClientSigning(
+    sdk: BreezSdk, signer: ExternalSparkSigner, prepareResponse: PreparePullPaymentResponse
+) async throws -> PullPaymentResponse {
+    // ANCHOR: client-signing-pull
+    let unsigned = try await sdk.buildUnsignedPullPackage(
+        request: BuildUnsignedPullPackageRequest(prepareResponse: prepareResponse))
+    let signedPackage = try await signPackage(signer: signer, unsigned: unsigned)
+    let response = try await sdk.publishSignedPullPackage(
+        request: PublishSignedPullPackageRequest(signedPackage: signedPackage))
+    // ANCHOR_END: client-signing-pull
+    return response
 }

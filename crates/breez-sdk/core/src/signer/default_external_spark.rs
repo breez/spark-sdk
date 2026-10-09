@@ -437,6 +437,15 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
                     ExternalTokenTransactionKind::Freeze => TokenTransactionKind::Freeze,
                     ExternalTokenTransactionKind::Partial => TokenTransactionKind::Partial,
                     ExternalTokenTransactionKind::Final => TokenTransactionKind::Final,
+                    ExternalTokenTransactionKind::AllowanceGrant => {
+                        TokenTransactionKind::AllowanceGrant
+                    }
+                    ExternalTokenTransactionKind::AllowanceRevoke => {
+                        TokenTransactionKind::AllowanceRevoke
+                    }
+                    ExternalTokenTransactionKind::AllowanceSpend => {
+                        TokenTransactionKind::AllowanceSpend
+                    }
                 },
                 digest: hash_32(&request.digest, "token transaction digest")?,
             })

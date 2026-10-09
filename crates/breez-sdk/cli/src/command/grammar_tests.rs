@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use breez_sdk_spark::{
-    AssetFilter, PaymentStatus, PaymentType, SparkHtlcStatus, TokenTransactionType,
+    AssetFilter, PaymentStatus, PaymentType, SparkHtlcStatus, TokenAllowanceLimit,
+    TokenAllowanceRole, TokenTransactionType,
 };
 use clap::Parser;
 
@@ -13,6 +14,7 @@ use super::advanced::{AdvancedCommand, FundingKindArg};
 use super::contacts::ContactCommand;
 use super::issuer::IssuerCommand;
 use super::stable_balance::StableBalanceCommand;
+use super::token_allowances::TokenAllowanceCommand;
 use super::webhooks::{WebhookCommand, WebhookEventTypeArg};
 use super::{Command, ReceivePaymentMethodArg};
 
@@ -948,4 +950,94 @@ fn unknown_command() {
         err.contains("unrecognized subcommand"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn token_allowance_commands() {
+    let Command::TokenAllowances(TokenAllowanceCommand::Create {
+        spender_address,
+        token_identifier,
+        expiry_time,
+        max_per_payment,
+        max_total,
+        allowed_recipients,
+    }) = parse_ok(
+        "token-allowances create 02aa btkn1x 4102444800 --max-per-payment 5 --max-total 10 \
+         -r 03bb -r 03cc",
+    )
+    else {
+        panic!("expected TokenAllowances Create");
+    };
+    assert_eq!(spender_address, "02aa");
+    assert_eq!(token_identifier, "btkn1x");
+    assert_eq!(expiry_time, 4_102_444_800);
+    assert_eq!(
+        TokenAllowanceLimit::from(max_per_payment),
+        TokenAllowanceLimit::Amount { amount: 5 }
+    );
+    assert_eq!(
+        TokenAllowanceLimit::from(max_total),
+        TokenAllowanceLimit::Amount { amount: 10 }
+    );
+    assert_eq!(
+        allowed_recipients,
+        vec!["03bb".to_string(), "03cc".to_string()]
+    );
+
+    let Command::TokenAllowances(TokenAllowanceCommand::Create {
+        max_per_payment,
+        max_total,
+        allowed_recipients,
+        ..
+    }) = parse_ok(
+        "token-allowances create 02aa btkn1x 4102444800 --max-per-payment 5 \
+         --max-total unlimited",
+    )
+    else {
+        panic!("expected TokenAllowances Create");
+    };
+    assert_eq!(
+        TokenAllowanceLimit::from(max_per_payment),
+        TokenAllowanceLimit::Amount { amount: 5 }
+    );
+    assert_eq!(
+        TokenAllowanceLimit::from(max_total),
+        TokenAllowanceLimit::Unlimited
+    );
+    assert!(allowed_recipients.is_empty());
+    parse_err("token-allowances create 02aa btkn1x 4102444800 --max-per-payment 5");
+    parse_err("token-allowances create 02aa btkn1x 4102444800 --max-total unlimited");
+    parse_err(
+        "token-allowances create 02aa btkn1x 4102444800 --max-per-payment five \
+         --max-total unlimited",
+    );
+
+    assert!(matches!(
+        parse_ok("token-allowances revoke some-id"),
+        Command::TokenAllowances(TokenAllowanceCommand::Revoke { allowance_id })
+            if allowance_id == "some-id"
+    ));
+    assert!(matches!(
+        parse_ok("token-allowances list spender --include-inactive true"),
+        Command::TokenAllowances(TokenAllowanceCommand::List {
+            role: TokenAllowanceRole::Spender,
+            include_inactive: Some(true),
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse_ok("token-allowances list"),
+        Command::TokenAllowances(TokenAllowanceCommand::List {
+            role: TokenAllowanceRole::Owner,
+            ..
+        })
+    ));
+
+    let Command::PullPayment { receivers, .. } =
+        parse_ok("pull-payment 02aa btkn1x -r 100 -r 03bb:50")
+    else {
+        panic!("expected PullPayment");
+    };
+    assert_eq!(receivers.len(), 2);
+    parse_err("pull-payment 02aa btkn1x");
 }

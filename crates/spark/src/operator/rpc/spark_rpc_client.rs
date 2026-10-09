@@ -361,6 +361,48 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn create_token_allowance(
+        &self,
+        req: spark_token::CreateTokenAllowanceRequest,
+    ) -> Result<spark_token::CreateTokenAllowanceResponse> {
+        debug!("Calling create_token_allowance with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.create_token_allowance(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn revoke_token_allowance(
+        &self,
+        req: spark_token::RevokeTokenAllowanceRequest,
+    ) -> Result<spark_token::RevokeTokenAllowanceResponse> {
+        debug!("Calling revoke_token_allowance with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.revoke_token_allowance(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn query_token_allowances(
+        &self,
+        req: spark_token::QueryTokenAllowancesRequest,
+    ) -> Result<spark_token::QueryTokenAllowancesResponse> {
+        debug!("Calling query_token_allowances with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.query_token_allowances(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_token_outputs(
         &self,
         req: spark_token::QueryTokenOutputsRequest,

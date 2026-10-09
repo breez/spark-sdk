@@ -12,6 +12,63 @@ use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
 use tracing_subscriber::util::TryInitError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TokenAllowanceErrorReason {
+    NotEnabled,
+    NotFound,
+    Revoked,
+    Expired,
+    NotSpendable,
+    OverPerPaymentLimit,
+    OverTotalLimit,
+    RecipientNotAllowed,
+    PayerInsufficientFunds,
+    AlreadyActive,
+    QuotaExceeded,
+    PreparedPullStale,
+}
+
+impl std::fmt::Display for TokenAllowanceErrorReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Self::NotEnabled => "token allowances are not enabled on this network",
+            Self::NotFound => "no token allowance from this payer for this token",
+            Self::Revoked => "the token allowance was revoked",
+            Self::Expired => "the token allowance has expired",
+            Self::NotSpendable => "the token allowance was revoked or expired during the pull",
+            Self::OverPerPaymentLimit => "the amount exceeds the per-payment limit",
+            Self::OverTotalLimit => "the amount exceeds the remaining total limit",
+            Self::RecipientNotAllowed => "a receiver is not on the allowance's recipient list",
+            Self::PayerInsufficientFunds => "the payer's balance can't cover the pull",
+            Self::AlreadyActive => "an active allowance already exists for this spender and token",
+            Self::QuotaExceeded => "the owner has too many active allowances",
+            Self::PreparedPullStale => "the operators never accepted this pull; prepare a new one",
+        };
+        f.write_str(text)
+    }
+}
+
+impl From<spark_wallet::TokenAllowanceFailure> for TokenAllowanceErrorReason {
+    fn from(failure: spark_wallet::TokenAllowanceFailure) -> Self {
+        use spark_wallet::TokenAllowanceFailure as F;
+        match failure {
+            F::NotEnabled => Self::NotEnabled,
+            F::NotFound => Self::NotFound,
+            F::Revoked => Self::Revoked,
+            F::Expired => Self::Expired,
+            F::NotSpendable => Self::NotSpendable,
+            F::OverPerPaymentLimit => Self::OverPerPaymentLimit,
+            F::OverTotalLimit => Self::OverTotalLimit,
+            F::RecipientNotAllowed => Self::RecipientNotAllowed,
+            F::PayerInsufficientFunds => Self::PayerInsufficientFunds,
+            F::AlreadyActive => Self::AlreadyActive,
+            F::QuotaExceeded => Self::QuotaExceeded,
+            F::PreparedPullStale => Self::PreparedPullStale,
+        }
+    }
+}
+
 /// Error type for the `BreezSdk`
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
@@ -132,6 +189,13 @@ pub enum SdkError {
     /// The provided CPFP funding is too low to cover the exit's on-chain fees.
     #[error("Insufficient CPFP funding: need at least {required_sat} sats")]
     InsufficientCpfpFunds { required_sat: u64 },
+
+    /// A token allowance operation failed for the given reason, explained in the details.
+    #[error("Token allowance error ({reason:?}): {details}")]
+    TokenAllowance {
+        reason: TokenAllowanceErrorReason,
+        details: String,
+    },
 
     #[error("Error: {0}")]
     Generic(String),
@@ -296,6 +360,13 @@ impl From<SparkWalletError> for SdkError {
             SparkWalletError::ServiceError(
                 spark_wallet::ServiceError::InsufficientCpfpBudget { required_sat },
             ) => SdkError::InsufficientCpfpFunds { required_sat },
+            SparkWalletError::ServiceError(spark_wallet::ServiceError::TokenAllowance {
+                failure,
+                message,
+            }) => SdkError::TokenAllowance {
+                reason: failure.into(),
+                details: message,
+            },
             _ => SdkError::SparkError(e.to_string()),
         }
     }
@@ -606,5 +677,34 @@ mod invalid_request_tests {
         .into();
         assert!(matches!(rejected, SdkError::NetworkError(_)));
         assert_eq!(rejected.to_string(), plain.to_string());
+    }
+}
+
+#[cfg(test)]
+mod token_allowance_error_tests {
+    use spark_wallet::{ServiceError, SparkWalletError, TokenAllowanceFailure};
+
+    use super::{SdkError, TokenAllowanceErrorReason};
+
+    #[test]
+    fn maps_allowance_refusals_to_reasons() {
+        let error = SdkError::from(SparkWalletError::ServiceError(
+            ServiceError::TokenAllowance {
+                failure: TokenAllowanceFailure::OverTotalLimit,
+                message: "metered amount exceeds the allowance remaining budget".to_string(),
+            },
+        ));
+        assert!(matches!(
+            &error,
+            SdkError::TokenAllowance {
+                reason: TokenAllowanceErrorReason::OverTotalLimit,
+                details,
+            } if details == "metered amount exceeds the allowance remaining budget"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Token allowance error (OverTotalLimit): metered amount exceeds the allowance remaining \
+             budget"
+        );
     }
 }
