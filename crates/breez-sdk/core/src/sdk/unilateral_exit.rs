@@ -1533,7 +1533,7 @@ mod tests {
         async fn checks_and_requests(self) -> (Vec<UpdateLeafRecovery>, usize) {
             let leaves: Vec<TreeNode> = self.tree_nodes.values().cloned().collect();
             let chain = std::sync::Arc::new(self.chain);
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
             queries
                 .resolve(|observed| {
                     let scan = scan_refund_sweeps(&self.refund_addresses, observed);

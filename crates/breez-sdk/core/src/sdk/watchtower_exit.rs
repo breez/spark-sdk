@@ -1508,7 +1508,7 @@ mod tests {
 
             // The chain service fails the request for the spend of the output.
             let chain = chain_knowing(&[exited.parent_spent.clone(), exited.direct_tx.clone()]);
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
             let complete = store_recovered_leaf_checks(
                 &leaves,
                 &HashMap::new(),
@@ -1528,7 +1528,7 @@ mod tests {
             assert_eq!(stored[LEAF_ID].chain_checked_at, None);
 
             let chain = chain_knowing(&[spent(&exited.found, true, Some(101))]);
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
             let complete = store_recovered_leaf_checks(
                 &leaves,
                 &HashMap::new(),
@@ -1598,7 +1598,7 @@ mod tests {
                 unspent(&found),
             ]);
             let storage = temp_storage();
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
 
             let complete = store_recovered_leaf_checks(
                 &[leaf],
@@ -1628,7 +1628,7 @@ mod tests {
             // are in the second batch.
             let known: Vec<Observation> = exited.iter().take(10).flat_map(all_of).collect();
             let chain = chain_knowing(&known);
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
             let complete = store_recovered_leaf_checks(
                 &leaves,
                 &HashMap::new(),
@@ -1648,7 +1648,7 @@ mod tests {
 
             let known: Vec<Observation> = exited.iter().skip(10).flat_map(all_of).collect();
             let chain = chain_knowing(&known);
-            let mut queries = ChainQueries::new(chain.clone());
+            let mut queries = ChainQueries::for_sync(chain.clone());
             let complete = store_recovered_leaf_checks(
                 &leaves[10..],
                 &HashMap::new(),

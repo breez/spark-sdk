@@ -346,7 +346,7 @@ impl BreezSdk {
                 new_leaf_ids.insert(leaf_id);
             }
         }
-        let mut queries = ChainQueries::new(self.chain_service.clone());
+        let mut queries = ChainQueries::for_sync(self.chain_service.clone());
         new_leaf_ids.extend(
             self.check_recovered_leaves(&new.recovered, &stored, &mut queries)
                 .await,

@@ -25,17 +25,32 @@ pub(crate) struct ChainQueries {
     /// [`ChainResult::Unavailable`] when the chain service failed its request
     /// or the SDK did not send it.
     observed: Vec<Observation>,
-    /// Set once the chain service failed a request. The SDK then sends it no
-    /// other one: a chain service that limits requests gets no more.
+    /// Whether the SDK sends no other request once the chain service failed
+    /// one.
+    stops_after_failure: bool,
+    /// Set once the chain service failed a request.
     failed: bool,
 }
 
 impl ChainQueries {
+    /// The queries of a call the app makes. A failed request leaves only its
+    /// own query without a result.
     pub(crate) fn new(chain: Arc<dyn BitcoinChainService>) -> Self {
         Self {
             chain,
             observed: Vec::new(),
+            stops_after_failure: false,
             failed: false,
+        }
+    }
+
+    /// The queries of a sync. Once the chain service failed a request, the SDK
+    /// sends it no other one: a chain service that limits requests gets no
+    /// more, and the next sync continues.
+    pub(crate) fn for_sync(chain: Arc<dyn BitcoinChainService>) -> Self {
+        Self {
+            stops_after_failure: true,
+            ..Self::new(chain)
         }
     }
 
@@ -80,7 +95,7 @@ impl ChainQueries {
     /// returned, or [`ChainResult::Unavailable`].
     async fn execute(&mut self, queries: Vec<ChainQuery>) {
         let mut recorded: HashSet<ChainQuery> = HashSet::new();
-        if !self.failed {
+        if !(self.stops_after_failure && self.failed) {
             let mut results = futures::stream::iter(queries.iter().cloned().map(|query| {
                 let chain = self.chain.clone();
                 async move {
@@ -92,7 +107,10 @@ impl ChainQueries {
             while let Some((query, result)) = results.next().await {
                 let Some(result) = result else {
                     self.failed = true;
-                    break;
+                    if self.stops_after_failure {
+                        break;
+                    }
+                    continue;
                 };
                 recorded.insert(query.clone());
                 self.observed.push(Observation { query, result });
@@ -436,12 +454,40 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn a_failed_request_leaves_the_rest_unsent() {
+    async fn a_failed_request_costs_a_call_only_its_own_result() {
         let chain = Arc::new(SlowChain {
             failing: Some(0),
             ..Default::default()
         });
         let mut queries = ChainQueries::new(chain.clone());
+        let wanted: Vec<ChainQuery> = (0..30).map(query).collect();
+
+        queries
+            .resolve(|observed| ((), without_result(wanted.clone(), observed)))
+            .await;
+
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 30);
+        assert_eq!(queries.fetched().len(), 29);
+        assert!(queries.failed());
+        assert_eq!(
+            result_of(queries.observed(), &query(0)),
+            Some(&ChainResult::Unavailable)
+        );
+
+        // A later scan of the same call sends its requests as well.
+        queries
+            .resolve(|observed| ((), without_result(vec![query(40)], observed)))
+            .await;
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 31);
+    }
+
+    #[macros::async_test_all]
+    async fn a_failed_request_leaves_the_rest_of_a_sync_unsent() {
+        let chain = Arc::new(SlowChain {
+            failing: Some(0),
+            ..Default::default()
+        });
+        let mut queries = ChainQueries::for_sync(chain.clone());
         let wanted: Vec<ChainQuery> = (0..30).map(query).collect();
 
         queries
@@ -461,7 +507,7 @@ mod tests {
             Some(&ChainResult::Unavailable)
         );
 
-        // Nor does it send one for a later scan of the same call.
+        // Nor does it send one for a later scan of the same sync.
         queries
             .resolve(|observed| ((), without_result(vec![query(40)], observed)))
             .await;
