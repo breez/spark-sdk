@@ -35,6 +35,27 @@ pub struct LnurlErrorDetails {
     pub reason: String,
 }
 
+/// Error shape some endpoints (e.g. Alby) return instead of LUD-06's `reason`.
+#[derive(Deserialize)]
+struct NonStandardErrorDetails {
+    error: bool,
+    message: String,
+}
+
+/// Parses an endpoint error from a callback response body, if it is one.
+fn parse_endpoint_error(body: &str) -> Option<LnurlErrorDetails> {
+    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(body) {
+        return Some(err);
+    }
+    match serde_json::from_str::<NonStandardErrorDetails>(body) {
+        Ok(NonStandardErrorDetails {
+            error: true,
+            message,
+        }) => Some(LnurlErrorDetails { reason: message }),
+        _ => None,
+    }
+}
+
 /// LUD-17 scheme prefixes that need to be converted to http(s) for bech32 encoding.
 const LNURL_SCHEME_PREFIXES: [&str; 4] = ["lnurlp://", "lnurlw://", "lnurlc://", "keyauth://"];
 
@@ -70,10 +91,28 @@ mod tests {
     use rand;
     use rand::distributions::{Alphanumeric, DistString};
 
-    use super::{encode_lnurl_to_bech32, normalize_lnurl_scheme};
+    use super::{encode_lnurl_to_bech32, normalize_lnurl_scheme, parse_endpoint_error};
 
     pub fn rand_string(len: usize) -> String {
         Alphanumeric.sample_string(&mut rand::thread_rng(), len)
+    }
+
+    #[test]
+    fn test_parse_endpoint_error() {
+        let reason = |body: &str| parse_endpoint_error(body).map(|e| e.reason);
+
+        assert_eq!(
+            reason(r#"{"status":"ERROR","reason":"boom"}"#).as_deref(),
+            Some("boom")
+        );
+        assert_eq!(
+            reason(r#"{"error":true,"message":"Recipient wallet error."}"#).as_deref(),
+            Some("Recipient wallet error.")
+        );
+        assert_eq!(reason(r#"{"error":false,"message":"hi"}"#), None);
+        assert_eq!(reason(r#"{"pr":"lnbc1","routes":[]}"#), None);
+        assert_eq!(reason(r#"{"status":"OK"}"#), None);
+        assert_eq!(reason("<!doctype html>"), None);
     }
 
     #[test]

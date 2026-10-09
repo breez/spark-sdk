@@ -9,7 +9,7 @@ use crate::{
     lnurl::{
         LnurlErrorDetails,
         error::{LnurlError, LnurlResult},
-        security,
+        parse_endpoint_error, security,
     },
     network::BitcoinNetwork,
     utils::default_true,
@@ -51,7 +51,7 @@ pub async fn validate_lnurl_pay<C: HttpClient + ?Sized>(
     #[cfg(all(target_family = "wasm", target_os = "unknown"))]
     let _ = (dns_preflight, &validated);
     let response = http_client.get(callback_url, None).await?;
-    if let Ok(err) = response.json::<LnurlErrorDetails>() {
+    if let Some(err) = parse_endpoint_error(&response.body) {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
 
