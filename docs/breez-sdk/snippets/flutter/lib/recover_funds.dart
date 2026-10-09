@@ -13,7 +13,7 @@ Future<void> fetchRecoverableFunds(BreezSdk sdk) async {
   // ANCHOR_END: recoverable-funds
 }
 
-Future<PrepareRecoverFundsResponse> quoteRecovery(BreezSdk sdk) async {
+Future<PrepareRecoverFundsResponse> prepareRecovery(BreezSdk sdk) async {
   // ANCHOR: prepare-recover-funds
   PrepareRecoverFundsRequest request = PrepareRecoverFundsRequest(
     feeRateSatPerVbyte: BigInt.from(2),
@@ -44,7 +44,7 @@ Future<PrepareRecoverFundsResponse> quoteRecovery(BreezSdk sdk) async {
 
 Future<void> recoverCooperatively(BreezSdk sdk, PrepareRecoverFundsResponse quote) async {
   // ANCHOR: recover-cooperatively
-  // A quote that asks for funding holds a unilateral exit: quote the
+  // A quote with funding holds a unilateral exit: prepare the
   // cooperative leaves alone to recover them without it.
   if (quote.funding != null) {
     List<String> leafIds = quote.leaves
@@ -130,7 +130,7 @@ Future<void> checkRecovery(BreezSdk sdk, RecoverFundsResponse stored) async {
   } else if (verdict is RecoveryVerdict_Done) {
     print("Every transaction confirmed: the recovery is done");
   } else if (verdict is RecoveryVerdict_Redo) {
-    // Quote and build again, naming the same leaves. Pass
+    // Prepare and build again, naming the same leaves. Pass
     // recovery.fundingInputs back and the SDK follows them to whatever they
     // have become.
     print("Build the recovery again: ${verdict.reason}");

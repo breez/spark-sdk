@@ -11,7 +11,7 @@ func fetchRecoverableFunds(sdk: BreezSdk) async throws {
     // ANCHOR_END: recoverable-funds
 }
 
-func quoteRecovery(sdk: BreezSdk) async throws -> PrepareRecoverFundsResponse {
+func prepareRecovery(sdk: BreezSdk) async throws -> PrepareRecoverFundsResponse {
     // ANCHOR: prepare-recover-funds
     let quote = try await sdk.prepareRecoverFunds(
         request: PrepareRecoverFundsRequest(
@@ -40,7 +40,7 @@ func quoteRecovery(sdk: BreezSdk) async throws -> PrepareRecoverFundsResponse {
 
 func recoverCooperatively(sdk: BreezSdk, quote: PrepareRecoverFundsResponse) async throws {
     // ANCHOR: recover-cooperatively
-    // A quote that asks for funding holds a unilateral exit: quote the
+    // A quote with funding holds a unilateral exit: prepare the
     // cooperative leaves alone to recover them without it.
     var quote = quote
     if quote.funding != nil {
@@ -123,7 +123,7 @@ func checkRecovery(sdk: BreezSdk, stored: RecoverFundsResponse) async throws {
     case .done:
         print("Every transaction confirmed: the recovery is done")
     case .redo(let reason):
-        // Quote and build again, naming the same leaves. Pass recovery.fundingInputs
+        // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
         // back and the SDK follows them to whatever they have become.
         print("Build the recovery again: \(reason)")
     }

@@ -14,19 +14,19 @@ The balance is split into leaves, and each leaf is recovered in one of two ways,
 
 Funds that left your balance are not part of {{#name balance_sats}}. {{#name get_info}} reports them separately, as {{#name recoverable_funds_sats}}. A sync adds a leaf's value to that total when it sees the leaf leave your balance. The value leaves the total once the SDK has seen the recovery pay the funds out on-chain: a cooperative recovery in a block, or a unilateral exit's sweep in a block. {{#name prepare_recover_funds}}, {{#name recover_funds}} and {{#name check_recover_funds}} record that when they find it on-chain, and the next sync leaves the leaf out. The total also counts funds too small to be worth recovering at the fee rate you pick.
 
-A wallet restored on another device has no such record. For each leaf whose recovery may already have finished, the SDK checks the chain during a sync, and leaves the leaf out of the total until it has the result. A chain service that fails a request, for example because it limits requests, does not fail the sync: the SDK keeps what it found, and the next sync continues from there. From then on the leaf is in the total unless the SDK found its recovery in a block. The SDK does not check a leaf whose funds are too small to send on-chain at the lowest fee rate nodes relay, so such a leaf stays in the total.
+A wallet restored on another device has no such record. For each leaf whose recovery may already have finished, the SDK checks the chain during a sync, and takes the leaf out of the total when it finds the recovery in a block. A chain service that fails a request, for example because it limits requests, does not fail the sync: the SDK keeps what it found, and the next sync continues from there. Until that check is complete the leaf stays in the total, so the total can include funds that were already recovered. The SDK does not check a leaf whose funds are too small to send on-chain at the lowest fee rate nodes relay, so such a leaf stays in the total.
 
 The SDK emits {{#enum SdkEvent::RecoverableFunds}} when a sync finds new recoverable funds, carrying the new total. Funds leaving the total emit nothing, so {{#name get_info}} is where the current total is read.
 
 {{#tabs recover_funds:recoverable-funds}}
 
-To recover them, quote with {{#enum ExitLeafSelection::RecoverableOnly}} (see [Choose the leaves](#choose-the-leaves)). That selection also takes the leaves of a recovery already under way: a unilateral exit you started takes its leaves out of the balance too, and the event fires for them. Quoting those again builds a second recovery that competes with the first. While one is under way, {{#name check_recover_funds}} is what follows it, and {{#enum ExitLeafSelection::Specific}} quotes the other leaves on their own.
+To recover them, prepare the recovery with {{#enum ExitLeafSelection::RecoverableOnly}} (see [Choose the leaves](#choose-the-leaves)). That selection also takes the leaves of a recovery already under way: a unilateral exit you started takes its leaves out of the balance too, and the event fires for them. When you prepare a recovery of those leaves again, you get a second recovery that competes with the first. While one is under way, {{#name check_recover_funds}} is what follows it, and with {{#enum ExitLeafSelection::Specific}} you prepare a recovery of the other leaves on their own.
 
 ## Before you start
 
 Co-signing a cooperative recovery needs the operators to be reachable. A unilateral exit works without them, and needs two things instead:
 
-- **The exit data has to already be on the device.** Quoting and building an exit read each leaf's pre-signed transactions from local storage, so both work with the operators unreachable. What they cannot do is obtain that data: a leaf can be exited this way only once it has been synced at least once while the operators were reachable. The SDK collects it as funds arrive, in the background where background services run, which you can turn off with [{{#name exit_chain_auto_fetch_enabled}}](./config.md#unilateral-exit-data). {{#name sync_wallet}} collects regardless of that flag and waits for the pass before returning, so calling a sync yourself runs the collection at a moment of your choosing. Once collected it can be kept outside the SDK's storage, see [Back up the exit data](#back-up-the-exit-data).
+- **The exit data has to already be on the device.** Preparing and building an exit read each leaf's pre-signed transactions from local storage, so both work with the operators unreachable. What they cannot do is obtain that data: a leaf can be exited this way only once it has been synced at least once while the operators were reachable. The SDK collects it as funds arrive, in the background where background services run, which you can turn off with [{{#name exit_chain_auto_fetch_enabled}}](./config.md#unilateral-exit-data). {{#name sync_wallet}} collects regardless of that flag and waits for the pass before returning, so calling a sync yourself runs the collection at a moment of your choosing. Once collected it can be kept outside the SDK's storage, see [Back up the exit data](#back-up-the-exit-data).
 - **You pay the fees from your own UTXO.** The pre-signed transactions carry no fee, so each is fee-bumped with a child transaction (CPFP) funded by a Bitcoin UTXO you provide. That UTXO must be **native SegWit** (a witness-program script). P2WPKH and P2TR are handled by the built-in signer; any other witness program (for example a P2WSH multisig) works through the {{#enum CpfpFundingKind::Custom}} funding kind and a custom signer (see [The signer](#the-signer)). Legacy (non-SegWit) scripts are rejected. The UTXO also has to be **confirmed** before the first package goes out: the children are version 3 (TRUC) transactions, which nodes do not relay while any input other than the transaction they fee-bump is unconfirmed.
 
 Either way, **you broadcast the transactions yourself.** The SDK builds and signs them but never broadcasts them.
@@ -35,8 +35,8 @@ Either way, **you broadcast the transactions yourself.** The SDK builds and sign
 
 A recovery is three calls:
 
-1. {{#name prepare_recover_funds}} quotes the recovery: it picks the leaves, says how each one is recovered, and reports the exact fee and how much to fund, without needing any funding UTXOs yet.
-2. {{#name recover_funds}} takes that quote, plus your funding UTXOs and a signer when the quote asks for funding, has the operators co-sign the cooperative recoveries, and returns the complete, signed set of transactions to broadcast.
+1. {{#name prepare_recover_funds}} prepares the recovery and returns a quote: it picks the leaves, says how each one is recovered, and reports the exact fee and how much to fund, without needing any funding UTXOs yet.
+2. {{#name recover_funds}} takes that quote, plus your funding UTXOs and a signer when the quote has {{#name funding}}, has the operators co-sign the cooperative recoveries, and returns the complete, signed set of transactions to broadcast.
 3. {{#name check_recover_funds}} takes that set, reads it back against the chain, and says what to send next.
 
 The third call works from what the second returned, which the SDK does not keep: see [Keep the response](#keep-the-response). A unilateral exit runs for days, so the third call is made many times: after each broadcast, and whenever you want to know how far along it is.
@@ -63,13 +63,13 @@ Exiting several leaves at once starts with a **fan-out** transaction that splits
 
 ## Choose the leaves
 
-The {{#name selection}} you quote with says which leaves to recover:
+The {{#name selection}} you prepare the recovery with says which leaves to recover:
 
 - {{#enum ExitLeafSelection::RecoverableOnly}} takes the leaves that left your balance, when each is worth more than its own recovery cost.
 - {{#enum ExitLeafSelection::All}} takes every leaf worth more than its own recovery cost, including the ones still in your balance. Its cooperative leaves still need the operators.
 - {{#enum ExitLeafSelection::Specific}} takes the leaves you name, whether or not they are worth it.
 
-Every selection leaves out a leaf whose recovery already finished. It also leaves out a cooperative leaf whose funds cannot pay the fee of their own recovery at your fee rate, and one whose funds the wallet has not found: a lower fee rate, or a later quote, can bring it back.
+Every selection leaves out a leaf whose recovery already finished. The SDK knows that from the recovery or sweep it recorded in a block. While that transaction is fewer than six blocks deep, and whenever you name the leaf, the SDK first checks that the transaction is still in a block, and prepares the leaf again when it is not. Every selection also leaves out a cooperative leaf whose funds cannot pay the fee of their own recovery at your fee rate, and one whose funds the wallet has not found: a lower fee rate, or preparing again later, can bring it back.
 
 <div class="warning">
 {{#enum ExitLeafSelection::All}} is for an emergency only: the operators are unreachable, or refuse to serve your wallet. It moves the leaves still in your balance out of Spark with a unilateral exit, a multi-step on-chain process that needs your own Bitcoin to pay mining fees and can take several days. While the operators cooperate, a normal [withdrawal](send_payment.md) moves the same funds on-chain cheaper and faster.
@@ -81,7 +81,7 @@ Every leaf is exited by its own chain of transactions, so it carries its own on-
 
 How the balance is split into leaves is governed by the SDK's leaf optimization, which balances everyday payment experience against unilateral exit value. More, smaller denominations let payments go out without leaf swaps, while fewer, larger denominations cost less to exit. The default leans toward payment experience, which suits most wallets, since a unilateral exit is a rare last resort. See [Custom leaf optimization](optimize.md) to understand this tradeoff and adjust it if your use case calls for it.
 
-## Quote the recovery
+## Prepare the recovery
 
 Call {{#name prepare_recover_funds}} with the target {{#name fee_rate_sat_per_vbyte}}, your {{#name destination}} address, the {{#name selection}}, and the {{#name funding_kind}} of UTXO you will pay a unilateral exit's fees with. The funding kind is needed only when the selection holds a unilateral exit with steps left to broadcast. It returns a {{#name PrepareRecoverFundsResponse}}, and each of its {{#name leaves}} says whether its {{#name method}} is {{#enum RecoveryMethod::Cooperative}} or {{#enum RecoveryMethod::Unilateral}}.
 
@@ -92,7 +92,7 @@ Its fields tell you how much Bitcoin to gather and how to structure it:
 
 Only a unilateral exit with steps left to broadcast needs funding. {{#name funding}} is unset when every leaf is recovered cooperatively, or when only a sweep is left, which pays its fee from the refunds it spends.
 
-{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK read the chain and found no output holding the leaf's funds. {{#enum SkippedLeafReason::Unverified}} means the SDK could not look up where the leaf's funds are, and it looks again on the next quote. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
+{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what it holds. {{#enum SkippedLeafReason::FundsNotFound}} means the SDK read the chain and found no output holding the leaf's funds. {{#enum SkippedLeafReason::Unverified}} means the SDK could not look up where the leaf's funds are, and it looks again the next time you prepare. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
 
 Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found for the unilateral exit: which nodes are already on-chain, which refunds landed, and which of those have been swept. {{#name recover_funds}} builds only the steps still left, so it takes the whole {{#name PrepareRecoverFundsResponse}} unchanged. {{#name exit_chain_state}} also shows how far an exit has got.
 
@@ -125,12 +125,12 @@ Under {{#enum ExitLeafSelection::All}} and {{#enum ExitLeafSelection::Recoverabl
 
 Two rules keep a recovery from ever costing more than it returns:
 
-1. **Before funding, require {{#name recoverable_value_sats}} to exceed {{#name total_fee_sats}}.** These are the actual totals for the quote, fan-out fee included. If the margin is thin or negative, do not proceed as quoted.
+1. **Before funding, require {{#name recoverable_value_sats}} to exceed {{#name total_fee_sats}}.** These are the actual totals for the quote, fan-out fee included. If the margin is thin or negative, do not proceed as prepared.
 2. **Prefer per-branch funding.** Funding one UTXO per branch ({{#name per_branch}}) skips the fan-out entirely, so there is no shared fee. Because those two selections already keep only leaves worth more than their own cost, such a recovery is always net-positive when funded per branch.
 
-If the single-UTXO total is not worth it, either fund per branch, or narrow the set: quote again with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
+If the single-UTXO total is not worth it, either fund per branch, or narrow the set: prepare again with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
 
-If nothing is selected (no leaf is worth recovering at the given fee rate, the leaves' recoveries already finished, or there is nothing to recover) the response comes back with no {{#name leaves}} rather than as an error. {{#name skipped}} names each leaf the quote left out and why.
+If nothing is selected (no leaf is worth recovering at the given fee rate, the leaves' recoveries already finished, or there is nothing to recover) the response comes back with no {{#name leaves}} rather than as an error. {{#name skipped}} names each leaf the SDK left out of the quote and why.
 
 {{#tabs recover_funds:prepare-recover-funds}}
 
@@ -152,7 +152,7 @@ The set it builds depends on what is already on-chain. Because each CPFP child s
 
 ### Recovering without funding
 
-When the quote has no {{#name funding}}, there is nothing to fund and nothing for a signer to sign: pass no funding inputs and no signer. When it has, and you want the cooperative leaves recovered without funding the rest, quote again naming only the cooperative leaves with {{#enum ExitLeafSelection::Specific}}. That builds a recovery of its own, and the unilateral leaves are left for another.
+When the quote has no {{#name funding}}, there is nothing to fund and nothing for a signer to sign: pass no funding inputs and no signer. When it has, and you want the cooperative leaves recovered without funding the rest, prepare again naming only the cooperative leaves with {{#enum ExitLeafSelection::Specific}}. That builds a recovery of its own, and the unilateral leaves are left for another.
 
 {{#tabs recover_funds:recover-cooperatively}}
 
@@ -160,7 +160,7 @@ When the quote has no {{#name funding}}, there is nothing to fund and nothing fo
 
 The CPFP children and the fan-out spend your funding UTXOs, so they have to be signed. The SDK does not hold your funding keys; it hands each unsigned transaction to a signer you provide.
 
-The built-in single-key signer covers the common case: it signs P2WPKH and P2TR inputs from one secret key. For {{#enum CpfpInput::P2tr}} funding, pass the **internal, untweaked (BIP86)** key, not the tweaked on-chain output key: the tweaked key derives a scriptPubKey that does not match the UTXO, so the transaction is rejected at broadcast. For anything else (a multisig, a hardware wallet, or keeping key material out of the SDK entirely) implement the {{#name CpfpSigner}} interface and describe the funding with {{#enum CpfpFundingKind::Custom}} (in the quote) and {{#enum CpfpInput::Custom}} (in the build). Those carry the funding {{#name script_pubkey_hex}} and an upper-bound {{#name signed_input_weight}} so the fee stays exact for any witness program. The signer receives a serialized PSBT, signs the inputs that are not already finalized, and returns the serialized signed PSBT:
+The built-in single-key signer covers the common case: it signs P2WPKH and P2TR inputs from one secret key. For {{#enum CpfpInput::P2tr}} funding, pass the **internal, untweaked (BIP86)** key, not the tweaked on-chain output key: the tweaked key derives a scriptPubKey that does not match the UTXO, so the transaction is rejected at broadcast. For anything else (a multisig, a hardware wallet, or keeping key material out of the SDK entirely) implement the {{#name CpfpSigner}} interface and describe the funding with {{#enum CpfpFundingKind::Custom}} (when preparing) and {{#enum CpfpInput::Custom}} (when building). Those carry the funding {{#name script_pubkey_hex}} and an upper-bound {{#name signed_input_weight}} so the fee stays exact for any witness program. The signer receives a serialized PSBT, signs the inputs that are not already finalized, and returns the serialized signed PSBT:
 
 Whichever signer you use, the funding inputs must be **native SegWit** (a witness-program script; P2WPKH or P2TR with the built-in signer, any other witness program with a custom one). The exit refers to each transaction by an id it computes before signing, which only stays stable when the signature lives in the witness (native SegWit) rather than in the input script; legacy scripts are rejected, so your signer only ever has to sign native SegWit inputs.
 
@@ -173,7 +173,7 @@ Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two recover
 
 ## Keep the response
 
-A {{#name RecoverFundsResponse}} is the record of the recovery it holds: the signed transactions, the leaves they recover, and the funding they spend. The SDK does not keep it, and {{#name check_recover_funds}} needs it to follow the recovery. Without it the recovery cannot be followed or finished as built, though the money stays recoverable: a new quote and build picks it up from wherever it is.
+A {{#name RecoverFundsResponse}} is the record of the recovery it holds: the signed transactions, the leaves they recover, and the funding they spend. The SDK does not keep it, and {{#name check_recover_funds}} needs it to follow the recovery. Without it the recovery cannot be followed or finished as built, though the money stays recoverable: when you prepare and build again, the SDK picks it up from wherever it is.
 
 {{#name check_recover_funds}} returns the same recovery with its statuses brought up to date, to be kept in place of the one passed in. Each call to {{#name recover_funds}} returns a separate recovery, followed on its own: for example the cooperative leaves built without the rest, a failed leaf built again, or a new build at a higher fee rate, which replaces the one before it.
 
@@ -187,7 +187,7 @@ Each {{#name RecoveryTransaction}} in {{#name transactions}} carries:
 - {{#name cpfp_tx_hex}}: its signed CPFP child, to broadcast alongside {{#name tx_hex}} as a package. Unset for a cooperative recovery, the fan-out and the sweep, and for a step that is already confirmed.
 - {{#name csv_timelock_blocks}}: the relative timelock, in blocks, that must mature before the transaction can confirm.
 - {{#name depends_on}}: the txids of other transactions in the set that must confirm first.
-- {{#name status}}: where the transaction stands. {{#enum ExitTransactionStatus::Confirmed}} means it is done and can be skipped, and carries the {{#name block_height}} it landed at, which is what a {{#name csv_timelock_blocks}} on its child counts from. {{#enum ExitTransactionStatus::Ready}} means broadcast it now. {{#enum ExitTransactionStatus::WaitingForDependencies}} means something in {{#name depends_on}} has yet to confirm. {{#enum ExitTransactionStatus::WaitingForTimelock}} means its inputs are confirmed but its {{#name csv_timelock_blocks}} has not matured, and reports the {{#name spendable_at_height}} block it can first be mined in. {{#enum ExitTransactionStatus::Unverified}} means the chain could not be read for it while the recovery was built, so whether it is waiting, ready or already confirmed is unknown. It can still be broadcast: if it, or a transaction spending the same funds, is already in a block, the network rejects it.
+- {{#name status}}: where the transaction stands. {{#enum ExitTransactionStatus::Confirmed}} means it is done and can be skipped, and carries the {{#name block_height}} it landed at, which is what a {{#name csv_timelock_blocks}} on its child counts from. {{#enum ExitTransactionStatus::Ready}} means broadcast it now. {{#enum ExitTransactionStatus::WaitingForDependencies}} means something in {{#name depends_on}} has yet to confirm. {{#enum ExitTransactionStatus::WaitingForTimelock}} means its inputs are confirmed but its {{#name csv_timelock_blocks}} has not matured, and reports the {{#name spendable_at_height}} block it can first be mined in. {{#enum ExitTransactionStatus::Unverified}} means the chain could not be read for it while the recovery was built, so whether it is waiting, ready or already confirmed is unknown. A cooperative recovery has this status when the SDK did not see the output it spends in a block, or could not check whether an earlier recovery already spent that output. It can still be broadcast: if it, or a transaction spending the same funds, is already in a block, the network rejects it.
 
 ## Broadcast the transactions
 
@@ -202,7 +202,7 @@ Each step of a unilateral exit becomes valid at a certain block. About 50 blocks
 
 The version the SDK builds for you is paid for by the funding UTXO you supplied, at the fee rate you asked for. The operators' version has its fee built in and takes it from the leaf itself, so that fee comes off the amount arriving at your address, at a rate you have no say in. At some steps the operators' version also moves the leaf's funds to an output the leaf's pre-signed transactions do not spend. The leaf then leaves your exit, and only a cooperative recovery, with the operators, reaches it. For some leaves the operators cannot co-sign that either, and their funds stay out of reach.
 
-The window runs per step, from the moment that step's timelock matures. An exit whose steps go out as they become {{#enum ExitTransactionStatus::Ready}} keeps the fee split the quote described, and keeps all its leaves.
+The window runs per step, from the moment that step's timelock matures. An exit whose steps go out as they become {{#enum ExitTransactionStatus::Ready}} keeps the fee split of the quote, and keeps all its leaves.
 </div>
 
 ### Broadcast each package together
@@ -213,7 +213,7 @@ Most steps of a unilateral exit come as a pair: a tree transaction and its {{#na
 bitcoin-cli submitpackage '["<tx_hex>", "<cpfp_tx_hex>"]'
 ```
 
-The **fan-out**, the **sweep** and a **cooperative recovery** are the exceptions: each pays its own fee and has no CPFP child ({{#name cpfp_tx_hex}} is unset), so each goes out **alone**, as an ordinary transaction, through any node or a public endpoint such as `POST https://mempool.space/api/tx`. At a zero fee rate they too have to reach a miner directly (see [Quote the recovery](#quote-the-recovery)). Most public broadcast APIs, including mempool.space, accept only one transaction at a time and cannot submit a package, so they reject the zero-fee tree transactions; use a package-relay-capable node (or service) for the pairs.
+The **fan-out**, the **sweep** and a **cooperative recovery** are the exceptions: each pays its own fee and has no CPFP child ({{#name cpfp_tx_hex}} is unset), so each goes out **alone**, as an ordinary transaction, through any node or a public endpoint such as `POST https://mempool.space/api/tx`. At a zero fee rate they too have to reach a miner directly (see [Prepare the recovery](#prepare-the-recovery)). Most public broadcast APIs, including mempool.space, accept only one transaction at a time and cannot submit a package, so they reject the zero-fee tree transactions; use a package-relay-capable node (or service) for the pairs.
 
 ### Wait for each step to confirm
 
@@ -237,9 +237,9 @@ Its {{#name verdict}} says what to do next:
 - {{#enum RecoveryVerdict::Done}}: every transaction has confirmed, and there is nothing left to do. A cooperative recovery counts as confirmed once any recovery of the same leaf is, so one you replaced with a higher fee reads as confirmed when its replacement confirms. The leaves in {{#name failed}} are not part of the recovery: they need one of their own.
 - {{#enum RecoveryVerdict::Redo}}: this recovery cannot finish as it stands. See [Starting over](#starting-over).
 
-{{#enum RecoveryVerdict::Redo}} carries a {{#name reason}}. {{#enum RecoveryRedoReason::OnChainStateDiverged}} means something on-chain no longer matches the transactions you hold: the Spark operators took a leaf on-chain before your exit reached it, a different refund for the same leaf confirmed, someone fee-bumped a step in a way yours cannot follow, or funding you were counting on went elsewhere. Quoting and building again picks each leaf up from wherever it is. A leaf the operators took on-chain comes back as {{#enum RecoveryMethod::Cooperative}} once the wallet has found its funds on-chain.
+{{#enum RecoveryVerdict::Redo}} carries a {{#name reason}}. {{#enum RecoveryRedoReason::OnChainStateDiverged}} means something on-chain no longer matches the transactions you hold: the Spark operators took a leaf on-chain before your exit reached it, a different refund for the same leaf confirmed, someone fee-bumped a step in a way yours cannot follow, or funding you were counting on went elsewhere. When you prepare and build again, the SDK picks each leaf up from wherever it is. A leaf the operators took on-chain comes back as {{#enum RecoveryMethod::Cooperative}} once the wallet has found its funds on-chain.
 
-{{#enum RecoveryRedoReason::UnreadableRecovery}} means the SDK could not read the recovery you passed, for example one that an earlier SDK version stored. The {{#name recovery}} it returns is then empty, so keep the one you stored: it names the leaves and the funding inputs to quote and build again with.
+A recovery that an earlier SDK version returned may not parse as a {{#name RecoverFundsResponse}} of this version. {{#name check_recover_funds}} then fails with an error. Keep the recovery you stored, because it names the leaves and the funding inputs, and prepare and build again with those.
 
 {{#tabs recover_funds:check-recover-funds}}
 
@@ -247,7 +247,7 @@ Its {{#name verdict}} says what to do next:
 
 Whenever you call {{#name recover_funds}} again for a unilateral exit, you have to give it funding. Two options, and the first is simpler:
 
-- **Fresh UTXOs.** Fund the amount the new quote asks for and pass those. Nothing to keep track of.
+- **Fresh UTXOs.** Fund the amount in the new quote and pass those. Nothing to keep track of.
 - **The same UTXOs as last time.** Pass back the {{#name funding_inputs}} the kept response carries. An earlier attempt will have spent them, and that is fine: the SDK follows each outpoint to what your money became, whether that is a fan-out output, the change of a fee-bumping transaction, or several steps of both. Only what came from money you supplied, and still pays a script you control, is used.
 
 Either way you can add more: pass the old funding *and* a fresh UTXO when the exit needs more than what is left.
@@ -258,13 +258,13 @@ The exit is short only when what you gave it, once followed, cannot cover what r
 
 Each of the following sends you back to {{#name prepare_recover_funds}} and {{#name recover_funds}}. In every case you build the recovery again from scratch: you never hand a previously built transaction back to the SDK.
 
-**You want to pay a higher fee rate.** On-chain fees rise, and a recovery already under way stops confirming. Quote again at the higher {{#name fee_rate_sat_per_vbyte}}, naming the same leaves with {{#enum ExitLeafSelection::Specific}}, and build again. Whatever has already confirmed stays as it is and costs nothing to keep; only what has not yet confirmed is rebuilt at the higher rate, and it replaces the earlier version on the network (RBF). The fee you are quoted is for the part that is left, so it is less than a fresh exit of the same leaves. The operators co-sign a new cooperative recovery the same way, and it has to pay enough to replace the earlier one if that is already on the network (see [Build the recovery](#build-the-recovery)).
+**You want to pay a higher fee rate.** On-chain fees rise, and a recovery already under way stops confirming. Prepare again at the higher {{#name fee_rate_sat_per_vbyte}}, naming the same leaves with {{#enum ExitLeafSelection::Specific}}, and build again. Whatever has already confirmed stays as it is and costs nothing to keep; only what has not yet confirmed is rebuilt at the higher rate, and it replaces the earlier version on the network (RBF). The fee in the new quote is for the part that is left, so it is less than a fresh exit of the same leaves. The operators co-sign a new cooperative recovery the same way, and it has to pay enough to replace the earlier one if that is already on the network (see [Build the recovery](#build-the-recovery)).
 
-**{{#name check_recover_funds}} returned {{#enum RecoveryVerdict::Redo}}.** The chain no longer matches the recovery you hold, or the SDK could not read it, so those transactions cannot finish. Quote and build again the same way: the new recovery picks the funds up from wherever they are, in the tree or on-chain.
+**{{#name check_recover_funds}} returned {{#enum RecoveryVerdict::Redo}}.** The chain no longer matches the recovery you hold, so those transactions cannot finish. Prepare and build again the same way: the new recovery picks the funds up from wherever they are, in the tree or on-chain.
 
-**An {{#enum ExitTransactionStatus::Unverified}} transaction was rejected.** The chain could not be read for it while the recovery was built, so an earlier fee-bumping child may already have spent the funding it uses. {{#name check_recover_funds}} cannot settle that: it reads only the recovery you kept, never your funding. Building again does, because it follows your funding to what it is worth now, so quote and build again once the chain service is healthy.
+**An {{#enum ExitTransactionStatus::Unverified}} transaction was rejected.** The chain could not be read for it while the recovery was built, so an earlier fee-bumping child may already have spent the funding it uses. {{#name check_recover_funds}} cannot settle that: it reads only the recovery you kept, never your funding. Building again does, because it follows your funding to what it is worth now, so prepare and build again once the chain service is healthy. For a cooperative recovery {{#name check_recover_funds}} does settle it: the SDK reports the recovery as {{#enum ExitTransactionStatus::Ready}} once the chain service shows the output it spends in a block.
 
-**A leaf is in {{#name failed}}.** Once its error is dealt with (see [Troubleshooting](#troubleshooting)), quote it again with {{#enum ExitLeafSelection::Specific}} and build. That makes a separate recovery, followed on its own.
+**A leaf is in {{#name failed}}.** Once its error is dealt with (see [Troubleshooting](#troubleshooting)), prepare its recovery again with {{#enum ExitLeafSelection::Specific}} and build. That makes a separate recovery, followed on its own.
 
 Name the leaves with {{#enum ExitLeafSelection::Specific}} rather than {{#enum ExitLeafSelection::All}} or {{#enum ExitLeafSelection::RecoverableOnly}}, taking the ids from the kept response. This is the dependable way to pick a recovery back up, including a leaf still waiting out its refund timelock.
 
@@ -297,21 +297,21 @@ An out of date value can restore leaves that have since been spent, so the balan
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | {{#name prepare_recover_funds}} returns no {{#name leaves}} | No leaf is worth recovering at the current rate, the leaves' recoveries already finished, or there is nothing to recover | Lower {{#name fee_rate_sat_per_vbyte}} or wait for cheaper on-chain fees. A finished recovery has nothing left to recover (this is not an error) |
-| A leaf your {{#name selection}} covers is missing from the {{#name leaves}} of the quote | Its recovery finished, or the quote left it out | A leaf the quote left out is in {{#name skipped}} with its {{#name reason}}. Lower {{#name fee_rate_sat_per_vbyte}} for {{#enum SkippedLeafReason::FeeExceedsValue}}, and quote again later for {{#enum SkippedLeafReason::Unverified}} |
-| A leaf you are mid-recovery on is missing from a new {{#enum ExitLeafSelection::All}} or {{#enum ExitLeafSelection::RecoverableOnly}} quote | Those selections keep only leaves worth recovering at the new fee rate | Quote with {{#enum ExitLeafSelection::Specific}}, naming the leaves from the kept response |
-| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::OperatorsUnavailable}} | The operators could not be reached to co-sign its recovery | Quote and build again once they are reachable |
-| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::ReplacementFeeTooLow}} | An earlier recovery of it is on the network, and the new one pays too little to replace it | Quote and build again at a fee rate of at least the one the error names, or let the earlier recovery confirm |
-| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::Generic}} | The operators refused to co-sign, the wallet's signer could not take part, or the chain service failed | The message says why. A wallet signing with Turnkey cannot recover cooperatively yet (see [Using Turnkey](turnkey.md#availability)) |
-| {{#name check_recover_funds}} returns {{#enum RecoveryVerdict::Redo}} | Something on-chain no longer matches the transactions you hold, for example the Spark operators took a leaf on-chain, or the SDK could not read the recovery | Quote and build again, naming the same leaves; see [Starting over](#starting-over) |
-| The recovery has stopped confirming | On-chain fees rose above what its transactions pay | Quote and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
+| A leaf your {{#name selection}} covers is missing from the {{#name leaves}} of the quote | Its recovery finished, or the SDK left it out of the quote | A leaf the SDK left out is in {{#name skipped}} with its {{#name reason}}. Lower {{#name fee_rate_sat_per_vbyte}} for {{#enum SkippedLeafReason::FeeExceedsValue}}, and prepare again later for {{#enum SkippedLeafReason::Unverified}} |
+| A leaf you are mid-recovery on is missing from a new {{#enum ExitLeafSelection::All}} or {{#enum ExitLeafSelection::RecoverableOnly}} quote | Those selections keep only leaves worth recovering at the new fee rate | Prepare the recovery with {{#enum ExitLeafSelection::Specific}}, naming the leaves from the kept response |
+| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::OperatorsUnavailable}} | The operators could not be reached to co-sign its recovery | Prepare and build again once they are reachable |
+| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::ReplacementFeeTooLow}} | An earlier recovery of it is on the network, and the new one pays too little to replace it | Prepare and build again at a fee rate of at least the one the error names, or let the earlier recovery confirm |
+| A leaf is in {{#name failed}} with {{#enum CooperativeRecoveryError::Generic}} | The operators refused to co-sign, the wallet's signer could not take part, the chain service failed, or the chain shows the leaf's funds in another output than the SDK assumed | The message says why. A wallet signing with Turnkey cannot recover cooperatively yet (see [Using Turnkey](turnkey.md#availability)) |
+| {{#name check_recover_funds}} returns {{#enum RecoveryVerdict::Redo}} | Something on-chain no longer matches the transactions you hold, for example the Spark operators took a leaf on-chain | Prepare and build again, naming the same leaves; see [Starting over](#starting-over) |
+| The recovery has stopped confirming | On-chain fees rose above what its transactions pay | Prepare and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
 | Less arrived than {{#name recoverable_value_sats}} less {{#name cooperative_fee_sats}} and {{#name sweep_fee_sats}} | A step sat unbroadcast long enough for the operators to send their own version, which pays its fee out of the leaf | Broadcast each step while it is {{#enum ExitTransactionStatus::Ready}}; see [A step left waiting can be sent by the operators](#broadcast-the-transactions) |
 | {{#name total_fee_sats}} is close to or above {{#name recoverable_value_sats}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch}}) to drop the fan-out fee, recover fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | The build/sweep fails with a "below the dust limit" error | The recoverable value net of fees is below the destination's dust limit | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_sats}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |
 | {{#enum SdkError::InvalidInput}} about the destination | The address is malformed, or belongs to another network | Use an address of the network the SDK is configured for |
-| {{#enum SdkError::InvalidInput}}: a leaf has no funds this wallet can recover cooperatively | The quote lists a cooperative leaf this wallet has no record of, for example a quote made by another wallet | Quote again with this wallet |
-| {{#enum SdkError::InvalidInput}} asking for a funding kind | The selection holds a unilateral exit with steps left to broadcast | Quote with a {{#name funding_kind}} |
-| {{#enum SdkError::InvalidInput}} asking for a signer or a funding input | The quote's {{#name funding}} is set, and the funding inputs or the signer to sign them are missing | Pass funding and a signer, or quote the cooperative leaves alone; see [Recovering without funding](#recovering-without-funding) |
+| {{#enum SdkError::InvalidInput}}: a leaf has no funds this wallet can recover cooperatively | The quote lists a cooperative leaf this wallet has no record of, for example a quote made by another wallet | Prepare again with this wallet |
+| {{#enum SdkError::InvalidInput}} asking for a funding kind | The selection holds a unilateral exit with steps left to broadcast | Prepare the recovery with a {{#name funding_kind}} |
+| {{#enum SdkError::InvalidInput}} asking for a signer or a funding input | The quote's {{#name funding}} is set, and the funding inputs or the signer to sign them are missing | Pass funding and a signer, or prepare a recovery of the cooperative leaves alone; see [Recovering without funding](#recovering-without-funding) |
 | {{#enum SdkError::InvalidInput}} about a funding input | A funding UTXO is malformed, or a custom one does not pay a native SegWit script | Check each {{#name CpfpInput}} against the UTXO it describes |
 | {{#enum SdkError::InvalidInput}} from {{#name check_recover_funds}} | A transaction in the recovery passed in does not parse | Pass the recovery as {{#name recover_funds}} or {{#name check_recover_funds}} returned it |
 | "min relay fee not met" when broadcasting | The fee rate is below the network's minimum relay fee rate, zero included | Build again at a higher {{#name fee_rate_sat_per_vbyte}}, or hand the transactions to a miner directly |
@@ -320,4 +320,4 @@ An out of date value can restore leaves that have since been spent, so the balan
 | "non-BIP68-final" | A relative timelock has not matured | Wait until {{#name status}} leaves {{#enum ExitTransactionStatus::WaitingForTimelock}} |
 | A tree transaction is rejected on its own | The zero-fee parent was broadcast without its child | Broadcast the parent and its {{#name cpfp_tx_hex}} together as a package |
 | The sweep is rejected | Not every refund it spends has confirmed | Wait until {{#name check_recover_funds}} reports it {{#enum ExitTransactionStatus::Ready}} |
-| An {{#enum ExitTransactionStatus::Unverified}} transaction is rejected | The chain service was unavailable or rate-limited while the recovery was built, so the SDK could not tell whether that step is already on-chain, nor whether an earlier fee-bumping child already spent the funding it uses | Quote and build the recovery again once the chain service is healthy; see [Starting over](#starting-over), and [Customizing the SDK](customizing.md#with-chain-service) for a more reliable service |
+| An {{#enum ExitTransactionStatus::Unverified}} transaction is rejected | The chain service was unavailable or rate-limited while the recovery was built, so the SDK could not tell whether that step is already on-chain, nor whether an earlier fee-bumping child already spent the funding it uses | Prepare and build the recovery again once the chain service is healthy; see [Starting over](#starting-over), and [Customizing the SDK](customizing.md#with-chain-service) for a more reliable service |

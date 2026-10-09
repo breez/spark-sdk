@@ -3060,8 +3060,11 @@ pub enum ExitTransactionStatus {
     /// read from the chain.
     WaitingForTimelock { spendable_at_height: Option<u32> },
     /// The on-chain status could not be determined (the chain service errored),
-    /// which also leaves what it is waiting for unknown. Broadcasting may fail
-    /// if a conflicting transaction already landed.
+    /// which also leaves what it is waiting for unknown. A cooperative recovery
+    /// has this status when the SDK did not see the output it spends in a
+    /// block, or could not check whether an earlier recovery spent that
+    /// output. Broadcasting may fail if a conflicting transaction already
+    /// landed.
     Unverified,
 }
 
@@ -3186,7 +3189,7 @@ pub struct ImportUnilateralExitStateResponse {
 // Recover funds
 // ===========================================================================
 
-/// Request for `prepare_recover_funds`, the recovery quote.
+/// Request for `prepare_recover_funds`, which returns the recovery quote.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareRecoverFundsRequest {
@@ -3249,7 +3252,8 @@ pub struct RecoveryFunding {
     pub per_branch: Vec<PerBranchFunding>,
 }
 
-/// A leaf the selection covers that a quote leaves out.
+/// A leaf the selection covers that `prepare_recover_funds` leaves out of the
+/// quote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SkippedLeaf {
@@ -3258,17 +3262,17 @@ pub struct SkippedLeaf {
     pub reason: SkippedLeafReason,
 }
 
-/// Why a quote leaves a leaf out.
+/// Why `prepare_recover_funds` leaves a leaf out of the quote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SkippedLeafReason {
-    /// At the quoted fee rate, recovering the leaf costs at least what it holds.
+    /// At the quote's fee rate, recovering the leaf costs at least what it holds.
     /// A low enough fee rate brings the leaf back into the quote.
     FeeExceedsValue,
     /// The SDK read the chain and found no output holding the leaf's funds.
     FundsNotFound,
-    /// The SDK could not look up where the leaf's funds are. It looks again on
-    /// the next quote.
+    /// The SDK could not look up where the leaf's funds are. It looks again the
+    /// next time you prepare.
     Unverified,
     /// No recovery can be built for the leaf as it stands. `message` says why.
     NotRecoverable { message: String },
@@ -3338,8 +3342,8 @@ pub struct RecoverFundsResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CooperativeRecoveryFailure {
     pub leaf_id: String,
-    /// The on-chain output holding the leaf's funds, which the recovery would
-    /// have spent.
+    /// The output the recovery would have spent: the on-chain output where the
+    /// SDK found the leaf's funds, or the one it assumed to hold them.
     pub output_txid: String,
     pub output_vout: u32,
     pub error: CooperativeRecoveryError,

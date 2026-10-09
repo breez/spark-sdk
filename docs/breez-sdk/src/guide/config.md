@@ -89,7 +89,7 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 Whether the SDK collects the data a [unilateral exit](./recover_funds.md) needs automatically, as funds arrive. Defaults to `true`.
 
-An exit is built from each leaf's chain of pre-signed transactions. Holding that chain locally is what lets an exit be quoted and built when the Spark operators are unreachable, so a leaf is only exitable that way once its chain has been collected. Collection runs after an operation finishes rather than during it, which keeps it off the critical path of a payment. Freshly received funds are therefore briefly not yet exitable, for roughly one round trip to the operators.
+An exit is built from each leaf's chain of pre-signed transactions. Holding that chain locally is what lets an exit be prepared and built when the Spark operators are unreachable, so a leaf is only exitable that way once its chain has been collected. Collection runs after an operation finishes rather than during it, which keeps it off the critical path of a payment. Freshly received funds are therefore briefly not yet exitable, for roughly one round trip to the operators.
 
 Set it to `false` when a collection behind every operation costs more than it is worth, on a busy wallet holding many leaves, or where bandwidth matters more than being able to recover funds without the operators. See [Treasury configuration](./treasury.md) for when that trade is worth making.
 

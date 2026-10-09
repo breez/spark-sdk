@@ -33,7 +33,7 @@ impl From<FundingKindArg> for CpfpFundingKind {
 /// yourself. Misuse can strand or lose funds.
 #[derive(Clone, Debug, Subcommand)]
 pub enum AdvancedCommand {
-    /// Recover the funds that left the balance, or with `--all` every leaf. Quotes
+    /// Recover the funds that left the balance, or with `--all` every leaf. Prepares
     /// the recovery (which leaves, how each is recovered, the fees, how much to
     /// fund), asks for funding UTXOs and their key when a unilateral exit needs
     /// them, and signs it once you confirm. A cooperative recovery needs the

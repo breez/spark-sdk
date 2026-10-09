@@ -25,7 +25,7 @@ func FetchRecoverableFunds(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func QuoteRecovery(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareRecoverFundsResponse, error) {
+func PrepareRecovery(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareRecoverFundsResponse, error) {
 	// ANCHOR: prepare-recover-funds
 	var fundingKind breez_sdk_spark.CpfpFundingKind = breez_sdk_spark.CpfpFundingKindP2wpkh{}
 	quote, err := sdk.PrepareRecoverFunds(breez_sdk_spark.PrepareRecoverFundsRequest{
@@ -59,7 +59,7 @@ func QuoteRecovery(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareRecov
 
 func RecoverCooperatively(sdk *breez_sdk_spark.BreezSdk, quote breez_sdk_spark.PrepareRecoverFundsResponse) error {
 	// ANCHOR: recover-cooperatively
-	// A quote that asks for funding holds a unilateral exit: quote the
+	// A quote with funding holds a unilateral exit: prepare the
 	// cooperative leaves alone to recover them without it.
 	if quote.Funding != nil {
 		var leafIds []string
@@ -164,7 +164,7 @@ func CheckRecovery(sdk *breez_sdk_spark.BreezSdk, stored breez_sdk_spark.Recover
 	case breez_sdk_spark.RecoveryVerdictDone:
 		log.Printf("Every transaction confirmed: the recovery is done")
 	case breez_sdk_spark.RecoveryVerdictRedo:
-		// Quote and build again, naming the same leaves. Pass
+		// Prepare and build again, naming the same leaves. Pass
 		// recovery.FundingInputs back and the SDK follows them to whatever
 		// they have become.
 		log.Printf("Build the recovery again: %v", verdict.Reason)

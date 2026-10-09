@@ -20,7 +20,7 @@ async fn fetch_recoverable_funds(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn quote_recovery(sdk: &BreezSdk) -> Result<PrepareRecoverFundsResponse> {
+async fn prepare_recovery(sdk: &BreezSdk) -> Result<PrepareRecoverFundsResponse> {
     // ANCHOR: prepare-recover-funds
     let quote = sdk
         .prepare_recover_funds(PrepareRecoverFundsRequest {
@@ -58,7 +58,7 @@ async fn quote_recovery(sdk: &BreezSdk) -> Result<PrepareRecoverFundsResponse> {
 
 async fn recover_cooperatively(sdk: &BreezSdk, quote: PrepareRecoverFundsResponse) -> Result<()> {
     // ANCHOR: recover-cooperatively
-    // A quote that asks for funding holds a unilateral exit: quote the
+    // A quote with funding holds a unilateral exit: prepare the
     // cooperative leaves alone to recover them without it.
     let quote = if quote.funding.is_some() {
         let leaf_ids: Vec<String> = quote
@@ -163,7 +163,7 @@ async fn check_recovery(sdk: &BreezSdk, stored: RecoverFundsResponse) -> Result<
             println!("Every transaction confirmed: the recovery is done");
         }
         RecoveryVerdict::Redo { reason } => {
-            // Quote and build again, naming the same leaves. Pass
+            // Prepare and build again, naming the same leaves. Pass
             // recovery.funding_inputs back and the SDK follows them to whatever
             // they have become.
             println!("Build the recovery again: {reason:?}");
