@@ -644,12 +644,29 @@ impl BreezSdk {
         Ok(self.sdk.buy_bitcoin(request.into()).await?.into())
     }
 
+    /// @deprecated Use `bridgeFromCashApp`.
     #[wasm_bindgen(js_name = "preparePaymentLink")]
     pub async fn prepare_payment_link(
         &self,
         request: PreparePaymentLinkRequest,
     ) -> WasmResult<PreparePaymentLinkResponse> {
         Ok(self.sdk.prepare_payment_link(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "bridgeFromCashApp")]
+    pub async fn bridge_from_cash_app(
+        &self,
+        request: BridgeFromCashAppRequest,
+    ) -> WasmResult<BridgeFromCashAppResponse> {
+        Ok(self.sdk.bridge_from_cash_app(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "bridgeToCashApp")]
+    pub async fn bridge_to_cash_app(
+        &self,
+        request: BridgeToCashAppRequest,
+    ) -> WasmResult<BridgeToCashAppResponse> {
+        Ok(self.sdk.bridge_to_cash_app(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "registerWebhook")]

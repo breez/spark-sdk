@@ -566,7 +566,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       if (crossChainToBitcoin && tokenIdentifier) {
         return 'Error: --cross-chain-to-bitcoin conflicts with --token-identifier'
       }
-      const filter = new CrossChainRouteFilter.Receive({ contractAddress: undefined })
+      const filter = new CrossChainRouteFilter.Receive({ contractAddress: undefined, deliveryMethod: undefined })
       const routeResult = await selectCrossChainRoute(sdk, filter, routeIndex)
       lines.push(routeResult.message)
 
@@ -654,7 +654,7 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
     const addressDetails: CrossChainAddressDetails = parsed.inner[0]
     const routeResult = await selectCrossChainRoute(
       sdk,
-      new CrossChainRouteFilter.Send({ addressDetails }),
+      new CrossChainRouteFilter.Send({ addressDetails, deliveryMethod: undefined }),
       routeIndex,
     )
     lines.push(routeResult.message)

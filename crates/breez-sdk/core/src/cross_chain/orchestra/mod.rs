@@ -58,12 +58,13 @@ use crate::utils::{
     time::{now_secs, try_now_secs},
 };
 
-// Orchestra `/quote` `source_chain` wire values.
+// Orchestra wire values for the local rails, used as `source_chain` on send
+// and `destination_chain` on receive.
 const SOURCE_CHAIN_SPARK: &str = "spark";
 const SOURCE_CHAIN_LIGHTNING: &str = "lightning";
 const SOURCE_CHAIN_BITCOIN: &str = "bitcoin";
 
-/// The Orchestra `source_chain` wire value for a [`DeliveryMethod`].
+/// The Orchestra chain wire value for a [`DeliveryMethod`].
 fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
     match delivery_method {
         DeliveryMethod::Spark => SOURCE_CHAIN_SPARK,
@@ -72,8 +73,8 @@ fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
     }
 }
 
-/// Parses an Orchestra `source_chain` wire value into a [`DeliveryMethod`],
-/// or `None` for one that isn't a local delivery rail.
+/// Parses an Orchestra chain wire value into a [`DeliveryMethod`], or `None`
+/// for one that isn't a local delivery rail.
 fn delivery_method_from_wire(chain: &str) -> Option<DeliveryMethod> {
     if chain.eq_ignore_ascii_case(SOURCE_CHAIN_SPARK) {
         Some(DeliveryMethod::Spark)
@@ -1212,8 +1213,7 @@ struct SizedDeposit {
 }
 
 /// Source chains Orchestra only accepts a receive from with a refund address
-/// on that chain. A receive request can't carry one: the payer's address isn't
-/// known when the request is made.
+/// on that chain.
 const RECEIVE_NEEDS_REFUND_ADDRESS: &[&str] = &["ton"];
 
 fn needs_refund_address_to_receive(chain: &str) -> bool {
@@ -1705,45 +1705,40 @@ impl CrossChainService for OrchestraService {
         &self,
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        let (source_chains, is_send, contract_filter, family_filter): (
-            Vec<&str>,
+        let (delivery_method, is_send, contract_filter, family_filter): (
+            Option<DeliveryMethod>,
             bool,
             Option<&str>,
             Option<CrossChainAddressFamily>,
         ) = match filter {
-            CrossChainRouteFilter::Send { address_details } => {
-                let family: CrossChainAddressFamily = address_details.address_family.into();
-                (
-                    vec![SOURCE_CHAIN_SPARK],
-                    true,
-                    address_details.contract_address.as_deref(),
-                    Some(family),
-                )
-            }
-            CrossChainRouteFilter::PaymentLink { address_details } => {
-                let family: CrossChainAddressFamily = address_details.address_family.into();
-                (
-                    vec![SOURCE_CHAIN_LIGHTNING],
-                    true,
-                    address_details.contract_address.as_deref(),
-                    Some(family),
-                )
-            }
-            CrossChainRouteFilter::Receive { contract_address } => (
-                vec![SOURCE_CHAIN_SPARK],
-                false,
-                contract_address.as_deref(),
-                None,
+            CrossChainRouteFilter::Send {
+                address_details,
+                delivery_method,
+            } => (
+                *delivery_method,
+                true,
+                address_details.contract_address.as_deref(),
+                Some(address_details.address_family.into()),
             ),
+            CrossChainRouteFilter::PaymentLink { address_details } => (
+                Some(DeliveryMethod::Lightning),
+                true,
+                address_details.contract_address.as_deref(),
+                Some(address_details.address_family.into()),
+            ),
+            CrossChainRouteFilter::Receive {
+                contract_address,
+                delivery_method,
+            } => (*delivery_method, false, contract_address.as_deref(), None),
+        };
+        // The local rail is the source on send and the destination on receive.
+        let local_chain = match delivery_method {
+            None | Some(DeliveryMethod::Spark) => SOURCE_CHAIN_SPARK,
+            Some(DeliveryMethod::Lightning) => SOURCE_CHAIN_LIGHTNING,
+            Some(DeliveryMethod::Bitcoin) => return Ok(Vec::new()),
         };
 
-        // `dedupe_routes` collapses a destination reachable from several
-        // sources into one pair.
-        let mut routes = Vec::new();
-        for chain in source_chains {
-            routes.extend(self.client.filter_routes(chain, is_send).await?);
-        }
-
+        let routes = self.client.filter_routes(local_chain, is_send).await?;
         let mut pairs = dedupe_routes(&routes, is_send, family_filter, contract_filter);
         if !is_send {
             pairs.retain(|pair| !needs_refund_address_to_receive(&pair.chain));
@@ -1765,8 +1760,9 @@ impl CrossChainService for OrchestraService {
         // asset for the chain: `spark` matches BTC or the token; `lightning`/
         // `bitcoin` match the externally funded BTC route. The lookup also
         // validates the route exists.
-        let source_chain =
-            delivery_method_to_wire(delivery_method.unwrap_or(DeliveryMethod::Spark));
+        let delivery_method = delivery_method.unwrap_or(DeliveryMethod::Spark);
+        super::ensure_route_delivers_over(route, delivery_method)?;
+        let source_chain = delivery_method_to_wire(delivery_method);
         let source_asset = self
             .resolve_source_asset(route, source_chain, source_token_identifier.as_deref())
             .await?;
@@ -1890,12 +1886,30 @@ impl CrossChainService for OrchestraService {
         destination: &SparkAsset,
         fee_mode: CrossChainFeeMode,
         target_overpay_bps: u32,
+        delivery_method: DeliveryMethod,
+        refund_address: Option<&str>,
     ) -> Result<CrossChainReceivePrepared, SdkError> {
+        let is_lightning = match delivery_method {
+            DeliveryMethod::Spark => false,
+            DeliveryMethod::Lightning if matches!(destination, SparkAsset::Bitcoin) => true,
+            DeliveryMethod::Lightning => {
+                return Err(SdkError::InvalidInput(
+                    "A cross-chain receive over Lightning can only deliver Bitcoin".to_string(),
+                ));
+            }
+            DeliveryMethod::Bitcoin => {
+                return Err(SdkError::InvalidInput(
+                    "Cross-chain receive does not support on-chain Bitcoin delivery".to_string(),
+                ));
+            }
+        };
+        let destination_chain = delivery_method_to_wire(delivery_method);
+
         // Resolve the destination's Spark-side wire symbol (e.g. "BTC",
         // "USDB") and decimals from the matching raw route. Route-level
         // validation of `destination` against `route.accepted_assets` is
         // the caller's responsibility.
-        let raw_routes = self.client.filter_routes(SOURCE_CHAIN_SPARK, false).await?;
+        let raw_routes = self.client.filter_routes(destination_chain, false).await?;
         let resolved_destination =
             find_spark_side(spark_routes(&raw_routes), route, destination, false).ok_or_else(
                 || {
@@ -1973,7 +1987,7 @@ impl CrossChainService for OrchestraService {
                     .estimate_required_source_amount(
                         &route.chain,
                         &route.asset,
-                        SOURCE_CHAIN_SPARK,
+                        destination_chain,
                         &destination_asset_symbol,
                         probe_source,
                         inflated_target,
@@ -1990,26 +2004,40 @@ impl CrossChainService for OrchestraService {
         // one created here tags the inbound payment with it and ties it to
         // this row the moment it is seen. Amountless, since the delivered
         // amount is only known once the order settles, and without expiry,
-        // since Orchestra accepts late deposits.
-        let spark_invoice = self
-            .spark_wallet
-            .create_spark_invoice(None, destination_token_identifier.clone(), None, None, None)
-            .await?;
+        // since Orchestra accepts late deposits. Over Lightning, Orchestra
+        // pays `recipient_address` itself and there is nothing to tie.
+        let spark_invoice = if is_lightning {
+            None
+        } else {
+            Some(
+                self.spark_wallet
+                    .create_spark_invoice(
+                        None,
+                        destination_token_identifier.clone(),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?,
+            )
+        };
 
         let request = QuoteRequest {
             // On receive the `route` describes the external side, so it maps
-            // to SOURCE on the wire and Spark is the DESTINATION.
+            // to SOURCE on the wire and the local rail is the DESTINATION.
             source_chain: route.chain.clone(),
             source_asset: route.asset.clone(),
-            destination_chain: SOURCE_CHAIN_SPARK.to_string(),
+            destination_chain: destination_chain.to_string(),
             destination_asset: destination_asset_symbol.clone(),
             amount: source_amount.to_string(),
-            recipient_address: spark_invoice.clone(),
+            recipient_address: spark_invoice
+                .clone()
+                .unwrap_or_else(|| recipient_address.to_string()),
             // ExactIn: the deposit is fixed (caller-picked on FeesIncluded,
             // SDK-computed on FeesExcluded); Orchestra forward-computes what
             // the receiver gets net of fees.
             amount_mode: Some(AmountMode::ExactIn),
-            refund_address: None,
+            refund_address: refund_address.map(str::to_string),
             slippage_bps: Some(max_slippage_bps),
             zeroconf_enabled: None,
             app_fees: Vec::new(),
@@ -2062,33 +2090,6 @@ impl CrossChainService for OrchestraService {
             quote_estimated_out
         };
 
-        let data = OrchestraSwapData {
-            quote_id: quote.quote_id.clone(),
-            order_id: None,
-            read_token: None,
-            quote_read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
-            recipient_address: recipient_address.to_string(),
-            spark_invoice: Some(spark_invoice),
-            source_chain: route.chain.clone(),
-            source_asset: route.asset.clone(),
-            source_chain_id: route.chain_id.clone(),
-            source_contract_address: route.contract_address.clone(),
-            source_decimals: u32::from(route.decimals),
-            destination_chain: SOURCE_CHAIN_SPARK.to_string(),
-            destination_asset: destination_asset_symbol.clone(),
-            destination_decimals,
-            token_identifier: destination_token_identifier.clone(),
-            amount_in: quote.amount_in.clone(),
-            expected_amount_out: expected_received_amount.to_string(),
-            fee_amount: Some(service_fee_amount.to_string()),
-            fee_asset: Some(quote.fee_asset.clone()),
-            fee_asset_decimals: service_fee_asset_decimals,
-            expires_at: expires_at_secs,
-        };
-
-        // Persist only once the request the caller gets back is in hand: a
-        // row written for a request that failed to build is polled for the
-        // whole grace window against a quote nobody is paying.
         let payment_request = super::build_receive_payment_request(
             &quote.deposit_address,
             &route.chain,
@@ -2097,9 +2098,38 @@ impl CrossChainService for OrchestraService {
             deposit_amount,
         )?;
 
-        let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
-        adapter.upsert(&data).await?;
-        self.has_active_receives.store(true, Ordering::Relaxed);
+        // Persisted only once the request the caller gets back is in hand: a
+        // row written for a request that failed to build is polled for the
+        // whole grace window against a quote nobody is paying. Over Lightning
+        // no funds reach this wallet, so there is no order to track.
+        if !is_lightning {
+            let data = OrchestraSwapData {
+                quote_id: quote.quote_id.clone(),
+                order_id: None,
+                read_token: None,
+                quote_read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
+                recipient_address: recipient_address.to_string(),
+                spark_invoice,
+                source_chain: route.chain.clone(),
+                source_asset: route.asset.clone(),
+                source_chain_id: route.chain_id.clone(),
+                source_contract_address: route.contract_address.clone(),
+                source_decimals: u32::from(route.decimals),
+                destination_chain: destination_chain.to_string(),
+                destination_asset: destination_asset_symbol.clone(),
+                destination_decimals,
+                token_identifier: destination_token_identifier.clone(),
+                amount_in: quote.amount_in.clone(),
+                expected_amount_out: expected_received_amount.to_string(),
+                fee_amount: Some(service_fee_amount.to_string()),
+                fee_asset: Some(quote.fee_asset.clone()),
+                fee_asset_decimals: service_fee_asset_decimals,
+                expires_at: expires_at_secs,
+            };
+            let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
+            adapter.upsert(&data).await?;
+            self.has_active_receives.store(true, Ordering::Relaxed);
+        }
 
         Ok(CrossChainReceivePrepared {
             payment_request,
@@ -2323,7 +2353,8 @@ fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
 /// Same-chain routes (`source_chain == destination_chain`) are always
 /// dropped: Orchestra advertises on-Spark AMM swaps in the same routes
 /// response, and those belong to the token conversion API, not the
-/// cross-chain surface.
+/// cross-chain surface. So are routes whose non-Spark side is itself a local
+/// rail (e.g. `spark` USDB to `lightning`), which are not cross-chain either.
 ///
 /// Both address-family and contract filters operate on the non-Spark side:
 /// - `family_filter` restricts to routes whose chain/contract matches the
@@ -2342,6 +2373,9 @@ fn route_passes_filters(
         return false;
     }
     let side = non_spark_side(r, is_send);
+    if delivery_method_from_wire(&side.chain).is_some() {
+        return false;
+    }
     let contract = side.contract_address.as_deref();
     let family_ok = family_filter.is_none_or(|f| f.matches_chain(&side.chain, contract));
     let contract_ok = contract_filter.is_none_or(|wanted| contract == Some(wanted));
@@ -2797,7 +2831,7 @@ async fn compute_receive_fee(
 }
 
 /// Parses Orchestra's RFC3339 `expires_at` into unix seconds.
-fn parse_rfc3339_to_unix_seconds(expires_at: &str) -> Result<u64, SdkError> {
+pub(crate) fn parse_rfc3339_to_unix_seconds(expires_at: &str) -> Result<u64, SdkError> {
     let exp = DateTime::parse_from_rfc3339(expires_at).map_err(|e| {
         SdkError::Generic(format!("Orchestra: invalid expires_at {expires_at:?}: {e}"))
     })?;
@@ -2866,15 +2900,13 @@ fn dedupe_routes(
                 })
         };
 
-        // Send/Buy delivery method comes from Orchestra's `source_chain` (spark /
-        // lightning / bitcoin). A receive lands on Spark, so its delivery method
-        // is always Spark. An unrecognized source chain (a receive route's
-        // external chain) parses to `None` and is skipped.
-        let delivery_method = if is_send {
-            delivery_method_from_wire(&r.source_chain)
+        // The delivery method is the local rail the route moves over: the
+        // `source_chain` on send, the `destination_chain` on receive.
+        let delivery_method = delivery_method_from_wire(if is_send {
+            &r.source_chain
         } else {
-            Some(DeliveryMethod::Spark)
-        };
+            &r.destination_chain
+        });
 
         let entry = grouped.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());
@@ -3532,6 +3564,40 @@ mod tests {
 
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].delivery_methods, vec![DeliveryMethod::Spark]);
+    }
+
+    #[test_all]
+    fn dedupe_routes_receive_delivery_method_is_lightning() {
+        let routes = vec![route(
+            ra("solana", "USDT", Some("Es9vMFrz")),
+            ra("lightning", "BTC", None),
+        )];
+
+        let pairs = dedupe_routes(&unlimited(routes), false, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].delivery_methods, vec![DeliveryMethod::Lightning]);
+        assert!(pairs[0].accepts_asset(&SparkAsset::Bitcoin));
+    }
+
+    #[test_all]
+    fn dedupe_routes_drops_local_rail_external_side() {
+        let routes = vec![
+            route(
+                ra("spark", "USDB", Some("btkn1usdb")),
+                ra("lightning", "BTC", None),
+            ),
+            route(ra("bitcoin", "BTC", None), ra("lightning", "BTC", None)),
+            route(
+                ra("base", "USDC", Some("0xUSDC")),
+                ra("lightning", "BTC", None),
+            ),
+        ];
+
+        let pairs = dedupe_routes(&unlimited(routes), false, None, None);
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].chain, "base");
     }
 
     #[test_all]

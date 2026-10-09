@@ -400,7 +400,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 println("Error: --amount is required for cross-chain receive")
                 return
             }
-            val filter = CrossChainRouteFilter.Receive(contractAddress = null)
+            val filter = CrossChainRouteFilter.Receive(contractAddress = null, deliveryMethod = null)
             val route = selectCrossChainRoute(sdk, reader, filter)
             val feeMode = if (crossChainFeesIncluded) CrossChainFeeMode.FEES_INCLUDED else null
             val destination = if (crossChainToBitcoin) {
@@ -491,7 +491,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
         is InputType.CrossChainAddress -> {
             val addressDetails = parsed.v1
             val address = addressDetails.address
-            val route = selectCrossChainRoute(sdk, reader, CrossChainRouteFilter.Send(addressDetails = addressDetails))
+            val route = selectCrossChainRoute(sdk, reader, CrossChainRouteFilter.Send(addressDetails = addressDetails, deliveryMethod = null))
             PaymentRequest.CrossChain(
                 address = address,
                 route = route,

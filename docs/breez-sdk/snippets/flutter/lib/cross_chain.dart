@@ -10,7 +10,10 @@ Future<List<CrossChainRoutePair>> getCrossChainRoutes(BreezSdk sdk) async {
   CrossChainAddressDetails addressDetails = parsed.field0;
 
   List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
-    filter: CrossChainRouteFilter.send(addressDetails: addressDetails),
+    filter: CrossChainRouteFilter.send(
+      addressDetails: addressDetails,
+      deliveryMethod: null,
+    ),
   );
 
   for (var route in routes) {
@@ -87,7 +90,10 @@ Future<SendPaymentResponse> sendPaymentCrossChain(
 Future<List<CrossChainRoutePair>> getCrossChainReceiveRoutes(BreezSdk sdk) async {
   // ANCHOR: cross-chain-get-receive-routes
   List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
-    filter: CrossChainRouteFilter.receive(contractAddress: null),
+    filter: CrossChainRouteFilter.receive(
+      contractAddress: null,
+      deliveryMethod: null,
+    ),
   );
 
   for (var route in routes) {

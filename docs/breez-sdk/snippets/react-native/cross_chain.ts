@@ -21,7 +21,10 @@ const exampleGetCrossChainRoutes = async (sdk: BreezSdk) => {
   const addressDetails = parsed.inner[0]
 
   const routes = await sdk.getCrossChainRoutes(
-    new CrossChainRouteFilter.Send({ addressDetails })
+    new CrossChainRouteFilter.Send({
+      addressDetails,
+      deliveryMethod: undefined
+    })
   )
 
   for (const route of routes) {
@@ -93,7 +96,10 @@ const exampleSendPaymentCrossChain = async (
 const exampleGetCrossChainReceiveRoutes = async (sdk: BreezSdk) => {
   // ANCHOR: cross-chain-get-receive-routes
   const routes = await sdk.getCrossChainRoutes(
-    new CrossChainRouteFilter.Receive({ contractAddress: undefined })
+    new CrossChainRouteFilter.Receive({
+      contractAddress: undefined,
+      deliveryMethod: undefined
+    })
   )
 
   for (const route of routes) {

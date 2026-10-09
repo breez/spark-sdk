@@ -12,7 +12,9 @@ mod cached_fiat;
 mod orchestra;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
-pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService};
+pub(crate) use orchestra::{
+    BreezServerOrchestraConfigResolver, OrchestraService, parse_rfc3339_to_unix_seconds,
+};
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -306,20 +308,44 @@ impl From<crate::FeePolicy> for CrossChainFeeMode {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainRouteFilter {
-    /// Routes for sending from the Spark wallet to another chain.
-    /// Filtered by the parsed recipient address details.
+    /// Routes for sending to another chain, filtered by the parsed recipient
+    /// address details.
     Send {
         address_details: CrossChainAddressDetails,
+        /// Unset or `Spark` lists the routes paid from the Spark balance.
+        /// `Lightning` lists the routes an external payer funds over
+        /// Lightning. `Bitcoin` lists nothing.
+        delivery_method: Option<DeliveryMethod>,
     },
-    /// Routes for receiving to Spark from another chain.
-    /// Optionally filtered by the source token contract address.
-    Receive { contract_address: Option<String> },
-    /// Routes for a payment link that sends a stablecoin funded by an external
-    /// rail (Cash App over Lightning) rather than the Spark wallet.
-    /// Filtered by the parsed recipient address details.
+    /// Routes for receiving from another chain, optionally filtered by the
+    /// source token contract address.
+    Receive {
+        contract_address: Option<String>,
+        /// Unset or `Spark` lists the routes that deliver to the Spark balance.
+        /// `Lightning` lists the routes that pay out to a Lightning address.
+        /// `Bitcoin` lists nothing.
+        delivery_method: Option<DeliveryMethod>,
+    },
+    /// **Deprecated.** Use `Send` with the `Lightning` delivery method.
+    ///
+    /// Routes for a payment link that sends a stablecoin funded by Cash App
+    /// over Lightning rather than the Spark wallet.
     PaymentLink {
         address_details: CrossChainAddressDetails,
     },
+}
+
+impl CrossChainRouteFilter {
+    /// The equivalent filter without the deprecated `PaymentLink` variant.
+    pub(crate) fn normalized(&self) -> Self {
+        match self {
+            Self::PaymentLink { address_details } => Self::Send {
+                address_details: address_details.clone(),
+                delivery_method: Some(DeliveryMethod::Lightning),
+            },
+            other => other.clone(),
+        }
+    }
 }
 
 /// A single route available for cross-chain transfers, tagged with the provider
@@ -449,8 +475,8 @@ pub enum CrossChainProviderContext {
 }
 
 /// Prepared cross-chain receive: the payment request to hand to the sender
-/// and the receive-quote details. The provider row is already persisted by
-/// the time this returns.
+/// and the receive-quote details. For a receive into this wallet, the provider
+/// row is already persisted by the time this returns.
 #[derive(Debug, Clone)]
 pub(crate) struct CrossChainReceivePrepared {
     /// Canonical cross-chain URI the sender can paste or scan to pay.
@@ -588,6 +614,13 @@ pub(crate) trait CrossChainService: Send + Sync {
     /// - `FeesIncluded`: the deposit the sender will pay, in the route's
     ///   source-asset base units. The receiver lands `amount - fees`.
     ///   `target_overpay_bps` is ignored.
+    ///
+    /// `delivery_method` is the rail the funds arrive on.
+    /// [`DeliveryMethod::Spark`] delivers to this wallet and tracks the
+    /// receive. [`DeliveryMethod::Lightning`] pays `recipient_address` (a
+    /// Lightning address) directly and is not tracked. `refund_address` is
+    /// where the provider returns the deposit if delivery fails.
+    #[allow(clippy::too_many_arguments)]
     async fn prepare_receive(
         &self,
         route: &CrossChainRoutePair,
@@ -600,6 +633,8 @@ pub(crate) trait CrossChainService: Send + Sync {
         destination: &SparkAsset,
         fee_mode: CrossChainFeeMode,
         target_overpay_bps: u32,
+        delivery_method: DeliveryMethod,
+        refund_address: Option<&str>,
     ) -> Result<CrossChainReceivePrepared, SdkError>;
 
     /// Execute the send: transfer funds to the deposit address, submit to
@@ -689,6 +724,20 @@ pub(crate) fn convert_source_amount_to_sats(
         )));
     }
     Ok(sats as u128)
+}
+
+/// Rejects a route that lists its delivery methods without `delivery_method`.
+/// A hand-built route without delivery methods is accepted.
+pub(crate) fn ensure_route_delivers_over(
+    route: &CrossChainRoutePair,
+    delivery_method: DeliveryMethod,
+) -> Result<(), SdkError> {
+    if !route.delivery_methods.is_empty() && !route.delivery_methods.contains(&delivery_method) {
+        return Err(SdkError::InvalidInput(format!(
+            "The selected route doesn't support {delivery_method}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_usd_stable_asset(asset: &str) -> bool {
@@ -842,6 +891,58 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn evm_address_details() -> crate::CrossChainAddressDetails {
+        crate::CrossChainAddressDetails {
+            address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            address_family: crate::CrossChainAddressFamily::Evm,
+            contract_address: None,
+            chain_id: None,
+            amount: None,
+        }
+    }
+
+    #[test_all]
+    fn route_filter_normalizes_payment_link_to_lightning_send() {
+        let filter = CrossChainRouteFilter::PaymentLink {
+            address_details: evm_address_details(),
+        };
+        let CrossChainRouteFilter::Send {
+            address_details,
+            delivery_method,
+        } = filter.normalized()
+        else {
+            panic!("expected a send filter");
+        };
+        assert_eq!(address_details.address, evm_address_details().address);
+        assert_eq!(delivery_method, Some(DeliveryMethod::Lightning));
+    }
+
+    #[test_all]
+    fn ensure_route_delivers_over_checks_listed_methods() {
+        let route = |delivery_methods: Vec<DeliveryMethod>| CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "base".to_string(),
+            chain_id: None,
+            asset: "USDC".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            accepted_assets: Vec::new(),
+            delivery_methods,
+        };
+        let spark = route(vec![DeliveryMethod::Spark]);
+        let lightning = route(vec![DeliveryMethod::Lightning]);
+        let unlisted = route(Vec::new());
+
+        assert!(ensure_route_delivers_over(&spark, DeliveryMethod::Spark).is_ok());
+        assert!(matches!(
+            ensure_route_delivers_over(&lightning, DeliveryMethod::Spark),
+            Err(SdkError::InvalidInput(_))
+        ));
+        assert!(ensure_route_delivers_over(&lightning, DeliveryMethod::Lightning).is_ok());
+        assert!(ensure_route_delivers_over(&unlisted, DeliveryMethod::Spark).is_ok());
+    }
 
     #[test_all]
     fn delivery_method_display_is_human_readable() {

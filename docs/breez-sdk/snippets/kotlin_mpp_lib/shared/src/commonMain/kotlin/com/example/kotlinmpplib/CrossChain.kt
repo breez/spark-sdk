@@ -16,7 +16,10 @@ class CrossChain {
             val addressDetails = parsed.v1
 
             val routes = sdk.getCrossChainRoutes(
-                CrossChainRouteFilter.Send(addressDetails = addressDetails)
+                CrossChainRouteFilter.Send(
+                    addressDetails = addressDetails,
+                    deliveryMethod = null,
+                )
             )
 
             for (route in routes) {
@@ -102,7 +105,10 @@ class CrossChain {
         // ANCHOR: cross-chain-get-receive-routes
         try {
             val routes = sdk.getCrossChainRoutes(
-                CrossChainRouteFilter.Receive(contractAddress = null)
+                CrossChainRouteFilter.Receive(
+                    contractAddress = null,
+                    deliveryMethod = null,
+                )
             )
 
             for (route in routes) {

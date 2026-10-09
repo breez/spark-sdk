@@ -4,6 +4,8 @@ The SDK can send and receive USDC and USDT between a Spark wallet and several su
 
 The send flow is documented on the [Sending payments](./send_payment.md#usdc-usdt) page; the receive flow on the [Receiving payments](./receive_payment.md#usdc-usdt) page. This page covers shared concepts: providers, lifecycle, retry safety, and limitations.
 
+Routes listed by {{#name get_cross_chain_routes}} with an unset {{#name delivery_method}} are the ones this wallet sends from or receives into. Setting it to {{#enum DeliveryMethod::Lightning}} lists the routes funded or paid out over Lightning by someone else, used by the [Cash App bridges](./cash_app.md).
+
 ## Supported address formats
 
 {{#name parse}} recognizes cross-chain destinations in the following forms, returning {{#enum InputType::CrossChainAddress}} with the parsed {{#name CrossChainAddressDetails}} — address family, bare address, and optional token contract address, chain id, and amount.

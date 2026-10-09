@@ -1,17 +1,22 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use breez_sdk_common::{buy::cashapp::CashAppProvider, input::CrossChainAddressFamily};
+use breez_sdk_common::{
+    buy::cashapp::{CashAppProvider, cash_app_lightning_address},
+    input::CrossChainAddressFamily,
+};
 use spark_wallet::MasterIdentityPublicKeyUpdate;
 use std::str::FromStr;
 use tracing::{debug, info};
 
 use crate::{
-    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
-    OptimizeLeavesResponse, PreparePaymentLinkRequest, PreparePaymentLinkResponse,
-    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
-    UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
+    BridgeFromCashAppRequest, BridgeFromCashAppResponse, BridgeToCashAppRequest,
+    BridgeToCashAppResponse, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest,
+    CheckMessageResponse, CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair,
+    DeliveryMethod, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
+    ListFiatCurrenciesResponse, ListFiatRatesResponse, Network, OptimizationMode,
+    OptimizeLeavesRequest, OptimizeLeavesResponse, PreparePaymentLinkRequest,
+    PreparePaymentLinkResponse, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
+    UserSettings, Webhook,
     chain::RecommendedFees,
     cross_chain::{
         CrossChainProviderContext, convert_destination_amount_to_sats, fetch_btc_usd_rate,
@@ -26,6 +31,7 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
+use super::payments::receive::{CrossChainReceiveTarget, receive_cross_chain};
 use super::payments::validation::{
     known_token_contracts, resolve_direct_overpay_amount, resolve_slippage_bps,
     validate_address_family_against_route, validate_amount,
@@ -102,16 +108,19 @@ impl BreezSdk {
 
     /// Returns the available cross-chain routes.
     ///
-    /// Use [`CrossChainRouteFilter::Send`] to get routes for sending from Spark
-    /// (filtered by the parsed recipient address),
-    /// [`CrossChainRouteFilter::PaymentLink`] for routes fundable by an external
-    /// fiat rail (`prepare_payment_link`), or
-    /// [`CrossChainRouteFilter::Receive`] to get routes for receiving into Spark
-    /// (optionally filtered by a source contract address).
+    /// Use [`CrossChainRouteFilter::Send`] to get routes for sending to
+    /// another chain (filtered by the parsed recipient address), or
+    /// [`CrossChainRouteFilter::Receive`] to get routes for receiving from
+    /// another chain (optionally filtered by a source contract address). By
+    /// default both list the routes paid from or delivered to the Spark
+    /// balance. Set their `delivery_method` to `Lightning` to list the routes an
+    /// external payer funds over Lightning, or that pay out to a Lightning
+    /// address.
     pub async fn get_cross_chain_routes(
         &self,
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        let filter = &filter.normalized();
         let mut all_routes = Vec::new();
         for svc in self.cross_chain_context.values() {
             match svc.get_routes(filter).await {
@@ -455,22 +464,32 @@ impl BreezSdk {
         Ok(BuyBitcoinResponse { url })
     }
 
-    /// Prepare a payment link that sends USDC/USDT to an external-chain
-    /// recipient, funded by Cash App over Lightning.
-    ///
-    /// Creates a cross-chain order and returns a `cash.app` deep link the payer
-    /// opens. Once paid, the provider delivers the stablecoin to `address`. No
-    /// funds move through the Spark wallet. Only available on mainnet.
+    /// **Deprecated.** Use [`bridge_from_cash_app`](Self::bridge_from_cash_app).
     pub async fn prepare_payment_link(
         &self,
         request: PreparePaymentLinkRequest,
     ) -> Result<PreparePaymentLinkResponse, SdkError> {
+        self.bridge_from_cash_app(request.into())
+            .await
+            .map(Into::into)
+    }
+
+    /// Bridge from Cash App to USDC/USDT on an external chain.
+    ///
+    /// Creates a cross-chain order and returns a `cash.app` deep link the payer
+    /// opens. Once paid over Lightning, the provider delivers the stablecoin to
+    /// `address`. No funds move through the Spark wallet, and nothing is
+    /// tracked. Only available on mainnet.
+    pub async fn bridge_from_cash_app(
+        &self,
+        request: BridgeFromCashAppRequest,
+    ) -> Result<BridgeFromCashAppResponse, SdkError> {
         if !matches!(self.config.network, Network::Mainnet) {
             return Err(SdkError::Generic("Only available on mainnet".to_string()));
         }
         validate_amount(Some(request.amount))?;
 
-        let PreparePaymentLinkRequest {
+        let BridgeFromCashAppRequest {
             address,
             route,
             amount,
@@ -478,13 +497,12 @@ impl BreezSdk {
             max_slippage_bps,
         } = request;
 
-        // Payment links are Orchestra-only. A Boltz reverse swap needs this
-        // wallet online to claim before the payer's HTLC settles, so it can't
-        // back a link someone else pays later. Orchestra orders are submitless
-        // and deliver without the SDK.
+        // A Boltz reverse swap needs this wallet online to claim before the
+        // payer's HTLC settles, so it can't back a link someone else pays
+        // later. Orchestra orders are submitless and deliver without the SDK.
         if !matches!(route.provider, CrossChainProvider::Orchestra) {
             return Err(SdkError::InvalidInput(
-                "Payment links are only supported on Orchestra routes".to_string(),
+                "Bridging from Cash App is only supported on Orchestra routes".to_string(),
             ));
         }
 
@@ -539,7 +557,7 @@ impl BreezSdk {
 
         // Match the send path: on `FeesExcluded` pad the source so the recipient
         // lands at or above target despite provider slippage. The pad comes from
-        // config (no per-request override on a payment link).
+        // config (no per-request override on a Cash App bridge).
         let fee_policy = fee_policy.unwrap_or_default();
         let overpay_bps = crate::cross_chain::resolve_target_overpay_bps(
             None,
@@ -583,8 +601,124 @@ impl BreezSdk {
 
         let url = CashAppProvider::build_url(&deposit_target);
 
-        Ok(prepare_payment_link_response(prepared, url, amount_sats))
+        bridge_from_cash_app_response(prepared, url, amount_sats)
     }
+
+    /// Bridge USDC/USDT from an external chain to a Cash App user.
+    ///
+    /// Returns the deposit the payer makes on the source chain. Once it lands,
+    /// the cross-chain provider pays the recipient in Bitcoin over Lightning,
+    /// or refunds `refund_address` if it can't. No funds move through the
+    /// Spark wallet, and nothing is tracked. Only available on mainnet.
+    pub async fn bridge_to_cash_app(
+        &self,
+        request: BridgeToCashAppRequest,
+    ) -> Result<BridgeToCashAppResponse, SdkError> {
+        if !matches!(self.config.network, Network::Mainnet) {
+            return Err(SdkError::Generic("Only available on mainnet".to_string()));
+        }
+        validate_amount(Some(request.amount))?;
+
+        let BridgeToCashAppRequest {
+            recipient,
+            route,
+            amount,
+            fee_policy,
+            refund_address,
+            max_slippage_bps,
+        } = request;
+
+        // The provider pays out after the deposit lands, with no wallet
+        // online, which only Orchestra supports.
+        if !matches!(route.provider, CrossChainProvider::Orchestra) {
+            return Err(SdkError::InvalidInput(
+                "Bridging to Cash App is only supported on Orchestra routes".to_string(),
+            ));
+        }
+        if !route_supports_delivery_method(&route, DeliveryMethod::Lightning) {
+            return Err(SdkError::InvalidInput(
+                "The selected route can't deliver over Lightning".to_string(),
+            ));
+        }
+
+        let Some(address) = cash_app_lightning_address(recipient.trim()) else {
+            return Err(SdkError::InvalidInput(format!(
+                "{recipient} is not a Cash App username"
+            )));
+        };
+        // Resolved before quoting so an unknown account fails before the payer
+        // funds anything.
+        let Ok(InputType::LightningAddress(recipient)) = self.parse(&address).await else {
+            return Err(SdkError::InvalidInput(format!(
+                "{recipient} is not a reachable Cash App account"
+            )));
+        };
+
+        let InputType::CrossChainAddress(refund) = self.parse(&refund_address).await? else {
+            return Err(SdkError::InvalidInput(
+                "Refund address must be a cross-chain (EVM/Solana/Tron) address".to_string(),
+            ));
+        };
+        let refund_family: CrossChainAddressFamily = refund.address_family.into();
+        validate_address_family_against_route(refund_family, &route)?;
+        let known_contracts =
+            known_token_contracts(self, &refund.address, refund_family, &route).await;
+        validate_recipient_not_contract_address(&refund.address, refund_family, &known_contracts)
+            .map_err(|_| {
+            SdkError::InvalidInput(
+                "Refund address is a token contract. Funds refunded to it cannot be \
+                     recovered. Use the payer's wallet address instead."
+                    .to_string(),
+            )
+        })?;
+
+        let prepared = receive_cross_chain(
+            self,
+            route,
+            amount,
+            CrossChainReceiveTarget::LightningAddress {
+                address: recipient.address,
+                refund_address: refund.address,
+            },
+            fee_policy.map(Into::into),
+            max_slippage_bps,
+            None,
+        )
+        .await?;
+        check_lightning_address_bounds(
+            prepared.info.expected_received_amount,
+            recipient.pay_request.min_sendable,
+            recipient.pay_request.max_sendable,
+        )?;
+
+        Ok(BridgeToCashAppResponse {
+            payment_request: prepared.payment_request,
+            info: prepared.info,
+        })
+    }
+}
+
+/// Checks `amount_sats` against a Lightning address's sendable range, in
+/// millisats.
+fn check_lightning_address_bounds(
+    amount_sats: u128,
+    min_sendable_msat: u64,
+    max_sendable_msat: u64,
+) -> Result<(), SdkError> {
+    let amount_msat = amount_sats.saturating_mul(1000);
+    if amount_msat < u128::from(min_sendable_msat) {
+        return Err(SdkError::InvalidInput(format!(
+            "The recipient accepts at least {} sats, but would receive about {amount_sats} sats",
+            min_sendable_msat.div_ceil(1000)
+        )));
+    }
+    if amount_msat > u128::from(max_sendable_msat) {
+        return Err(SdkError::InvalidInput(format!(
+            "The recipient accepts at most {} sats, but would receive about {amount_sats} sats",
+            max_sendable_msat / 1000
+        )));
+    }
+    Ok(())
 }
 
 /// Whether `route` advertises `required` as a fundable delivery method. An
@@ -631,18 +765,18 @@ fn deposit_target(context: &CrossChainProviderContext) -> String {
 }
 
 /// Maps a [`crate::cross_chain::CrossChainSendPrepared`] + funding `url` to a
-/// [`PreparePaymentLinkResponse`].
+/// [`BridgeFromCashAppResponse`].
 ///
 /// `estimated_out` is in the destination `asset`'s base units. The fee mirrors
 /// the cross-chain send response: `service_fee_amount` in `service_fee_asset`
 /// base units, where `None` means sats (Boltz denominates its fee in sats;
 /// Orchestra in the stablecoin).
-fn prepare_payment_link_response(
+fn bridge_from_cash_app_response(
     prepared: crate::cross_chain::CrossChainSendPrepared,
     url: String,
     amount_sats: u64,
-) -> PreparePaymentLinkResponse {
-    PreparePaymentLinkResponse {
+) -> Result<BridgeFromCashAppResponse, SdkError> {
+    Ok(BridgeFromCashAppResponse {
         url,
         amount_sats,
         estimated_out: prepared.estimated_out,
@@ -650,20 +784,8 @@ fn prepare_payment_link_response(
         service_fee_amount: prepared.service_fee_amount,
         service_fee_asset: prepared.service_fee_asset,
         service_fee_asset_decimals: prepared.service_fee_asset_decimals,
-        expires_at: normalize_expires_at(&prepared.expires_at),
-    }
-}
-
-/// Normalizes a provider `expires_at` to RFC3339. Orchestra already returns
-/// RFC3339; Boltz returns a unix-seconds string, which we convert so callers
-/// see a single format.
-fn normalize_expires_at(raw: &str) -> String {
-    if let Ok(secs) = raw.parse::<i64>()
-        && let Some(dt) = chrono::DateTime::from_timestamp(secs, 0)
-    {
-        return dt.to_rfc3339();
-    }
-    raw.to_string()
+        expires_at: crate::cross_chain::parse_rfc3339_to_unix_seconds(&prepared.expires_at)?,
+    })
 }
 
 /// Refuses a message in the namespace reserved for the LNURL server.
@@ -703,8 +825,9 @@ fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError>
 #[cfg(test)]
 mod tests {
     use super::{
-        CashAppProvider, SdkError, deposit_target, parse_compressed_public_key,
-        prepare_payment_link_response, reject_reserved_namespace, route_supports_delivery_method,
+        CashAppProvider, SdkError, bridge_from_cash_app_response, check_lightning_address_bounds,
+        deposit_target, parse_compressed_public_key, reject_reserved_namespace,
+        route_supports_delivery_method,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
     use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, DeliveryMethod};
@@ -815,12 +938,14 @@ mod tests {
 
     #[test_all]
     fn orchestra_response_maps_stablecoin_fee() {
-        let resp = prepare_payment_link_response(
+        let resp = bridge_from_cash_app_response(
             prepared(orchestra_context()),
             "https://x".to_string(),
             5000,
-        );
+        )
+        .unwrap();
         assert_eq!(resp.url, "https://x");
+        assert_eq!(resp.expires_at, 1_784_966_966);
         assert_eq!(resp.amount_sats, 5000);
         assert_eq!(resp.estimated_out, 6_450_000);
         assert_eq!(resp.asset, "USDC");
@@ -842,22 +967,11 @@ mod tests {
         prepared.service_fee_amount = 17;
         prepared.service_fee_asset = None;
         prepared.service_fee_asset_decimals = None;
-        let resp = prepare_payment_link_response(prepared, "https://x".to_string(), 5000);
+        let resp = bridge_from_cash_app_response(prepared, "https://x".to_string(), 5000).unwrap();
         assert_eq!(resp.asset, "USDC");
         assert_eq!(resp.service_fee_amount, 17);
         assert_eq!(resp.service_fee_asset, None);
         assert_eq!(resp.service_fee_asset_decimals, None);
-    }
-
-    #[test_all]
-    fn normalize_expires_at_converts_unix_and_passes_rfc3339() {
-        // Boltz-style unix seconds get converted to a parseable RFC3339 string.
-        let converted = super::normalize_expires_at("1784895588");
-        assert_ne!(converted, "1784895588");
-        assert!(chrono::DateTime::parse_from_rfc3339(&converted).is_ok());
-        // Orchestra-style RFC3339 passes through unchanged.
-        let iso = "2026-07-25T08:09:26.770Z";
-        assert_eq!(super::normalize_expires_at(iso), iso);
     }
 
     const COMPRESSED: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -922,5 +1036,21 @@ mod tests {
                 "expected {input} to be rejected"
             );
         }
+    }
+
+    #[test_all]
+    fn check_lightning_address_bounds_accepts_inside_and_rejects_outside() {
+        // Cash App's floor is 1 sat. Its ceiling varies per account.
+        let (min_msat, max_msat) = (1_000, 1_185_220_000);
+        assert!(check_lightning_address_bounds(1, min_msat, max_msat).is_ok());
+        assert!(check_lightning_address_bounds(1_185_220, min_msat, max_msat).is_ok());
+        assert!(matches!(
+            check_lightning_address_bounds(0, min_msat, max_msat),
+            Err(SdkError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            check_lightning_address_bounds(1_185_221, min_msat, max_msat),
+            Err(SdkError::InvalidInput(_))
+        ));
     }
 }

@@ -327,7 +327,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
         if args.amount is None:
             print("--amount is required for cross-chain receive")
             return
-        route_filter = CrossChainRouteFilter.RECEIVE(contract_address=None)
+        route_filter = CrossChainRouteFilter.RECEIVE(contract_address=None, delivery_method=None)
         route = await _select_cross_chain_route(sdk, session, route_filter)
         fee_mode = (
             CrossChainFeeMode.FEES_INCLUDED
@@ -400,7 +400,7 @@ async def _handle_pay(sdk, _token_issuer, session, args):
         address_details = parsed[0]
         address = address_details.address
         route = await _select_cross_chain_route(
-            sdk, session, CrossChainRouteFilter.SEND(address_details=address_details),
+            sdk, session, CrossChainRouteFilter.SEND(address_details=address_details, delivery_method=None),
         )
         payment_request = PaymentRequest.CROSS_CHAIN(
             address=address,

@@ -432,7 +432,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
         }
         let route = try await selectCrossChainRoute(
             sdk: sdk,
-            filter: .receive(contractAddress: nil)
+            filter: .receive(contractAddress: nil, deliveryMethod: nil)
         )
         let feeMode: CrossChainFeeMode? = crossChainFeesIncluded
             ? .feesIncluded : nil
@@ -508,7 +508,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let parsed = try? await sdk.parse(input: paymentRequestStr)
     if case let .crossChainAddress(v1) = parsed {
         let address = v1.address
-        let route = try await selectCrossChainRoute(sdk: sdk, filter: .send(addressDetails: v1))
+        let route = try await selectCrossChainRoute(sdk: sdk, filter: .send(addressDetails: v1, deliveryMethod: nil))
         paymentRequest = .crossChain(
             address: address,
             route: route,
