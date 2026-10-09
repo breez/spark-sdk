@@ -2045,7 +2045,7 @@ pub struct _FetchConversionLimitsResponse {
 #[frb(mirror(BuyBitcoinRequest))]
 pub enum _BuyBitcoinRequest {
     Moonpay {
-        locked_amount_sat: Option<u64>,
+        delivery: Option<MoonpayDelivery>,
         redirect_url: Option<String>,
     },
     CashApp {
@@ -2053,9 +2053,21 @@ pub enum _BuyBitcoinRequest {
     },
 }
 
+#[frb(mirror(MoonpayDelivery))]
+pub enum _MoonpayDelivery {
+    Bitcoin {
+        amount_sat: Option<u64>,
+    },
+    CrossChain {
+        amount: u128,
+        fee_mode: Option<CrossChainFeeMode>,
+    },
+}
+
 #[frb(mirror(BuyBitcoinResponse))]
 pub struct _BuyBitcoinResponse {
     pub url: String,
+    pub cross_chain_info: Option<CrossChainReceiveInfo>,
 }
 
 #[frb(mirror(RefundPendingConversionsResponse))]

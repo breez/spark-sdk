@@ -1,4 +1,5 @@
 mod api;
+mod buy;
 mod contacts;
 mod deposits;
 pub(crate) mod exit_chain_downloader;

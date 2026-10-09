@@ -1,14 +1,15 @@
+import BigNumber
 import BreezSdkSpark
 
 func buyBitcoin(sdk: BreezSdk) async throws {
     // ANCHOR: buy-bitcoin
-    // Optionally, lock the purchase to a specific amount
-    let optionalLockedAmountSat: UInt64 = 100_000
+    // Optionally, prefill the purchase amount
+    let optionalAmountSat: UInt64? = 100_000
     // Optionally, set a redirect URL for after the purchase is completed
-    let optionalRedirectUrl = "https://example.com/purchase-complete"
+    let optionalRedirectUrl: String? = "https://example.com/purchase-complete"
 
     let request = BuyBitcoinRequest.moonpay(
-        lockedAmountSat: optionalLockedAmountSat,
+        delivery: .bitcoin(amountSat: optionalAmountSat),
         redirectUrl: optionalRedirectUrl
     )
 
@@ -16,6 +17,31 @@ func buyBitcoin(sdk: BreezSdk) async throws {
     print("Open this URL in a browser to complete the purchase:")
     print("\(response.url)")
     // ANCHOR_END: buy-bitcoin
+}
+
+func buyBitcoinViaCrossChain(sdk: BreezSdk) async throws {
+    // ANCHOR: buy-bitcoin-cross-chain
+    // USD amount to receive, in 6-decimal base units ($50)
+    let amount = BInt(50_000_000)
+
+    let request = BuyBitcoinRequest.moonpay(
+        delivery: .crossChain(amount: amount, feeMode: nil),
+        redirectUrl: nil
+    )
+
+    let response = try await sdk.buyBitcoin(request: request)
+    print("Open this URL in a browser to complete the purchase:")
+    print("\(response.url)")
+
+    if let info = response.crossChainInfo {
+        print("USDC to buy: \(info.depositAmount)")
+        print(
+            "Expected to receive: \(info.expectedReceivedAmount) "
+                + "\(info.destinationAsset)"
+        )
+        print("Conversion fee: \(info.serviceFeeAmount)")
+    }
+    // ANCHOR_END: buy-bitcoin-cross-chain
 }
 
 func buyBitcoinViaCashapp(sdk: BreezSdk) async throws {

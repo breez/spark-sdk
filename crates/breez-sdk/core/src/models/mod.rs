@@ -1522,11 +1522,11 @@ pub struct ListUnclaimedDepositsResponse {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum BuyBitcoinRequest {
-    /// `MoonPay`: Fiat-to-Bitcoin via credit card, Apple Pay, etc.
-    /// Uses an on-chain deposit address.
+    /// `MoonPay`: Fiat purchase via credit card, Apple Pay, etc.
     Moonpay {
-        /// Lock the purchase to a specific amount in satoshis.
-        locked_amount_sat: Option<u64>,
+        /// How `MoonPay` delivers the purchase. Defaults to Bitcoin with no
+        /// amount.
+        delivery: Option<MoonpayDelivery>,
         /// Custom redirect URL after purchase completion.
         redirect_url: Option<String>,
     },
@@ -1547,9 +1547,36 @@ pub enum BuyBitcoinRequest {
 impl Default for BuyBitcoinRequest {
     fn default() -> Self {
         Self::Moonpay {
-            locked_amount_sat: None,
+            delivery: None,
             redirect_url: None,
         }
+    }
+}
+
+/// How a `MoonPay` purchase is delivered.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum MoonpayDelivery {
+    /// Bitcoin to an on-chain deposit address.
+    Bitcoin {
+        /// Amount in satoshis to prefill the checkout with.
+        amount_sat: Option<u64>,
+    },
+    /// USDC on Solana, converted on arrival into the active stable balance
+    /// token if set, otherwise Bitcoin. Requires `cross_chain_config`.
+    CrossChain {
+        /// USD amount to prefill the checkout with, in 6-decimal base units
+        /// (`1_000_000` is $1).
+        amount: u128,
+        /// Whether the conversion fee is added on top of `amount`
+        /// (`FeesExcluded`, the default) or deducted from it (`FeesIncluded`).
+        fee_mode: Option<crate::cross_chain::CrossChainFeeMode>,
+    },
+}
+
+impl Default for MoonpayDelivery {
+    fn default() -> Self {
+        Self::Bitcoin { amount_sat: None }
     }
 }
 
@@ -1559,6 +1586,8 @@ impl Default for BuyBitcoinRequest {
 pub struct BuyBitcoinResponse {
     /// The URL to open in a browser to complete the purchase
     pub url: String,
+    /// The conversion quote, populated only for cross-chain delivery.
+    pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 
 /// Response from refunding pending conversions.

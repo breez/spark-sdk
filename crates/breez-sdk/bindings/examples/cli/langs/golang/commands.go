@@ -1134,7 +1134,8 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	default:
 		moonpayReq := breez_sdk_spark.BuyBitcoinRequestMoonpay{}
 		if *amountSat > 0 {
-			moonpayReq.LockedAmountSat = amountSat
+			var delivery breez_sdk_spark.MoonpayDelivery = breez_sdk_spark.MoonpayDeliveryBitcoin{AmountSat: amountSat}
+			moonpayReq.Delivery = &delivery
 		}
 		if *redirectUrl != "" {
 			moonpayReq.RedirectUrl = redirectUrl

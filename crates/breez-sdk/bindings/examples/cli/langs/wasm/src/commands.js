@@ -749,7 +749,11 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
         }
         request = { type: 'cashApp', amountSats: options.amountSat }
       } else {
-        request = { type: 'moonpay', lockedAmountSat: options.amountSat, redirectUrl: options.redirectUrl }
+        request = {
+          type: 'moonpay',
+          delivery: { type: 'bitcoin', amountSat: options.amountSat },
+          redirectUrl: options.redirectUrl
+        }
       }
       const value = await sdk.buyBitcoin(request)
       console.log('Open this URL in a browser to complete the purchase:')

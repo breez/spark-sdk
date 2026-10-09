@@ -1180,7 +1180,7 @@ public static class Commands
                 break;
             default:
                 request = new BuyBitcoinRequest.Moonpay(
-                    lockedAmountSat: ParseOptionalUlong(amountSatStr),
+                    delivery: new MoonpayDelivery.Bitcoin(amountSat: ParseOptionalUlong(amountSatStr)),
                     redirectUrl: redirectUrl
                 );
                 break;

@@ -31,6 +31,7 @@ from breez_sdk_spark import (
     LnurlPayRequest,
     LnurlWithdrawRequest,
     MaxFee,
+    MoonpayDelivery,
     OnchainConfirmationSpeed,
     PaymentDetailsFilter,
     PaymentRequest,
@@ -820,7 +821,7 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
         request = BuyBitcoinRequest.CASH_APP(amount_sats=args.amount_sat)
     else:
         request = BuyBitcoinRequest.MOONPAY(
-            locked_amount_sat=args.amount_sat,
+            delivery=MoonpayDelivery.BITCOIN(amount_sat=args.amount_sat),
             redirect_url=args.redirect_url,
         )
     result = await sdk.buy_bitcoin(request=request)
