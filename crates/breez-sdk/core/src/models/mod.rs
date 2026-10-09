@@ -1678,9 +1678,12 @@ pub struct GetInfoResponse {
     /// The balances of the tokens in the wallet keyed by the token identifier
     pub token_balances: HashMap<String, TokenBalance>,
     /// Funds that left `balance_sats` and wait to be recovered on-chain with
-    /// `recover_funds`. They stay in this total until their recovery confirms,
-    /// and include any too small to be worth recovering at the fee rate you
-    /// choose.
+    /// `recover_funds`. The SDK on this device takes them out of this total at
+    /// the next sync after it has seen their recovery in a block. It looks for
+    /// that in `prepare_recover_funds`, `recover_funds` and
+    /// `check_recover_funds`, and during syncs at most once per leaf. The
+    /// total includes funds too small to be worth recovering at the fee rate
+    /// you choose.
     pub recoverable_funds_sats: u64,
 }
 

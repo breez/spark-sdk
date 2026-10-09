@@ -193,7 +193,7 @@ Each {{#name RecoveryTransaction}} in {{#name transactions}} carries:
 
 {{#name transactions}} is the complete, signed set in valid broadcast order, and it is yours to send to the network over time. Broadcast each transaction whose {{#name status}} is {{#enum ExitTransactionStatus::Ready}}, and leave the rest until a later {{#name check_recover_funds}} reports them ready. Because of the timelocks in the tree, a unilateral exit can span several days.
 
-A cooperative recovery is ready as soon as it is returned, and its funds stay in {{#name recoverable_funds_sats}} until it confirms.
+A cooperative recovery is ready as soon as it is returned. Its funds stay in {{#name recoverable_funds_sats}} until the SDK on this device has found the recovery in a block, as [Recoverable funds](#recoverable-funds) describes. The SDK looks for that in {{#name prepare_recover_funds}}, {{#name recover_funds}} and {{#name check_recover_funds}}, and during syncs at most once per leaf. Another device keeps the funds in its own total until the SDK there has found the recovery.
 
 <div class="warning">
 <h4>A step left waiting can be sent by the operators</h4>
