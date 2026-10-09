@@ -3415,10 +3415,6 @@ pub enum RecoveryRedoReason {
     /// refund, a fee bump from elsewhere, or funding spent on something else
     /// all land here.
     OnChainStateDiverged,
-    /// The SDK could not read the recovery, for example one that an earlier SDK
-    /// version stored. The returned recovery is empty, so keep the one you
-    /// stored: it names the leaves and the funding inputs.
-    UnreadableRecovery,
 }
 
 #[cfg(test)]

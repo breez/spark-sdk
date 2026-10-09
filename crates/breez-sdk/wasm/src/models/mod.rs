@@ -1126,33 +1126,6 @@ pub enum RecoveryVerdict {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryRedoReason)]
 pub enum RecoveryRedoReason {
     OnChainStateDiverged,
-    UnreadableRecovery,
-}
-
-impl CheckRecoverFundsResponse {
-    /// The answer to a recovery that does not parse, such as one an earlier
-    /// version stored.
-    pub(crate) fn unreadable() -> Self {
-        Self {
-            recovery: RecoverFundsResponse {
-                recoverable_value_sats: 0,
-                total_fee_sats: 0,
-                cooperative_fee_sats: 0,
-                cpfp_fee_sats: 0,
-                fanout_fee_sats: 0,
-                sweep_fee_sats: 0,
-                leaves: Vec::new(),
-                failed: Vec::new(),
-                transactions: Vec::new(),
-                funding_inputs: Vec::new(),
-                fee_rate_sat_per_vbyte: 0,
-                destination: String::new(),
-            },
-            verdict: RecoveryVerdict::Redo {
-                reason: RecoveryRedoReason::UnreadableRecovery,
-            },
-        }
-    }
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]
