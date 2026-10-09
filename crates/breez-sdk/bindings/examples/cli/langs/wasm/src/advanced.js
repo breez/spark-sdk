@@ -115,6 +115,29 @@ function printRecovery(response) {
   }
 }
 
+function printSkipped(skipped) {
+  for (const leaf of skipped) {
+    let reason
+    switch (leaf.reason.type) {
+      case 'feeExceedsValue':
+        reason = 'recovering it costs too much at this fee rate'
+        break
+      case 'fundsNotFound':
+        reason = 'its funds were not found on-chain'
+        break
+      case 'unverified':
+        reason = 'its funds could not be looked up'
+        break
+      case 'notRecoverable':
+        reason = leaf.reason.message
+        break
+      default:
+        reason = JSON.stringify(leaf.reason)
+    }
+    console.log(`Left out: leaf ${leaf.leafId} (${leaf.valueSats} sats): ${reason}`)
+  }
+}
+
 function cooperativeRecoveryErrorMessage(error) {
   switch (error.type) {
     case 'replacementFeeTooLow':
@@ -214,10 +237,8 @@ function registerAdvancedCommands(program, getSdk, rl) {
 async function recoverFunds(rl, sdk, request, fundingKind, outputFile) {
   let prepared = await sdk.prepareRecoverFunds(request)
   if (prepared.leaves.length === 0) {
-    console.log(
-      'Nothing to recover: each selected leaf is finished, not worth recovering at this fee ' +
-      'rate, or its funds were not found.'
-    )
+    console.log('Nothing to recover.')
+    printSkipped(prepared.skipped)
     return
   }
   printQuote(prepared)
@@ -281,6 +302,7 @@ function printQuote(prepared) {
     `${prepared.leaves.length - cooperative} unilateral: ` +
     `recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees`
   )
+  printSkipped(prepared.skipped)
 }
 
 async function checkRecoverFunds(sdk, inputFile, outputFile) {

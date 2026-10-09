@@ -198,10 +198,8 @@ Future<void> _recoverFunds(
 ) async {
   var prepared = await sdk.prepareRecoverFunds(request: request);
   if (prepared.leaves.isEmpty) {
-    print(
-      'Nothing to recover: each selected leaf is finished, not worth recovering at this fee rate, '
-      'or its funds were not found.',
-    );
+    print('Nothing to recover.');
+    _printSkipped(prepared.skipped);
     return;
   }
   _printQuote(prepared);
@@ -275,6 +273,26 @@ void _printQuote(PrepareRecoverFundsResponse prepared) {
     '${prepared.leaves.length - cooperative} unilateral: '
     'recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees',
   );
+  _printSkipped(prepared.skipped);
+}
+
+void _printSkipped(List<SkippedLeaf> skipped) {
+  for (final leaf in skipped) {
+    final String reason;
+    final r = leaf.reason;
+    if (r is SkippedLeafReason_FeeExceedsValue) {
+      reason = 'recovering it costs too much at this fee rate';
+    } else if (r is SkippedLeafReason_FundsNotFound) {
+      reason = 'its funds were not found on-chain';
+    } else if (r is SkippedLeafReason_Unverified) {
+      reason = 'its funds could not be looked up';
+    } else if (r is SkippedLeafReason_NotRecoverable) {
+      reason = r.message;
+    } else {
+      reason = '${leaf.reason}';
+    }
+    print('Left out: leaf ${leaf.leafId} (${leaf.valueSats} sats): $reason');
+  }
 }
 
 ExitLeafSelection _recoverySelection(bool all, List<String> leafIds) {

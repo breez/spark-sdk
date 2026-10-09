@@ -207,8 +207,8 @@ func recoverFunds(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, request 
 		return err
 	}
 	if len(prepared.Leaves) == 0 {
-		fmt.Println("Nothing to recover: each selected leaf is finished, not worth recovering " +
-			"at this fee rate, or its funds were not found.")
+		fmt.Println("Nothing to recover.")
+		printSkipped(prepared.Skipped)
 		return nil
 	}
 	printQuote(prepared)
@@ -305,6 +305,27 @@ func printQuote(prepared breez_sdk_spark.PrepareRecoverFundsResponse) {
 	fmt.Printf("%d leaf(s), %d cooperative and %d unilateral: recovering %d sats for %d sats in fees\n",
 		len(prepared.Leaves), cooperative, len(prepared.Leaves)-cooperative,
 		prepared.RecoverableValueSats, prepared.TotalFeeSats)
+	printSkipped(prepared.Skipped)
+}
+
+func printSkipped(skipped []breez_sdk_spark.SkippedLeaf) {
+	for _, leaf := range skipped {
+		var reason string
+		switch r := leaf.Reason.(type) {
+		case breez_sdk_spark.SkippedLeafReasonFeeExceedsValue:
+			reason = "recovering it costs too much at this fee rate"
+		case breez_sdk_spark.SkippedLeafReasonFundsNotFound:
+			reason = "its funds were not found on-chain"
+		case breez_sdk_spark.SkippedLeafReasonUnverified:
+			reason = "its funds could not be looked up"
+		case breez_sdk_spark.SkippedLeafReasonNotRecoverable:
+			reason = r.Message
+		default:
+			reason = fmt.Sprintf("%v", leaf.Reason)
+		}
+		fmt.Printf("Left out: leaf %s (%d sats): %s\n",
+			leaf.LeafId, leaf.ValueSats, reason)
+	}
 }
 
 func recoverySelection(all bool, leafIDs []string) breez_sdk_spark.ExitLeafSelection {

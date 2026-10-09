@@ -19,6 +19,7 @@ from breez_sdk_spark import (
     RecoveryTransaction,
     RecoveryTxKind,
     RecoveryVerdict,
+    SkippedLeafReason,
     single_key_cpfp_signer,
 )
 
@@ -146,6 +147,22 @@ def _recovery_selection(all_leaves, leaf_ids):
     return ExitLeafSelection.SPECIFIC(leaf_ids=leaf_ids)
 
 
+def _print_skipped(skipped):
+    for leaf in skipped:
+        reason = leaf.reason
+        if isinstance(reason, SkippedLeafReason.FEE_EXCEEDS_VALUE):
+            text = "recovering it costs too much at this fee rate"
+        elif isinstance(reason, SkippedLeafReason.FUNDS_NOT_FOUND):
+            text = "its funds were not found on-chain"
+        elif isinstance(reason, SkippedLeafReason.UNVERIFIED):
+            text = "its funds could not be looked up"
+        elif isinstance(reason, SkippedLeafReason.NOT_RECOVERABLE):
+            text = reason.message
+        else:
+            text = str(reason)
+        print(f"Left out: leaf {leaf.leaf_id} ({leaf.value_sats} sats): {text}")
+
+
 def _print_quote(prepared):
     print_value(prepared)
     cooperative = sum(1 for leaf in prepared.leaves if leaf.method == RecoveryMethod.COOPERATIVE)
@@ -154,6 +171,7 @@ def _print_quote(prepared):
         f"{len(prepared.leaves) - cooperative} unilateral: "
         f"recovering {prepared.recoverable_value_sats} sats for {prepared.total_fee_sats} sats in fees"
     )
+    _print_skipped(prepared.skipped)
 
 
 def _cooperative_recovery_error_text(error):
@@ -293,10 +311,8 @@ def _redo_command(recovery):
 async def _recover_funds(sdk, session, request, funding_kind, output_file):
     prepared = await sdk.prepare_recover_funds(request=request)
     if not prepared.leaves:
-        print(
-            "Nothing to recover: each selected leaf is finished, not worth recovering at this "
-            "fee rate, or its funds were not found."
-        )
+        print("Nothing to recover.")
+        _print_skipped(prepared.skipped)
         return
     _print_quote(prepared)
     if not output_file:

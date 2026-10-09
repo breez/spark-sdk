@@ -128,10 +128,8 @@ private func recoverFunds(
 ) async throws {
     var prepared = try await sdk.prepareRecoverFunds(request: request)
     if prepared.leaves.isEmpty {
-        print(
-            "Nothing to recover: each selected leaf is finished, not worth recovering at this fee " +
-            "rate, or its funds were not found."
-        )
+        print("Nothing to recover.")
+        printSkipped(prepared.skipped)
         return
     }
     printQuote(prepared)
@@ -210,6 +208,24 @@ private func printQuote(_ prepared: PrepareRecoverFundsResponse) {
         "\(prepared.leaves.count - cooperative) unilateral: " +
         "recovering \(prepared.recoverableValueSats) sats for \(prepared.totalFeeSats) sats in fees"
     )
+    printSkipped(prepared.skipped)
+}
+
+private func printSkipped(_ skipped: [SkippedLeaf]) {
+    for leaf in skipped {
+        let reason: String
+        switch leaf.reason {
+        case .feeExceedsValue:
+            reason = "recovering it costs too much at this fee rate"
+        case .fundsNotFound:
+            reason = "its funds were not found on-chain"
+        case .unverified:
+            reason = "its funds could not be looked up"
+        case let .notRecoverable(message):
+            reason = message
+        }
+        print("Left out: leaf \(leaf.leafId) (\(leaf.valueSats) sats): \(reason)")
+    }
 }
 
 private func handleCheckRecoverFunds(_ sdk: BreezSdk, _ args: [String]) async throws {

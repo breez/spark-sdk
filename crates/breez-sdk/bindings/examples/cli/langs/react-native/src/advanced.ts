@@ -24,12 +24,15 @@ import {
   RecoveryTransaction,
   RecoveryTxKind,
   RecoveryVerdict_Tags,
+  SkippedLeafReason_Tags,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
   BreezSdkInterface,
   CpfpSigner,
   PrepareRecoverFundsRequest,
   PrepareRecoverFundsResponse,
+  SkippedLeaf,
+  SkippedLeafReason,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 import { formatValue } from './serialization'
@@ -172,12 +175,32 @@ function formatQuote(prepared: PrepareRecoverFundsResponse): string[] {
   const cooperative = prepared.leaves.filter(
     (leaf: RecoverFundsLeaf) => leaf.method === RecoveryMethod.Cooperative
   ).length
-  return [
+  const lines = [
     formatValue(prepared),
     `${prepared.leaves.length} leaf(s), ${cooperative} cooperative and ` +
     `${prepared.leaves.length - cooperative} unilateral: ` +
     `recovering ${prepared.recoverableValueSats} sats for ${prepared.totalFeeSats} sats in fees`,
   ]
+  lines.push(...formatSkipped(prepared.skipped))
+  return lines
+}
+
+function formatSkipped(skipped: SkippedLeaf[]): string[] {
+  const lines: string[] = []
+  for (const leaf of skipped) {
+    let reason: string
+    if (leaf.reason.tag === SkippedLeafReason_Tags.FeeExceedsValue) {
+      reason = 'recovering it costs too much at this fee rate'
+    } else if (leaf.reason.tag === SkippedLeafReason_Tags.FundsNotFound) {
+      reason = 'its funds were not found on-chain'
+    } else if (leaf.reason.tag === SkippedLeafReason_Tags.Unverified) {
+      reason = 'its funds could not be looked up'
+    } else {
+      reason = (leaf.reason as SkippedLeafReason).inner?.message ?? 'not recoverable'
+    }
+    lines.push(`Left out: leaf ${leaf.leafId} (${leaf.valueSats} sats): ${reason}`)
+  }
+  return lines
 }
 
 // Printed the way the Rust CLI prints it.
@@ -321,10 +344,9 @@ async function handleRecoverFunds(sdk: BreezSdkInterface, args: string[]): Promi
 
   let prepared = await sdk.prepareRecoverFunds(request)
   if (prepared.leaves.length === 0) {
-    return (
-      'Nothing to recover: each selected leaf is finished, not worth recovering at this fee ' +
-      'rate, or its funds were not found.'
-    )
+    const lines = ['Nothing to recover.']
+    lines.push(...formatSkipped(prepared.skipped))
+    return lines.join('\n')
   }
   const lines = formatQuote(prepared)
   if (!outputFile) {
