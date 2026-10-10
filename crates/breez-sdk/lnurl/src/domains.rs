@@ -58,6 +58,17 @@ pub fn group_of(domains: &DomainMap, domain: &str, is_mainnet: bool) -> Option<D
     }
 }
 
+/// The names of the domains in `group`.
+pub fn domains_in<'a>(
+    domains: &'a DomainMap,
+    group: &DomainGroup,
+) -> impl Iterator<Item = &'a str> {
+    domains
+        .iter()
+        .filter(move |(_, domain)| domain.group.as_ref() == Some(group))
+        .map(|(name, _)| name.as_str())
+}
+
 /// Load the allowed domains from the database and start a background task that
 /// periodically refreshes them. Returns the shared handle that should be stored
 /// on `State` so request handlers and the partner JWT provider observe updates.
@@ -292,6 +303,19 @@ mod tests {
             group_of(&map, "a.com", true),
             Some(DomainGroup::new("a.com"))
         );
+    }
+
+    #[test]
+    fn a_group_has_the_domain_it_is_named_after_and_the_ones_that_joined() {
+        let map = to_map(vec![
+            cfg("a.com", None),
+            joined("b.com", "a.com"),
+            cfg("c.com", None),
+            joined("d.com", "b.com"),
+        ]);
+        let mut members: Vec<&str> = domains_in(&map, &DomainGroup::new("a.com")).collect();
+        members.sort_unstable();
+        assert_eq!(members, ["a.com", "b.com"]);
     }
 
     #[test]

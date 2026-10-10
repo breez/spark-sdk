@@ -258,10 +258,12 @@ where
         }
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
+        let user = with_shown_description(&state, &domain, user).await;
         let lnurl = format!("lnurlp://{}/lnurlp/{}", domain, user.name);
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, domain),
+            description: Some(user.description),
         }))
     }
 
@@ -387,10 +389,12 @@ where
         }
 
         debug!("transferred '{username}' from {from_pk} to {to_pk}");
+        let description = shown_description(&state, &domain, &group, &username, &description).await;
         let lnurl = format!("lnurlp://{domain}/lnurlp/{username}");
         Ok(Json(TransferLnurlPayResponse {
             lnurl,
             lightning_address: format!("{username}@{domain}"),
+            description: Some(description),
         }))
     }
 
@@ -505,6 +509,7 @@ where
 
         match user {
             Some(user) => {
+                let user = with_shown_description(&state, &domain, user).await;
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", domain, user.name);
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
@@ -597,6 +602,7 @@ where
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
+        let user = with_shown_description(&state, &domain, user).await;
 
         let nostr_pubkey = user_nostr_pubkey(state.nostr_keys.as_ref(), &user.pubkey)?;
         let allows_nostr = nostr_pubkey.is_some().then_some(true);
@@ -638,6 +644,7 @@ where
         let Some(user) = user else {
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
+        let user = with_shown_description(&state, &domain, user).await;
 
         let Some(amount_msat) = params.amount else {
             trace!("missing amount");
@@ -1915,6 +1922,34 @@ fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
         )
     })?;
     Ok(pubkey)
+}
+
+/// The description the server shows on `domain` for the user `name` of `group`,
+/// who stored `description`.
+async fn shown_description<DB>(
+    state: &State<DB>,
+    domain: &str,
+    group: &DomainGroup,
+    name: &str,
+    description: &str,
+) -> String {
+    let domains = state.domains.read().await;
+    crate::user::shown_description(
+        name,
+        description,
+        domain,
+        crate::domains::domains_in(&domains, group),
+    )
+}
+
+/// `user` with the description the server shows on `domain`.
+async fn with_shown_description<DB>(state: &State<DB>, domain: &str, user: User) -> User {
+    let description =
+        shown_description(state, domain, &user.group, &user.name, &user.description).await;
+    User {
+        description,
+        ..user
+    }
 }
 
 fn get_metadata(domain: &str, user: &User) -> String {

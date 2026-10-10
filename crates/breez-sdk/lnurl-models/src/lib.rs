@@ -49,6 +49,10 @@ pub struct UnregisterLnurlPayRequest {
 pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
+    /// The description the server shows for the address. `None` from a server
+    /// that does not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +81,10 @@ pub struct TransferLnurlPayRequest {
 pub struct TransferLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
+    /// The description the server shows for the address. `None` from a server
+    /// that does not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
