@@ -108,10 +108,14 @@ impl BreezSdk {
     /// fiat rail (`prepare_payment_link`), or
     /// [`CrossChainRouteFilter::Receive`] to get routes for receiving into Spark
     /// (optionally filtered by a source contract address).
+    ///
+    /// Fails with a `CrossChainDisabled` error when cross-chain payments are not
+    /// enabled in the config. An empty list means no route matches the filter.
     pub async fn get_cross_chain_routes(
         &self,
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        self.cross_chain_context.ensure_enabled()?;
         let mut all_routes = Vec::new();
         for svc in self.cross_chain_context.values() {
             match svc.get_routes(filter).await {
@@ -468,6 +472,7 @@ impl BreezSdk {
         if !matches!(self.config.network, Network::Mainnet) {
             return Err(SdkError::Generic("Only available on mainnet".to_string()));
         }
+        self.cross_chain_context.ensure_enabled()?;
         validate_amount(Some(request.amount))?;
 
         let PreparePaymentLinkRequest {
