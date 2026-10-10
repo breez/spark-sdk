@@ -58,14 +58,10 @@ fn require_configured_domain(
     Ok(())
 }
 
-/// Names the address as a payer would type it, so the configured domain is
-/// reduced to the authority the server registers the address under rather than
-/// interpolated whole.
-fn default_description(username: &str, configured_domain: &str) -> String {
-    format!(
-        "Pay to {username}@{}",
-        crate::lnurl::signed_domain(configured_domain)
-    )
+/// The description the LNURL server shows for an address. A server that does
+/// not return it shows the description it was sent.
+fn shown_description(returned: Option<String>, sent: Option<String>) -> String {
+    returned.or(sent).unwrap_or_default()
 }
 
 #[macros::instance_span]
@@ -114,20 +110,15 @@ impl BreezSdk {
 
         let username = sanitize_username(&request.username);
 
-        let description = match request.description {
-            Some(description) => description,
-            None => default_description(&username, client.domain()),
-        };
-
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
-            description: description.clone(),
+            description: request.description,
         };
 
         let response = client.register_lightning_address(&params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
-            description,
+            description: shown_description(response.description, params.description),
             lnurl: LnurlInfo::new(response.lnurl),
             username,
         };
@@ -217,14 +208,10 @@ impl BreezSdk {
         }
 
         let username = sanitize_username(&request.authorization.username);
-        let description = match request.description {
-            Some(description) => description,
-            None => default_description(&username, client.domain()),
-        };
 
         let params = crate::lnurl::TransferLightningAddressRequest {
             username: username.clone(),
-            description: description.clone(),
+            description: request.description,
             from_pubkey: normalized_pubkey(&request.authorization.pubkey)?,
             from_signature: request.authorization.signature,
             timestamp: request.authorization.timestamp,
@@ -233,7 +220,7 @@ impl BreezSdk {
         let response = client.transfer_lightning_address(&params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
-            description,
+            description: shown_description(response.description, params.description),
             lnurl: LnurlInfo::new(response.lnurl),
             username,
         };

@@ -1972,3 +1972,27 @@ async fn test_20_a_released_address_is_reclaimable_only_by_its_owner() -> Result
     info!("=== Test test_20_a_released_address_is_reclaimable_only_by_its_owner PASSED ===");
     Ok(())
 }
+
+/// An address registered without a description gets the server's default,
+/// which names the address.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_21_an_address_without_a_description_gets_the_servers_default() -> Result<()> {
+    info!("=== Starting test_21_an_address_without_a_description_gets_the_servers_default ===");
+
+    let bob = setup_bob().await?;
+    let registered = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobdefault".to_string(),
+            description: None,
+        })
+        .await?;
+    assert_eq!(
+        registered.description,
+        format!("Pay to {}", registered.lightning_address)
+    );
+
+    info!("=== Test test_21_an_address_without_a_description_gets_the_servers_default PASSED ===");
+    Ok(())
+}
