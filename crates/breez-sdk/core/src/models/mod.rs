@@ -1245,7 +1245,8 @@ impl Config {
 ///
 /// `Rate` and `NetworkRecommended` can add a share of the deposit amount,
 /// `proportional_ppm` in parts per million (100 ppm is 0.01%), to allow for a
-/// provider fee that grows with the deposit. Unset adds nothing.
+/// provider fee that grows with the deposit. It applies to every claim, early
+/// ones included. Unset adds nothing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum MaxFee {

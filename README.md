@@ -31,7 +31,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 <td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/stable_balance.html"><b>Stable Balance</b></a><br>Users can hold their balance in USD to avoid BTC price volatility.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/onchain_claims.html#instant-expedited-claims"><b>Instant Deposits</b></a><br>Claim on-chain deposits in seconds, no confirmations needed.</td>
+<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/onchain_claims.html#how-deposits-are-claimed"><b>Instant Deposits</b></a><br>Claim on-chain deposits in seconds, no confirmations needed.</td>
 <td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/onchain_claims.html"><b>Automatic Claims</b></a><br>On-chain deposits are claimed automatically within the fee limits you set.</td>
 </tr>
 <tr>
