@@ -4,7 +4,8 @@
 set -eu
 
 : "${SPARK_LOCAL_DIR:?}" "${LOCAL_DIR:?}" "${SO_CONFIG:?}" "${SPARK_OPERATOR_INDEX:?}"
-: "${SPARK_OPERATOR_KEY:?}" "${OPERATOR_PORT:?}" "${POSTGRES_PORT:?}"
+: "${SPARK_OPERATOR_KEY:?}" "${OPERATOR_PORT:?}" "${OPERATOR_HTTP_PORT:?}"
+: "${OPERATOR_INTERNAL_PORT:?}" "${OPERATOR_METRICS_PORT:?}" "${POSTGRES_PORT:?}"
 : "${BITCOIND_RPC_PORT:?}" "${BITCOIND_ZMQ_PORT:?}"
 : "${DKG_MIN_AVAILABLE_KEYS:?}" "${DKG_BATCH_SIZE:?}"
 
@@ -41,7 +42,10 @@ operator \
   -operators "$LOCAL_DIR/operators.json" \
   -threshold 2 \
   -signer "unix://$socket" \
-  -port "$OPERATOR_PORT" \
+  -grpc-port "$OPERATOR_PORT" \
+  -http-port "$OPERATOR_HTTP_PORT" \
+  -internal-grpc-port "$OPERATOR_INTERNAL_PORT" \
+  -metrics-port "$OPERATOR_METRICS_PORT" \
   -database "postgresql://postgres:postgres@127.0.0.1:$POSTGRES_PORT/sparkoperator_$index?sslmode=disable" \
   -run-dir "$dir" \
   -local true

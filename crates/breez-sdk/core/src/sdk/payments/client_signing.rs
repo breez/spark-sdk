@@ -1,18 +1,22 @@
+use bitcoin::secp256k1::schnorr;
 use spark_wallet::{
-    CoopExitFeeQuote, ExitSpeed, PreparedTokenPackage, SendPackagePreparation, SparkAddress,
-    TokenRecipient,
+    CoopExitFeeQuote, ExitSpeed, PreparedTokenPackage, PreparedTokenPull, SendPackagePreparation,
+    SparkAddress, TokenRecipient,
 };
 
 use crate::{
-    BitcoinAddressDetails, FeePolicy, SendOnchainFeeQuote,
+    BitcoinAddressDetails, FeePolicy, Network, SendOnchainFeeQuote,
     error::SdkError,
     models::{
-        BuildTransferPackageOptions, PrepareSendBatchResponse, PrepareSendPaymentResponse,
-        SendPaymentMethod, SignedTransferPackage, TransferSignature, TransferTarget,
-        UnsignedTransferPackage,
+        BuildTransferPackageOptions, BuildUnsignedPullPackageRequest, PrepareSendBatchResponse,
+        PrepareSendPaymentResponse, PullPaymentResponse, SendPaymentMethod, SignedTransferPackage,
+        TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
     sdk::payments::send,
+    sdk::token_allowances::{
+        address_of, decode_prepare_response, decode_pull_context, describes_pull, pull_receivers,
+    },
     signer::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
         ExternalTokenTransactionKind,
@@ -404,4 +408,228 @@ pub(in crate::sdk::payments) async fn submit_swap(
         )
         .await?;
     Ok(())
+}
+
+pub(in crate::sdk) fn build_unsigned_pull_package(
+    request: &BuildUnsignedPullPackageRequest,
+    network: Network,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    let prepared = decode_prepare_response(&request.prepare_response, network)?;
+    let digest = prepared
+        .spend_digest()
+        .map_err(|e| SdkError::InvalidInput(e.to_string()))?
+        .to_vec();
+    Ok(UnsignedTransferPackage::TokenPull {
+        prepare_token_transaction: ExternalPrepareTokenTransactionRequest {
+            kind: ExternalTokenTransactionKind::AllowanceSpend,
+            digest,
+        },
+        pull_context: request.prepare_response.pull_context.clone(),
+        payer_address: address_of(prepared.payer_public_key, network)?,
+        token_identifier: prepared.token_identifier.clone(),
+        receivers: pull_receivers(&prepared, network)?,
+        amount: prepared.total(),
+        expiry_time: prepared.expiry_time(),
+    })
+}
+
+fn decode_signed_pull_package(
+    signed_package: &SignedTransferPackage,
+    network: Network,
+) -> Result<(PreparedTokenPull, schnorr::Signature), SdkError> {
+    let (
+        UnsignedTransferPackage::TokenPull {
+            pull_context,
+            payer_address,
+            token_identifier,
+            receivers,
+            amount,
+            expiry_time,
+            ..
+        },
+        TransferSignature::Token { signed },
+    ) = (&signed_package.unsigned, &signed_package.signature)
+    else {
+        return Err(SdkError::InvalidInput(
+            "publish_signed_pull_package needs a signed TokenPull package".to_string(),
+        ));
+    };
+    let prepared = decode_pull_context(pull_context)?;
+    if *expiry_time != prepared.expiry_time()
+        || !describes_pull(
+            &prepared,
+            network,
+            payer_address,
+            token_identifier,
+            receivers,
+            *amount,
+        )
+    {
+        return Err(SdkError::InvalidInput(
+            "The pull package doesn't match its pull context".to_string(),
+        ));
+    }
+    Ok((prepared, signed.to_prepared_token_transaction()?.signature))
+}
+
+pub(in crate::sdk) async fn publish_signed_pull_package(
+    sdk: &BreezSdk,
+    signed_package: &SignedTransferPackage,
+) -> Result<PullPaymentResponse, SdkError> {
+    let (prepared, signature) = decode_signed_pull_package(signed_package, sdk.config.network)?;
+    let transaction = sdk
+        .spark_wallet
+        .broadcast_token_pull(&prepared, signature)
+        .await?;
+    Ok(sdk.complete_pull(transaction).await)
+}
+
+#[cfg(test)]
+mod pull_package_tests {
+    use crate::{
+        BuildUnsignedPullPackageRequest, Network, PullReceiver, SignedTransferPackage,
+        TransferSignature, UnsignedTransferPackage,
+        error::SdkError,
+        sdk::token_allowances::{
+            address_of, prepare_response_for_tests,
+            tests::{other_address, sample_pull},
+        },
+        signer::{
+            ExternalPreparedTokenTransaction, ExternalTokenTransactionKind, SchnorrSignatureBytes,
+        },
+    };
+
+    use super::{build_unsigned_pull_package, decode_signed_pull_package};
+
+    type ReviewFieldsEdit =
+        fn(&mut String, &mut String, &mut Vec<PullReceiver>, &mut u128, &mut u64);
+
+    fn build(
+        request: &BuildUnsignedPullPackageRequest,
+    ) -> Result<UnsignedTransferPackage, SdkError> {
+        build_unsigned_pull_package(request, Network::Regtest)
+    }
+
+    fn signed_package() -> SignedTransferPackage {
+        let prepare_response = prepare_response_for_tests(&sample_pull()).unwrap();
+        SignedTransferPackage {
+            unsigned: build(&BuildUnsignedPullPackageRequest { prepare_response }).unwrap(),
+            signature: TransferSignature::Token {
+                signed: ExternalPreparedTokenTransaction {
+                    signature: SchnorrSignatureBytes { bytes: vec![1; 64] },
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn pull_package_shows_the_prepared_pull() {
+        let pull = sample_pull();
+        let UnsignedTransferPackage::TokenPull {
+            payer_address,
+            token_identifier,
+            receivers,
+            amount,
+            expiry_time,
+            ..
+        } = build(&BuildUnsignedPullPackageRequest {
+            prepare_response: prepare_response_for_tests(&pull).unwrap(),
+        })
+        .unwrap()
+        else {
+            panic!("expected a TokenPull package");
+        };
+        let address = |key| address_of(key, Network::Regtest).unwrap();
+        assert_eq!(payer_address, address(pull.payer_public_key));
+        assert_eq!(token_identifier, pull.token_identifier);
+        assert_eq!(
+            receivers,
+            vec![PullReceiver {
+                amount: 42,
+                receiver_address: Some(address(pull.receivers[0].receiver_public_key)),
+            }]
+        );
+        assert_eq!(amount, 42);
+        assert_eq!(expiry_time, pull.expiry_time());
+    }
+
+    #[test]
+    fn building_refuses_an_edited_prepare_response() {
+        let mut prepare_response = prepare_response_for_tests(&sample_pull()).unwrap();
+        prepare_response.amount = 1;
+        assert!(matches!(
+            build(&BuildUnsignedPullPackageRequest { prepare_response }),
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn publishing_accepts_the_built_package() {
+        let (prepared, _) =
+            decode_signed_pull_package(&signed_package(), Network::Regtest).unwrap();
+        assert_eq!(prepared.total(), 42);
+    }
+
+    #[test]
+    fn publishing_refuses_a_package_edited_after_build() {
+        let edits: [ReviewFieldsEdit; 5] = [
+            |payer, _, _, _, _| *payer = other_address(),
+            |_, token, _, _, _| *token = "btknrt1other".to_string(),
+            |_, _, receivers, _, _| {
+                receivers[0].receiver_address = Some(other_address());
+            },
+            |_, _, _, amount, _| *amount = 1,
+            |_, _, _, _, expiry_time| *expiry_time += 1,
+        ];
+        for edit in edits {
+            let mut package = signed_package();
+            let UnsignedTransferPackage::TokenPull {
+                payer_address,
+                token_identifier,
+                receivers,
+                amount,
+                expiry_time,
+                ..
+            } = &mut package.unsigned
+            else {
+                panic!("expected a TokenPull package");
+            };
+            edit(
+                payer_address,
+                token_identifier,
+                receivers,
+                amount,
+                expiry_time,
+            );
+            assert!(matches!(
+                decode_signed_pull_package(&package, Network::Regtest),
+                Err(SdkError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn pull_package_asks_for_the_spend_digest() {
+        let pull = sample_pull();
+        let prepare_response =
+            crate::sdk::token_allowances::prepare_response_for_tests(&pull).unwrap();
+        let package = build(&BuildUnsignedPullPackageRequest { prepare_response }).unwrap();
+        let UnsignedTransferPackage::TokenPull {
+            prepare_token_transaction,
+            amount,
+            ..
+        } = package
+        else {
+            panic!("expected a TokenPull package");
+        };
+        assert!(matches!(
+            prepare_token_transaction.kind,
+            ExternalTokenTransactionKind::AllowanceSpend
+        ));
+        assert_eq!(
+            prepare_token_transaction.digest,
+            pull.spend_digest().unwrap().to_vec()
+        );
+        assert_eq!(amount, 42);
+    }
 }

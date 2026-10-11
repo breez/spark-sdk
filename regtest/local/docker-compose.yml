@@ -5,7 +5,8 @@
 # the background. Add `--build` after changing the daemon or the operator pin.
 #
 # The images are this environment's own: the integration tests build their own
-# from the same dockerfiles, under tags of theirs.
+# from the same dockerfiles, under tags of theirs. The operator's start from a
+# private image, see crates/spark-itest/docker/spark-so-private.dockerfile.
 #
 # Every published port can be set in the environment, for example
 # `BITCOIND_RPC_PORT=18500 docker compose up`.
@@ -37,7 +38,7 @@ x-operator: &operator
   image: spark-local-so:latest
   build:
     context: ../../crates/spark-itest/docker
-    dockerfile: spark-so.dockerfile
+    dockerfile: spark-so-private.dockerfile
   restart: unless-stopped
   volumes:
     - local:/local:ro
@@ -78,7 +79,7 @@ x-migrations: &migrations
   image: spark-local-migrations:latest
   build:
     context: ../../crates/spark-itest/docker
-    dockerfile: migrations.dockerfile
+    dockerfile: migrations-private.dockerfile
   depends_on:
     postgres:
       condition: service_healthy
@@ -90,6 +91,7 @@ services:
     environment:
       <<: *tools-env
       OPERATOR_ADDRESSES: spark-so-0:8535 spark-so-1:8535 spark-so-2:8535
+      OPERATOR_INTERNAL_ADDRESSES: spark-so-0:8537 spark-so-1:8537 spark-so-2:8537
       OPERATOR_PUBLIC_PORTS: ${OPERATOR_0_PORT:-8535} ${OPERATOR_1_PORT:-8536} ${OPERATOR_2_PORT:-8537}
       SSP_PUBLIC_PORT: ${SSP_PORT:-59049}
       SSP_ADDRESS: sspd:59049
@@ -488,3 +490,11 @@ volumes:
   bitcoind:
   postgres:
   electrs:
+
+networks:
+  default:
+    # The operators serve the SSP's API only to 10.x addresses, and docker's
+    # default pools are 172.x and 192.168.x.
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-10.250.0.0/24}

@@ -39,6 +39,9 @@ pub enum _SdkEvent {
         error: String,
         retry_in_secs: Option<u64>,
     },
+    RecoverableFunds {
+        recoverable_funds_sats: u64,
+    },
 }
 
 #[frb(mirror(StableBalanceConversionKind))]

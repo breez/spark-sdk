@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use spark::signer::{DefaultSigner, derive_identity_public_key};
 use spark_itest::fixtures::bitcoind::BitcoindFixture;
+use spark_itest::fixtures::network::ClusterNetwork;
 use spark_itest::fixtures::setup::{FixtureId, SSPD_WALLET_SEED_HEX};
 use spark_itest::fixtures::spark_so::{SparkSoFixture, StateSource};
 use spark_itest::fixtures::sspd::{FULL_POOL_ONCHAIN_SATS, LEAVES_PER_DENOMINATION, SspdFixture};
@@ -44,6 +45,8 @@ async fn capture() -> Result<()> {
     state_snapshot::discard()?;
 
     let fixture_id = FixtureId::new();
+    // Declared first, so it is dropped after the containers on it.
+    let _network = ClusterNetwork::create(&fixture_id)?;
 
     let mut bitcoind = BitcoindFixture::new(&fixture_id).await?;
     bitcoind.initialize().await?;

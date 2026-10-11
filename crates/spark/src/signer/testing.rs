@@ -13,8 +13,9 @@ use super::{
     PrepareTokenTransactionRequest, PrepareTransferRequest, PreparedClaim,
     PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
     PreparedTokenTransaction, PreparedTransfer, SignSparkInvoiceRequest,
-    SignStaticDepositRefundRequest, SignedSparkInvoice, Signer, SignerError, SparkSigner,
-    SparkSignerAdapter, StartStaticDepositRefundRequest, StartedStaticDepositRefund,
+    SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest, SignedSparkInvoice, Signer,
+    SignerError, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
+    StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund, StartedWatchtowerExitRecovery,
     create_test_signer,
 };
 use crate::tree::TreeNodeId;
@@ -138,6 +139,20 @@ impl SparkSigner for RecordingSparkSigner {
         request: SignStaticDepositRefundRequest,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
         self.inner.sign_static_deposit_refund(request).await
+    }
+
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: StartWatchtowerExitRecoveryRequest,
+    ) -> Result<StartedWatchtowerExitRecovery, SignerError> {
+        self.inner.start_watchtower_exit_recovery(request).await
+    }
+
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: SignWatchtowerExitRecoveryRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        self.inner.sign_watchtower_exit_recovery(request).await
     }
 
     async fn prepare_static_deposit_claim(

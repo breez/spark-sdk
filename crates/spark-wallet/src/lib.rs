@@ -6,6 +6,7 @@ mod model;
 mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
+mod watchtower_exit;
 
 pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
@@ -27,8 +28,9 @@ pub use spark::{
         StaticDepositAddress, TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction,
         TokenTransactionStatus, TokenTransferInput, TransferId, TransferObserver,
         TransferObserverError, TransferStatus, TransferTokenOutput, TransferType,
-        UnilateralExitPlan, UnilateralExitSelectedLeaf, Utxo, build_cpfp_child, compute_sweep_fee,
-        csv_timelock, p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
+        UnilateralExitPlan, UnilateralExitSelectedLeaf, UnilateralExitSkipReason,
+        UnilateralExitSkippedLeaf, Utxo, build_cpfp_child, compute_sweep_fee, csv_timelock,
+        p2tr_key_path_input_weight, p2wpkh_input_weight, walk_unilateral_exit_chain,
     },
     session_store::*,
     signer::{
@@ -40,17 +42,21 @@ pub use spark::{
         PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
         PreparedTokenTransaction, PreparedTransfer, SecretShare, SecretSource, SecretToSplit,
         SignFrostRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-        SignedSparkInvoice, Signer, SignerError, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
-        StartStaticDepositRefundRequest, StartedStaticDepositRefund, TokenTransactionKind,
-        TransferLeafInput, VerifiableSecretShare, account_master_key, default_account_number,
-        identity_master_key, identity_public_key,
+        SignWatchtowerExitRecoveryRequest, SignedSparkInvoice, Signer, SignerError,
+        SparkInvoiceKind, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
+        StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund,
+        StartedWatchtowerExitRecovery, TokenTransactionKind, TransferLeafInput,
+        VerifiableSecretShare, account_master_key, default_account_number, identity_master_key,
+        identity_public_key,
     },
     ssp::*,
     token::{
         BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore, MAX_TOKEN_TX_OUTPUTS,
-        PreparedTokenPackage, PreparedTokenReceiverOutput, PreparedTokenTransfer,
-        ReservationPurpose as TokenReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,
+        NewTokenAllowance, PreparedTokenPackage, PreparedTokenPull, PreparedTokenReceiverOutput,
+        PreparedTokenTransfer, PullReceiver, ReservationPurpose as TokenReservationPurpose,
+        ReservationTarget, SelectionStrategy, TokenAllowance, TokenAllowanceFailure,
+        TokenAllowanceQuery, TokenAllowanceRole, TokenAllowanceStatus, TokenMetadata,
+        TokenOutpoint, TokenOutput, TokenOutputServiceError, TokenOutputStore,
         TokenOutputWithPrevOut, TokenOutputs, TokenOutputsPerStatus, TokenOutputsReservation,
         TokenOutputsReservationId, TokensConfig, bech32m_decode_token_id,
         select_token_outputs_from,
@@ -61,8 +67,8 @@ pub use spark::{
         LeavesReservation, LeavesReservationId, OptimizationError, OptimizationOutcome,
         ReservationPurpose, ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts,
         TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, VerifiedLeafKeys,
-        assemble_exit_chains, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
-        verified_leaf_keys_from_leaves,
+        WATCHTOWER_EXITED_STATUSES, assemble_exit_chains, select_leaves_by_minimum_amount,
+        select_leaves_by_target_amounts, verified_leaf_keys_from_leaves,
     },
     utils::frost::aggregate_frost,
     utils::{
@@ -73,6 +79,11 @@ pub use spark::{
 pub use unilateral_exit::*;
 pub use wallet::{ExitContext, SendPackagePreparation, SparkWallet};
 pub use wallet_builder::WalletBuilder;
+pub use watchtower_exit::{
+    UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput, WatchtowerExitScan,
+    assumed_watchtower_exit_output, build_watchtower_exit_recovery, scan_watchtower_exits,
+    watchtower_exit_recovery_payout,
+};
 
 #[cfg(feature = "test-utils")]
 pub use spark::session_store::tests as session_store_tests;

@@ -609,6 +609,34 @@ impl TreeStore for MysqlTreeStore {
         })
     }
 
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if statuses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut params: Vec<Value> = Vec::with_capacity(statuses.len().saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        params.extend(
+            statuses
+                .iter()
+                .map(|status| Value::from(status.to_string())),
+        );
+        let sql = format!(
+            "SELECT data FROM brz_tree_leaves WHERE user_id = ? AND status IN ({})",
+            build_placeholders(statuses.len())
+        );
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let rows: Vec<String> = conn
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        rows.iter()
+            .map(|data| Self::deserialize_node(data))
+            .collect()
+    }
+
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
@@ -2699,6 +2727,12 @@ mod tests {
     async fn test_get_leaves_not_available() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_get_leaves_not_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_with_status() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_with_status(&fixture.store).await;
     }
 
     #[tokio::test]

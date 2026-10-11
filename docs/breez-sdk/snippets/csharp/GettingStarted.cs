@@ -130,6 +130,12 @@ namespace BreezSdkSnippets
                         var retryInSecs = stableBalanceConversionFailedEvent.retryInSecs;
                         break;
 
+                    case SdkEvent.RecoverableFunds recoverableFundsEvent:
+                        // Funds left the balance and wait to be recovered on-chain.
+                        // Quote their recovery with PrepareRecoverFunds.
+                        var recoverableFundsSats = recoverableFundsEvent.recoverableFundsSats;
+                        break;
+
                     default:
                         // Handle any future event types
                         break;

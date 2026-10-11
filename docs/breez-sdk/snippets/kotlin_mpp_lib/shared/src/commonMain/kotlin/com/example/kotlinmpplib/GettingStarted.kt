@@ -118,6 +118,11 @@ class GettingStarted {
                     val conversion = e.conversion
                     val retryInSecs = e.retryInSecs
                 }
+                is SdkEvent.RecoverableFunds -> {
+                    // Funds left the balance and wait to be recovered on-chain.
+                    // Quote their recovery with prepareRecoverFunds.
+                    val recoverableFundsSats = e.recoverableFundsSats
+                }
                 else -> {
                     // Handle any future event types
                 }

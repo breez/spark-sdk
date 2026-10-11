@@ -126,10 +126,13 @@ impl SoAuthHeaderProvider {
         &self,
         force_refresh: bool,
     ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
-        let session = self
-            .get_or_authenticate(force_refresh)
-            .await
-            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        let session = self.get_or_authenticate(force_refresh).await.map_err(|e| {
+            if e.is_unavailable() {
+                HeaderProviderError::Unavailable(e.to_string())
+            } else {
+                HeaderProviderError::Generic(e.to_string())
+            }
+        })?;
         Ok(HashMap::from([(
             "authorization".to_string(),
             session.token,

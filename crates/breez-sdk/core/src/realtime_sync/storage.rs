@@ -636,6 +636,21 @@ impl Storage for SyncedStorage {
             .await
     }
 
+    // Local-only: the SDK does not replicate leaf recoveries. Each device reads
+    // a leaf's on-chain state from the chain service itself.
+    async fn list_leaf_recoveries(
+        &self,
+    ) -> Result<Vec<crate::persist::LeafRecovery>, StorageError> {
+        self.inner.list_leaf_recoveries().await
+    }
+
+    async fn update_leaf_recovery(
+        &self,
+        update: crate::persist::UpdateLeafRecovery,
+    ) -> Result<(), StorageError> {
+        self.inner.update_leaf_recovery(update).await
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<crate::persist::SetLnurlMetadataItem>,

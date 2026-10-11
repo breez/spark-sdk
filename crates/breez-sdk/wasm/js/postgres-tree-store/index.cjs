@@ -476,6 +476,28 @@ class PostgresTreeStore {
   }
 
   /**
+   * Return the leaves, reserved or not, whose status is one of `statuses`.
+   * @param {Array<string>} statuses
+   * @returns {Promise<Array<object>>}
+   */
+  async getLeavesWithStatus(statuses) {
+    try {
+      if (!statuses || statuses.length === 0) return [];
+      const result = await this.pool.query(
+        "SELECT data FROM brz_tree_leaves WHERE user_id = $1 AND status = ANY($2)",
+        [this.identity, statuses]
+      );
+      return result.rows.map((row) => row.data);
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get leaves with status: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Set leaves from a refresh operation.
    * @param {Array} leaves - Available leaves from operators
    * @param {Array} missingLeaves - Leaves missing from some operators

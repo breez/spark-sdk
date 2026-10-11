@@ -38,7 +38,9 @@ pub use cross_chain::{
     CrossChainReceiveInfo, CrossChainRouteFilter, CrossChainRouteLimits, CrossChainRoutePair,
     DeliveryMethod, SparkAsset,
 };
-pub use error::{DepositClaimError, SdkError, SignerError};
+pub use error::{
+    CooperativeRecoveryError, DepositClaimError, SdkError, SignerError, TokenAllowanceErrorReason,
+};
 pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
 };
@@ -46,9 +48,10 @@ pub use issuer::*;
 pub use logger::{DEFAULT_FILTER, parse_log_filter};
 pub use models::*;
 pub use persist::{
-    ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-    StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-    UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
+    ChainTransaction, ConversionFilter, LeafRecovery, PaymentMetadata, SetLnurlMetadataItem,
+    Storage, StorageError, StorageListPaymentsRequest, StoragePaymentDetailsFilter,
+    StoredCrossChainSwap, StoredWatchtowerExitOutput, UpdateDepositPayload, UpdateLeafRecovery,
+    UpdateWatchedAddressPayload, WatchedDepositAddress, WatchtowerExitRecovery,
     backend::{
         PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage, default_session_store,
     },

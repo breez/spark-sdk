@@ -55,6 +55,14 @@ LNURL payments have their own pair of methods, because completing them includes 
 
 {{#tabs client_signing:client-signing-lnurl-pay}}
 
+## Pulls
+
+Pulls from a token allowance have their own pair of methods. Prepare with {{#name prepare_pull_payment}} as in [Token allowances](token_allowances.md), then build with {{#name build_unsigned_pull_package}}, sign the package's {{#name prepare_token_transaction}} on the spender's side, and publish with {{#name publish_signed_pull_package}}. Publishing the same signed package again is the retry, and refreshes a {{#enum PaymentStatus::Pending}} pull. Retry under the same rule as {{#name pull_payment}}: see [Retrying](token_allowances.md#retrying).
+
+The pull must be published before the package's {{#name expiry_time}}, at most 5 minutes after preparing it, so the spender has to approve it within that window.
+
+{{#tabs client_signing:client-signing-pull}}
+
 ## Failures and retries
 
 - Publishing the same signed package twice returns the same result, so it is safe to retry after a lost response or a network error.

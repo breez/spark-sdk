@@ -1,3 +1,4 @@
+use spark::{operator::rpc::is_temporary_code, services::ServiceError};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -75,5 +76,65 @@ impl SparkWalletError {
 impl From<spark::operator::rpc::OperatorRpcError> for SparkWalletError {
     fn from(error: spark::operator::rpc::OperatorRpcError) -> Self {
         SparkWalletError::OperatorRpcError(Box::new(error))
+    }
+}
+
+impl SparkWalletError {
+    pub fn is_operator_unavailable(&self) -> bool {
+        match self {
+            SparkWalletError::OperatorRpcError(error)
+            | SparkWalletError::ServiceError(ServiceError::ServiceConnectionError(error))
+            | SparkWalletError::TreeServiceError(spark::tree::TreeServiceError::RpcError(error)) => {
+                error.is_unavailable()
+            }
+            SparkWalletError::ServiceError(ServiceError::RequestError(status)) => {
+                is_temporary_code(status.code())
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use spark::operator::rpc::OperatorRpcError;
+    use tonic::{Code, Status};
+
+    use super::*;
+
+    fn operator_status(code: Code) -> SparkWalletError {
+        SparkWalletError::ServiceError(ServiceError::ServiceConnectionError(Box::new(
+            OperatorRpcError::Connection(Box::new(Status::new(code, "operator"))),
+        )))
+    }
+
+    #[test]
+    fn unreachable_or_busy_operators_are_unavailable() {
+        for code in [
+            Code::Unavailable,
+            Code::DeadlineExceeded,
+            Code::ResourceExhausted,
+            Code::Aborted,
+        ] {
+            assert!(operator_status(code).is_operator_unavailable(), "{code:?}");
+        }
+        let transport = SparkWalletError::from(OperatorRpcError::Transport("refused".to_string()));
+        assert!(transport.is_operator_unavailable());
+    }
+
+    #[test]
+    fn a_refusal_is_not_unavailability() {
+        for code in [
+            Code::FailedPrecondition,
+            Code::InvalidArgument,
+            Code::NotFound,
+            Code::PermissionDenied,
+            Code::Internal,
+        ] {
+            assert!(!operator_status(code).is_operator_unavailable(), "{code:?}");
+        }
+        assert!(
+            !SparkWalletError::ValidationError("invalid".to_string()).is_operator_unavailable()
+        );
     }
 }

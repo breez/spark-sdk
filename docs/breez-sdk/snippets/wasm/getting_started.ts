@@ -144,6 +144,12 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const retryInSecs = event.retryInSecs
           break
         }
+        case 'recoverableFunds': {
+          // Funds left the balance and wait to be recovered on-chain.
+          // Quote their recovery with prepareRecoverFunds.
+          const recoverableFundsSats = event.recoverableFundsSats
+          break
+        }
         default: {
           // Handle any future event types
           break

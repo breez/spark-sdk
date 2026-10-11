@@ -101,6 +101,10 @@ class SdkEventListener: EventListener {
             // the SDK retries after it.
             let _ = conversion
             let _ = retryInSecs
+        case .recoverableFunds(let recoverableFundsSats):
+            // Funds left the balance and wait to be recovered on-chain.
+            // Quote their recovery with prepareRecoverFunds.
+            let _ = recoverableFundsSats
         default:
             // Handle any future event types
             break

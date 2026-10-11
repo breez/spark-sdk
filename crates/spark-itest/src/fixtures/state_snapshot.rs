@@ -56,7 +56,7 @@ impl SnapshotManifest {
 }
 
 fn pinned_operator_version() -> Result<String> {
-    let dockerfile = manifest_dir().join("docker/spark-so.dockerfile");
+    let dockerfile = manifest_dir().join("docker/spark-so-private.dockerfile");
     let contents = std::fs::read_to_string(&dockerfile)
         .with_context(|| format!("failed to read {}", dockerfile.display()))?;
     contents

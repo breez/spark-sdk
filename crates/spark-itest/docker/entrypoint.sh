@@ -90,7 +90,9 @@ operator \
     -operators "$OPERATORS_JSON" \
     -threshold ${SPARK_THRESHOLD} \
     -signer "unix:///tmp/frost.sock" \
-    -port 8535 \
+    -grpc-port 8535 \
+    -http-port 8536 \
+    -internal-grpc-port 8537 \
     -database "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${DB_NAME}?sslmode=disable" \
     -run-dir "/data" \
     -local true 2>&1 | sed "s/^/[Operator] /" &

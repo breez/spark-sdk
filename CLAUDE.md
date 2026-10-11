@@ -64,6 +64,12 @@ switch first:
 nvm use 22 || nvm install 22  # then re-run the make target
 ```
 
+## Itest Operator
+
+The itests and `regtest/local` run Lightspark's current operator, whose code is not public, from the private image `ghcr.io/breez/spark-operator`. It is built from Breez's private mirror, github.com/breez/spark-breez (see its `breez/README.md`), and `crates/spark-itest/docker/spark-so-private.dockerfile` and `migrations-private.dockerfile` pin it by mirror commit. Building from Lightspark's public code instead, for when they update their public repository again, is in git history.
+
+Never put the private code or an image built from it anywhere public. That includes CI caches and artifacts, which forks can read: CI builds the operator images in every job instead of caching them, and encrypts the itest state snapshot, whose operator dumps hold the private migrations, with the `ITEST_SNAPSHOT_KEY` secret.
+
 ## Local Regtest Environment
 
 `regtest/local/` runs the services the local itests use as a standing
@@ -74,7 +80,7 @@ in `regtest/local/scripts/`, so a change there reaches both. It is documented in
 
 Keep both setups in step when changing:
 
-- **A dockerfile pin** (`ARG VERSION` in `crates/spark-itest/docker/spark-so.dockerfile`
+- **A dockerfile pin** (`ARG VERSION` in `crates/spark-itest/docker/spark-so-private.dockerfile`
   or `ldk-server.dockerfile`). The flake reads the pin itself, but the
   `vendorHash` and `cargoHash` in `regtest/local/nix/packages.nix` move with it:
   build the package, then copy the hash the failure prints.

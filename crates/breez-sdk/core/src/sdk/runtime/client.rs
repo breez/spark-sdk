@@ -120,6 +120,7 @@ impl RuntimeProfile for ClientRuntime {
             identity_pubkey: sdk.spark_wallet.get_identity_public_key().to_string(),
             balance_sats: account_info.balance_sats,
             token_balances: account_info.token_balances,
+            recoverable_funds_sats: sdk.recoverable_funds_sats().await?,
         })
     }
 

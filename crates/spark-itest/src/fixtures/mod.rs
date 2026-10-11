@@ -2,6 +2,7 @@ pub mod bitcoind;
 pub mod keyshares;
 pub mod ldk_server;
 pub mod log;
+pub mod network;
 pub mod setup;
 pub mod spark_so;
 pub mod sspd;

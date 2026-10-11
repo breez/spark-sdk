@@ -1,6 +1,8 @@
 pub(crate) mod adaptors;
 pub mod payment_observer;
 pub use payment_observer::*;
+pub mod token_allowance;
+pub use token_allowance::*;
 
 // Re-export public conversion types from the conversion module
 pub use crate::token_conversion::{
@@ -25,7 +27,7 @@ use crate::{
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
     cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
-    error::DepositClaimError,
+    error::{CooperativeRecoveryError, DepositClaimError},
 };
 
 /// A list of external input parsers that are used by default.
@@ -1708,6 +1710,14 @@ pub struct GetInfoResponse {
     pub balance_sats: u64,
     /// The balances of the tokens in the wallet keyed by the token identifier
     pub token_balances: HashMap<String, TokenBalance>,
+    /// Funds that left `balance_sats` and wait to be recovered on-chain with
+    /// `recover_funds`. The SDK on this device takes them out of this total at
+    /// the next sync after it has seen their recovery in a block. It looks for
+    /// that in `prepare_recover_funds`, `recover_funds` and
+    /// `check_recover_funds`, and during syncs at most once per leaf. The
+    /// total includes funds too small to be worth recovering at the fee rate
+    /// you choose.
+    pub recoverable_funds_sats: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2172,6 +2182,17 @@ pub enum UnsignedTransferPackage {
         /// sending a payment. Publishing it returns `SwapCompleted`: rebuild the
         /// original send from the same prepare response and submit again.
         is_swap: bool,
+    },
+    /// A pull from a token allowance, signed through its `prepare_token_transaction` like a Token package.
+    TokenPull {
+        prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
+        pull_context: Vec<u8>,
+        payer_address: String,
+        token_identifier: String,
+        receivers: Vec<PullReceiver>,
+        amount: u128,
+        /// When the pull stops being publishable, in Unix seconds.
+        expiry_time: u64,
     },
 }
 
@@ -2984,7 +3005,7 @@ pub enum CpfpInput {
     P2wpkh {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     /// A P2TR (taproot, key-path) UTXO. `pubkey` (x-only or compressed, hex) is
@@ -2996,7 +3017,7 @@ pub enum CpfpInput {
     P2tr {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         pubkey: String,
     },
     /// Any witness-program script, signed via a custom `CpfpSigner`. Legacy
@@ -3006,7 +3027,7 @@ pub enum CpfpInput {
     Custom {
         txid: String,
         vout: u32,
-        value: u64,
+        value_sats: u64,
         script_pubkey_hex: String,
         signed_input_weight: u64,
     },
@@ -3031,38 +3052,27 @@ pub enum CpfpFundingKind {
     },
 }
 
-/// Which leaves to exit.
+/// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when it
+/// is worth more than what recovering it costs. That cost leaves out the shared
+/// fan-out fee, so funding several unilateral exits from one UTXO adds
+/// `fanout_fee_sats` on top: compare `recoverable_value_sats` with
+/// `total_fee_sats`, or fund one UTXO per branch to avoid the fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ExitLeafSelection {
-    /// Exit every leaf whose value exceeds its own marginal exit cost (its tree
-    /// and refund CPFP fees plus its sweep input). This per-leaf test does not
-    /// include the shared fan-out fee, so funding many leaves from a single UTXO
-    /// adds `fanout_fee_sat` on top: compare `recoverable_value_sat` with
-    /// `total_fee_sat`, or fund one UTXO per branch to avoid the fan-out. Leaves
-    /// that fail the per-leaf test are skipped.
-    Auto,
-    /// Exit exactly these leaves, regardless of profitability, apart from any
-    /// whose exit already finished.
+    /// Every leaf, including the ones still in the balance. Only for when the
+    /// operators are unreachable or refuse to serve the wallet. Its cooperative
+    /// leaves still need the operators.
+    All,
+    /// The leaves that left the balance and whose recovery has not confirmed.
+    RecoverableOnly,
+    /// Exactly these leaves, whether or not they are worth it. A leaf whose
+    /// recovery finished is left out, and so is a cooperative leaf too small to
+    /// pay its fee, or one whose funds were not found.
     Specific { leaf_ids: Vec<String> },
 }
 
-/// The role of a transaction in the exit path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum UnilateralExitTxKind {
-    /// Splits the caller's funding into one output per branch. Present only
-    /// when the funding couldn't be matched one-to-one to branches.
-    FanOut,
-    /// A tree node transaction (root, intermediate, or leaf node).
-    Node,
-    /// A leaf's refund transaction.
-    Refund,
-    /// The final transaction sweeping all refund outputs to the destination.
-    Sweep,
-}
-
-/// Where a transaction in the exit path stands: on-chain, ready to send, or
+/// Where a transaction of a recovery stands: on-chain, ready to send, or
 /// waiting for something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -3086,58 +3096,12 @@ pub enum ExitTransactionStatus {
     /// read from the chain.
     WaitingForTimelock { spendable_at_height: Option<u32> },
     /// The on-chain status could not be determined (the chain service errored),
-    /// which also leaves what it is waiting for unknown. Broadcasting may fail
-    /// if a conflicting transaction already landed.
+    /// which also leaves what it is waiting for unknown. A cooperative recovery
+    /// has this status when the SDK did not see the output it spends in a
+    /// block, or could not check whether an earlier recovery spent that
+    /// output. Broadcasting may fail if a conflicting transaction already
+    /// landed.
     Unverified,
-}
-
-/// One transaction in the unilateral exit path, with everything needed to
-/// order and broadcast it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitTransaction {
-    pub kind: UnilateralExitTxKind,
-    /// The tree node this transaction belongs to. Unset for the fan-out and the
-    /// sweep.
-    pub node_id: Option<String>,
-    pub txid: String,
-    pub tx_hex: String,
-    /// The signed CPFP child to broadcast alongside `tx_hex` as a package.
-    /// Unset for the fan-out and the sweep (no anchor to bump) and for a
-    /// `Confirmed` step (its CPFP is already on-chain).
-    pub cpfp_tx_hex: Option<String>,
-    /// Relative CSV timelock, in blocks, that must mature on the spent input
-    /// before this transaction can confirm. Unset when there is no timelock.
-    pub csv_timelock_blocks: Option<u32>,
-    /// Txids of other entries in this list that must be confirmed before this
-    /// one can be broadcast.
-    pub depends_on: Vec<String>,
-    /// Whether this transaction is on-chain, can go out now, or is waiting on
-    /// something. Resolved against the chain tip, so it accounts for
-    /// `csv_timelock_blocks` as well as `depends_on`.
-    pub status: ExitTransactionStatus,
-}
-
-/// A leaf selected for exit, with its value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitLeaf {
-    pub leaf_id: String,
-    /// The leaf's value in satoshis.
-    pub value: u64,
-}
-
-/// Request for `prepare_unilateral_exit`, the exit quote.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareUnilateralExitRequest {
-    /// Target fee rate in sat/vByte, applied to every CPFP child, the fan-out,
-    /// and the sweep.
-    pub fee_rate_sat_per_vbyte: u64,
-    pub funding_kind: CpfpFundingKind,
-    /// The Bitcoin address the swept funds are sent to.
-    pub destination: String,
-    pub selection: ExitLeafSelection,
 }
 
 /// How much to fund one branch of the exit to avoid a fan-out.
@@ -3147,13 +3111,13 @@ pub struct PerBranchFunding {
     /// The leaf whose branch this funds.
     pub leaf_id: String,
     /// Fund a UTXO of at least this many satoshis for this branch.
-    pub funding_sat: u64,
+    pub funding_sats: u64,
 }
 
 /// What the chain has already done to an exit's leaves, as
-/// `prepare_unilateral_exit` found it. Pass it back to `unilateral_exit`, which
-/// builds only the steps it does not cover.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `prepare_recover_funds` found it. `recover_funds` builds only the steps it
+/// does not cover.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExitChainState {
     /// Nodes whose transaction is on-chain.
@@ -3212,154 +3176,11 @@ pub enum ExitRefundState {
     OnChain {
         tx_hex: String,
         vout: u32,
-        value_sat: u64,
+        value_sats: u64,
         block_height: Option<u32>,
     },
     /// Spent by a confirmed transaction: the sweep landed.
     Swept,
-}
-
-/// Response from `prepare_unilateral_exit`: which leaves would exit, the exact
-/// fee at the requested rate, and how much to fund.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrepareUnilateralExitResponse {
-    /// The leaves the exit covers. A leaf whose exit already finished is left out,
-    /// even when named: `exit_chain_state` shows its refund swept or its branch
-    /// stopped.
-    pub leaves: Vec<UnilateralExitLeaf>,
-    /// Total value of the selected leaves, in satoshis.
-    pub recoverable_value_sat: u64,
-    /// Total on-chain fee when funding with a single UTXO (fanned out across
-    /// branches), in satoshis. Exact for the given funding kind; nodes the
-    /// operators report on-chain are assumed already paid, so a partially-exited
-    /// tree quotes a lower fee than a fresh one.
-    ///
-    /// The sum of the three components below, which say who pays what:
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
-    /// your funding UTXO, the third off the value being recovered.
-    pub total_fee_sat: u64,
-    /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
-    /// It does not reduce what the exit recovers.
-    pub cpfp_fee_sat: u64,
-    /// The part of `total_fee_sat` paid for the fan-out transaction, funded by
-    /// your UTXO. Funding one UTXO per branch (`per_branch_funding`) avoids it.
-    /// Zero for a single branch (no fan-out).
-    pub fanout_fee_sat: u64,
-    /// The part of `total_fee_sat` the final sweep pays. The sweep takes its fee
-    /// from the value it moves, so this is the one component subtracted from
-    /// what reaches `destination`.
-    pub sweep_fee_sat: u64,
-    /// Fund a single UTXO of at least this many satoshis to exit with a fan-out.
-    /// Above `cpfp_fee_sat + fanout_fee_sat` by design: it carries the sweep fee
-    /// and a per-branch dust allowance as headroom, both of which come back to
-    /// you in the sweep.
-    pub single_utxo_funding_sat: u64,
-    /// To skip the fan-out, fund one UTXO per branch of at least the given
-    /// amount (one entry per selected leaf).
-    pub per_branch_funding: Vec<PerBranchFunding>,
-    /// The fee rate this quote was computed at, in sat/vByte.
-    pub fee_rate_sat_per_vbyte: u64,
-    pub destination: String,
-    /// What the chain has already done to these leaves, read while preparing.
-    /// Pass it back to `unilateral_exit`, which builds only the steps it does
-    /// not already cover.
-    pub exit_chain_state: ExitChainState,
-}
-
-/// Request for `unilateral_exit`: a `prepare_unilateral_exit` quote plus the
-/// funding UTXOs that pay its fees. The signer is passed separately (it is not a
-/// plain data value).
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitRequest {
-    /// The quote returned by `prepare_unilateral_exit`, naming the leaves to exit.
-    pub prepared: PrepareUnilateralExitResponse,
-    /// The funding UTXOs that pay the exit's on-chain fees, meeting the quote's
-    /// `single_utxo_funding_sat` (one UTXO) or `per_branch_funding` (one per branch).
-    pub funding_inputs: Vec<CpfpInput>,
-}
-
-/// Result of `unilateral_exit`: a cost summary plus the complete, signed exit
-/// path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitResponse {
-    /// Total value of the selected leaves, in satoshis.
-    pub recoverable_value_sat: u64,
-    /// The actual total on-chain fee the returned transactions pay at the
-    /// requested rate, in satoshis. A resumed or partially-confirmed exit pays
-    /// less because already-confirmed steps are not rebuilt.
-    ///
-    /// The sum of the three components below, which say who pays what:
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`. The first two come from
-    /// your funding UTXOs, the third off the value being recovered.
-    pub total_fee_sat: u64,
-    /// The part of `total_fee_sat` the CPFP children pay, funded by your UTXOs.
-    /// It does not reduce what the exit recovers.
-    pub cpfp_fee_sat: u64,
-    /// The part of `total_fee_sat` the fan-out pays, funded by your UTXO. Zero
-    /// when this exit needed no fan-out, and when an earlier attempt's fan-out
-    /// had already confirmed.
-    pub fanout_fee_sat: u64,
-    /// The part of `total_fee_sat` the sweep pays, taken from the value it
-    /// moves, so this is the one component subtracted from what reaches the
-    /// destination. Zero while no refund is on-chain yet and the set carries no
-    /// sweep.
-    pub sweep_fee_sat: u64,
-    pub leaves: Vec<UnilateralExitLeaf>,
-    /// The full signed transaction set, in valid topological (broadcast) order
-    /// with shared ancestors appearing once and the sweep last.
-    pub transactions: Vec<UnilateralExitTransaction>,
-    /// The funding UTXOs this exit was built from, as you supplied them. Hand
-    /// them back when you build the exit again and they are followed to whatever
-    /// they have since become, so an outpoint an earlier attempt already spent
-    /// still funds the rest.
-    pub funding_inputs: Vec<CpfpInput>,
-}
-
-/// Request for `check_unilateral_exit`: the exit you kept from a previous
-/// `unilateral_exit`, as you last stored it.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct CheckUnilateralExitRequest {
-    pub exit: UnilateralExitResponse,
-}
-
-/// Result of `check_unilateral_exit`: the same exit, read back against the
-/// chain.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct CheckUnilateralExitResponse {
-    /// The exit with each transaction's status brought up to date. Store it in
-    /// place of the copy you passed in.
-    pub exit: UnilateralExitResponse,
-    pub verdict: UnilateralExitVerdict,
-}
-
-/// What to do with an exit that has been read back against the chain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum UnilateralExitVerdict {
-    /// The exit still holds. Broadcast the transactions whose dependencies are
-    /// confirmed and whose timelocks have matured.
-    Valid,
-    /// Every transaction is confirmed, the sweep included. The funds have
-    /// arrived and there is nothing left to send.
-    Done,
-    /// The exit cannot be finished as it stands. Quote and build it again.
-    Redo { reason: UnilateralExitRedoReason },
-}
-
-/// Why an exit has to be built again.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum UnilateralExitRedoReason {
-    /// The chain no longer matches the exit: something that is not one of its
-    /// own transactions took an outpoint it still needs. A different refund, a
-    /// fee bump from elsewhere, or funding spent on something else all land
-    /// here.
-    OnChainStateDiverged,
 }
 
 /// Result of `export_unilateral_exit_state`: a self-contained copy of the
@@ -3398,6 +3219,255 @@ pub struct ImportUnilateralExitStateResponse {
     /// incomplete, the wallet's own copy can already back an exit, or the leaf
     /// was named more than once. The leaf itself is in the wallet either way.
     pub skipped_chains: u32,
+}
+
+// ===========================================================================
+// Recover funds
+// ===========================================================================
+
+/// Request for `prepare_recover_funds`, which returns the recovery quote.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareRecoverFundsRequest {
+    /// Target fee rate in sat/vByte, applied to every transaction the recovery
+    /// builds. Below the network's relay minimum, zero included, nodes do not
+    /// relay the transactions: they have to reach a miner another way.
+    pub fee_rate_sat_per_vbyte: u64,
+    /// The kind of UTXO that will fund a unilateral exit. Needed only when the
+    /// selection holds one with steps left to broadcast.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub funding_kind: Option<CpfpFundingKind>,
+    /// The Bitcoin address the recovered funds are sent to.
+    pub destination: String,
+    pub selection: ExitLeafSelection,
+}
+
+/// Response from `prepare_recover_funds`: which leaves would be recovered and
+/// how, the exact fee at the requested rate, and how much to fund.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareRecoverFundsResponse {
+    pub leaves: Vec<RecoverFundsLeaf>,
+    /// The leaves the selection covers that are not in `leaves`, each with the
+    /// reason. A leaf whose recovery already finished is not listed.
+    pub skipped: Vec<SkippedLeaf>,
+    /// Total value of the selected leaves, in satoshis.
+    pub recoverable_value_sats: u64,
+    /// `cooperative_fee_sats + cpfp_fee_sats + fanout_fee_sats + sweep_fee_sats`.
+    pub total_fee_sats: u64,
+    /// Paid from the cooperative leaves' own value. Each leaf has two fees: the
+    /// one of the transaction the operators broadcast to move it on-chain, which
+    /// is already paid, and the one of its recovery transaction.
+    pub cooperative_fee_sats: u64,
+    /// Paid by the CPFP children, from your funding UTXOs.
+    pub cpfp_fee_sats: u64,
+    /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per branch
+    /// (`funding.per_branch`) avoids it.
+    pub fanout_fee_sats: u64,
+    /// Paid by the final sweep, off the value it moves.
+    pub sweep_fee_sats: u64,
+    /// What to fund the unilateral exit with. Unset when nothing needs funding:
+    /// every leaf is recovered cooperatively, or only sweeps are left.
+    pub funding: Option<RecoveryFunding>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+    /// What the chain has already done to the unilateral leaves, read while
+    /// preparing.
+    pub exit_chain_state: ExitChainState,
+}
+
+/// How much to fund a unilateral exit with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoveryFunding {
+    /// Fund a single UTXO of at least this many satoshis, which a fan-out
+    /// splits over the branches.
+    pub single_utxo_sats: u64,
+    /// To skip the fan-out, fund one UTXO per branch of at least the given
+    /// amount.
+    pub per_branch: Vec<PerBranchFunding>,
+}
+
+/// A leaf the selection covers that `prepare_recover_funds` leaves out of the
+/// quote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SkippedLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub reason: SkippedLeafReason,
+}
+
+/// Why `prepare_recover_funds` leaves a leaf out of the quote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SkippedLeafReason {
+    /// At the quote's fee rate, recovering the leaf costs at least what it holds.
+    /// A low enough fee rate brings the leaf back into the quote.
+    FeeExceedsValue,
+    /// The SDK read the chain and found no output holding the leaf's funds.
+    FundsNotFound,
+    /// The SDK could not look up where the leaf's funds are. It looks again the
+    /// next time you prepare.
+    Unverified,
+    /// No recovery can be built for the leaf as it stands. `message` says why.
+    NotRecoverable { message: String },
+}
+
+/// A leaf selected for recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverFundsLeaf {
+    pub leaf_id: String,
+    pub value_sats: u64,
+    pub method: RecoveryMethod,
+}
+
+/// How a leaf's funds are recovered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum RecoveryMethod {
+    /// One transaction the operators co-sign, paid from the leaf's value. No
+    /// funding, no timelock.
+    Cooperative,
+    /// The leaf's own pre-signed transactions, fee-bumped from funding you
+    /// supply, with timelock waits.
+    Unilateral,
+}
+
+/// Request for `recover_funds`: a `prepare_recover_funds` quote plus the
+/// funding UTXOs that pay its fees.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverFundsRequest {
+    pub prepared: PrepareRecoverFundsResponse,
+    /// UTXOs that meet the quote's `funding`: one of at least `single_utxo_sats`,
+    /// or one per branch. Not needed when the quote has no `funding`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub funding_inputs: Vec<CpfpInput>,
+}
+
+/// Result of `recover_funds`: every signed transaction of the recovery, and its
+/// totals. The totals mean what they do on the quote, for the leaves in
+/// `leaves`: the ones in `failed` add nothing to them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoverFundsResponse {
+    pub recoverable_value_sats: u64,
+    pub total_fee_sats: u64,
+    pub cooperative_fee_sats: u64,
+    pub cpfp_fee_sats: u64,
+    pub fanout_fee_sats: u64,
+    pub sweep_fee_sats: u64,
+    pub leaves: Vec<RecoverFundsLeaf>,
+    /// Cooperative leaves whose recovery could not be produced, and why. No
+    /// transaction depends on them.
+    pub failed: Vec<CooperativeRecoveryFailure>,
+    /// Every transaction, cooperative ones included, in broadcast order.
+    pub transactions: Vec<RecoveryTransaction>,
+    /// The funding UTXOs this recovery was built from, as you supplied them.
+    /// Hand them back when you build it again and they are followed to whatever
+    /// they have since become.
+    pub funding_inputs: Vec<CpfpInput>,
+    pub fee_rate_sat_per_vbyte: u64,
+    pub destination: String,
+}
+
+/// A cooperative recovery that could not be produced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CooperativeRecoveryFailure {
+    pub leaf_id: String,
+    /// The output the recovery would have spent: the on-chain output where the
+    /// SDK found the leaf's funds, or the one it assumed to hold them.
+    pub output_txid: String,
+    pub output_vout: u32,
+    pub error: CooperativeRecoveryError,
+}
+
+/// One transaction of a recovery, with everything needed to order and
+/// broadcast it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecoveryTransaction {
+    pub kind: RecoveryTxKind,
+    /// The tree node it belongs to (the leaf, for `Cooperative`). Unset for
+    /// `FanOut` and `Sweep`.
+    pub node_id: Option<String>,
+    pub txid: String,
+    pub tx_hex: String,
+    /// The signed CPFP child to broadcast alongside `tx_hex` as a package. Unset
+    /// when there is no anchor to bump, and for a `Confirmed` step.
+    pub cpfp_tx_hex: Option<String>,
+    /// Relative CSV timelock, in blocks, that must mature on the spent input
+    /// before this transaction can confirm. Unset when there is no timelock.
+    pub csv_timelock_blocks: Option<u32>,
+    /// Txids of other entries in this list that must be confirmed before this
+    /// one can be broadcast.
+    pub depends_on: Vec<String>,
+    pub status: ExitTransactionStatus,
+}
+
+/// The role of a transaction in a recovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum RecoveryTxKind {
+    /// Spends the on-chain output holding a leaf's funds, co-signed by the
+    /// operators. Pays its fee from the leaf's value: no CPFP child, no
+    /// dependencies, no timelock.
+    Cooperative,
+    /// Splits the caller's funding into one output per branch. Present only
+    /// when the funding couldn't be matched one-to-one to branches.
+    FanOut,
+    /// A tree node transaction (root, intermediate, or leaf node).
+    Node,
+    /// A leaf's refund transaction.
+    Refund,
+    /// The final transaction sweeping all refund outputs to the destination.
+    Sweep,
+}
+
+/// Request for `check_recover_funds`: the recovery you kept from a previous
+/// `recover_funds`, as you last stored it.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckRecoverFundsRequest {
+    pub recovery: RecoverFundsResponse,
+}
+
+/// Result of `check_recover_funds`: the same recovery, read back against the
+/// chain.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CheckRecoverFundsResponse {
+    /// Store it in place of the one you passed in.
+    pub recovery: RecoverFundsResponse,
+    pub verdict: RecoveryVerdict,
+}
+
+/// What to do with a recovery that has been read back against the chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum RecoveryVerdict {
+    /// The recovery can still be finished as it stands. Broadcast the `Ready`
+    /// transactions.
+    Valid,
+    /// Every transaction is confirmed. The leaves in `failed` are not part of
+    /// the recovery.
+    Done,
+    /// The recovery cannot be finished as it stands. Prepare and recover again.
+    Redo { reason: RecoveryRedoReason },
+}
+
+/// Why a recovery has to be built again.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum RecoveryRedoReason {
+    /// The chain no longer matches the recovery: something that is not one of
+    /// its own transactions took an outpoint it still needs. A different
+    /// refund, a fee bump from elsewhere, or funding spent on something else
+    /// all land here.
+    OnChainStateDiverged,
 }
 
 #[cfg(test)]

@@ -526,6 +526,27 @@ impl TreeStore for PostgresTreeStore {
         })
     }
 
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if statuses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let statuses: Vec<String> = statuses.iter().map(ToString::to_string).collect();
+        let client = self.pool.get().await.map_err(map_err)?;
+        let rows = client
+            .query(
+                "SELECT data FROM brz_tree_leaves WHERE user_id = $1 AND status = ANY($2)",
+                &[&self.identity, &statuses],
+            )
+            .await
+            .map_err(map_err)?;
+        rows.into_iter()
+            .map(|row| Self::deserialize_node(row.get(0)))
+            .collect()
+    }
+
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
@@ -1339,6 +1360,14 @@ impl PostgresTreeStore {
                     parent_node_id = data->>'parent_node_id', \
                     verifying_public_key = data->>'verifying_public_key', \
                     signing_public_key = data->'signing_keyshare'->>'public_key'"
+                    .to_string(),
+            ],
+            // Migration 6: Index the leaves outside the `Available` status, so
+            // reading them by status does not scan the spendable pool. Mirrored
+            // in crates/breez-sdk/wasm/js/postgres-tree-store/migrations.cjs.
+            vec![
+                "CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_user_unavailable \
+                 ON brz_tree_leaves(user_id, status) WHERE status <> 'Available'"
                     .to_string(),
             ],
         ]
@@ -2443,6 +2472,12 @@ mod tests {
     async fn test_get_leaves_not_available() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_get_leaves_not_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_with_status() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_with_status(&fixture.store).await;
     }
 
     #[tokio::test]

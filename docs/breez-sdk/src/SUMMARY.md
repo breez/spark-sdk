@@ -59,6 +59,7 @@
     - [Sending to multiple recipients](guide/batch_send.md)
   - [Converting tokens](guide/token_conversion.md)
   - [Issuing tokens](guide/issuing_tokens.md)
+  - [Token allowances](guide/token_allowances.md)
 - [Running on a server](guide/server_deployments.md)
   - [Multi-user configuration](guide/server_mode.md)
   - [Treasury configuration](guide/treasury.md)
@@ -71,7 +72,7 @@
   - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)
   - [Managing webhooks](guide/webhooks.md)
-  - [Unilateral exit](guide/unilateral_exit.md)
+  - [Recovering funds](guide/recover_funds.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

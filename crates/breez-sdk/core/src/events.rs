@@ -71,6 +71,9 @@ pub enum SdkEvent {
         error: String,
         retry_in_secs: Option<u64>,
     },
+    /// Emitted when sync finds new recoverable funds. Carries the total
+    /// `get_info` reports.
+    RecoverableFunds { recoverable_funds_sats: u64 },
 }
 
 /// Which Stable Balance conversion an [`SdkEvent::StableBalanceConversionFailed`]
@@ -141,6 +144,9 @@ impl fmt::Display for SdkEvent {
             SdkEvent::StableBalanceConversionFailed { conversion, .. } => {
                 write!(f, "StableBalanceConversionFailed({conversion:?})")
             }
+            SdkEvent::RecoverableFunds {
+                recoverable_funds_sats,
+            } => write!(f, "RecoverableFunds[{recoverable_funds_sats}]"),
         }
     }
 }

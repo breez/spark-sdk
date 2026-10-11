@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     BreezSdk,
     BuildTransferPackageOptions,
     BuildUnsignedLnurlPayPackageRequest,
+    BuildUnsignedPullPackageRequest,
     BuildUnsignedTransferPackageRequest,
     ExternalSparkSigner,
     LnurlPayResponse,
@@ -12,12 +13,15 @@ from breez_sdk_spark import (
     Payment,
     PaymentRequest,
     PrepareLnurlPayResponse,
+    PreparePullPaymentResponse,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
     PublishSignedLnurlPayPackageRequest,
     PublishSignedLnurlPayResponse,
+    PublishSignedPullPackageRequest,
     PublishSignedTransferPackageRequest,
     PublishSignedTransferPackageResponse,
+    PullPaymentResponse,
     SignedTransferPackage,
     TransferSignature,
     TransferTarget,
@@ -29,6 +33,7 @@ async def sign_package(
     signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage
 ) -> SignedTransferPackage:
     # ANCHOR: client-signing-sign-package
+    signature: TransferSignature.TRANSFER | TransferSignature.TOKEN
     if isinstance(unsigned, UnsignedTransferPackage.TRANSFER):
         # Show the user what they are approving before signing
         target = unsigned.target
@@ -77,6 +82,19 @@ async def sign_package(
                 logging.debug(
                     f"Approve sending {total.amount} of token {total.token_identifier}"
                 )
+        signature = TransferSignature.TOKEN(
+            signed=await signer.prepare_token_transaction(
+                unsigned.prepare_token_transaction
+            )
+        )
+    elif isinstance(unsigned, UnsignedTransferPackage.TOKEN_PULL):
+        logging.debug(
+            f"Approve pulling {unsigned.amount} of token {unsigned.token_identifier}"
+            f" from {unsigned.payer_address}"
+        )
+        for receiver in unsigned.receivers:
+            logging.debug(f"  {receiver.amount} to {receiver.receiver_address}")
+        logging.debug(f"Expires at {unsigned.expiry_time}")
         signature = TransferSignature.TOKEN(
             signed=await signer.prepare_token_transaction(
                 unsigned.prepare_token_transaction
@@ -199,3 +217,24 @@ async def lnurl_pay_with_client_signing(
         logging.error(error)
         raise
     # ANCHOR_END: client-signing-lnurl-pay
+
+
+async def pull_with_client_signing(
+    sdk: BreezSdk,
+    signer: ExternalSparkSigner,
+    prepare_response: PreparePullPaymentResponse,
+) -> PullPaymentResponse:
+    # ANCHOR: client-signing-pull
+    try:
+        unsigned = await sdk.build_unsigned_pull_package(
+            BuildUnsignedPullPackageRequest(prepare_response=prepare_response)
+        )
+        signed_package = await sign_package(signer, unsigned)
+        response = await sdk.publish_signed_pull_package(
+            PublishSignedPullPackageRequest(signed_package=signed_package)
+        )
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: client-signing-pull
+    return response

@@ -106,7 +106,9 @@ async fn client_sign_transfer_send(
             } => TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
             },
-            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
+            UnsignedTransferPackage::Token { .. }
+            | UnsignedTransferPackage::TokenBatch { .. }
+            | UnsignedTransferPackage::TokenPull { .. } => {
                 panic!("unexpected token package for a transfer send")
             }
         };
@@ -205,7 +207,9 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
+            UnsignedTransferPackage::Token { .. }
+            | UnsignedTransferPackage::TokenBatch { .. }
+            | UnsignedTransferPackage::TokenPull { .. } => {
                 panic!("unexpected token package for a sats send")
             }
         };
@@ -964,7 +968,9 @@ async fn test_client_signing_coop_exit() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
+            UnsignedTransferPackage::Token { .. }
+            | UnsignedTransferPackage::TokenBatch { .. }
+            | UnsignedTransferPackage::TokenPull { .. } => {
                 panic!("unexpected token package for a coop-exit")
             }
         };
@@ -1239,7 +1245,9 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
             },
-            UnsignedTransferPackage::Token { .. } | UnsignedTransferPackage::TokenBatch { .. } => {
+            UnsignedTransferPackage::Token { .. }
+            | UnsignedTransferPackage::TokenBatch { .. }
+            | UnsignedTransferPackage::TokenPull { .. } => {
                 panic!("unexpected token package for a sats send")
             }
         };

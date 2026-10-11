@@ -31,11 +31,11 @@ pub fn tag(image: &str) -> Result<String> {
     let docker = manifest_dir().join("docker");
     let mut inputs = match image {
         SPARK_SO => vec![
-            docker.join("spark-so.dockerfile"),
+            docker.join("spark-so-private.dockerfile"),
             docker.join("entrypoint.sh"),
             docker.join("so.config.yaml"),
         ],
-        MIGRATIONS => vec![docker.join("migrations.dockerfile")],
+        MIGRATIONS => vec![docker.join("migrations-private.dockerfile")],
         LDK_SERVER => vec![docker.join("ldk-server.dockerfile")],
         // Built from the crates its binaries are built from, so a change to a
         // crate it does not use leaves the daemon's image alone.

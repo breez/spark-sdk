@@ -196,19 +196,17 @@ macro_rules! version_module {
 version_module!(
     vold,
     spark_wallet_old,
-    /// The previous release's builder takes the low-level `Signer` directly.
-    fn build_signer(seed: &[u8; 32]) -> Result<Arc<spark_wallet_old::DefaultSigner>> {
-        Ok(Arc::new(spark_wallet_old::DefaultSigner::new(
-            seed,
-            spark_wallet_old::Network::Regtest,
-        )?))
+    fn build_signer(seed: &[u8; 32]) -> Result<Arc<spark_wallet_old::SparkSignerAdapter>> {
+        Ok(Arc::new(spark_wallet_old::SparkSignerAdapter::new(
+            Arc::new(spark_wallet_old::DefaultSigner::new(
+                seed,
+                spark_wallet_old::Network::Regtest,
+            )?),
+        )))
     },
-    /// The previous release defaults background processing on, so disable it
-    /// explicitly to keep the wallet offline (driven by the helpers below).
     pub async fn wallet(fx: &TestFixtures, seed: &[u8; 32]) -> Result<SparkWallet> {
         let spark_signer = build_signer(seed)?;
         Ok(WalletBuilder::new(config(fx)?, spark_signer)
-            .with_background_processing(false)
             .build()
             .await?)
     }

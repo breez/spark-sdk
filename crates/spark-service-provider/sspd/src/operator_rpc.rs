@@ -11,12 +11,8 @@ pub mod proto {
     pub mod spark_ssp_internal {
         tonic::include_proto!("spark_ssp_internal");
     }
-    pub mod spark_internal {
-        tonic::include_proto!("spark_internal");
-    }
 }
 
-use proto::spark_internal::spark_internal_service_client::SparkInternalServiceClient;
 use proto::spark_ssp_internal::spark_ssp_internal_service_client::SparkSspInternalServiceClient;
 pub use proto::spark_ssp_internal::{
     ClaimInstantStaticDepositUtxoSwapRequest, ClaimInstantStaticDepositUtxoSwapResponse,
@@ -59,15 +55,6 @@ fn ssp_client(
     InterceptedService<spark::operator::rpc::Transport, HeaderInterceptor>,
 > {
     SparkSspInternalServiceClient::with_interceptor(client.transport().clone(), interceptor)
-}
-
-fn internal_client(
-    client: &SparkRpcClient,
-    interceptor: HeaderInterceptor,
-) -> SparkInternalServiceClient<
-    InterceptedService<spark::operator::rpc::Transport, HeaderInterceptor>,
-> {
-    SparkInternalServiceClient::with_interceptor(client.transport().clone(), interceptor)
 }
 
 pub async fn prepare_tree_address(
@@ -173,7 +160,7 @@ pub async fn query_nodes_internal(
     req: QueryNodesRequest,
 ) -> Result<QueryNodesResponse> {
     with_auth_retry(client, |interceptor| {
-        let mut c = internal_client(client, interceptor);
+        let mut c = ssp_client(client, interceptor);
         let req = req.clone();
         async move { c.query_nodes(req).await }
     })
@@ -244,15 +231,15 @@ pub async fn get_utxos_for_address(
     .await
 }
 
-pub async fn finalize_node_signatures_v2(
+/// Completes the nodes of a tree `create_tree` started.
+pub async fn finalize_node_signatures(
     client: &SparkRpcClient,
     req: FinalizeNodeSignaturesRequest,
 ) -> Result<FinalizeNodeSignaturesResponse> {
-    use spark::operator::rpc::spark::spark_service_client::SparkServiceClient;
     with_auth_retry(client, |interceptor| {
-        let mut c = SparkServiceClient::with_interceptor(client.transport().clone(), interceptor);
+        let mut c = ssp_client(client, interceptor);
         let req = req.clone();
-        async move { c.finalize_node_signatures_v2(req).await }
+        async move { c.finalize_node_signatures(req).await }
     })
     .await
 }

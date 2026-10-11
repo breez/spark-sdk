@@ -9,6 +9,7 @@ mod timelock_manager;
 mod transfer;
 mod transfer_observer;
 mod unilateral_exit;
+mod watchtower_recovery;
 
 pub use coop_exit::*;
 pub use deposit::*;
@@ -24,3 +25,4 @@ pub use timelock_manager::*;
 pub use transfer::*;
 pub use transfer_observer::*;
 pub use unilateral_exit::*;
+pub use watchtower_recovery::*;

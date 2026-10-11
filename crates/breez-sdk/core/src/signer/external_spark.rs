@@ -15,8 +15,10 @@ use super::external_spark_types::{
     ExternalPrepareTransferRequest, ExternalPreparedClaim, ExternalPreparedLightningReceive,
     ExternalPreparedStaticDeposit, ExternalPreparedStaticDepositClaim,
     ExternalPreparedTokenTransaction, ExternalPreparedTransfer, ExternalSignSparkInvoiceRequest,
-    ExternalSignStaticDepositRefundRequest, ExternalSignedSparkInvoice,
-    ExternalStartStaticDepositRefundRequest, ExternalStartedStaticDepositRefund,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedSparkInvoice, ExternalStartStaticDepositRefundRequest,
+    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
+    ExternalStartedWatchtowerExitRecovery,
 };
 use super::external_types::{
     EcdsaSignatureBytes, ExternalFrostSignature, ExternalTreeNodeId, PublicKeyBytes,
@@ -111,6 +113,23 @@ pub trait ExternalSparkSigner: Send + Sync {
     async fn sign_static_deposit_refund(
         &self,
         request: ExternalSignStaticDepositRefundRequest,
+    ) -> Result<ExternalFrostSignature, SignerError>;
+
+    /// Begin the recovery of a watchtower-exited leaf: return the public key of
+    /// the leaf's signing key (derived from `leaf_id`), a fresh FROST nonce
+    /// commitment, and the identity key's ECDSA signature over the SHA-256 hash
+    /// of `user_statement`.
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: ExternalStartWatchtowerExitRecoveryRequest,
+    ) -> Result<ExternalStartedWatchtowerExitRecovery, SignerError>;
+
+    /// Finish the recovery: sign with the leaf's signing key under the nonce
+    /// committed by `start_watchtower_exit_recovery`, and aggregate the
+    /// operators' shares into the final signature.
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: ExternalSignWatchtowerExitRecoveryRequest,
     ) -> Result<ExternalFrostSignature, SignerError>;
 
     /// Schnorr-sign a Spark invoice (sats or tokens) with the identity key.

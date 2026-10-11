@@ -108,6 +108,10 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
         // the SDK retries after it.
         const conversion = event.inner.conversion
         const retryInSecs = event.inner.retryInSecs
+      } else if (event.tag === SdkEvent_Tags.RecoverableFunds) {
+        // Funds left the balance and wait to be recovered on-chain.
+        // Quote their recovery with prepareRecoverFunds.
+        const recoverableFundsSats = event.inner.recoverableFundsSats
       } else {
         // Handle any future event types
       }

@@ -92,7 +92,7 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Webhooks**: `webhooks <subcommand>`
 
-**Advanced**: `advanced unilateral-exit`, `advanced check-unilateral-exit`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
+**Advanced**: `advanced recover-funds`, `advanced check-recover-funds`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
@@ -191,23 +191,30 @@ Expert-only commands that build raw transactions for you to broadcast yourself.
 Misuse can strand or lose funds.
 
 ```
-# Quote a unilateral exit (no funding, shows the quote only)
-advanced unilateral-exit --fee-rate 2 --destination bc1q...
+# Quote the recovery of the funds that left the balance, without signing it.
+# Without --utxo, a recovery that needs funding covers only its cooperative
+# leaves.
+advanced recover-funds --fee-rate 2 --destination bc1q...
 
-# Build and sign a unilateral exit
-advanced unilateral-exit --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex>
+# Also sign it, and write it to a file for check-recover-funds to read back
+advanced recover-funds --fee-rate 2 --destination bc1q... --output-file recovery.json --sign
 
-# Select specific leaves to exit
-advanced unilateral-exit --fee-rate 2 --destination bc1q... --leaf id1,id2
+# Fund the unilateral exit (for P2TR, pubkey is the internal key)
+advanced recover-funds --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex> --output-file recovery.json --sign
 
-# Write the signed exit to a file for later checking
-advanced unilateral-exit --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex> --output-file exit.json
+# Quote the recovery of specific leaves
+advanced recover-funds --fee-rate 2 --destination bc1q... --leaf id1 --leaf id2
 
-# Check a signed exit against the chain (which txs confirmed, what is ready)
-advanced check-unilateral-exit --input-file exit.json
+# Quote the recovery of every leaf worth it, including the ones still in the
+# balance. Only for when the operators are unreachable or refuse to serve the
+# wallet.
+advanced recover-funds --fee-rate 2 --destination bc1q... --all
 
-# Check and write the updated exit to a different file
-advanced check-unilateral-exit --input-file exit.json --output-file checked.json
+# Check a recovery against the chain (which txs confirmed, what is ready)
+advanced check-recover-funds --input-file recovery.json
+
+# Check and write the updated recovery to a different file
+advanced check-recover-funds --input-file recovery.json --output-file checked.json
 
 # Export exit state to a file (for safekeeping outside the wallet)
 advanced export-unilateral-exit-state --output-file exit-state.json

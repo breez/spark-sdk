@@ -19,9 +19,10 @@ use crate::{
     PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
-        Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
-        UpdateDepositPayload, UpdateWatchedAddressPayload, WatchedDepositAddress,
+        ChainTransaction, LeafRecovery, Payment, PaymentMetadata, SetLnurlMetadataItem, Storage,
+        StorageError, StorageListPaymentsRequest, StoragePaymentDetailsFilter,
+        StoredCrossChainSwap, StoredWatchtowerExitOutput, UpdateDepositPayload, UpdateLeafRecovery,
+        UpdateWatchedAddressPayload, WatchedDepositAddress, WatchtowerExitRecovery,
         parse_payment_status,
     },
     sync_storage::{
@@ -575,8 +576,154 @@ impl MysqlStorage {
                 column: "max_claim_fee",
                 definition: "JSON NULL",
             }],
+            // Migration 26: Leaf recoveries. What the chain service reported about
+            // leaves with funds to recover on-chain, and the recoveries the operators
+            // co-signed. Every block height is in brz_chain_transactions, keyed by
+            // txid.
+            vec![
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_leaf_recoveries (
+                        user_id VARBINARY(33) NOT NULL,
+                        leaf_id VARCHAR(255) NOT NULL,
+                        chain_checked_at BIGINT,
+                        PRIMARY KEY (user_id, leaf_id)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_chain_transactions (
+                        user_id VARBINARY(33) NOT NULL,
+                        txid VARCHAR(255) NOT NULL,
+                        block_height BIGINT NOT NULL,
+                        PRIMARY KEY (user_id, txid)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_outputs (
+                        user_id VARBINARY(33) NOT NULL,
+                        leaf_id VARCHAR(255) NOT NULL,
+                        txid VARCHAR(255) NOT NULL,
+                        vout BIGINT NOT NULL,
+                        amount_sats BIGINT NOT NULL,
+                        script_pubkey TEXT NOT NULL,
+                        PRIMARY KEY (user_id, leaf_id)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_recoveries (
+                        user_id VARBINARY(33) NOT NULL,
+                        leaf_id VARCHAR(255) NOT NULL,
+                        txid VARCHAR(255) NOT NULL,
+                        transaction_hex TEXT NOT NULL,
+                        output_amount_sats BIGINT NOT NULL,
+                        PRIMARY KEY (user_id, leaf_id, txid)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_watchtower_exit_spends (
+                        user_id VARBINARY(33) NOT NULL,
+                        leaf_id VARCHAR(255) NOT NULL,
+                        txid VARCHAR(255) NOT NULL,
+                        PRIMARY KEY (user_id, leaf_id)
+                    )",
+                ),
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_unilateral_exit_sweeps (
+                        user_id VARBINARY(33) NOT NULL,
+                        leaf_id VARCHAR(255) NOT NULL,
+                        txid VARCHAR(255) NOT NULL,
+                        PRIMARY KEY (user_id, leaf_id)
+                    )",
+                ),
+            ],
         ]
     }
+}
+
+async fn set_chain_transaction(
+    tx: &mut Transaction<'_>,
+    identity: &[u8],
+    txid: &str,
+    block_height: u32,
+) -> Result<(), StorageError> {
+    tx.exec_drop(
+        "INSERT INTO brz_chain_transactions (user_id, txid, block_height)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE block_height = VALUES(block_height)",
+        (identity.to_vec(), txid, i64::from(block_height)),
+    )
+    .await
+    .map_err(map_db_error)
+}
+
+/// One statement for all of a user's leaf recoveries, so `MySQL` reads an
+/// output and its recoveries from the same snapshot. A leaf recovery has one
+/// row per watchtower exit recovery, or a single row when it has none.
+const SELECT_LEAF_RECOVERIES_SQL: &str = "
+    SELECT l.leaf_id,
+           l.chain_checked_at,
+           o.txid,
+           ot.block_height,
+           o.vout,
+           o.amount_sats,
+           o.script_pubkey,
+           s.txid,
+           st.block_height,
+           w.txid,
+           wt.block_height,
+           r.txid,
+           r.transaction_hex,
+           r.output_amount_sats
+      FROM brz_leaf_recoveries l
+      LEFT JOIN brz_watchtower_exit_outputs o ON o.user_id = l.user_id AND o.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions ot ON ot.user_id = o.user_id AND ot.txid = o.txid
+      LEFT JOIN brz_watchtower_exit_spends s ON s.user_id = l.user_id AND s.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions st ON st.user_id = s.user_id AND st.txid = s.txid
+      LEFT JOIN brz_unilateral_exit_sweeps w ON w.user_id = l.user_id AND w.leaf_id = l.leaf_id
+      LEFT JOIN brz_chain_transactions wt ON wt.user_id = w.user_id AND wt.txid = w.txid
+      LEFT JOIN brz_watchtower_exit_recoveries r ON r.user_id = l.user_id AND r.leaf_id = l.leaf_id
+     WHERE l.user_id = ?
+     ORDER BY l.leaf_id, r.txid";
+
+/// Maps a `SELECT_LEAF_RECOVERIES_SQL` row to a [`LeafRecovery`] with the
+/// watchtower exit recovery of that row, if it has one.
+fn leaf_recovery_from_row(row: &Row) -> Result<LeafRecovery, StorageError> {
+    let chain_transaction = |index: usize| -> Result<Option<ChainTransaction>, StorageError> {
+        let txid = get_opt_str(row, index);
+        let block_height = get_opt_i64(row, index.saturating_add(1));
+        match (txid, block_height) {
+            (Some(txid), Some(block_height)) => Ok(Some(ChainTransaction {
+                txid,
+                block_height: u32::try_from(block_height)?,
+            })),
+            _ => Ok(None),
+        }
+    };
+    let output = match chain_transaction(2)? {
+        Some(ChainTransaction { txid, block_height }) => Some(StoredWatchtowerExitOutput {
+            txid,
+            vout: u32::try_from(get_i64(row, 4)?)?,
+            amount_sats: u64::try_from(get_i64(row, 5)?)?,
+            script_pubkey: get_str(row, 6)?,
+            block_height,
+        }),
+        None => None,
+    };
+    let recovery = match get_opt_str(row, 11) {
+        Some(txid) => Some(WatchtowerExitRecovery {
+            txid,
+            transaction_hex: get_str(row, 12)?,
+            output_amount_sats: u64::try_from(get_i64(row, 13)?)?,
+        }),
+        None => None,
+    };
+    Ok(LeafRecovery {
+        leaf_id: get_str(row, 0)?,
+        chain_checked_at: get_opt_i64(row, 1).map(u64::try_from).transpose()?,
+        watchtower_exit_output: output,
+        watchtower_exit_recoveries: recovery.into_iter().collect(),
+        watchtower_exit_spend: chain_transaction(7)?,
+        unilateral_exit_sweep: chain_transaction(9)?,
+    })
 }
 
 /// Maps a `brz_cross_chain_swaps` row tuple `(provider, id, is_terminal,
@@ -1593,6 +1740,152 @@ impl Storage for MysqlStorage {
         Ok(())
     }
 
+    async fn list_leaf_recoveries(&self) -> Result<Vec<LeafRecovery>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let rows: Vec<Row> = conn
+            .exec(SELECT_LEAF_RECOVERIES_SQL, (self.identity.clone(),))
+            .await
+            .map_err(map_db_error)?;
+
+        let mut leaf_recoveries: Vec<LeafRecovery> = Vec::new();
+        for row in &rows {
+            let leaf_recovery = leaf_recovery_from_row(row)?;
+            match leaf_recoveries.last_mut() {
+                Some(last) if last.leaf_id == leaf_recovery.leaf_id => {
+                    last.watchtower_exit_recoveries
+                        .extend(leaf_recovery.watchtower_exit_recoveries);
+                }
+                _ => leaf_recoveries.push(leaf_recovery),
+            }
+        }
+        Ok(leaf_recoveries)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn update_leaf_recovery(&self, update: UpdateLeafRecovery) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let mut tx = conn
+            .start_transaction(tx_opts())
+            .await
+            .map_err(map_db_error)?;
+        let leaf_id = update.leaf_id.as_str();
+        // InnoDB locks the row until the transaction ends, also when it finds
+        // the row and changes nothing, so a second writer of the same leaf
+        // waits here. Two interleaved writers could otherwise leave a leaf
+        // with one output and the recoveries of another.
+        tx.exec_drop(
+            "INSERT INTO brz_leaf_recoveries (user_id, leaf_id) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE leaf_id = leaf_id",
+            (self.identity.clone(), leaf_id),
+        )
+        .await
+        .map_err(map_db_error)?;
+        if let Some(chain_checked_at) = update.chain_checked_at {
+            tx.exec_drop(
+                "UPDATE brz_leaf_recoveries
+                 SET chain_checked_at = GREATEST(COALESCE(chain_checked_at, 0), ?)
+                 WHERE user_id = ? AND leaf_id = ?",
+                (
+                    i64::try_from(chain_checked_at)?,
+                    self.identity.clone(),
+                    leaf_id,
+                ),
+            )
+            .await
+            .map_err(map_db_error)?;
+        }
+        if let Some(output) = &update.watchtower_exit_output {
+            let vout = i64::from(output.vout);
+            for table in [
+                "brz_watchtower_exit_recoveries",
+                "brz_watchtower_exit_spends",
+            ] {
+                tx.exec_drop(
+                    format!(
+                        "DELETE FROM {table} WHERE user_id = ? AND leaf_id = ? AND EXISTS (
+                             SELECT 1 FROM brz_watchtower_exit_outputs
+                             WHERE user_id = ? AND leaf_id = ? AND (txid <> ? OR vout <> ?))"
+                    ),
+                    (
+                        self.identity.clone(),
+                        leaf_id,
+                        self.identity.clone(),
+                        leaf_id,
+                        output.txid.as_str(),
+                        vout,
+                    ),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            set_chain_transaction(&mut tx, &self.identity, &output.txid, output.block_height)
+                .await?;
+            tx.exec_drop(
+                "INSERT INTO brz_watchtower_exit_outputs
+                     (user_id, leaf_id, txid, vout, amount_sats, script_pubkey)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                     txid = VALUES(txid),
+                     vout = VALUES(vout),
+                     amount_sats = VALUES(amount_sats),
+                     script_pubkey = VALUES(script_pubkey)",
+                (
+                    self.identity.clone(),
+                    leaf_id,
+                    output.txid.as_str(),
+                    vout,
+                    i64::try_from(output.amount_sats)?,
+                    output.script_pubkey.as_str(),
+                ),
+            )
+            .await
+            .map_err(map_db_error)?;
+        }
+        if let Some(recovery) = &update.watchtower_exit_recovery {
+            tx.exec_drop(
+                "INSERT INTO brz_watchtower_exit_recoveries
+                     (user_id, leaf_id, txid, transaction_hex, output_amount_sats)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE txid = txid",
+                (
+                    self.identity.clone(),
+                    leaf_id,
+                    recovery.txid.as_str(),
+                    recovery.transaction_hex.as_str(),
+                    i64::try_from(recovery.output_amount_sats)?,
+                ),
+            )
+            .await
+            .map_err(map_db_error)?;
+        }
+        for (table, transaction) in [
+            ("brz_watchtower_exit_spends", &update.watchtower_exit_spend),
+            ("brz_unilateral_exit_sweeps", &update.unilateral_exit_sweep),
+        ] {
+            let Some(transaction) = transaction else {
+                continue;
+            };
+            set_chain_transaction(
+                &mut tx,
+                &self.identity,
+                &transaction.txid,
+                transaction.block_height,
+            )
+            .await?;
+            tx.exec_drop(
+                format!(
+                    "INSERT INTO {table} (user_id, leaf_id, txid) VALUES (?, ?, ?)
+                     ON DUPLICATE KEY UPDATE txid = VALUES(txid)"
+                ),
+                (self.identity.clone(), leaf_id, transaction.txid.as_str()),
+            )
+            .await
+            .map_err(map_db_error)?;
+        }
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(())
+    }
+
     async fn set_lnurl_metadata(
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
@@ -2451,6 +2744,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_leaf_recoveries() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_leaf_recoveries(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_unclaimed_deposits_crud() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_unclaimed_deposits_crud(Box::new(fixture.storage)).await;
@@ -3161,7 +3460,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(25), "migration version must advance to 25");
+        assert_eq!(version, Some(26), "migration version must advance to 26");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3433,7 +3732,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(25), "migration must advance to 25");
+        assert_eq!(version, Some(26), "migration must advance to 26");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

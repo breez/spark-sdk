@@ -36,7 +36,9 @@ use crate::{
     },
 };
 
-use super::{LeafKeyTweak, TreeNode, error::TreeServiceError};
+use super::{
+    LeafKeyTweak, TreeNode, error::TreeServiceError, exit_chain_resolver::LEAVES_PER_FETCH,
+};
 
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
@@ -104,20 +106,30 @@ impl TreeService for SynchronousTreeService {
         self.state.get_leaves().await
     }
 
+    async fn list_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        self.state.get_leaves_with_status(statuses).await
+    }
+
     async fn fetch_nodes(
         &self,
         node_ids: &[TreeNodeId],
         include_parents: bool,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
-        if node_ids.is_empty() {
-            return Ok(Vec::new());
-        }
         let client = &self.operator_pool.get_coordinator().client;
-        let source = Source::NodeIds(TreeNodeIds {
-            node_ids: node_ids.iter().map(ToString::to_string).collect(),
-        });
-        self.query_nodes(client, include_parents, Some(source), vec![])
-            .await
+        let mut nodes = Vec::new();
+        for batch in node_ids.chunks(LEAVES_PER_FETCH) {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: batch.iter().map(ToString::to_string).collect(),
+            });
+            nodes.extend(
+                self.query_nodes(client, include_parents, Some(source), vec![])
+                    .await?,
+            );
+        }
+        Ok(nodes)
     }
 
     async fn load_exit_chains(
@@ -1187,6 +1199,8 @@ fn held_leaf_statuses() -> Vec<i32> {
         ProtoTreeNodeStatus::Exited as i32,
         ProtoTreeNodeStatus::ParentExited as i32,
         ProtoTreeNodeStatus::RenewLocked as i32,
+        ProtoTreeNodeStatus::WatchtowerExited as i32,
+        ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
     ]
 }
 
@@ -1481,6 +1495,9 @@ mod tests {
             TreeNodeStatus::Aggregated,
             TreeNodeStatus::Reimbursed,
             TreeNodeStatus::ParentExited,
+            TreeNodeStatus::Consolidated,
+            TreeNodeStatus::WatchtowerExited,
+            TreeNodeStatus::WatchtowerExitRecovered,
             TreeNodeStatus::Unknown,
         ]
         .into_iter()
@@ -1809,6 +1826,8 @@ mod tests {
                 ProtoTreeNodeStatus::Exited as i32,
                 ProtoTreeNodeStatus::ParentExited as i32,
                 ProtoTreeNodeStatus::RenewLocked as i32,
+                ProtoTreeNodeStatus::WatchtowerExited as i32,
+                ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
             ]
         );
         assert!(

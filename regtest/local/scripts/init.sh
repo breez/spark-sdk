@@ -4,6 +4,8 @@
 # only reissued when the host names it covers change.
 #
 # OPERATOR_ADDRESSES: host:port per operator, as operators and the SSP reach it.
+# OPERATOR_INTERNAL_ADDRESSES: host:port per operator that other operators reach
+# its operator-to-operator services at, on the same host as its address.
 # OPERATOR_PUBLIC_PORTS: the port per operator on PUBLIC_HOST, for wallets.
 # SSP_ADDRESS: host:port the SSP's API is reached at from inside the
 # environment, PUBLIC_HOST and SSP_PUBLIC_PORT by default.
@@ -15,6 +17,7 @@ set -eu
 . "$(dirname "$0")/lib.sh"
 
 : "${LOCAL_DIR:?}" "${OPERATOR_ADDRESSES:?}" "${OPERATOR_PUBLIC_PORTS:?}"
+: "${OPERATOR_INTERNAL_ADDRESSES:?}"
 : "${OPERATOR_IDENTITY_PUBLIC_KEYS:?}" "${SSP_IDENTITY_PUBLIC_KEY:?}"
 : "${PUBLIC_HOST:=127.0.0.1}" "${SSP_PUBLIC_PORT:=59049}"
 : "${SSP_ADDRESS:=$PUBLIC_HOST:$SSP_PUBLIC_PORT}"
@@ -80,6 +83,7 @@ ca_pem=$(cat "$certs/ca.crt")
 
 # Positional lists, walked in step: the operator index, its address, port and key.
 set -- $OPERATOR_ADDRESSES
+internal_addresses=$OPERATOR_INTERNAL_ADDRESSES
 index=0
 operators_json="[]"
 sspd_operators=""
@@ -89,12 +93,15 @@ for public_port in $OPERATOR_PUBLIC_PORTS; do
   address=$1
   shift
   key=$(echo "$OPERATOR_IDENTITY_PUBLIC_KEYS" | cut -d' ' -f$((index + 1)))
+  internal_address=$(echo "$internal_addresses" | cut -d' ' -f$((index + 1)))
   identifier=$(printf '%064x' $((index + 1)))
   operators_json=$(printf '%s\n' "$operators_json" | jq -c \
     --argjson id "$index" --arg address "$address" \
+    --arg internal "$internal_address" \
     --arg external "$PUBLIC_HOST:$public_port" --arg key "$key" \
     --arg cert "$certs/ca.crt" \
-    '. + [{id: $id, address: $address, external_address: $external,
+    '. + [{id: $id, address: $address, internal_address: $internal,
+           internal_address_dkg: $internal, external_address: $external,
            identity_public_key: $key, cert_path: $cert}]')
   sspd_operators="$sspd_operators$(printf '[[operators]]\nid = %s\nidentifier = "%s"\naddress = "https://%s"\nidentity_public_key = "%s"\nca_cert_pem = """\n%s\n"""\n\n' \
     "$index" "$identifier" "$address" "$key" "$ca_pem")

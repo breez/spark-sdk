@@ -11,8 +11,8 @@ use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     LeafPedigree, LeafSelection, Leaves, LeavesReservation, LeavesReservationId, PublicKey,
-    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeServiceError,
-    TreeStore, VerifiedLeafKeys,
+    ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
+    TreeServiceError, TreeStore, VerifiedLeafKeys,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -343,6 +343,22 @@ impl TreeStore for WasmTreeStore {
         Ok(leaves)
     }
 
+    async fn get_leaves_with_status(
+        &self,
+        statuses: &[TreeNodeStatus],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let statuses_js = serde_wasm_bindgen::to_value(statuses)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .get_leaves_with_status(statuses_js)
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        serde_wasm_bindgen::from_value(result).map_err(|e| TreeServiceError::Generic(e.to_string()))
+    }
+
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
@@ -591,6 +607,7 @@ export interface TreeStore {
     storeAncestors: (pedigrees: LeafPedigree[]) => Promise<void>;
     leavesMissingExitChains: () => Promise<string[]>;
     getLeaves: () => Promise<Leaves>;
+    getLeavesWithStatus: (statuses: string[]) => Promise<TreeNode[]>;
     getExitChains: (leafIds: string[]) => Promise<LeafPedigree[]>;
     getAvailableBalance: () => Promise<bigint>;
     getVerifiedLeafKeys: () => Promise<[string, string, string][]>;
@@ -620,6 +637,12 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getLeavesWithStatus, catch)]
+    pub fn get_leaves_with_status(
+        this: &TreeStoreJs,
+        statuses: JsValue,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getExitChains, catch)]
     pub fn get_exit_chains(this: &TreeStoreJs, leaf_ids: JsValue) -> Result<Promise, JsValue>;

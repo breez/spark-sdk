@@ -52,7 +52,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/server_mode.html"><b>Multi-user Server Mode</b></a><br>Run multiple user balances from a single backend server.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/unilateral_exit.html"><b>Unilateral Exit</b></a><br>Users can always withdraw to the Bitcoin blockchain without the Spark operators.</td>
+<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/recover_funds.html"><b>Unilateral Exit</b></a><br>Users can always withdraw to the Bitcoin blockchain without the Spark operators.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="https://github.com/breez/spark-sdk"><b>Open-source</b></a><br>Free and open-source, available to any developer at any scale.</td>

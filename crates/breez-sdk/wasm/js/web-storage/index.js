@@ -624,6 +624,27 @@ class MigrationManager {
           }
         },
       },
+      {
+        // Leaf recoveries. What the chain service reported about leaves with
+        // funds to recover on-chain, and the recoveries the operators co-signed.
+        // Every block height is in chain_transactions, keyed by txid.
+        name: "Create leaf recovery stores",
+        upgrade: (db) => {
+          const keyPaths = {
+            leaf_recoveries: "leafId",
+            chain_transactions: "txid",
+            watchtower_exit_outputs: "leafId",
+            watchtower_exit_recoveries: ["leafId", "txid"],
+            watchtower_exit_spends: "leafId",
+            unilateral_exit_sweeps: "leafId",
+          };
+          for (const [name, keyPath] of Object.entries(keyPaths)) {
+            if (!db.objectStoreNames.contains(name)) {
+              db.createObjectStore(name, { keyPath });
+            }
+          }
+        },
+      },
     ];
   }
 }
@@ -652,7 +673,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 22; // Current schema version (= migration count)
+    this.dbVersion = 23; // Current schema version (= migration count)
   }
 
   /**
@@ -1747,6 +1768,208 @@ class IndexedDBStorage {
       }
 
       reject(new StorageError(`Unknown payload type: ${payload.type}`));
+    });
+  }
+
+  async listLeafRecoveries() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const storeNames = [
+        "leaf_recoveries",
+        "chain_transactions",
+        "watchtower_exit_outputs",
+        "watchtower_exit_recoveries",
+        "watchtower_exit_spends",
+        "unilateral_exit_sweeps",
+      ];
+      const transaction = this.db.transaction(storeNames, "readonly");
+      const entries = {};
+      // getAll returns the entries of a store in key order: the leaf recoveries by
+      // leaf id, and the recoveries of a leaf by txid.
+      for (const name of storeNames) {
+        const request = transaction.objectStore(name).getAll();
+        request.onsuccess = () => {
+          entries[name] = request.result;
+        };
+      }
+
+      transaction.oncomplete = () => {
+        const blockHeights = new Map(
+          entries.chain_transactions.map((entry) => [
+            entry.txid,
+            entry.blockHeight,
+          ])
+        );
+        const chainTransaction = (entry) =>
+          entry && blockHeights.has(entry.txid)
+            ? { txid: entry.txid, blockHeight: blockHeights.get(entry.txid) }
+            : null;
+        const byLeafId = (name) =>
+          new Map(entries[name].map((entry) => [entry.leafId, entry]));
+        const outputs = byLeafId("watchtower_exit_outputs");
+        const spends = byLeafId("watchtower_exit_spends");
+        const sweeps = byLeafId("unilateral_exit_sweeps");
+        const recoveries = new Map();
+        for (const entry of entries.watchtower_exit_recoveries) {
+          if (!recoveries.has(entry.leafId)) {
+            recoveries.set(entry.leafId, []);
+          }
+          recoveries.get(entry.leafId).push({
+            txid: entry.txid,
+            transactionHex: entry.transactionHex,
+            outputAmountSats: entry.outputAmountSats,
+          });
+        }
+
+        resolve(
+          entries.leaf_recoveries.map(({ leafId, chainCheckedAt }) => {
+            const output = outputs.get(leafId);
+            return {
+              leafId,
+              chainCheckedAt,
+              watchtowerExitOutput:
+                output && blockHeights.has(output.txid)
+                  ? {
+                      txid: output.txid,
+                      vout: output.vout,
+                      amountSats: output.amountSats,
+                      scriptPubkey: output.scriptPubkey,
+                      blockHeight: blockHeights.get(output.txid),
+                    }
+                  : null,
+              watchtowerExitRecoveries: recoveries.get(leafId) ?? [],
+              watchtowerExitSpend: chainTransaction(spends.get(leafId)),
+              unilateralExitSweep: chainTransaction(sweeps.get(leafId)),
+            };
+          })
+        );
+      };
+      transaction.onabort = () =>
+        reject(
+          new StorageError(
+            `Failed to list leaf recoveries: ${transaction.error?.message || "Unknown error"}`,
+            transaction.error
+          )
+        );
+    });
+  }
+
+  async updateLeafRecovery(update) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const {
+        leafId,
+        chainCheckedAt,
+        watchtowerExitOutput: output,
+        watchtowerExitRecovery: recovery,
+        watchtowerExitSpend: spend,
+        unilateralExitSweep: sweep,
+      } = update;
+      const storeNames = ["leaf_recoveries"];
+      if (output != null) {
+        storeNames.push("watchtower_exit_outputs");
+      }
+      if (output != null || recovery != null) {
+        storeNames.push("watchtower_exit_recoveries");
+      }
+      if (output != null || spend != null) {
+        storeNames.push("watchtower_exit_spends");
+      }
+      if (sweep != null) {
+        storeNames.push("unilateral_exit_sweeps");
+      }
+      if (output != null || spend != null || sweep != null) {
+        storeNames.push("chain_transactions");
+      }
+      const transaction = this.db.transaction(storeNames, "readwrite");
+      const store = (name) => transaction.objectStore(name);
+
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () =>
+        reject(
+          new StorageError(
+            `Failed to update leaf recovery '${leafId}': ${transaction.error?.message || "Unknown error"}`,
+            transaction.error
+          )
+        );
+
+      const leafRecoveryRequest = store("leaf_recoveries").get(leafId);
+      leafRecoveryRequest.onsuccess = () => {
+        const stored = leafRecoveryRequest.result?.chainCheckedAt ?? null;
+        const later =
+          chainCheckedAt != null && (stored == null || chainCheckedAt > stored)
+            ? chainCheckedAt
+            : stored;
+        store("leaf_recoveries").put({ leafId, chainCheckedAt: later });
+      };
+
+      const setChainTransaction = ({ txid, blockHeight }) =>
+        store("chain_transactions").put({ txid, blockHeight });
+
+      const storeRecoverySpendSweep = () => {
+        if (recovery != null) {
+          const recoveries = store("watchtower_exit_recoveries");
+          const keyRequest = recoveries.getKey([leafId, recovery.txid]);
+          keyRequest.onsuccess = () => {
+            if (keyRequest.result === undefined) {
+              recoveries.put({
+                leafId,
+                txid: recovery.txid,
+                transactionHex: recovery.transactionHex,
+                outputAmountSats: recovery.outputAmountSats,
+              });
+            }
+          };
+        }
+        if (spend != null) {
+          setChainTransaction(spend);
+          store("watchtower_exit_spends").put({ leafId, txid: spend.txid });
+        }
+        if (sweep != null) {
+          setChainTransaction(sweep);
+          store("unilateral_exit_sweeps").put({ leafId, txid: sweep.txid });
+        }
+      };
+
+      if (output == null) {
+        storeRecoverySpendSweep();
+        return;
+      }
+
+      const outputs = store("watchtower_exit_outputs");
+      const outputRequest = outputs.get(leafId);
+      outputRequest.onsuccess = () => {
+        const stored = outputRequest.result;
+        if (
+          stored &&
+          (stored.txid !== output.txid || stored.vout !== output.vout)
+        ) {
+          // IndexedDB orders an array after every string, so the range holds
+          // every recovery of the leaf.
+          store("watchtower_exit_recoveries").delete(
+            IDBKeyRange.bound([leafId], [leafId, []])
+          );
+          store("watchtower_exit_spends").delete(leafId);
+        }
+        setChainTransaction(output);
+        outputs.put({
+          leafId,
+          txid: output.txid,
+          vout: output.vout,
+          amountSats: output.amountSats,
+          scriptPubkey: output.scriptPubkey,
+        });
+        // The browser runs a transaction's requests in the order this method
+        // makes them, so it stores the recovery and the spend of this update
+        // after it has deleted those of the output replaced.
+        storeRecoverySpendSweep();
+      };
     });
   }
 

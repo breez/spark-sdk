@@ -263,6 +263,32 @@ pub struct SignStaticDepositRefundRequest {
     pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
 }
 
+// ─── watchtower-exit recovery ─────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct StartWatchtowerExitRecoveryRequest {
+    pub leaf_id: TreeNodeId,
+    pub user_statement: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartedWatchtowerExitRecovery {
+    pub signing_public_key: PublicKey,
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub user_signature: ecdsa::Signature,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignWatchtowerExitRecoveryRequest {
+    pub leaf_id: TreeNodeId,
+    pub sighash: [u8; 32],
+    pub verifying_key: PublicKey,
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub statechain_signatures: BTreeMap<Identifier, SignatureShare>,
+    pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
+}
+
 // ─── static-deposit claim ─────────────────────────────────────────────────
 
 /// Prepare a static-deposit claim. Like the refund, this is the
@@ -321,6 +347,12 @@ pub enum TokenTransactionKind {
     /// Owner-side signature on a finalized token transaction
     /// (`SHA256(SHA256(tx_hash) || SHA256(operator_pubkey))`).
     Final,
+    /// Owner-side signature on a token allowance grant.
+    AllowanceGrant,
+    /// Owner-side signature on a token allowance revocation.
+    AllowanceRevoke,
+    /// Spender-side signature on a pull from a token allowance.
+    AllowanceSpend,
 }
 
 #[derive(Debug, Clone)]
@@ -443,6 +475,21 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: SignStaticDepositRefundRequest,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
 
+    /// Begin the recovery of a watchtower-exited leaf. The operators need the
+    /// nonce commitment before they sign, so the signature comes from
+    /// [`sign_watchtower_exit_recovery`](Self::sign_watchtower_exit_recovery).
+    async fn start_watchtower_exit_recovery(
+        &self,
+        request: StartWatchtowerExitRecoveryRequest,
+    ) -> Result<StartedWatchtowerExitRecovery, SignerError>;
+
+    /// Finish the recovery with the nonce committed by
+    /// [`start_watchtower_exit_recovery`](Self::start_watchtower_exit_recovery).
+    async fn sign_watchtower_exit_recovery(
+        &self,
+        request: SignWatchtowerExitRecoveryRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
+
     /// Prepare a static-deposit claim. Returns the static-deposit secret in the
     /// clear (the SSP co-signs the claim and needs it) and the identity-key
     /// signature over the claim user-statement (see
@@ -459,8 +506,8 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: SignSparkInvoiceRequest,
     ) -> Result<SignedSparkInvoice, SignerError>;
 
-    /// Prepare a token transaction (freeze / partial / final). Returns the
-    /// identity-key signature over the request digest (see
+    /// Sign the digest of a token transaction or allowance statement of any
+    /// [`TokenTransactionKind`] with the identity key (see
     /// [`PreparedTokenTransaction`]).
     async fn prepare_token_transaction(
         &self,

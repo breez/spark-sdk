@@ -4,7 +4,7 @@ use super::error::Result;
 use super::metadata::set_idempotency_key;
 use super::spark::*;
 use super::spark_token;
-use crate::header_provider::HeaderProvider;
+use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
@@ -288,6 +288,20 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn recover_watchtower_exited_leaf(
+        &self,
+        req: RecoverWatchtowerExitedLeafRequest,
+    ) -> Result<RecoverWatchtowerExitedLeafResponse> {
+        debug!("Calling recover_watchtower_exited_leaf with request: {req:?}");
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.recover_watchtower_exited_leaf(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
         self.call_with_auth_retry(|interceptor| {
@@ -356,6 +370,48 @@ impl SparkRpcClient {
             let mut client = self.spark_token_service_client(interceptor);
             let req = req.clone();
             async move { Ok(client.freeze_tokens(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn create_token_allowance(
+        &self,
+        req: spark_token::CreateTokenAllowanceRequest,
+    ) -> Result<spark_token::CreateTokenAllowanceResponse> {
+        debug!("Calling create_token_allowance with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.create_token_allowance(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn revoke_token_allowance(
+        &self,
+        req: spark_token::RevokeTokenAllowanceRequest,
+    ) -> Result<spark_token::RevokeTokenAllowanceResponse> {
+        debug!("Calling revoke_token_allowance with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.revoke_token_allowance(req).await?) }
+        })
+        .await
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn query_token_allowances(
+        &self,
+        req: spark_token::QueryTokenAllowancesRequest,
+    ) -> Result<spark_token::QueryTokenAllowancesResponse> {
+        debug!("Calling query_token_allowances with request: {:?}", req);
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_token_service_client(interceptor);
+            let req = req.clone();
+            async move { Ok(client.query_token_allowances(req).await?) }
         })
         .await
     }
@@ -719,7 +775,10 @@ impl SparkRpcClient {
         } else {
             self.header_provider.headers().await
         }
-        .map_err(|e| OperatorRpcError::Authentication(e.to_string()))?;
+        .map_err(|e| match e {
+            HeaderProviderError::Unavailable(message) => OperatorRpcError::Transport(message),
+            HeaderProviderError::Generic(message) => OperatorRpcError::Authentication(message),
+        })?;
         let mut headers = Vec::with_capacity(raw_headers.len());
         for (key, value) in raw_headers {
             let metadata_key = key
@@ -818,6 +877,33 @@ mod tests {
             .expect("transport")
             .into_inner();
         SparkRpcClient::new(transport, provider, 0)
+    }
+
+    struct UnreachableProvider;
+
+    #[macros::async_trait]
+    impl HeaderProvider for UnreachableProvider {
+        async fn headers(
+            &self,
+        ) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+            Err(HeaderProviderError::Unavailable(
+                "connection refused".to_string(),
+            ))
+        }
+    }
+
+    #[async_test_all]
+    async fn an_operator_unreachable_while_authenticating_is_a_transport_error() {
+        let transport = GrpcClient::new("http://127.0.0.1:1".to_string(), None, None, None)
+            .expect("transport")
+            .into_inner();
+        let client = SparkRpcClient::new(transport, Arc::new(UnreachableProvider), 0);
+
+        let result = client
+            .call_with_auth_retry(|_| async { Ok(tonic::Response::new(())) })
+            .await;
+
+        assert!(matches!(result, Err(OperatorRpcError::Transport(_))));
     }
 
     fn unauthenticated() -> OperatorRpcError {

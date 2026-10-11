@@ -1477,7 +1477,7 @@ impl TokenService {
     }
 }
 
-fn unix_micros(time: SystemTime) -> Result<i64, ServiceError> {
+pub(crate) fn unix_micros(time: SystemTime) -> Result<i64, ServiceError> {
     i64::try_from(
         time.duration_since(UNIX_EPOCH)
             .map_err(|_| {

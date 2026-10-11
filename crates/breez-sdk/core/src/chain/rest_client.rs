@@ -366,8 +366,9 @@ impl RestClientChainServiceInner {
             .require_network(self.network.into())?;
         let address_str = address.to_string();
 
-        // A refund address only ever holds its one refund plus the sweep spending
-        // it, so a single (un-paginated) page of history covers it.
+        // A refund address only ever holds its one refund, a child paying that
+        // refund's fee and the sweep, so a single (un-paginated) page of history
+        // covers it.
         let txs = self
             .get_response_json::<Vec<AddressTx>>(format!("/address/{address}/txs").as_str())
             .await?;

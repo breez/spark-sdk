@@ -1,4 +1,5 @@
 mod api;
+mod chain_queries;
 mod contacts;
 mod deposits;
 pub(crate) mod exit_chain_downloader;
@@ -8,11 +9,14 @@ mod lightning_address;
 mod lightning_sender;
 mod lnurl;
 mod payments;
+mod recover_funds;
 mod runtime;
 mod sync;
 mod sync_coordinator;
+mod token_allowances;
 mod unilateral_exit;
 mod unilateral_exit_backup;
+mod watchtower_exit;
 
 pub(crate) use helpers::partner_id;
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};
@@ -50,10 +54,12 @@ bitflags! {
         const WalletState = 1 << 1;
         const Deposits = 1 << 2;
         const LnurlMetadata = 1 << 3;
+        const ExitChainState = 1 << 4;
         const Full = Self::Wallet.0.0
             | Self::WalletState.0.0
             | Self::Deposits.0.0
-            | Self::LnurlMetadata.0.0;
+            | Self::LnurlMetadata.0.0
+            | Self::ExitChainState.0.0;
     }
 }
 

@@ -251,40 +251,6 @@ impl BreezSdk {
         Ok(self.sdk.get_info(request.into()).await?.into())
     }
 
-    #[wasm_bindgen(js_name = "prepareUnilateralExit")]
-    pub async fn prepare_unilateral_exit(
-        &self,
-        request: PrepareUnilateralExitRequest,
-    ) -> WasmResult<PrepareUnilateralExitResponse> {
-        Ok(self
-            .sdk
-            .prepare_unilateral_exit(request.into())
-            .await?
-            .into())
-    }
-
-    #[wasm_bindgen(js_name = "unilateralExit")]
-    pub async fn unilateral_exit(
-        &self,
-        request: UnilateralExitRequest,
-        signer: crate::signer::JsCpfpSigner,
-    ) -> WasmResult<UnilateralExitResponse> {
-        let signer = std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer));
-        Ok(self
-            .sdk
-            .unilateral_exit(request.into(), signer)
-            .await?
-            .into())
-    }
-
-    #[wasm_bindgen(js_name = "checkUnilateralExit")]
-    pub async fn check_unilateral_exit(
-        &self,
-        request: CheckUnilateralExitRequest,
-    ) -> WasmResult<CheckUnilateralExitResponse> {
-        Ok(self.sdk.check_unilateral_exit(request.into()).await?.into())
-    }
-
     #[wasm_bindgen(js_name = "exportUnilateralExitState")]
     pub async fn export_unilateral_exit_state(
         &self,
@@ -302,6 +268,35 @@ impl BreezSdk {
             .import_unilateral_exit_state(request.into())
             .await?
             .into())
+    }
+
+    #[wasm_bindgen(js_name = "prepareRecoverFunds")]
+    pub async fn prepare_recover_funds(
+        &self,
+        request: PrepareRecoverFundsRequest,
+    ) -> WasmResult<PrepareRecoverFundsResponse> {
+        Ok(self.sdk.prepare_recover_funds(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "recoverFunds")]
+    pub async fn recover_funds(
+        &self,
+        request: RecoverFundsRequest,
+        signer: Option<crate::signer::JsCpfpSigner>,
+    ) -> WasmResult<RecoverFundsResponse> {
+        let signer = signer.map(|signer| {
+            std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer))
+                as std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>
+        });
+        Ok(self.sdk.recover_funds(request.into(), signer).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "checkRecoverFunds")]
+    pub async fn check_recover_funds(
+        &self,
+        request: CheckRecoverFundsRequest,
+    ) -> WasmResult<CheckRecoverFundsResponse> {
+        Ok(self.sdk.check_recover_funds(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "receivePayment")]
@@ -434,6 +429,74 @@ impl BreezSdk {
         Ok(self
             .sdk
             .publish_signed_transfer_package(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "createTokenAllowance")]
+    pub async fn create_token_allowance(
+        &self,
+        request: CreateTokenAllowanceRequest,
+    ) -> WasmResult<CreateTokenAllowanceResponse> {
+        Ok(self
+            .sdk
+            .create_token_allowance(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "revokeTokenAllowance")]
+    pub async fn revoke_token_allowance(
+        &self,
+        request: RevokeTokenAllowanceRequest,
+    ) -> WasmResult<()> {
+        Ok(self.sdk.revoke_token_allowance(request.into()).await?)
+    }
+
+    #[wasm_bindgen(js_name = "listTokenAllowances")]
+    pub async fn list_token_allowances(
+        &self,
+        request: ListTokenAllowancesRequest,
+    ) -> WasmResult<ListTokenAllowancesResponse> {
+        Ok(self.sdk.list_token_allowances(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "preparePullPayment")]
+    pub async fn prepare_pull_payment(
+        &self,
+        request: PreparePullPaymentRequest,
+    ) -> WasmResult<PreparePullPaymentResponse> {
+        Ok(self.sdk.prepare_pull_payment(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "pullPayment")]
+    pub async fn pull_payment(
+        &self,
+        request: PullPaymentRequest,
+    ) -> WasmResult<PullPaymentResponse> {
+        Ok(self.sdk.pull_payment(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "buildUnsignedPullPackage")]
+    pub async fn build_unsigned_pull_package(
+        &self,
+        request: BuildUnsignedPullPackageRequest,
+    ) -> WasmResult<UnsignedTransferPackage> {
+        Ok(self
+            .sdk
+            .build_unsigned_pull_package(request.into())
+            .await?
+            .into())
+    }
+
+    #[wasm_bindgen(js_name = "publishSignedPullPackage")]
+    pub async fn publish_signed_pull_package(
+        &self,
+        request: PublishSignedPullPackageRequest,
+    ) -> WasmResult<PullPaymentResponse> {
+        Ok(self
+            .sdk
+            .publish_signed_pull_package(request.into())
             .await?
             .into())
     }

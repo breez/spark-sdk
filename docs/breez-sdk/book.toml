@@ -13,6 +13,9 @@ git-repository-url = "https://github.com/breez/spark-sdk"
 edit-url-template = "https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/{path}"
 no-section-label = true
 
+[output.html.redirect]
+"/guide/unilateral_exit.html" = "recover_funds.html"
+
 [output.html.fold]
 enable = true
 

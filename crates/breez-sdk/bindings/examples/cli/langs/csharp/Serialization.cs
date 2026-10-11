@@ -151,6 +151,7 @@ public static class Serialization
         "ServiceStatus+", "SdkEvent+", "InputType+",
         "AssetFilter+", "FeePolicy+", "MaxFee+", "Fee+", "Seed+",
         "ExitTransactionStatus+", "CpfpInput+",
+        "CooperativeRecoveryError+", "ExitRefundState+",
     };
 
     /// <summary>

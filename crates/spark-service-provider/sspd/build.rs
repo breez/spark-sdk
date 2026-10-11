@@ -16,10 +16,7 @@ fn main() {
         .extern_path(".spark", "::spark::operator::rpc::spark")
         .extern_path(".common", "::spark::operator::rpc::common")
         .compile_protos(
-            &[
-                "proto/spark/spark_ssp_internal.proto",
-                "proto/spark/spark_internal.proto",
-            ],
+            &["proto/spark/spark_ssp_internal.proto"],
             &["proto", "../../spark/protos"],
         )
         .unwrap();

@@ -457,7 +457,7 @@ impl TreeDepositService {
             .aggregate_signatures(&response_node, &node_tree)
             .await?;
 
-        let finalize_resp = crate::operator_rpc::finalize_node_signatures_v2(
+        let finalize_resp = crate::operator_rpc::finalize_node_signatures(
             &self.operator_pool.get_coordinator().client,
             operator_rpc::spark::FinalizeNodeSignaturesRequest {
                 intent: operator_rpc::common::SignatureIntent::Creation as i32,

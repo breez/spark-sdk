@@ -1,4 +1,5 @@
 # pylint: disable=too-many-branches
+# pylint: disable=too-many-branches
 import logging
 from breez_sdk_spark import (
     BreezSdk,
@@ -122,6 +123,10 @@ class SdkListener(EventListener):
             # the SDK retries after it.
             conversion = event.conversion
             retry_in_secs = event.retry_in_secs
+        elif isinstance(event, SdkEvent.RECOVERABLE_FUNDS):
+            # Funds left the balance and wait to be recovered on-chain.
+            # Quote their recovery with prepare_recover_funds.
+            recoverable_funds_sats = event.recoverable_funds_sats
         else:
             # Handle any future event types
             pass

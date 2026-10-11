@@ -115,6 +115,12 @@ impl EventListener for SdkEventListener {
                 // A stable balance conversion failed. When retry_in_secs is set,
                 // the SDK retries after it.
             }
+            SdkEvent::RecoverableFunds {
+                recoverable_funds_sats,
+            } => {
+                // Funds left the balance and wait to be recovered on-chain.
+                // Quote their recovery with prepare_recover_funds.
+            }
         }
     }
 }

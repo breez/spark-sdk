@@ -21,6 +21,15 @@ let
     OPERATOR_0_TLS_PORT = 18535;
     OPERATOR_1_TLS_PORT = 18536;
     OPERATOR_2_TLS_PORT = 18537;
+    OPERATOR_0_HTTP_PORT = 18545;
+    OPERATOR_1_HTTP_PORT = 18546;
+    OPERATOR_2_HTTP_PORT = 18547;
+    OPERATOR_0_INTERNAL_PORT = 18555;
+    OPERATOR_1_INTERNAL_PORT = 18556;
+    OPERATOR_2_INTERNAL_PORT = 18557;
+    OPERATOR_0_METRICS_PORT = 19090;
+    OPERATOR_1_METRICS_PORT = 19091;
+    OPERATOR_2_METRICS_PORT = 19092;
     SSP_PORT = 59049;
     SSP_INTERNAL_PORT = 59050;
     LNURL_PORT = 8080;
@@ -94,6 +103,9 @@ let
       "SPARK_OPERATOR_INDEX=${toString index}"
       "SPARK_OPERATOR_KEY=${lib.concatStrings (lib.replicate 32 "0${toString (index + 1)}")}"
       ''OPERATOR_PORT="$OPERATOR_${toString index}_TLS_PORT"''
+      ''OPERATOR_HTTP_PORT="$OPERATOR_${toString index}_HTTP_PORT"''
+      ''OPERATOR_INTERNAL_PORT="$OPERATOR_${toString index}_INTERNAL_PORT"''
+      ''OPERATOR_METRICS_PORT="$OPERATOR_${toString index}_METRICS_PORT"''
       "DKG_BATCH_SIZE=${toString dkgBatchSize}"
       "${./operator.sh}"
     ];
@@ -149,9 +161,9 @@ let
     }
   '';
 
-  # The operators serve TLS only. Wallets reach them here over plain HTTP,
-  # native gRPC and gRPC-Web on the same port, and nginx carries on to the
-  # operator over TLS.
+  # The operators serve TLS only, native gRPC and gRPC-Web on ports of their
+  # own. Wallets reach them here over plain HTTP, both on the same port, and
+  # nginx carries on to the operator's matching port over TLS.
   operatorProxyConfig = pkgs.writeText "operator-proxy-nginx.conf" ''
     daemon off;
     pid nginx.pid;
@@ -164,10 +176,15 @@ let
       fastcgi_temp_path tmp/fastcgi;
       uwsgi_temp_path tmp/uwsgi;
       scgi_temp_path tmp/scgi;
-      map $server_port $operator {
+      map $server_port $operator_grpc {
         @OPERATOR_0_PORT@ 127.0.0.1:@OPERATOR_0_TLS_PORT@;
         @OPERATOR_1_PORT@ 127.0.0.1:@OPERATOR_1_TLS_PORT@;
         @OPERATOR_2_PORT@ 127.0.0.1:@OPERATOR_2_TLS_PORT@;
+      }
+      map $server_port $operator_http {
+        @OPERATOR_0_PORT@ 127.0.0.1:@OPERATOR_0_HTTP_PORT@;
+        @OPERATOR_1_PORT@ 127.0.0.1:@OPERATOR_1_HTTP_PORT@;
+        @OPERATOR_2_PORT@ 127.0.0.1:@OPERATOR_2_HTTP_PORT@;
       }
       server {
         listen @BIND_ADDRESS@:@OPERATOR_0_PORT@;
@@ -182,9 +199,9 @@ let
         proxy_send_timeout 1d;
         location / {
           if ($content_type ~* "^application/grpc($|[+;])") {
-            grpc_pass grpcs://$operator;
+            grpc_pass grpcs://$operator_grpc;
           }
-          proxy_pass https://$operator;
+          proxy_pass https://$operator_http;
           proxy_http_version 1.1;
           proxy_buffering off;
         }
@@ -223,6 +240,7 @@ let
         # fails.
         command = words [
           ''OPERATOR_ADDRESSES="localhost:$OPERATOR_0_TLS_PORT localhost:$OPERATOR_1_TLS_PORT localhost:$OPERATOR_2_TLS_PORT"''
+          ''OPERATOR_INTERNAL_ADDRESSES="localhost:$OPERATOR_0_INTERNAL_PORT localhost:$OPERATOR_1_INTERNAL_PORT localhost:$OPERATOR_2_INTERNAL_PORT"''
           ''OPERATOR_PUBLIC_PORTS="$OPERATOR_0_PORT $OPERATOR_1_PORT $OPERATOR_2_PORT"''
           ''SSP_PUBLIC_PORT="$SSP_PORT"''
           ''SSP_ADDRESS="127.0.0.1:$SSP_PORT"''
@@ -307,6 +325,9 @@ let
             ''-e "s|@OPERATOR_0_TLS_PORT@|$OPERATOR_0_TLS_PORT|"''
             ''-e "s|@OPERATOR_1_TLS_PORT@|$OPERATOR_1_TLS_PORT|"''
             ''-e "s|@OPERATOR_2_TLS_PORT@|$OPERATOR_2_TLS_PORT|"''
+            ''-e "s|@OPERATOR_0_HTTP_PORT@|$OPERATOR_0_HTTP_PORT|"''
+            ''-e "s|@OPERATOR_1_HTTP_PORT@|$OPERATOR_1_HTTP_PORT|"''
+            ''-e "s|@OPERATOR_2_HTTP_PORT@|$OPERATOR_2_HTTP_PORT|"''
             ''${operatorProxyConfig} >"$dir/nginx.conf"''
           ]}
           exec nginx -e stderr -p "$dir" -c "$dir/nginx.conf"

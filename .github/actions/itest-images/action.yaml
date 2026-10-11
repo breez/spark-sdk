@@ -2,7 +2,9 @@ name: 'Itest images'
 description: >
   Loads the images a local cluster runs from the cache, keyed by what each one is
   built from. With build set, whatever the cache did not hold is built and cached
-  for the jobs that follow. Needs a Rust toolchain: the tags come from the itest
+  for the jobs that follow. The operator images are built in every job instead:
+  they hold code that is not public, and a pull request from a fork can restore
+  this repository's caches. Needs a Rust toolchain: the tags come from the itest
   harness, so the images cached are the ones the fixtures then run.
 inputs:
   images:
@@ -13,6 +15,10 @@ inputs:
     description: 'Build and cache the images the cache did not hold'
     required: false
     default: 'false'
+  registry-token:
+    description: 'A token that can pull ghcr.io/breez/spark-operator, for the operator images'
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
@@ -25,22 +31,6 @@ runs:
         mkdir -p /tmp/itest-images
         cargo run --quiet -p spark-itest --bin itest-image-tags -- ${{ inputs.images }} > /tmp/itest-images/tags
         tr '-' '_' < /tmp/itest-images/tags >> "$GITHUB_OUTPUT"
-
-    - name: Restore the operator image
-      id: spark-so
-      if: steps.tags.outputs.spark_so != ''
-      uses: actions/cache/restore@v4
-      with:
-        path: /tmp/itest-images/spark-so.tar
-        key: itest-image-spark-so-${{ runner.os }}-${{ steps.tags.outputs.spark_so }}
-
-    - name: Restore the migrations image
-      id: spark-migrations
-      if: steps.tags.outputs.spark_migrations != ''
-      uses: actions/cache/restore@v4
-      with:
-        path: /tmp/itest-images/spark-migrations.tar
-        key: itest-image-spark-migrations-${{ runner.os }}-${{ steps.tags.outputs.spark_migrations }}
 
     - name: Restore the lightning node image
       id: ldk-server
@@ -67,6 +57,23 @@ runs:
           fi
         done
 
+    # Built rather than cached, see above. On top of their private base image,
+    # which the registry serves to Actions for free, that takes seconds.
+    - name: Build the operator images
+      if: steps.tags.outputs.spark_so != '' || steps.tags.outputs.spark_migrations != ''
+      shell: bash
+      env:
+        REGISTRY_TOKEN: ${{ inputs.registry-token }}
+      run: |
+        if [ -z "$REGISTRY_TOKEN" ]; then
+          echo "::error::The operator images need the registry-token input"
+          exit 1
+        fi
+        echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        images=$(grep -oE '^(spark-so|spark-migrations)=' /tmp/itest-images/tags | tr -d '=' | tr '\n' ' ')
+        cargo xtask itest-images $images
+        docker logout ghcr.io
+
     # Builds only what the loads above left missing, and saves those for the jobs
     # this one hands the images to.
     - name: Build what the cache did not hold
@@ -75,25 +82,12 @@ runs:
       run: |
         cargo xtask itest-images ${{ inputs.images }}
         while IFS='=' read -r image tag; do
+          case "$image" in spark-so|spark-migrations) continue ;; esac
           tarball="/tmp/itest-images/$image.tar"
           if [ ! -e "$tarball" ]; then
             docker save "$image:$tag" -o "$tarball"
           fi
         done < /tmp/itest-images/tags
-
-    - name: Cache the operator image
-      if: inputs.build == 'true' && steps.tags.outputs.spark_so != '' && steps.spark-so.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: /tmp/itest-images/spark-so.tar
-        key: itest-image-spark-so-${{ runner.os }}-${{ steps.tags.outputs.spark_so }}
-
-    - name: Cache the migrations image
-      if: inputs.build == 'true' && steps.tags.outputs.spark_migrations != '' && steps.spark-migrations.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: /tmp/itest-images/spark-migrations.tar
-        key: itest-image-spark-migrations-${{ runner.os }}-${{ steps.tags.outputs.spark_migrations }}
 
     - name: Cache the lightning node image
       if: inputs.build == 'true' && steps.tags.outputs.ldk_server != '' && steps.ldk-server.outputs.cache-hit != 'true'
