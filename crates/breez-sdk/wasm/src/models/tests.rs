@@ -197,41 +197,35 @@ fn tagged_enums_report_what_is_wrong() {
     );
 }
 
-// Every file whose types cross to JS, since a type in one reaches structs in
-// the others.
-const MIRRORED: &[&str] = &[
-    include_str!("mod.rs"),
-    include_str!("chain_service.rs"),
-    include_str!("issuer.rs"),
-    include_str!("rest_client.rs"),
-    include_str!("../passkey.rs"),
-    include_str!("../sdk_builder.rs"),
-    include_str!("../sdk_context.rs"),
-    include_str!("../signer.rs"),
-    include_str!("../token_store/mod.rs"),
-    include_str!("../tree_store/mod.rs"),
-    include_str!("../turnkey.rs"),
-];
+// Every source file in the crate, so a buffered type is caught wherever it is
+// declared.
+const SOURCES: &[&str] = include!(concat!(env!("OUT_DIR"), "/wasm_sources.rs"));
 
-// Serde buffers a flattened field, and an enum tagged by hand rather than by
-// the models macro, in a form that has no u128. A u128 below either can't be
-// read back from JS.
+// Serde buffers a flattened field, an untagged enum and an enum tagged by hand
+// rather than by the models macro. A buffered value can't be read through
+// serde-wasm-bindgen directly, which a u128 and a macro-tagged enum need, so
+// neither may sit anywhere below one.
 #[wasm_bindgen_test]
-fn buffered_models_hold_no_u128() {
+fn buffered_models_hold_no_u128_or_tagged_enum() {
     let mut mirrored = Mirrored::default();
-    for source in MIRRORED {
+    for source in SOURCES {
         mirrored.visit_file(&syn::parse_file(source).unwrap());
     }
     let Mirrored {
         fields,
+        tagged,
         mut pending,
     } = mirrored;
+    assert!(!tagged.is_empty(), "found no macro-tagged enum to check");
 
     let mut seen = HashSet::new();
-    let mut u128s = Vec::new();
-    while let Some(name) = pending.pop() {
+    let mut unreadable = Vec::new();
+    while let Some((name, start)) = pending.pop() {
         if !seen.insert(name.clone()) {
             continue;
+        }
+        if tagged.contains(&name) {
+            unreadable.push(format!("{name} (tagged enum, below {start})"));
         }
         // A flattened field names a type, not a model, so it can be missing.
         let Some(type_fields) = fields.get(&name) else {
@@ -241,26 +235,30 @@ fn buffered_models_hold_no_u128() {
             let mut idents = Idents::default();
             idents.visit_type(&field.ty);
             if idents.0.iter().any(|i| i == "u128") {
-                let field_name = field.ident.as_ref().map(ToString::to_string);
-                u128s.push(format!("{name}.{}", field_name.unwrap_or_default()));
+                let field_name = field_name(field);
+                unreadable.push(format!("{name}.{field_name} (u128, below {start})"));
             }
-            pending.extend(idents.0.into_iter().filter(|i| fields.contains_key(i)));
+            let reached = idents.0.into_iter().filter(|i| fields.contains_key(i));
+            pending.extend(reached.map(|i| (i, start.clone())));
         }
     }
     assert!(
-        u128s.is_empty(),
-        "u128 below a flattened field or a hand-tagged enum can't be read back from JS: \
-         mirror the enum with `extern_wasm_bindgen` instead. {u128s:?}"
+        unreadable.is_empty(),
+        "these can't be read back from JS below a flattened field, an untagged \
+         enum or a hand-tagged enum: mirror the enum with `extern_wasm_bindgen` \
+         and drop the flatten. {unreadable:?}"
     );
 }
 
-// Fields by type name, and where the walk starts: hand-tagged enums and
-// anything flattened. Visiting rather than reading `file.items` also reaches
-// types declared inside a module.
+// Fields by type name, the enums the models macro tags, and where the walk
+// starts: buffered enums and anything flattened. Visiting rather than reading
+// `file.items` also reaches types declared inside a module. Types sharing a
+// name across files share an entry, which can only widen the walk.
 #[derive(Default)]
 struct Mirrored {
     fields: HashMap<String, Vec<syn::Field>>,
-    pending: Vec<String>,
+    tagged: HashSet<String>,
+    pending: Vec<(String, String)>,
 }
 
 impl Mirrored {
@@ -269,10 +267,12 @@ impl Mirrored {
             if serde_attr_has(&field.attrs, "flatten") {
                 let mut idents = Idents::default();
                 idents.visit_type(&field.ty);
-                self.pending.extend(idents.0);
+                let start = format!("flattened {name}.{}", field_name(field));
+                self.pending
+                    .extend(idents.0.into_iter().map(|i| (i, start.clone())));
             }
         }
-        self.fields.insert(name, fields);
+        self.fields.entry(name).or_default().extend(fields);
     }
 }
 
@@ -284,21 +284,51 @@ impl Visit<'_> for Mirrored {
 
     fn visit_item_enum(&mut self, item: &syn::ItemEnum) {
         let name = item.ident.to_string();
+        let has_data = item.variants.iter().any(|v| !v.fields.is_empty());
+        let mirrored = item.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "extern_wasm_bindgen")
+        });
+        if mirrored && has_data {
+            self.tagged.insert(name.clone());
+        }
         if serde_attr_has(&item.attrs, "tag") || serde_attr_has(&item.attrs, "untagged") {
-            self.pending.push(name.clone());
+            self.pending
+                .push((name.clone(), format!("buffered enum {name}")));
         }
         let variant_fields = item.variants.iter().flat_map(|v| v.fields.iter().cloned());
         self.record(name, variant_fields.collect());
     }
 }
 
-fn serde_attr_has(attrs: &[syn::Attribute], needle: &str) -> bool {
-    attrs.iter().any(|attr| match &attr.meta {
-        syn::Meta::List(list) if list.path.is_ident("serde") => {
-            list.tokens.to_string().contains(needle)
-        }
-        _ => false,
-    })
+fn field_name(field: &syn::Field) -> String {
+    field
+        .ident
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+// Whether a `#[serde(...)]` attribute names `key`, as `key` or `key = ...`.
+fn serde_attr_has(attrs: &[syn::Attribute], key: &str) -> bool {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("serde"))
+        .any(|attr| {
+            let mut found = false;
+            let _ = attr.parse_nested_meta(|meta| {
+                found |= meta.path.is_ident(key);
+                if meta.input.peek(syn::Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
+                } else if meta.input.peek(syn::token::Paren) {
+                    meta.parse_nested_meta(|_| Ok(()))?;
+                }
+                Ok(())
+            });
+            found
+        })
 }
 
 #[derive(Default)]
