@@ -146,6 +146,8 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: Some(domain.to_string()),
+            actual_domain: None,
+            username: None,
             amount_received_sat: Some(1000),
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -173,6 +175,55 @@ mod shared_tests {
         assert_eq!(data["amount_sat"], 1000);
     }
 
+    /// The webhook names the address the invoice was requested for. The user
+    /// may have given the username up since, and the server may have handled
+    /// the request as another domain, whose webhook then gets the delivery.
+    pub async fn enqueue_webhooks_names_the_address_that_was_paid<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let webhook_service = WebhookService::new(db.clone());
+        let preimage_bytes = [13u8; 32];
+        let (preimage_hex, payment_hash, invoice_str) =
+            super::test_helpers::generate_test_invoice(&preimage_bytes);
+
+        let user = |name: &str| crate::user::User {
+            name: name.to_string(),
+            pubkey: "paid_pubkey".to_string(),
+            domain: "tips.example".to_string(),
+            description: None,
+        };
+        db.upsert_user(&user("alice"), None).await.unwrap();
+        crate::invoice_paid::create_invoice(
+            db,
+            &payment_hash,
+            &user("alice"),
+            &invoice_str,
+            i64::MAX,
+            "cash.example",
+        )
+        .await
+        .unwrap();
+        db.upsert_user(&user("alicia"), None).await.unwrap();
+        let mut invoice = db
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        invoice.preimage = Some(preimage_hex);
+        db.upsert_invoice(&invoice).await.unwrap();
+
+        crate::webhook_notify::notify_webhooks(db, &webhook_service, &[payment_hash])
+            .await
+            .unwrap();
+
+        let deliveries = db.take_pending_webhook_deliveries().await.unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].domain, "tips.example");
+        let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
+        assert_eq!(payload["data"]["lightning_address"], "alice@cash.example");
+    }
+
     pub async fn enqueue_webhooks_skips_invoice_without_domain<DB>(db: &DB)
     where
         DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
@@ -192,6 +243,8 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: None,
+            actual_domain: None,
+            username: None,
             amount_received_sat: None,
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -230,6 +283,8 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: Some(domain.to_string()),
+            actual_domain: None,
+            username: None,
             amount_received_sat: Some(1000),
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -268,6 +323,12 @@ mod postgres_tests {
     async fn enqueue_webhooks_creates_delivery() {
         let (_pg, db) = test_db().await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
+    }
+
+    #[tokio::test]
+    async fn enqueue_webhooks_names_the_address_that_was_paid() {
+        let (_pg, db) = test_db().await;
+        shared_tests::enqueue_webhooks_names_the_address_that_was_paid(&db).await;
     }
 
     #[tokio::test]

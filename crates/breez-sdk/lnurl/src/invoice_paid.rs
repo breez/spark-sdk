@@ -4,6 +4,7 @@ use tracing::{debug, error};
 
 use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError};
 use crate::time::now_millis;
+use crate::user::User;
 use crate::webhooks::{WebhookRepository, WebhookService};
 
 #[derive(Debug, thiserror::Error)]
@@ -89,10 +90,10 @@ where
 pub async fn create_invoice<DB>(
     db: &DB,
     payment_hash: &str,
-    user_pubkey: &str,
+    user: &User,
     invoice: &str,
     invoice_expiry: i64,
-    domain: &str,
+    actual_domain: &str,
 ) -> Result<(), LnurlRepositoryError>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
@@ -100,13 +101,15 @@ where
     let now = now_millis();
     let invoice_record = Invoice {
         payment_hash: payment_hash.to_string(),
-        user_pubkey: user_pubkey.to_string(),
+        user_pubkey: user.pubkey.clone(),
         invoice: invoice.to_string(),
         preimage: None,
         invoice_expiry,
         created_at: now,
         updated_at: now,
-        domain: Some(domain.to_string()),
+        domain: Some(user.domain.clone()),
+        actual_domain: Some(actual_domain.to_string()),
+        username: Some(user.name.clone()),
         amount_received_sat: None,
     };
     db.upsert_invoice(&invoice_record).await?;
@@ -186,6 +189,8 @@ mod shared_tests {
             created_at: 1000,
             updated_at: 1000,
             domain: None,
+            actual_domain: None,
+            username: None,
             amount_received_sat: None,
         })
         .await
@@ -207,6 +212,32 @@ mod shared_tests {
             pending.iter().any(|p| p.payment_hash == payment_hash),
             "zap receipt must be enqueued even when the preimage was already stored"
         );
+    }
+
+    pub async fn create_invoice_records_the_address_it_was_requested_for<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let user = crate::user::User {
+            domain: "tips.example".to_string(),
+            pubkey: "requested_pubkey".to_string(),
+            name: "alice".to_string(),
+            description: None,
+        };
+
+        create_invoice(db, "requested", &user, "lnbc1", i64::MAX, "cash.example")
+            .await
+            .unwrap();
+
+        let invoice = db
+            .get_invoice_by_payment_hash("requested")
+            .await
+            .unwrap()
+            .expect("the invoice is stored");
+        assert_eq!(invoice.user_pubkey, "requested_pubkey");
+        assert_eq!(invoice.domain.as_deref(), Some("tips.example"));
+        assert_eq!(invoice.actual_domain.as_deref(), Some("cash.example"));
+        assert_eq!(invoice.username.as_deref(), Some("alice"));
     }
 
     pub async fn get_or_create_setting_returns_default_on_first_call<DB>(db: &DB)
@@ -249,6 +280,12 @@ mod postgres_tests {
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
         let (_pg, db) = test_db().await;
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
+    }
+
+    #[tokio::test]
+    async fn create_invoice_records_the_address_it_was_requested_for() {
+        let (_pg, db) = test_db().await;
+        shared_tests::create_invoice_records_the_address_it_was_requested_for(&db).await;
     }
 
     #[tokio::test]
