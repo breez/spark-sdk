@@ -203,8 +203,9 @@ fn is_package(entry: &RecoveryTransaction) -> bool {
 ///
 /// Grounded in `spark::services::quote_unilateral_exit`: `per_branch[i] = estimated_cost +
 /// dust`, `single_utxo_funding = sum(per_branch) + fanout_fee`, `total_fee =
-/// sum(estimated_cost) + fanout_fee`, so `single_utxo_funding - total_fee ==
-/// n*dust` and `fanout_fee == 0` iff a single branch.
+/// sum(estimated_cost) + fanout_fee + refund_fee`, so without a refund fee
+/// `single_utxo_funding - total_fee == n*dust`, and `fanout_fee == 0` iff a
+/// single branch.
 fn assert_quote_consistent(
     quote: &PrepareRecoverFundsResponse,
     fee_rate_sat_per_vbyte: u64,
@@ -305,6 +306,10 @@ fn assert_build_matches_quote(quote: &PrepareRecoverFundsResponse, built: &Recov
     assert_eq!(
         built.recoverable_value_sats, quote.recoverable_value_sats,
         "built recoverable value must match the quote"
+    );
+    assert_eq!(
+        built.refund_fee_sats, quote.refund_fee_sats,
+        "built refund fee must match the quote"
     );
     let mut q: Vec<(&String, u64)> = quote
         .leaves
@@ -3744,6 +3749,7 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         mixed.cooperative_fee_sats
             + mixed.cpfp_fee_sats
             + mixed.fanout_fee_sats
+            + mixed.refund_fee_sats
             + mixed.sweep_fee_sats
     );
     let funded: Vec<&str> = quoted_funding(&mixed)
