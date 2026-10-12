@@ -63,6 +63,8 @@ pub struct Invoice {
     pub updated_at: i64,
     /// The domain this invoice was created for, if any.
     pub domain: Option<String>,
+    /// The username this invoice was created for, if the server stored it.
+    pub username: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
 }
@@ -348,8 +350,8 @@ pub struct WebhookPayloadData {
 #[cfg(test)]
 pub mod shared_tests {
     use super::{
-        DomainConfig, LnurlRepository, LnurlRepositoryError, NameStatus, RegistrationLimit,
-        StatementClaim, TransferRequest,
+        DomainConfig, Invoice, LnurlRepository, LnurlRepositoryError, NameStatus,
+        RegistrationLimit, StatementClaim, TransferRequest,
     };
     use crate::domains::DomainGroup;
     use crate::user::User;
@@ -900,6 +902,53 @@ pub mod shared_tests {
         assert_eq!(joined.domain_group.as_deref(), Some("group.com"));
         let group = domain_config(db, "group.com").await;
         assert_eq!(group.domain_group, None);
+    }
+
+    /// The metadata of a payment names the address its invoice was requested
+    /// on, which the user may have given up since. An invoice stored without
+    /// a username or without a domain gets no address.
+    pub async fn metadata_names_the_address_an_invoice_was_requested_on<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = &DomainGroup::new("paid.com");
+        register(db, domain, "pppp", "pia").await.unwrap();
+        let invoice = |payment_hash: &str, domain: Option<&str>, username: Option<&str>| Invoice {
+            payment_hash: payment_hash.into(),
+            user_pubkey: "pppp".into(),
+            invoice: "lnbc1".into(),
+            preimage: None,
+            invoice_expiry: i64::MAX,
+            created_at: 1,
+            updated_at: 1,
+            domain: domain.map(Into::into),
+            username: username.map(Into::into),
+            amount_received_sat: None,
+        };
+        for stored in [
+            invoice("paid-with-username", Some("paid.com"), Some("pia")),
+            invoice("paid-without-username", Some("paid.com"), None),
+            invoice("paid-without-domain", None, None),
+        ] {
+            db.upsert_invoice(&stored).await.unwrap();
+        }
+        register(db, domain, "pppp", "pilar").await.unwrap();
+
+        let metadata = db
+            .get_metadata_by_pubkey("pppp", 0, 100, None)
+            .await
+            .unwrap();
+        let address = |payment_hash: &str| {
+            metadata
+                .iter()
+                .find(|m| m.payment_hash == payment_hash)
+                .expect("metadata for the invoice")
+                .lightning_address
+                .as_deref()
+        };
+        assert_eq!(address("paid-with-username"), Some("pia@paid.com"));
+        assert_eq!(address("paid-without-username"), None);
+        assert_eq!(address("paid-without-domain"), None);
     }
 
     /// A limit inside a window that never expires during the test.

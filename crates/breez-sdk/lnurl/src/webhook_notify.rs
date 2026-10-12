@@ -146,6 +146,7 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: Some(domain.to_string()),
+            username: None,
             amount_received_sat: Some(1000),
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -171,6 +172,55 @@ mod shared_tests {
         assert_eq!(data["preimage"], preimage_hex);
         assert_eq!(data["lightning_address"], "alice@enqueue-test.example.com");
         assert_eq!(data["amount_sat"], 1000);
+    }
+
+    /// The webhook names the address the invoice was requested on, which the
+    /// user may have given up since.
+    pub async fn enqueue_webhooks_names_the_address_that_was_paid<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let webhook_service = WebhookService::new(db.clone());
+        let preimage_bytes = [14u8; 32];
+        let (preimage_hex, payment_hash, invoice_str) =
+            super::test_helpers::generate_test_invoice(&preimage_bytes);
+
+        let domain = "renamed-test.example.com";
+        let user = |name: &str| crate::user::User {
+            name: name.to_string(),
+            pubkey: "renamed_pubkey".to_string(),
+            group: crate::domains::DomainGroup::new(domain),
+            description: String::new(),
+        };
+        db.upsert_user(&user("alice"), None).await.unwrap();
+
+        let now = now_millis();
+        let invoice = Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: "renamed_pubkey".to_string(),
+            invoice: invoice_str,
+            preimage: Some(preimage_hex),
+            invoice_expiry: i64::MAX,
+            created_at: now,
+            updated_at: now,
+            domain: Some(domain.to_string()),
+            username: Some("alice".to_string()),
+            amount_received_sat: Some(1000),
+        };
+        db.upsert_invoice(&invoice).await.unwrap();
+        db.upsert_user(&user("alicia"), None).await.unwrap();
+
+        crate::webhook_notify::notify_webhooks(db, &webhook_service, &[payment_hash])
+            .await
+            .unwrap();
+
+        let deliveries = db.take_pending_webhook_deliveries().await.unwrap();
+        assert_eq!(deliveries.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
+        assert_eq!(
+            payload["data"]["lightning_address"],
+            "alice@renamed-test.example.com"
+        );
     }
 
     /// A payment through a domain in another domain's group is delivered to the
@@ -207,6 +257,7 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: Some("joined.example.com".to_string()),
+            username: None,
             amount_received_sat: Some(1000),
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -244,6 +295,7 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: None,
+            username: None,
             amount_received_sat: None,
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -282,6 +334,7 @@ mod shared_tests {
             created_at: now,
             updated_at: now,
             domain: Some(domain.to_string()),
+            username: None,
             amount_received_sat: Some(1000),
         };
         db.upsert_invoice(&invoice).await.unwrap();
@@ -337,6 +390,12 @@ mod postgres_tests {
             .unwrap();
         let db = crate::postgresql::LnurlRepository::new(pool);
         shared_tests::enqueue_webhooks_delivers_to_the_group_of_the_paid_domain(&db).await;
+    }
+
+    #[tokio::test]
+    async fn enqueue_webhooks_names_the_address_that_was_paid() {
+        let (_pg, db) = test_db().await;
+        shared_tests::enqueue_webhooks_names_the_address_that_was_paid(&db).await;
     }
 
     #[tokio::test]

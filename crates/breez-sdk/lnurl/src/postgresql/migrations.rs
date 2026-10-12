@@ -413,6 +413,17 @@ fn migrations() -> Vec<Vec<String>> {
                  ADD COLUMN domain_group VARCHAR(255) REFERENCES allowed_domains (domain)"
                 .to_string(),
         ],
+        vec![
+            // The username the invoice was requested for. An invoice that
+            // exists already gets the name its user holds now.
+            "ALTER TABLE invoices ADD COLUMN username VARCHAR(64)".to_string(),
+            "UPDATE invoices
+             SET username = users.name
+             FROM users
+             WHERE users.pubkey = invoices.user_pubkey
+               AND users.domain = invoices.domain"
+                .to_string(),
+        ],
     ]
 }
 
@@ -681,6 +692,62 @@ mod tests {
                 "a database left at {count} must end with a fresh database's schema"
             );
         }
+    }
+
+    /// An invoice from before the server stored usernames gets the name its
+    /// user holds on the invoice's domain, and stays without one when no user
+    /// matches.
+    #[tokio::test]
+    async fn existing_invoices_get_the_username_their_user_holds() {
+        let (_pg, pool) = empty_test_pool().await;
+        let before_usernames = migrations()
+            .iter()
+            .position(|statements| statements[0].contains("ADD COLUMN username"))
+            .expect("a migration that adds the username column");
+        spark_postgres::run_migrations(
+            &pool,
+            MIGRATIONS_TABLE,
+            &migrations()[..before_usernames],
+            None,
+        )
+        .await
+        .expect("migrate up to the username column");
+        let client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "INSERT INTO users (domain, pubkey, name, description, updated_at)
+                 VALUES ('paid.com', 'pk1', 'alice', '', 0);
+                 INSERT INTO invoices
+                     (payment_hash, user_pubkey, invoice, invoice_expiry, created_at, updated_at, domain)
+                 VALUES ('same-domain', 'pk1', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('other-domain', 'pk1', 'lnbc1', 0, 0, 0, 'other.com'),
+                        ('other-user', 'pk2', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('no-domain', 'pk1', 'lnbc1', 0, 0, 0, NULL);",
+            )
+            .await
+            .unwrap();
+
+        run(&pool).await.expect("add the username column");
+
+        let usernames: Vec<(String, Option<String>)> = client
+            .query(
+                "SELECT payment_hash, username FROM invoices ORDER BY payment_hash",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+        assert_eq!(
+            usernames,
+            [
+                ("no-domain".to_string(), None),
+                ("other-domain".to_string(), None),
+                ("other-user".to_string(), None),
+                ("same-domain".to_string(), Some("alice".to_string())),
+            ]
+        );
     }
 
     #[tokio::test]

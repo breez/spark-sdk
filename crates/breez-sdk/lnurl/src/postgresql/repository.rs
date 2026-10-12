@@ -601,6 +601,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      z.zap_event
                  ,      GREATEST(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
                  ,      i.preimage
+                 ,      i.username || '@' || i.domain
                  FROM (
                      SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                      UNION
@@ -628,6 +629,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
                     preimage: row.try_get(5)?,
+                    lightning_address: row.try_get(6)?,
                 })
             })
             .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
@@ -686,8 +688,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, username)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   invoice = excluded.invoice
@@ -695,7 +697,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   invoice_expiry = excluded.invoice_expiry
                  ,   updated_at = excluded.updated_at
                  ,   domain = excluded.domain
-                 ,   amount_received_sat = excluded.amount_received_sat",
+                 ,   amount_received_sat = excluded.amount_received_sat
+                 ,   username = excluded.username",
             )
             .await?;
         client
@@ -711,6 +714,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     &invoice.updated_at,
                     &invoice.domain,
                     &invoice.amount_received_sat,
+                    &invoice.username,
                 ],
             )
             .await?;
@@ -724,7 +728,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
+                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, username
                  FROM invoices
                  WHERE payment_hash = $1",
             )
@@ -743,6 +747,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     updated_at: row.try_get(6)?,
                     domain: row.try_get(7)?,
                     amount_received_sat: row.try_get(8)?,
+                    username: row.try_get(9)?,
                 })
             })
             .transpose()?;
@@ -772,6 +777,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      i.updated_at     AS i_updated_at
                  ,      i.domain         AS i_domain
                  ,      i.amount_received_sat AS i_amount_received_sat
+                 ,      i.username       AS i_username
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -807,6 +813,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     updated_at: row.try_get("i_updated_at")?,
                     domain: row.try_get("i_domain")?,
                     amount_received_sat: row.try_get("i_amount_received_sat")?,
+                    username: row.try_get("i_username")?,
                 })
             })
             .transpose()?;
@@ -942,7 +949,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                         u.name, COALESCE(d.domain_group, i.domain),
                         sc.sender_comment,
                         i.domain,
-                        z.zap_request
+                        z.zap_request,
+                        i.username
                  FROM invoices i
                  LEFT JOIN allowed_domains d ON d.domain = i.domain
                  LEFT JOIN users u ON u.pubkey = i.user_pubkey
@@ -961,6 +969,10 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 let name: Option<String> = row.try_get(5)?;
                 let group: String = row.try_get(6)?;
                 let domain: String = row.try_get(8)?;
+                let username: Option<String> = row.try_get(10)?;
+                // The username the invoice was created for, or without one the
+                // name its user holds now.
+                let name = username.or(name);
                 Ok::<_, tokio_postgres::Error>(WebhookPayloadData {
                     payment_hash: row.try_get(0)?,
                     user_pubkey: row.try_get(1)?,
@@ -1208,6 +1220,13 @@ mod postgres_tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn metadata_names_the_address_an_invoice_was_requested_on() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::metadata_names_the_address_an_invoice_was_requested_on(&db).await;
     }
 
     #[tokio::test]

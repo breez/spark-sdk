@@ -780,7 +780,7 @@ where
         if let Err(e) = create_invoice(
             &state.db,
             &payment_hash,
-            &user.pubkey,
+            &user,
             &res.invoice,
             invoice_expiry,
             &domain,
@@ -2362,6 +2362,7 @@ mod tests {
                 created_at: 0,
                 updated_at: 0,
                 domain: None,
+                username: None,
                 amount_received_sat: None,
             },
         );
@@ -2724,6 +2725,7 @@ mod tests {
                 created_at: 0,
                 updated_at: 0,
                 domain: None,
+                username: None,
                 amount_received_sat: None,
             },
         );

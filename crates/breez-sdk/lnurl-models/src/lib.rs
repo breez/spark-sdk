@@ -121,6 +121,10 @@ pub struct ListMetadataMetadata {
     pub updated_at: i64,
     /// The payment preimage if invoice has been paid
     pub preimage: Option<String>,
+    /// The Lightning address the invoice was requested on. `None` when the
+    /// server does not know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightning_address: Option<String>,
 }
 
 pub fn sanitize_username(username: &str) -> String {
