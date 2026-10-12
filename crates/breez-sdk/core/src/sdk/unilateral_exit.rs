@@ -1287,6 +1287,7 @@ mod tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            refund_fee_sat: 0,
         }
     }
 

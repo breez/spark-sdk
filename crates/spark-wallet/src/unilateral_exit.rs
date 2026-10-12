@@ -174,6 +174,10 @@ pub struct UnilateralExitBuild {
     /// A freshly-broadcast fan-out's fee, paid by the funding UTXO. Zero when
     /// there is no fan-out or it was adopted already-confirmed.
     pub fanout_fee_sat: u64,
+    /// The fees paid out of the leaves' value before the sweep: the value of
+    /// each leaf with an output in `refund_outputs`, less the value of that
+    /// output. A direct transaction's output is its input less its fee.
+    pub refund_fee_sat: u64,
 }
 
 /// A refund output sitting on-chain after a unilateral exit.
@@ -1604,6 +1608,13 @@ pub(crate) fn build_exit(
         .map(|l| l.value)
         .fold(0u64, u64::saturating_add);
     let fanout_fee_sat = fresh_fan_out_fee(plan, fan_out.as_ref());
+    let refund_fee_sat = refund_outputs
+        .iter()
+        .filter_map(|output| {
+            let leaf = node_map.get(&output.leaf_id)?;
+            Some(leaf.value.saturating_sub(output.value))
+        })
+        .fold(0u64, u64::saturating_add);
 
     debug!(
         has_fan_out = fan_out.is_some(),
@@ -1613,6 +1624,7 @@ pub(crate) fn build_exit(
         recoverable_value_sat,
         cpfp_fee_sat,
         fanout_fee_sat,
+        refund_fee_sat,
         "build_unilateral_exit: assembled"
     );
     Ok(UnilateralExitBuild {
@@ -1623,6 +1635,7 @@ pub(crate) fn build_exit(
         recoverable_value_sat,
         cpfp_fee_sat,
         fanout_fee_sat,
+        refund_fee_sat,
     })
 }
 
@@ -2245,6 +2258,7 @@ mod exit_build_tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            refund_fee_sat: 0,
         };
         let interpretation = ChainInterpretation {
             resolved: ResolvedExitState::default(),
@@ -2790,6 +2804,100 @@ mod exit_build_tests {
         assert_eq!(quote.sweep_fee_sat, sweep_fee(&build, change_len));
         let funded: Vec<&TreeNodeId> = quote.per_branch_funding.iter().map(|(id, _)| id).collect();
         assert_eq!(funded, [&leaf_ids[1]]);
+    }
+
+    #[test]
+    fn quote_and_build_report_the_fees_of_direct_transactions() {
+        let leaf = || node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
+        let confirmed = |node_id: &str, confirmed_by: ExitNodeConfirmation| ConfirmedExitNode {
+            node_id: id(node_id),
+            confirmed_by,
+            block_height: None,
+        };
+
+        let nothing_on_chain = (leaf(), ExitChainState::default());
+
+        let direct_refund_on_chain = (
+            leaf(),
+            ExitChainState {
+                nodes: vec![
+                    confirmed("leaf", ExitNodeConfirmation::Cpfp),
+                    confirmed("root", ExitNodeConfirmation::Cpfp),
+                ],
+                refunds: vec![ExitRefund {
+                    leaf_id: id("leaf"),
+                    state: ExitRefundState::OnChain {
+                        tx: tx_paying(99_045, 4),
+                        vout: 0,
+                        value: 99_045,
+                        block_height: None,
+                    },
+                }],
+                ..Default::default()
+            },
+        );
+
+        let mut went_direct = leaf();
+        went_direct.direct_tx = Some(tx_paying(99_045, 4));
+        went_direct.direct_refund_tx = Some(tx_paying(98_090, 5));
+        let direct_tx_on_chain = (
+            went_direct,
+            ExitChainState {
+                nodes: vec![
+                    confirmed("leaf", ExitNodeConfirmation::Direct),
+                    confirmed("root", ExitNodeConfirmation::Cpfp),
+                ],
+                ..Default::default()
+            },
+        );
+
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+        for ((leaf, on_chain), refund_fee) in [
+            (nothing_on_chain, 0),
+            (direct_refund_on_chain, 955),
+            (direct_tx_on_chain, 1_910),
+        ] {
+            let nodes = to_node_map(vec![node("root", None, anchor_tx(1), None), leaf]);
+            let leaf_id = id("leaf");
+            let quote = quote_unilateral_exit(
+                &nodes,
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::All,
+                272,
+                change_len,
+                dust,
+                FEE_RATE,
+                change_len,
+                &on_chain,
+            )
+            .unwrap();
+            let funding_inputs = if quote.per_branch_funding.is_empty() {
+                Vec::new()
+            } else {
+                vec![funding(quote.single_utxo_funding_sat)]
+            };
+            let plan = plan_unilateral_exit(
+                nodes,
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::All,
+                funding_inputs,
+                FEE_RATE,
+                change_len,
+                &on_chain,
+            )
+            .unwrap();
+            let build = build_unilateral_exit(&plan, &on_chain, FEE_RATE).unwrap();
+
+            assert_eq!(quote.refund_fee_sat, refund_fee);
+            assert_eq!(build.refund_fee_sat, refund_fee);
+            let swept: u64 = build.refund_outputs.iter().map(|output| output.value).sum();
+            assert_eq!(build.recoverable_value_sat - build.refund_fee_sat, swept);
+        }
     }
 }
 
