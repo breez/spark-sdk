@@ -16,7 +16,7 @@ build-target-%: install-target-%
 build-release:
 	cargo xtask build --release
 
-check: fmt-check clippy-check test flutter-check
+check: fmt-check clippy-check wasm-js-lint test flutter-check
 
 clippy-fix: cargo-clippy-fix wasm-clippy-fix
 
@@ -70,6 +70,9 @@ wasm-test-mysql-timezone: wasm-test-node
 wasm-test-js-ssl-mode:
 	cd crates/breez-sdk/wasm/js/mysql-storage && npm install && npm test
 	cd crates/breez-sdk/wasm/js/postgres-storage && npm install && npm test
+
+wasm-js-lint:
+	cd crates/breez-sdk/wasm/js && npm ci && ESLINT_USE_FLAT_CONFIG=false npm run lint
 
 flutter-check:
 	cargo xtask flutter-check
