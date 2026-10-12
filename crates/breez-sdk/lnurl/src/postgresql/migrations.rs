@@ -424,6 +424,27 @@ fn migrations() -> Vec<Vec<String>> {
                AND users.domain = invoices.domain"
                 .to_string(),
         ],
+        vec![
+            // What happened to each username under a domain when the domain
+            // joined a group. Nothing else keeps what a merge dropped.
+            // registered is false for a held username. outcome is 'moved',
+            // 'released' (the group holds it for its pubkey) or 'dropped'.
+            // dropped_hold_pubkey is the pubkey whose hold in the group ended
+            // because the registration moved to the group.
+            "CREATE TABLE merged_names (
+                    id BIGSERIAL PRIMARY KEY,
+                    merged_at BIGINT NOT NULL,
+                    domain VARCHAR(255) NOT NULL,
+                    domain_group VARCHAR(255) NOT NULL,
+                    name VARCHAR(64) NOT NULL,
+                    pubkey VARCHAR(66) NOT NULL,
+                    registered BOOLEAN NOT NULL,
+                    description VARCHAR(255),
+                    outcome VARCHAR(16) NOT NULL,
+                    dropped_hold_pubkey VARCHAR(66)
+                )"
+            .to_string(),
+        ],
     ]
 }
 

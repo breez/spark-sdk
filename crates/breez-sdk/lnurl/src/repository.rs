@@ -1,6 +1,7 @@
 use lnurl_models::ListMetadataMetadata;
 
 use crate::domains::DomainGroup;
+use crate::merge::MergedNames;
 use crate::user::User;
 use crate::zap::Zap;
 
@@ -82,6 +83,8 @@ pub struct DomainConfig {
     pub domain: String,
     /// The domain whose group this domain is in, if set.
     pub domain_group: Option<String>,
+    /// Whether usernames are registered or held under this domain.
+    pub has_names: bool,
     /// The domain's own Breez API key, if set.
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
@@ -269,6 +272,16 @@ pub trait LnurlRepository {
 
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Move the usernames registered or held under `domain` to `group`, which
+    /// `domain` joined, and record in `merged_names` what happened to each.
+    ///
+    /// What is registered in the group stays: [`crate::merge`] has every case.
+    async fn merge_domain(
+        &self,
+        domain: &str,
+        group: &DomainGroup,
+    ) -> Result<MergedNames, LnurlRepositoryError>;
 
     /// Store the cached partner JWT for a domain.
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
@@ -902,6 +915,26 @@ pub mod shared_tests {
         assert_eq!(joined.domain_group.as_deref(), Some("group.com"));
         let group = domain_config(db, "group.com").await;
         assert_eq!(group.domain_group, None);
+    }
+
+    /// `list_domains` reports whether usernames are registered or held under a
+    /// domain. The caller allows `group.com` and `joined.com` first.
+    pub async fn list_domains_reports_whether_a_domain_has_usernames<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        assert!(!domain_config(db, "group.com").await.has_names);
+
+        let domain = &DomainGroup::new("group.com");
+        register(db, domain, "aaaa", "alice").await.unwrap();
+        assert!(domain_config(db, "group.com").await.has_names);
+
+        assert!(db.delete_user(domain, "aaaa", "alice").await.unwrap());
+        assert!(
+            domain_config(db, "group.com").await.has_names,
+            "a released username is held under the domain"
+        );
+        assert!(!domain_config(db, "joined.com").await.has_names);
     }
 
     /// The metadata of a payment names the address its invoice was requested

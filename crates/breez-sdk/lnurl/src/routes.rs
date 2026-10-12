@@ -2150,6 +2150,13 @@ mod tests {
         async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
+        async fn merge_domain(
+            &self,
+            _: &str,
+            _: &DomainGroup,
+        ) -> Result<crate::merge::MergedNames, LnurlRepositoryError> {
+            Ok(crate::merge::MergedNames::default())
+        }
         async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
             self.invoices
                 .lock()

@@ -107,13 +107,49 @@ where
 }
 
 /// Load the allowed domains together with the ones that have no key of their own.
+/// Usernames under a domain that is in another domain's group move to that
+/// group first.
 async fn load<DB>(db: &DB) -> Result<(DomainMap, Vec<String>), LnurlRepositoryError>
 where
     DB: LnurlRepository,
 {
     let configs = db.list_domains().await?;
     let without_api_key = domains_without_api_key(&configs);
-    Ok((to_map(configs), without_api_key))
+    let with_names: Vec<String> = configs
+        .iter()
+        .filter(|config| config.has_names)
+        .map(|config| config.domain.clone())
+        .collect();
+    let domains = to_map(configs);
+    merge_joined(db, &domains, &with_names).await?;
+    Ok((domains, without_api_key))
+}
+
+/// Move the usernames under each of `with_names` that is in another domain's
+/// group to that group. The server looks a username up in the group only, so
+/// one left under the joined domain would not be found.
+async fn merge_joined<DB>(
+    db: &DB,
+    domains: &DomainMap,
+    with_names: &[String],
+) -> Result<(), LnurlRepositoryError>
+where
+    DB: LnurlRepository,
+{
+    for name in with_names {
+        let Some(group) = domains.get(name).and_then(|domain| domain.group.as_ref()) else {
+            continue;
+        };
+        if group.as_str() == name {
+            continue;
+        }
+        let merged = db.merge_domain(name, group).await?;
+        info!(
+            "merged the usernames under '{name}' into its group '{group}': {} moved, {} released for their pubkey, {} dropped",
+            merged.moved, merged.released, merged.dropped
+        );
+    }
+    Ok(())
 }
 
 fn to_map(configs: Vec<DomainConfig>) -> DomainMap {
@@ -263,12 +299,17 @@ fn log_changes(current: &DomainMap, latest: &DomainMap) {
 
 #[cfg(test)]
 mod tests {
+    use spark_postgres::deadpool_postgres::Pool;
+
     use super::*;
+    use crate::test_support::test_pool;
+    use crate::user::User;
 
     fn cfg(domain: &str, api_key: Option<&str>) -> DomainConfig {
         DomainConfig {
             domain: domain.to_string(),
             domain_group: None,
+            has_names: false,
             api_key: api_key.map(str::to_string),
             jwt: None,
         }
@@ -403,5 +444,79 @@ mod tests {
             joined("c.com", "a.com"),
         ];
         assert_eq!(domains_without_api_key(&configs), vec!["b.com".to_string()]);
+    }
+
+    /// Allow `domain` and register `alice` under it.
+    async fn allow_with_alice(db: &crate::postgresql::LnurlRepository, domain: &str) {
+        db.add_domain(domain).await.unwrap();
+        db.upsert_user(
+            &User {
+                group: DomainGroup::new(domain),
+                pubkey: "aaaa".into(),
+                name: "alice".into(),
+                description: String::new(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Put `domain` in the group of `group` the way admins do.
+    async fn join(pool: &Pool, domain: &str, group: &str) {
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE allowed_domains SET domain_group = $2 WHERE domain = $1",
+                &[&domain, &group],
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn owner_of_alice(
+        db: &crate::postgresql::LnurlRepository,
+        domain: &str,
+    ) -> Option<String> {
+        db.get_user_by_name(&DomainGroup::new(domain), "alice")
+            .await
+            .unwrap()
+            .map(|user| user.pubkey)
+    }
+
+    #[tokio::test]
+    async fn loading_moves_the_usernames_of_a_joined_domain_to_its_group() {
+        let (_pg, pool) = test_pool().await;
+        let db = crate::postgresql::LnurlRepository::new(pool.clone());
+        db.add_domain("a.com").await.unwrap();
+        allow_with_alice(&db, "b.com").await;
+        join(&pool, "b.com", "a.com").await;
+
+        let (domains, _) = load(&db).await.unwrap();
+
+        assert_eq!(
+            group_of(&domains, "b.com", true),
+            Some(DomainGroup::new("a.com"))
+        );
+        assert_eq!(owner_of_alice(&db, "a.com").await.as_deref(), Some("aaaa"));
+        assert_eq!(owner_of_alice(&db, "b.com").await, None);
+    }
+
+    #[tokio::test]
+    async fn loading_leaves_the_usernames_of_a_domain_it_does_not_serve() {
+        let (_pg, pool) = test_pool().await;
+        let db = crate::postgresql::LnurlRepository::new(pool.clone());
+        db.add_domain("a.com").await.unwrap();
+        db.add_domain("b.com").await.unwrap();
+        allow_with_alice(&db, "c.com").await;
+        join(&pool, "b.com", "a.com").await;
+        // b.com is in the group of a.com, so no group is named after it.
+        join(&pool, "c.com", "b.com").await;
+
+        let (domains, _) = load(&db).await.unwrap();
+
+        assert_eq!(group_of(&domains, "c.com", true), None);
+        assert_eq!(owner_of_alice(&db, "c.com").await.as_deref(), Some("aaaa"));
     }
 }

@@ -44,6 +44,7 @@ mod auth;
 mod domains;
 mod error;
 mod invoice_paid;
+mod merge;
 mod partner_jwt;
 mod postgresql;
 mod repository;
