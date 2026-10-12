@@ -35,6 +35,10 @@ use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
 use uuid::Uuid;
 
+/// The refund timelock at or below which the operators refuse to decrement a
+/// returned leaf's refunds, and renew it through the arms that reset them.
+const OPERATOR_RENEW_TIMELOCK_THRESHOLD: u16 = 300;
+
 #[derive(PartialEq)]
 pub struct Leaves {
     pub available: Vec<TreeNode>,
@@ -167,6 +171,59 @@ mod malformed_tx_tests {
     }
 }
 
+#[cfg(test)]
+mod returned_leaf_tests {
+    use bitcoin::Sequence;
+
+    use super::TreeNodeStatus;
+    use crate::tree::tests::create_test_tree_node;
+
+    fn leaf_with_refund_timelock(status: TreeNodeStatus, timelock: u32) -> super::TreeNode {
+        let mut leaf = create_test_tree_node("leaf", 1_000);
+        let mut refund_tx = leaf.node_tx.clone();
+        refund_tx.input[0].sequence = Sequence::from_consensus(timelock | (1 << 30));
+        leaf.refund_tx = Some(refund_tx);
+        leaf.status = status;
+        leaf
+    }
+
+    #[test]
+    fn returned_is_parsed_rather_than_unknown() {
+        assert_eq!(TreeNodeStatus::from("RETURNED"), TreeNodeStatus::Returned);
+    }
+
+    /// Above the operators' threshold a returned leaf takes the refund decrement;
+    /// at or below it, the arms that reset the refund.
+    #[test]
+    fn only_a_returned_leaf_above_the_threshold_renews_by_decrement() {
+        let returned = |timelock| leaf_with_refund_timelock(TreeNodeStatus::Returned, timelock);
+        assert!(returned(2_000).renews_by_refund_decrement());
+        assert!(returned(301).renews_by_refund_decrement());
+        assert!(!returned(300).renews_by_refund_decrement());
+        assert!(!returned(150).renews_by_refund_decrement());
+        assert!(
+            !leaf_with_refund_timelock(TreeNodeStatus::Available, 2_000)
+                .renews_by_refund_decrement()
+        );
+    }
+
+    #[test]
+    fn a_returned_leaf_needs_renewal_whatever_its_timelock() {
+        for timelock in [2_000, 300, 100] {
+            assert!(
+                leaf_with_refund_timelock(TreeNodeStatus::Returned, timelock)
+                    .needs_renewal()
+                    .unwrap()
+            );
+        }
+        assert!(
+            !leaf_with_refund_timelock(TreeNodeStatus::Available, 300)
+                .needs_renewal()
+                .unwrap()
+        );
+    }
+}
+
 /// Projects the verified-leaf categories of `leaves` into the keys keyed by id.
 /// Every stored leaf passed the ownership check on its way in, whatever its
 /// status, so `not_available` belongs here too: a leaf part-way through an exit
@@ -231,6 +288,10 @@ pub enum TreeNodeStatus {
     WatchtowerExited,
     /// WatchtowerExitRecovered is the status of a watchtower-exited node with a co-signed recovery.
     WatchtowerExitRecovered,
+    /// Returned is the status of a leaf whose outbound preimage swap was returned.
+    /// The leaf is still owned, but a refund signed for that swap stays valid, so
+    /// it cannot be spent until it is renewed.
+    Returned,
     /// Unknown is a status not yet recognized by this SDK version.
     Unknown,
 }
@@ -270,6 +331,7 @@ impl std::fmt::Display for TreeNodeStatus {
             TreeNodeStatus::Consolidated => write!(f, "Consolidated"),
             TreeNodeStatus::WatchtowerExited => write!(f, "WatchtowerExited"),
             TreeNodeStatus::WatchtowerExitRecovered => write!(f, "WatchtowerExitRecovered"),
+            TreeNodeStatus::Returned => write!(f, "Returned"),
             TreeNodeStatus::Unknown => write!(f, "Unknown"),
         }
     }
@@ -296,6 +358,7 @@ impl From<&str> for TreeNodeStatus {
             "CONSOLIDATED" => TreeNodeStatus::Consolidated,
             "WATCHTOWER_EXITED" => TreeNodeStatus::WatchtowerExited,
             "WATCHTOWER_EXIT_RECOVERED" => TreeNodeStatus::WatchtowerExitRecovered,
+            "RETURNED" => TreeNodeStatus::Returned,
             other => {
                 tracing::warn!("Unrecognized TreeNodeStatus: {other}");
                 TreeNodeStatus::Unknown
@@ -361,6 +424,23 @@ impl TreeNode {
         let sequence_num = self.refund_sequence()?.to_consensus_u32() as u16;
         trace!("Refund tx sequence: {} node id: {}", sequence_num, self.id);
         Ok(sequence_num <= 100)
+    }
+
+    /// Whether this leaf is due a renewal: its refund timelock is expiring, or it
+    /// is returned, which keeps it unspendable until renewed.
+    pub fn needs_renewal(&self) -> Result<bool, TreeServiceError> {
+        Ok(self.status == TreeNodeStatus::Returned || self.needs_refund_tx_renewed()?)
+    }
+
+    /// Whether this leaf renews by re-signing only its refunds one timelock
+    /// interval lower. The operators allow it only for a returned leaf whose
+    /// refund timelock is above their renewal threshold. At or below it, a
+    /// returned leaf renews through the arms that reset the refund.
+    pub fn renews_by_refund_decrement(&self) -> bool {
+        self.status == TreeNodeStatus::Returned
+            && self.refund_sequence().is_ok_and(|sequence| {
+                sequence.to_consensus_u32() as u16 > OPERATOR_RENEW_TIMELOCK_THRESHOLD
+            })
     }
 
     pub fn is_zero_timelock(&self) -> bool {

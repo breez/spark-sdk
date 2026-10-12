@@ -688,6 +688,7 @@ fn is_unilaterally_exitable(status: TreeNodeStatus) -> bool {
         | TreeNodeStatus::RenewLocked
         | TreeNodeStatus::ParentExited
         | TreeNodeStatus::Consolidated
+        | TreeNodeStatus::Returned
         | TreeNodeStatus::Unknown => true,
     }
 }

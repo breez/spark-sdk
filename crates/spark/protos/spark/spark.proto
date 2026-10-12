@@ -405,6 +405,16 @@ message RenewLeafRequest {
       // node transaction to the transaction chain with zero timelock as well.
       // This case is mostly used for user-created trees from L1 deposits.
       RenewNodeZeroTimelockSigningJob renew_node_zero_timelock_signing_job = 4;
+
+      // Refreshes a RETURNED leaf: re-signs only the refund transactions,
+      // paying the owner, on the multiple of 100 at or below
+      // (current refund timelock - 100), the same step a send takes. The node
+      // transaction is untouched. The only refund a returned transfer can
+      // still broadcast is a lightning HTLC one at current - 30, so the new
+      // refunds beat it. Requires the leaf to be RETURNED
+      // with a refund timelock above 300; at or below that the leaf renews
+      // through one of the arms above instead, which reset the refund.
+      DecrementRefundTimelockSigningJob decrement_refund_timelock_signing_job = 6;
     }
 
     // When set, the renewal is authorized via a delegate decomposition (Spark
@@ -469,11 +479,22 @@ message RenewNodeZeroTimelockSigningJob {
     // node transaction.
 }
 
+message DecrementRefundTimelockSigningJob {
+    // Signing job with the updated cpfp refund transaction, spending the
+    // leaf's current node transaction one timelock interval lower.
+    UserSignedTxSigningJob refund_tx_signing_job = 1;
+    // Required iff the leaf has a direct refund transaction today.
+    UserSignedTxSigningJob direct_refund_tx_signing_job = 2;
+    // Required iff the leaf has a direct-from-cpfp refund transaction today.
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 3;
+}
+
 message RenewLeafResponse {
     oneof renew_result {
       RenewNodeTimelockResult renew_node_timelock_result = 1;
       RenewRefundTimelockResult renew_refund_timelock_result = 2;
       RenewNodeZeroTimelockResult renew_node_zero_timelock_result = 3;
+      DecrementRefundTimelockResult decrement_refund_timelock_result = 4;
     }
 }
 
@@ -489,6 +510,10 @@ message RenewRefundTimelockResult {
 message RenewNodeZeroTimelockResult {
     TreeNode split_node = 1;
     TreeNode node = 2;
+}
+
+message DecrementRefundTimelockResult {
+    TreeNode node = 1;
 }
 
 /**
@@ -1987,6 +2012,12 @@ enum TreeNodeStatus {
     // when it confirms — the SE never observes the broadcast. Terminal: the leaf
     // can no longer be used off-chain, and recovery is on L1.
     TREE_NODE_STATUS_WATCHTOWER_EXIT_RECOVERED = 15;
+    // A leaf whose outbound lightning send was returned. The HTLC refund
+    // signed for that transfer stays valid, so the leaf is owned but not
+    // spendable until the owner renews it through renew_leaf. Other transfer
+    // types return to AVAILABLE: their refunds only gain a witness together
+    // with the key tweak.
+    TREE_NODE_STATUS_RETURNED = 16;
 }
 
 message WalletSetting {

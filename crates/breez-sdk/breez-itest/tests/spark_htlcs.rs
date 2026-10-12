@@ -1,7 +1,8 @@
-//! TODO: re-enable every test here once Spark allows direct HTLCs again. They
-//! are temporarily restricted to transfers to and from the SSP, so creating one
-//! between two wallets is refused with `PermissionDenied`. See
-//! github.com/breez/spark-sdk/issues/1123.
+//! TODO: run every test here against the deployed regtest too once Spark allows
+//! direct HTLCs again. They are temporarily restricted there to transfers to and
+//! from the SSP, so creating one between two wallets is refused with
+//! `PermissionDenied`. See github.com/breez/spark-sdk/issues/1123. The local
+//! operators allow them, so the tests run on the local stack meanwhile.
 
 use anyhow::Result;
 use breez_sdk_itest::*;
@@ -130,7 +131,10 @@ async fn send_htlc_alice_to_bob(
 
 /// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
-#[ignore = "direct Spark HTLCs are temporarily disabled"]
+#[cfg_attr(
+    not(feature = "local-itest"),
+    ignore = "direct Spark HTLCs are temporarily disabled"
+)]
 #[test_log::test(tokio::test)]
 async fn test_01_htlc_success(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
@@ -196,7 +200,10 @@ async fn test_01_htlc_success(#[future] env: Result<Environment>) -> Result<()> 
 
 /// Test 2: Send payment from Alice to Bob using Spark transfer and fail to claim before expiry
 #[rstest]
-#[ignore = "direct Spark HTLCs are temporarily disabled"]
+#[cfg_attr(
+    not(feature = "local-itest"),
+    ignore = "direct Spark HTLCs are temporarily disabled"
+)]
 #[test_log::test(tokio::test)]
 async fn test_02_htlc_refund(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
@@ -321,7 +328,10 @@ async fn test_02_htlc_refund(#[future] env: Result<Environment>) -> Result<()> {
 /// A payment stored as Pending at an older sync offset never transitions to Failed
 /// because the offset-based sync skips it on subsequent syncs.
 #[rstest]
-#[ignore = "direct Spark HTLCs are temporarily disabled"]
+#[cfg_attr(
+    not(feature = "local-itest"),
+    ignore = "direct Spark HTLCs are temporarily disabled"
+)]
 #[test_log::test(tokio::test)]
 async fn test_03_reconcile_stale_pending_payment(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;

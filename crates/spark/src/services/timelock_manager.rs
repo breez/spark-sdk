@@ -4,15 +4,16 @@ use tracing::{error, info, trace};
 
 use crate::{
     Network,
+    core::{current_sequence, enforce_timelock, next_sequence},
     operator::{
         OperatorPool,
         rpc::{
             QueryNodesPaginatedRequest,
             spark::{
-                GetSigningCommitmentsRequest, RenewLeafRequest, RenewNodeTimelockSigningJob,
-                RenewNodeZeroTimelockSigningJob, RenewRefundTimelockSigningJob, TreeNodeIds,
-                query_nodes_request::Source, renew_leaf_request::SigningJobs,
-                renew_leaf_response::RenewResult,
+                DecrementRefundTimelockSigningJob, GetSigningCommitmentsRequest, RenewLeafRequest,
+                RenewNodeTimelockSigningJob, RenewNodeZeroTimelockSigningJob,
+                RenewRefundTimelockSigningJob, TreeNodeIds, query_nodes_request::Source,
+                renew_leaf_request::SigningJobs, renew_leaf_response::RenewResult,
             },
         },
     },
@@ -24,13 +25,44 @@ use crate::{
         transactions::{
             NodeTransactions, RefundTransactions, create_decremented_timelock_node_txs,
             create_initial_timelock_node_txs, create_initial_timelock_refund_txs,
-            create_zero_timelock_node_txs, first_output,
+            create_refund_txs, create_zero_timelock_node_txs, first_output,
         },
     },
 };
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
 use std::collections::BTreeMap;
+
+/// The `renew_leaf` arm a leaf due a renewal takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenewalArm {
+    /// Re-signs only the refunds, one interval lower.
+    DecrementRefund,
+    /// Extends a node tx at timelock 0 and resets the refund.
+    ZeroTimelock,
+    /// Re-splits from the parent and resets both node and refund.
+    Node,
+    /// Decrements the node tx from the parent and resets the refund.
+    Refund,
+}
+
+impl RenewalArm {
+    fn for_leaf(leaf: &TreeNode) -> Self {
+        if leaf.renews_by_refund_decrement() {
+            Self::DecrementRefund
+        } else if leaf.is_zero_timelock() {
+            Self::ZeroTimelock
+        } else if leaf.needs_node_tx_renewed() {
+            Self::Node
+        } else {
+            Self::Refund
+        }
+    }
+
+    fn builds_on_parent(self) -> bool {
+        matches!(self, Self::Node | Self::Refund)
+    }
+}
 
 /// A leaf to check for renewal: its chain and the key it is held under.
 #[derive(Debug)]
@@ -95,11 +127,12 @@ impl TimelockManager {
             .await?)
     }
 
-    /// Renews each leaf whose refund timelock is expiring, signing with the key it
-    /// is held under and paying the new refunds to that key. Every leaf comes back
-    /// with its chain: as it arrived if not renewed, otherwise rebuilt from its
-    /// ancestors plus the new split node the coordinator returns. A parent missing
-    /// from the stored chain is fetched from the operators.
+    /// Renews each leaf whose refund timelock is expiring or that is returned,
+    /// signing with the key it is held under and paying the new refunds to that
+    /// key. Every leaf comes back with its chain: as it arrived if not renewed,
+    /// otherwise rebuilt from its ancestors plus the new split node the
+    /// coordinator returns. A parent missing from the stored chain is fetched
+    /// from the operators.
     pub async fn check_renew_nodes(
         &self,
         candidates: Vec<RenewalCandidate>,
@@ -108,7 +141,7 @@ impl TimelockManager {
         let mut ready = Vec::new();
         let mut renewable = Vec::new();
         for candidate in candidates {
-            if candidate.pedigree.leaf.needs_refund_tx_renewed()? {
+            if candidate.pedigree.leaf.needs_renewal()? {
                 renewable.push(candidate);
             } else {
                 ready.push(candidate.pedigree);
@@ -154,8 +187,7 @@ impl TimelockManager {
         let node_ids: Vec<String> = renewable
             .iter()
             .map(|candidate| &candidate.pedigree)
-            // A zero-timelock renewal builds on no parent.
-            .filter(|pedigree| !pedigree.leaf.is_zero_timelock())
+            .filter(|pedigree| RenewalArm::for_leaf(&pedigree.leaf).builds_on_parent())
             .filter(|pedigree| match &pedigree.leaf.parent_node_id {
                 Some(parent_id) => !pedigree.ancestors.iter().any(|a| &a.id == parent_id),
                 None => false,
@@ -208,13 +240,15 @@ impl TimelockManager {
             .map(|a| (a.id.clone(), a.clone()))
             .collect();
 
-        let (renewed_leaf, split_node) = if leaf.is_zero_timelock() {
-            self.renew_zero_timelock(leaf, signing_key).await?
-        } else {
-            let parent = Self::resolve_renewal_parent(leaf, &mut nodes, fetched)?;
-            if leaf.needs_node_tx_renewed() {
+        let (renewed_leaf, split_node) = match RenewalArm::for_leaf(leaf) {
+            RenewalArm::DecrementRefund => self.decrement_refund(leaf, signing_key).await?,
+            RenewalArm::ZeroTimelock => self.renew_zero_timelock(leaf, signing_key).await?,
+            RenewalArm::Node => {
+                let parent = Self::resolve_renewal_parent(leaf, &mut nodes, fetched)?;
                 self.renew_node(leaf, signing_key, &parent).await?
-            } else {
+            }
+            RenewalArm::Refund => {
+                let parent = Self::resolve_renewal_parent(leaf, &mut nodes, fetched)?;
                 self.renew_refund(leaf, signing_key, &parent).await?
             }
         };
@@ -622,6 +656,85 @@ impl TimelockManager {
         Ok((node, None))
     }
 
+    /// Re-signs a returned leaf's refunds one timelock interval lower, on the same
+    /// node transactions, so they mature before the refund the returned transfer
+    /// left signed.
+    async fn decrement_refund(
+        &self,
+        node: &TreeNode,
+        signing_key: &LeafSigningKey,
+    ) -> Result<(TreeNode, Option<TreeNode>), ServiceError> {
+        info!("Decrementing refund: {:?}", node.id);
+        let signing_public_key = self.signing_public_key(signing_key).await?;
+        let signing_jobs = decrement_refund_signing_jobs(node, signing_public_key, self.network)?;
+
+        let signing_commitments = self
+            .get_signing_commitments_for_jobs(&node.id, signing_jobs.len())
+            .await?;
+
+        let signed_jobs = sign_signing_jobs(
+            &self.spark_signer,
+            signing_key,
+            signing_jobs,
+            signing_commitments,
+            self.network,
+        )
+        .await?;
+
+        let idempotency_key = node
+            .refund_tx
+            .as_ref()
+            .map(|tx| tx.compute_txid().to_string());
+
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .renew_leaf(
+                RenewLeafRequest {
+                    delegation_path: None,
+                    leaf_id: node.id.to_string(),
+                    signing_jobs: Some(SigningJobs::DecrementRefundTimelockSigningJob(
+                        DecrementRefundTimelockSigningJob {
+                            refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_from_cpfp_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                        },
+                    )),
+                },
+                idempotency_key,
+            )
+            .await?;
+
+        let Some(RenewResult::DecrementRefundTimelockResult(renew_result)) = response.renew_result
+        else {
+            return Err(ServiceError::Generic(
+                "Expected decrement refund timelock response".to_string(),
+            ));
+        };
+
+        // The node transactions are untouched, so the leaf keeps its parent.
+        let node = renew_result
+            .node
+            .ok_or(ServiceError::Generic(
+                "Expected a node in response".to_string(),
+            ))?
+            .try_into()?;
+        Ok((node, None))
+    }
+
     pub async fn renew_zero_timelock(
         &self,
         node: &TreeNode,
@@ -761,18 +874,108 @@ impl TimelockManager {
     }
 }
 
+/// The refunds a returned leaf's decrement re-signs: each one it already has,
+/// on the same node transactions, at the interval boundary at or below one
+/// interval lower. That boundary is what the operators expect, and for an
+/// unaligned refund it is not just one interval lower.
+fn decrement_refund_signing_jobs(
+    node: &TreeNode,
+    signing_public_key: PublicKey,
+    network: Network,
+) -> Result<Vec<SigningJob>, ServiceError> {
+    let node_tx = &node.node_tx;
+    let refund_sequence = node
+        .refund_tx
+        .as_ref()
+        .and_then(|tx| tx.input.first())
+        .map(|input| input.sequence)
+        .ok_or_else(|| {
+            ServiceError::ValidationError(format!("Node {} has no refund tx input", node.id))
+        })?;
+    let (cpfp_sequence, direct_sequence) = next_sequence(refund_sequence)
+        .and_then(|(next, _)| current_sequence(enforce_timelock(next)))
+        .ok_or_else(|| {
+            ServiceError::ValidationError(format!(
+                "Node {} refund timelock {:#x} cannot be decremented",
+                node.id,
+                refund_sequence.to_consensus_u32()
+            ))
+        })?;
+    let direct_node_tx = match (&node.direct_refund_tx, &node.direct_tx) {
+        (None, _) => None,
+        (Some(_), Some(direct_tx)) => Some(direct_tx),
+        (Some(_), None) => {
+            return Err(ServiceError::ValidationError(format!(
+                "Node {} has a direct refund tx but no direct tx",
+                node.id
+            )));
+        }
+    };
+
+    let RefundTransactions {
+        cpfp_tx: cpfp_refund_tx,
+        direct_tx: direct_refund_tx,
+        direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+    } = create_refund_txs(
+        node_tx,
+        direct_node_tx,
+        cpfp_sequence,
+        direct_sequence,
+        &signing_public_key,
+        network,
+    )?;
+
+    let mut signing_jobs = vec![SigningJob {
+        job_type: SigningJobType::CpfpRefund,
+        node_id: node.id.clone(),
+        tx: cpfp_refund_tx,
+        parent_tx_out: first_output(node_tx)?.clone(),
+        signing_public_key,
+        verifying_public_key: node.verifying_public_key,
+    }];
+
+    if let (Some(direct_refund_tx), Some(direct_node_tx)) = (direct_refund_tx, direct_node_tx) {
+        signing_jobs.push(SigningJob {
+            job_type: SigningJobType::DirectRefund,
+            node_id: node.id.clone(),
+            tx: direct_refund_tx,
+            parent_tx_out: first_output(direct_node_tx)?.clone(),
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
+        });
+    }
+
+    if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx
+        && node.direct_from_cpfp_refund_tx.is_some()
+    {
+        signing_jobs.push(SigningJob {
+            job_type: SigningJobType::DirectFromCpfpRefund,
+            node_id: node.id.clone(),
+            tx: direct_from_cpfp_refund_tx,
+            parent_tx_out: first_output(node_tx)?.clone(),
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
+        });
+    }
+
+    Ok(signing_jobs)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use macros::async_test_all;
 
-    use super::{RenewalCandidate, TimelockManager};
+    use bitcoin::{OutPoint, Sequence, Transaction};
+
+    use super::{RenewalArm, RenewalCandidate, TimelockManager, decrement_refund_signing_jobs};
     use crate::Network;
     use crate::operator::testing::unroutable_operator_pool;
     use crate::signer::{LeafSigningKey, SparkSigner, SparkSignerAdapter, create_test_signer};
     use crate::tree::tests::create_test_leaf_held_under;
-    use crate::tree::{LeafPedigree, TreeNodeId};
+    use crate::tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus};
+    use crate::utils::{signing_job::SigningJobType, transactions::is_ephemeral_anchor_output};
 
     async fn timelock_manager() -> (TimelockManager, Arc<dyn SparkSigner>) {
         let signer: Arc<dyn SparkSigner> =
@@ -837,5 +1040,155 @@ mod tests {
         assert_eq!(checked.len(), 1);
         assert_eq!(checked[0].leaf, pedigree.leaf);
         assert_eq!(checked[0].ancestors, pedigree.ancestors);
+    }
+
+    const SPARK_SEQUENCE_FLAG: u32 = 1 << 30;
+
+    /// A returned leaf with a refund at `refund_timelock` and, as most leaves
+    /// have, a direct tx with both direct refunds.
+    fn returned_leaf(user_key: bitcoin::secp256k1::PublicKey, refund_timelock: u32) -> TreeNode {
+        let mut leaf = create_test_leaf_held_under("leaf", user_key);
+        leaf.status = TreeNodeStatus::Returned;
+        leaf.node_tx.input[0].sequence = Sequence::from_consensus(1_000 | SPARK_SEQUENCE_FLAG);
+        let mut direct_tx = leaf.node_tx.clone();
+        direct_tx.input[0].sequence = Sequence::from_consensus(1_050 | SPARK_SEQUENCE_FLAG);
+        leaf.direct_tx = Some(direct_tx);
+        let refund_tx = leaf.refund_tx.as_mut().unwrap();
+        refund_tx.input[0].sequence =
+            Sequence::from_consensus(refund_timelock | SPARK_SEQUENCE_FLAG);
+        leaf.direct_refund_tx = leaf.refund_tx.clone();
+        leaf.direct_from_cpfp_refund_tx = leaf.refund_tx.clone();
+        leaf
+    }
+
+    /// A returned leaf above the operators' threshold takes the decrement; at or
+    /// below it, the same arm an expiring available leaf would.
+    #[async_test_all]
+    async fn a_returned_leaf_takes_the_decrement_only_above_the_threshold() {
+        let (_, signer) = timelock_manager().await;
+        let key = signer
+            .get_public_key_for_leaf(&"leaf".parse().unwrap())
+            .await
+            .unwrap();
+        let with_node_timelock = |refund_timelock, node_timelock: u32| {
+            let mut leaf = returned_leaf(key, refund_timelock);
+            leaf.node_tx.input[0].sequence =
+                Sequence::from_consensus(node_timelock | SPARK_SEQUENCE_FLAG);
+            leaf
+        };
+
+        assert_eq!(
+            RenewalArm::for_leaf(&with_node_timelock(500, 1_000)),
+            RenewalArm::DecrementRefund
+        );
+        assert_eq!(
+            RenewalArm::for_leaf(&with_node_timelock(300, 1_000)),
+            RenewalArm::Refund
+        );
+        assert_eq!(
+            RenewalArm::for_leaf(&with_node_timelock(300, 100)),
+            RenewalArm::Node
+        );
+        assert_eq!(
+            RenewalArm::for_leaf(&with_node_timelock(200, 0)),
+            RenewalArm::ZeroTimelock
+        );
+        assert!(!RenewalArm::DecrementRefund.builds_on_parent());
+    }
+
+    fn spent_outpoint(tx: &Transaction) -> OutPoint {
+        tx.input[0].previous_output
+    }
+
+    fn timelock(tx: &Transaction) -> u32 {
+        tx.input[0].sequence.to_consensus_u32()
+    }
+
+    /// The refunds land one interval lower, where the operators expect them,
+    /// each spending the node tx it spent before.
+    #[async_test_all]
+    async fn a_decrement_re_signs_every_refund_one_interval_lower() {
+        let (_, signer) = timelock_manager().await;
+        let key = signer
+            .get_public_key_for_leaf(&"leaf".parse().unwrap())
+            .await
+            .unwrap();
+        let leaf = returned_leaf(key, 500);
+        let node_outpoint = OutPoint {
+            txid: leaf.node_tx.compute_txid(),
+            vout: 0,
+        };
+        let direct_outpoint = OutPoint {
+            txid: leaf.direct_tx.as_ref().unwrap().compute_txid(),
+            vout: 0,
+        };
+
+        let jobs = decrement_refund_signing_jobs(&leaf, key, Network::Regtest).unwrap();
+
+        let job = |job_type| {
+            jobs.iter()
+                .find(|j| j.job_type == job_type)
+                .unwrap_or_else(|| panic!("no {job_type:?} job"))
+        };
+        assert_eq!(jobs.len(), 3);
+        let cpfp = job(SigningJobType::CpfpRefund);
+        assert_eq!(timelock(&cpfp.tx), 400 | SPARK_SEQUENCE_FLAG);
+        assert_eq!(spent_outpoint(&cpfp.tx), node_outpoint);
+        assert!(cpfp.tx.output.iter().any(is_ephemeral_anchor_output));
+        let direct = job(SigningJobType::DirectRefund);
+        assert_eq!(timelock(&direct.tx), 450 | SPARK_SEQUENCE_FLAG);
+        assert_eq!(spent_outpoint(&direct.tx), direct_outpoint);
+        let direct_from_cpfp = job(SigningJobType::DirectFromCpfpRefund);
+        assert_eq!(timelock(&direct_from_cpfp.tx), 450 | SPARK_SEQUENCE_FLAG);
+        assert_eq!(spent_outpoint(&direct_from_cpfp.tx), node_outpoint);
+        // The refunds pay the key the leaf is held under.
+        let script = bitcoin::ScriptBuf::new_p2tr(
+            &bitcoin::secp256k1::Secp256k1::new(),
+            key.x_only_public_key().0,
+            None,
+        );
+        for job in &jobs {
+            assert_eq!(job.tx.output[0].script_pubkey, script);
+        }
+    }
+
+    /// An unaligned refund lands on the interval boundary at or below one
+    /// interval lower, as the operators compute it.
+    #[async_test_all]
+    async fn a_decrement_of_an_unaligned_refund_rounds_down() {
+        let (_, signer) = timelock_manager().await;
+        let key = signer
+            .get_public_key_for_leaf(&"leaf".parse().unwrap())
+            .await
+            .unwrap();
+
+        let jobs =
+            decrement_refund_signing_jobs(&returned_leaf(key, 550), key, Network::Regtest).unwrap();
+
+        assert_eq!(timelock(&jobs[0].tx), 400 | SPARK_SEQUENCE_FLAG);
+    }
+
+    /// The operators require exactly the refunds the leaf already has.
+    #[async_test_all]
+    async fn a_decrement_replaces_only_the_refunds_the_leaf_has() {
+        let (_, signer) = timelock_manager().await;
+        let key = signer
+            .get_public_key_for_leaf(&"leaf".parse().unwrap())
+            .await
+            .unwrap();
+        let mut leaf = returned_leaf(key, 500);
+        leaf.direct_refund_tx = None;
+        leaf.direct_from_cpfp_refund_tx = None;
+
+        let jobs = decrement_refund_signing_jobs(&leaf, key, Network::Regtest).unwrap();
+
+        assert_eq!(
+            jobs.iter().map(|j| j.job_type).collect::<Vec<_>>(),
+            [SigningJobType::CpfpRefund]
+        );
+
+        let mut leaf = returned_leaf(key, 500);
+        leaf.direct_tx = None;
+        assert!(decrement_refund_signing_jobs(&leaf, key, Network::Regtest).is_err());
     }
 }

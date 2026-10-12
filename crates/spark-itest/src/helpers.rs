@@ -19,7 +19,7 @@ use spark_postgres::{
 };
 use spark_wallet::{
     DefaultSigner, Network, SessionStore, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
-    SparkWalletConfig, WalletBuilder, WalletEvent, is_ephemeral_anchor_output,
+    SparkWalletConfig, WalletBuilder, WalletEvent, WalletLeaf, is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
@@ -461,6 +461,12 @@ pub async fn fund_wallet_via_static_deposit(
             }
         }
     }
+}
+
+/// The block-height timelock of a leaf's refund tx.
+pub fn refund_timelock(leaf: &WalletLeaf) -> u32 {
+    let refund_tx = leaf.refund_tx.as_ref().expect("leaf has a refund tx");
+    refund_tx.input[0].sequence.to_consensus_u32() & 0xffff
 }
 
 /// Polls a condition function every 50ms until it returns true or the timeout is reached.

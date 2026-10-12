@@ -29,6 +29,9 @@ knobs:
     # Routes the SSP's counter transfer through the consensus flow, which fences a
     # swap's primary transfer on every operator rather than the coordinator alone.
     spark.so.use_consensus_initiate_counter_transfer: 1
+    # Off by default: parks the leaves of a returned send whose HTLC refund is
+    # signed as RETURNED, until the owner renews them.
+    spark.so.returned_leaf_status.enabled: 1
 bitcoind:
   regtest:
     network: regtest

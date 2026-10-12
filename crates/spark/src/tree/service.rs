@@ -77,18 +77,21 @@ struct RenewalOutcome {
 }
 
 /// Splits a refresh's leaves into the ones worth renewing and the ones already on
-/// their way out. Only a spendable leaf is renewed: the statuses the exit added
-/// are either part-way out or already locked by the operators, and asking for a
-/// new timelock on one of those is at best refused, while a node that no longer
-/// carries a refund fails the check outright and would take the whole refresh
-/// down with it.
+/// their way out. Only a spendable leaf, or a returned one that renewal makes
+/// spendable again, is renewed: the statuses the exit added are either part-way
+/// out or already locked by the operators, and asking for a new timelock on one
+/// of those is at best refused, while a node that no longer carries a refund
+/// fails the check outright and would take the whole refresh down with it.
 ///
 /// Named as what is kept rather than what is excluded, so a status added later is
 /// left out until someone decides it belongs.
 fn partition_renewable(leaves: Vec<TreeNode>) -> (Vec<TreeNode>, Vec<TreeNode>) {
-    leaves
-        .into_iter()
-        .partition(|leaf| leaf.status == TreeNodeStatus::Available)
+    leaves.into_iter().partition(|leaf| {
+        matches!(
+            leaf.status,
+            TreeNodeStatus::Available | TreeNodeStatus::Returned
+        )
+    })
 }
 
 /// Whether `leaf` may enter the pool, logging why not. A leaf is kept out when
@@ -970,7 +973,7 @@ impl SynchronousTreeService {
         // left as it is: that is the key a renewal here signs with.
         let mut due = Vec::new();
         for pedigree in &pedigrees {
-            if pedigree.leaf.needs_refund_tx_renewed()? {
+            if pedigree.leaf.needs_renewal()? {
                 due.push(&pedigree.leaf);
             }
         }
@@ -1190,13 +1193,13 @@ fn any_renewal_landed(
     })
 }
 
-/// Whether any leaf is due for a refund tx renewal, using the same predicate
+/// Whether any leaf is due a renewal, using the same predicate
 /// `TimelockManager::check_renew_nodes` partitions on.
 fn any_needs_renewal<'a>(
     leaves: impl IntoIterator<Item = &'a TreeNode>,
 ) -> Result<bool, TreeServiceError> {
     for leaf in leaves {
-        if leaf.needs_refund_tx_renewed()? {
+        if leaf.needs_renewal()? {
             return Ok(true);
         }
     }
@@ -1225,6 +1228,7 @@ fn held_leaf_statuses() -> Vec<i32> {
         ProtoTreeNodeStatus::RenewLocked as i32,
         ProtoTreeNodeStatus::WatchtowerExited as i32,
         ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
+        ProtoTreeNodeStatus::Returned as i32,
     ]
 }
 
@@ -1511,6 +1515,16 @@ mod tests {
         assert!(any_needs_renewal(&[fresh, expiring]).unwrap());
     }
 
+    /// A returned leaf is unspendable until renewed, however far out its refund
+    /// timelock is.
+    #[test_all]
+    fn renewal_is_pending_for_a_returned_leaf() {
+        let mut returned = leaf_with_refund_sequence("returned", 2_000);
+        returned.status = TreeNodeStatus::Returned;
+
+        assert!(any_needs_renewal(std::slice::from_ref(&returned)).unwrap());
+    }
+
     /// The refund timelock a renewal resets a leaf's to, far enough out that a
     /// leaf handed back by one is no longer due.
     const RENEWED_REFUND_SEQUENCE: u32 = 2_000;
@@ -1552,8 +1566,9 @@ mod tests {
     fn a_leaf_on_its_way_out_is_not_offered_for_renewal() {
         let node = |id, status| create_test_node_with_parent(id, Some("root"), status);
         let available = node("available", TreeNodeStatus::Available);
-        // Every status but Available, so one added later is held out until
-        // someone decides it belongs.
+        let returned = node("returned", TreeNodeStatus::Returned);
+        // Every status but Available and Returned, so one added later is held
+        // out until someone decides it belongs.
         let others: Vec<TreeNode> = [
             TreeNodeStatus::OnChain,
             TreeNodeStatus::Exited,
@@ -1576,14 +1591,14 @@ mod tests {
         .map(|(i, status)| node(Box::leak(format!("other-{i}").into_boxed_str()), status))
         .collect();
 
-        let mut all = vec![available.clone()];
+        let mut all = vec![available.clone(), returned.clone()];
         all.extend(others.iter().cloned());
         let (renewable, kept) = partition_renewable(all);
 
         assert_eq!(
             renewable.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
-            vec![available.id],
-            "only a spendable leaf is worth a new timelock"
+            vec![available.id, returned.id],
+            "only a leaf that is or becomes spendable is worth a new timelock"
         );
         assert_eq!(
             kept.len(),
@@ -1648,6 +1663,85 @@ mod tests {
 
         assert_eq!(*offered.lock().unwrap(), ["ours"]);
         assert!(inserted.contains(&elsewhere));
+    }
+
+    /// What the timelock manager returns for a returned leaf the operators
+    /// renewed: its refunds one interval lower and the leaf available again.
+    fn decrement_returned(candidates: Vec<RenewalCandidate>) -> Vec<LeafPedigree> {
+        candidates
+            .into_iter()
+            .map(|RenewalCandidate { mut pedigree, .. }| {
+                set_refund_sequence(&mut pedigree.leaf, 1_900);
+                pedigree.leaf.status = TreeNodeStatus::Available;
+                pedigree
+            })
+            .collect()
+    }
+
+    async fn our_returned_leaf(service: &SynchronousTreeService, id: &str) -> TreeNode {
+        let mut leaf = owned_leaf(service, id, Some("root"), TreeNodeStatus::Returned).await;
+        set_refund_sequence(&mut leaf, 2_000);
+        leaf
+    }
+
+    #[async_test_all]
+    async fn a_renewed_returned_leaf_counts_towards_the_balance() {
+        let mut service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        service.renew_stub = Some(Box::new(decrement_returned));
+
+        let returned = our_returned_leaf(&service, "returned").await;
+        service.insert_leaves(vec![returned.clone()]).await.unwrap();
+
+        let leaves = service.list_leaves().await.unwrap();
+        assert_eq!(
+            leaves.available.iter().map(|l| &l.id).collect::<Vec<_>>(),
+            [&returned.id]
+        );
+        assert_eq!(
+            service.get_available_balance().await.unwrap(),
+            returned.value
+        );
+    }
+
+    /// A returned leaf the operators would not renew is kept out of the balance
+    /// and of selection, and offered again on the next pass: they keep
+    /// reporting it returned until it is renewed.
+    #[async_test_all]
+    async fn a_returned_leaf_not_renewed_stays_unspendable_and_is_retried() {
+        let mut service = service_over(Arc::new(InMemoryTreeStore::new()), None).await;
+        let offered = Arc::new(std::sync::Mutex::new(0));
+        let recorded = Arc::clone(&offered);
+        service.renew_stub = Some(Box::new(move |candidates: Vec<RenewalCandidate>| {
+            *recorded.lock().unwrap() += candidates.len();
+            renewal_refused(candidates)
+        }));
+
+        let returned = our_returned_leaf(&service, "returned").await;
+        for pass in 1..=2 {
+            service.insert_leaves(vec![returned.clone()]).await.unwrap();
+            assert_eq!(*offered.lock().unwrap(), pass);
+        }
+
+        let leaves = service.list_leaves().await.unwrap();
+        assert!(leaves.available.is_empty());
+        assert_eq!(
+            leaves
+                .not_available
+                .iter()
+                .map(|l| &l.id)
+                .collect::<Vec<_>>(),
+            [&returned.id]
+        );
+        assert_eq!(service.get_available_balance().await.unwrap(), 0);
+        assert!(matches!(
+            service
+                .reserve_leaves_by_ids(
+                    std::slice::from_ref(&returned.id),
+                    ReservationPurpose::Payment
+                )
+                .await,
+            Err(TreeServiceError::NonReservableLeaves)
+        ));
     }
 
     #[async_test_all]
@@ -1966,6 +2060,7 @@ mod tests {
                 ProtoTreeNodeStatus::RenewLocked as i32,
                 ProtoTreeNodeStatus::WatchtowerExited as i32,
                 ProtoTreeNodeStatus::WatchtowerExitRecovered as i32,
+                ProtoTreeNodeStatus::Returned as i32,
             ]
         );
         assert!(

@@ -102,7 +102,11 @@ impl WatchtowerRecoveryService {
 
         let mut witness = Witness::new();
         witness.push(signature.serialize()?);
-        recovery_tx.input[0].witness = witness;
+        recovery_tx
+            .input
+            .first_mut()
+            .ok_or_else(|| ServiceError::ValidationError("recovery tx has no inputs".to_string()))?
+            .witness = witness;
         Ok(recovery_tx)
     }
 }

@@ -17,7 +17,7 @@ use spark::tree::{InMemoryTreeStore, SynchronousTreeService, TreeNodeId, TreeSer
 use spark::utils::leaf_key_tweak::with_node_id_keys;
 use spark_itest::fixtures::bitcoind::BitcoindFixture;
 use spark_itest::fixtures::ldk_server::LdkServerFixture;
-use spark_itest::helpers::deposit_with_amount;
+use spark_itest::helpers::{deposit_with_amount, refund_timelock};
 use spark_itest::lightning_stack::LightningStack;
 use spark_wallet::{ServiceProviderConfig, SparkWalletConfig};
 use sspd_lib::lightning::ldk::LdkServerNode;
@@ -604,7 +604,8 @@ async fn send_failure_does_not_claim() -> Result<()> {
     setup_channel(&stack).await?;
 
     deposit_with_amount(&stack.alice, &stack.fixtures.bitcoind, 16384).await?;
-    let leaf = stack.alice.list_leaves().await?.available[0].id.clone();
+    let sent = stack.alice.list_leaves().await?.available[0].clone();
+    let leaf = sent.id.clone();
 
     let payment_hash = sha256::Hash::hash(&[4u8; 32]);
     let hold: api::Bolt11ReceiveForHashResponse = stack
@@ -673,6 +674,18 @@ async fn send_failure_does_not_claim() -> Result<()> {
             .any(|available| available.id == leaf))
     })
     .await?;
+
+    // The operators park a returned send's leaf until it is renewed below the
+    // refund the send left signed, which here is one interval lower.
+    let returned = stack
+        .alice
+        .list_leaves()
+        .await?
+        .available
+        .into_iter()
+        .find(|available| available.id == leaf)
+        .context("Alice's leaf is available")?;
+    assert_eq!(refund_timelock(&returned), refund_timelock(&sent) - 100);
     Ok(())
 }
 
