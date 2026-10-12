@@ -554,7 +554,11 @@ impl TryFrom<PreimageRequest> for SparkHtlcDetails {
 impl From<PreimageRequestStatus> for SparkHtlcStatus {
     fn from(status: PreimageRequestStatus) -> Self {
         match status {
-            PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
+            // An unrecognized status is not known to be final. The payment's own status
+            // comes from its transfer, so this only affects the HTLC details.
+            PreimageRequestStatus::WaitingForPreimage | PreimageRequestStatus::Unknown => {
+                SparkHtlcStatus::WaitingForPreimage
+            }
             PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
             PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
         }

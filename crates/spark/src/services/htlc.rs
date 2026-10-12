@@ -248,7 +248,9 @@ impl HtlcService {
                 identity_public_key: filter.identity_public_key.serialize().to_vec(),
                 status: filter
                     .status
-                    .map(|s| operator_rpc::spark::PreimageRequestStatus::from(s).into()),
+                    .map(operator_rpc::spark::PreimageRequestStatus::try_from)
+                    .transpose()?
+                    .map(Into::into),
                 limit: paging.limit as i64,
                 offset: paging.offset as i64,
             })

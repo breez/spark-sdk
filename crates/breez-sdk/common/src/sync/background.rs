@@ -483,7 +483,17 @@ impl SyncProcessor {
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
         let reply = self.client.set_record(&record).await?;
 
-        match reply.status() {
+        // Decoded explicitly: the prost getter reads an unrecognized status as `Success`,
+        // which would drop the change from the outgoing queue.
+        let status = crate::sync::proto::SetRecordStatus::try_from(reply.status).map_err(|_| {
+            anyhow::anyhow!(
+                "Unrecognized status {} when pushing outgoing change with id {} for type {}",
+                reply.status,
+                &record.id.data_id,
+                &record.id.r#type
+            )
+        })?;
+        match status {
             crate::sync::proto::SetRecordStatus::Success => {
                 debug!(
                     "Successfully pushed outgoing change with id {} for type {} (local queue id {}). Server returned revision {}.",
@@ -948,6 +958,44 @@ mod tests {
         // Verify
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Network error");
+    }
+
+    #[macros::async_test_all]
+    async fn test_push_sync_once_unknown_status_keeps_change_queued() {
+        let mut mock_storage = MockSyncStorage::new();
+        let test_change = create_outgoing_change("test", "123", 1);
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![test_change.clone()]));
+
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
+        mock_storage.expect_complete_outgoing_sync().times(0);
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client.expect_set_record().times(1).returning(|_| {
+            Ok(crate::sync::proto::SetRecordReply {
+                status: 99,
+                new_revision: 1,
+            })
+        });
+
+        let (_tx, rx) = broadcast::channel(10);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let client = create_signing_client(mock_client, MockSyncSigner::new());
+
+        let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
+
+        let result = sync_processor.push_sync_once().await;
+
+        assert!(result.is_err());
     }
 
     #[macros::async_test_all]

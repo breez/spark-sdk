@@ -551,9 +551,17 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
                 ServiceError::Generic("Invalid receiver identity public key".to_string())
             })?;
 
-        let status = transfer.status().into();
+        let status = decode_proto_enum::<operator_rpc::spark::TransferStatus, _>(
+            transfer.status,
+            TransferStatus::Unknown,
+            "transfer status",
+        );
 
-        let transfer_type = transfer.r#type().into();
+        let transfer_type = decode_proto_enum::<operator_rpc::spark::TransferType, _>(
+            transfer.r#type,
+            TransferType::Unknown,
+            "transfer type",
+        );
 
         let leaves = transfer
             .leaves
@@ -880,6 +888,8 @@ pub enum TransferStatus {
     ReceiverKeyTweakLocked,
     ReceiverKeyTweakApplied,
     ApplyingSenderKeyTweak,
+    /// A status not yet recognized by this SDK version.
+    Unknown,
 }
 
 impl Display for TransferStatus {
@@ -897,6 +907,7 @@ impl Display for TransferStatus {
             TransferStatus::ReceiverKeyTweakLocked => "ReceiverKeyTweakLocked",
             TransferStatus::ReceiverKeyTweakApplied => "ReceiverKeyTweakApplied",
             TransferStatus::ApplyingSenderKeyTweak => "ApplyingSenderKeyTweak",
+            TransferStatus::Unknown => "Unknown",
         };
         write!(f, "{status_str}")
     }
@@ -947,6 +958,8 @@ pub enum TransferType {
     CounterSwap,
     PrimarySwapV3,
     CounterSwapV3,
+    /// A type not yet recognized by this SDK version.
+    Unknown,
 }
 
 impl From<operator_rpc::spark::TransferType> for TransferType {
@@ -1173,10 +1186,11 @@ impl
             .map(|output| (output, network).try_into())
             .collect::<Result<Vec<TokenOutput>, _>>()?;
 
-        let status =
-            operator_rpc::spark_token::TokenTransactionStatus::try_from(transaction.status)
-                .map_err(|_| ServiceError::Generic("Invalid token transaction status".to_string()))?
-                .into();
+        let status = decode_proto_enum::<operator_rpc::spark_token::TokenTransactionStatus, _>(
+            transaction.status,
+            TokenTransactionStatus::Unknown,
+            "token transaction status",
+        );
 
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
@@ -1557,7 +1571,11 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             })?,
             receiver_identity_pubkey: PublicKey::from_slice(&request.receiver_identity_pubkey)
                 .map_err(|_| ServiceError::InvalidPublicKey)?,
-            status: request.status().into(),
+            status: decode_proto_enum::<operator_rpc::spark::PreimageRequestStatus, _>(
+                request.status,
+                PreimageRequestStatus::Unknown,
+                "preimage request status",
+            ),
             created_time: request
                 .created_time
                 .ok_or(ServiceError::Generic("Missing created time".to_string()))
@@ -1584,18 +1602,27 @@ pub enum PreimageRequestStatus {
     WaitingForPreimage,
     PreimageShared,
     Returned,
+    /// A status not yet recognized by this SDK version.
+    Unknown,
 }
 
-impl From<PreimageRequestStatus> for operator_rpc::spark::PreimageRequestStatus {
-    fn from(status: PreimageRequestStatus) -> Self {
+impl TryFrom<PreimageRequestStatus> for operator_rpc::spark::PreimageRequestStatus {
+    type Error = ServiceError;
+
+    fn try_from(status: PreimageRequestStatus) -> Result<Self, Self::Error> {
         match status {
             PreimageRequestStatus::WaitingForPreimage => {
-                operator_rpc::spark::PreimageRequestStatus::WaitingForPreimage
+                Ok(operator_rpc::spark::PreimageRequestStatus::WaitingForPreimage)
             }
             PreimageRequestStatus::PreimageShared => {
-                operator_rpc::spark::PreimageRequestStatus::PreimageShared
+                Ok(operator_rpc::spark::PreimageRequestStatus::PreimageShared)
             }
-            PreimageRequestStatus::Returned => operator_rpc::spark::PreimageRequestStatus::Returned,
+            PreimageRequestStatus::Returned => {
+                Ok(operator_rpc::spark::PreimageRequestStatus::Returned)
+            }
+            PreimageRequestStatus::Unknown => Err(ServiceError::ValidationError(
+                "cannot filter by an unknown preimage request status".to_string(),
+            )),
         }
     }
 }
@@ -1612,6 +1639,22 @@ impl From<operator_rpc::spark::PreimageRequestStatus> for PreimageRequestStatus 
             operator_rpc::spark::PreimageRequestStatus::Returned => PreimageRequestStatus::Returned,
         }
     }
+}
+
+/// Decodes a proto enum field, mapping values this SDK version doesn't know to `unknown`.
+/// The prost getters map them to the enum's first variant, which reads as a real state.
+fn decode_proto_enum<P, T>(value: i32, unknown: T, field: &str) -> T
+where
+    P: TryFrom<i32>,
+    T: From<P>,
+{
+    P::try_from(value).map_or_else(
+        |_| {
+            warn!("Unrecognized {field} {value}, treating it as unknown");
+            unknown
+        },
+        T::from,
+    )
 }
 
 #[cfg(test)]
@@ -1896,5 +1939,43 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test_all]
+    fn decode_proto_enum_maps_unrecognized_values_to_unknown() {
+        use super::{PreimageRequestStatus, TransferStatus, TransferType, decode_proto_enum};
+
+        let status = decode_proto_enum::<operator_rpc::spark::TransferStatus, _>(
+            99,
+            TransferStatus::Unknown,
+            "transfer status",
+        );
+        assert_eq!(status, TransferStatus::Unknown);
+
+        let transfer_type = decode_proto_enum::<operator_rpc::spark::TransferType, _>(
+            99,
+            TransferType::Unknown,
+            "transfer type",
+        );
+        assert_eq!(transfer_type, TransferType::Unknown);
+
+        let preimage_status = decode_proto_enum::<operator_rpc::spark::PreimageRequestStatus, _>(
+            99,
+            PreimageRequestStatus::Unknown,
+            "preimage request status",
+        );
+        assert_eq!(preimage_status, PreimageRequestStatus::Unknown);
+    }
+
+    #[test_all]
+    fn decode_proto_enum_keeps_recognized_values() {
+        use super::{TransferType, decode_proto_enum};
+
+        let transfer_type = decode_proto_enum::<operator_rpc::spark::TransferType, _>(
+            operator_rpc::spark::TransferType::PreimageSwap as i32,
+            TransferType::Unknown,
+            "transfer type",
+        );
+        assert_eq!(transfer_type, TransferType::PreimageSwap);
     }
 }
