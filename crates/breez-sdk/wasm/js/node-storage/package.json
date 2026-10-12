@@ -9,15 +9,8 @@
     "./migrations": "./migrations.cjs",
     "./errors": "./errors.cjs"
   },
-  "scripts": {
-    "lint": "eslint *.cjs",
-    "lint:fix": "eslint *.cjs --fix"
-  },
   "dependencies": {
     "better-sqlite3": "^9.2.2"
-  },
-  "devDependencies": {
-    "eslint": "^8.56.0"
   },
   "engines": {
     "node": ">=16.0.0"

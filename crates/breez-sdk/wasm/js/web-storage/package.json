@@ -8,14 +8,7 @@
     ".": "./index.js",
     "./storage": "./index.js"
   },
-  "scripts": {
-    "lint": "eslint *.js",
-    "lint:fix": "eslint *.js --fix"
-  },
   "dependencies": {},
-  "devDependencies": {
-    "eslint": "^8.56.0"
-  },
   "engines": {
     "node": ">=16.0.0"
   },
