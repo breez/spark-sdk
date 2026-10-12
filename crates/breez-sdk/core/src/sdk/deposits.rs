@@ -142,10 +142,11 @@ impl BreezSdk {
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
 
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         let (confirmations, instant, mature) = tokio::join!(
             self.deposit_confirmations(&request.txid),
             self.fetch_instant_claim_quote(&detailed_utxo),
-            self.fetch_mature_claim_quote(&detailed_utxo),
+            self.fetch_mature_claim_quote(&detailed_utxo, &fee_market),
         );
         let confirmations = confirmations?;
         let mature = mature?;
@@ -158,7 +159,6 @@ impl BreezSdk {
         // own max fee when it has one, the one at maturity under the larger of that
         // and the configured one.
         let deposit_sats = detailed_utxo.value;
-        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
         let instant_max_fee = stored_max_fee
             .or(self.config.max_deposit_claim_fee.as_ref())
@@ -635,6 +635,7 @@ impl BreezSdk {
     async fn fetch_mature_claim_quote(
         &self,
         detailed_utxo: &DetailedUtxo,
+        fee_market: &FeeMarket<'_>,
     ) -> Result<ClaimDepositQuote, SdkError> {
         match self
             .spark_wallet
@@ -659,8 +660,7 @@ impl BreezSdk {
                     "No mature quote for {}:{}, estimating: {e}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
-                let fee_sats = self
-                    .chain_service
+                let fee_sats = fee_market
                     .recommended_fees()
                     .await?
                     .fastest_fee
