@@ -59,6 +59,7 @@ pub enum _SdkError {
         reason: String,
         temporary: bool,
     },
+    CrossChainDisabled,
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),
