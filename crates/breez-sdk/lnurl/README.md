@@ -268,6 +268,80 @@ every held name unavailable: saying otherwise would say who a name is held for.
 held for that wallet, which is what lets a client offer the name back to the
 pubkey that released it.
 
+## Descriptions
+
+The description of an address is the `text/plain` entry of its LNURL-pay
+metadata. A wallet that sends an empty description in a register or transfer
+request leaves the description to the server. The server then stores none, and
+shows `Pay to <username>@<domain>` with the domain the request was sent to. The
+register, transfer and recover responses return the description the server
+shows.
+
+## Domain Aliases
+
+Several domains can serve the same users. A row in `domain_aliases` makes a
+domain an alias of another, its target, and the server handles every request for
+the alias as a request for the target:
+
+```sql
+INSERT INTO domain_aliases (domain, target_domain)
+VALUES ('second.example', 'first.example');
+```
+
+`alice@first.example` and `alice@second.example` are then one registration.
+Payments to either go to the same wallet, and a register, unregister or
+transfer request sent to either domain changes both.
+
+What the server keeps per domain is the target's:
+
+- usernames, each with its description, and the usernames held for the pubkey
+  that released them
+- the registration limit: a pubkey has one budget for both domains
+- the Breez API key and the webhook (`domain_webhooks`)
+
+A client reads the domain it sent its request to:
+
+- The domain in a [signed message](#signed-messages) is the domain the request
+  is sent to, and the server verifies the signature against that domain. A
+  transfer request carries the signatures of both wallets, so a wallet can hand
+  its address over only to a wallet that uses the same domain.
+- In a response, the server puts that domain in place of the target wherever
+  the target is the domain of an address (`alice@first.example`) or the host of
+  a URL (`https://first.example/...`). That covers the Lightning address, the
+  `lnurl`, the callback, the verify URL and the LNURL-pay metadata.
+- The [default description](#descriptions) names that domain. A description
+  that a wallet gave is stored as the wallet sent it, and the server replaces
+  the target in it as in any other string of a response.
+
+The `metadata` endpoint returns the comments that payers wrote and the zap
+requests that they signed as they are stored, whichever domain they name.
+
+An invoice records both domains. `invoices.domain` is the target, whose webhook
+gets the payment. `invoices.actual_domain` is the domain the invoice was
+requested on. Together with the username the invoice was requested for it is
+the `lightning_address` of the payment, in the webhook and in the `metadata`
+response.
+
+The database only accepts a `target_domain` that is an allowed domain, and only
+lowercase names. An alias needs no row in `allowed_domains`, and such a row has
+no effect while the alias exists.
+
+The server loads the aliases when it starts and again every minute. Until an
+instance has loaded a new alias, it serves the domain as before: not at all, or
+as a domain with users of its own when the domain is allowed.
+
+The server does not serve an alias in two cases. It answers requests for the
+alias with `404`, as for a domain that is not allowed, and logs the reason when
+it loads the alias.
+
+- Usernames are registered or held under the alias itself. Payments to those
+  addresses would otherwise go to the target's users of the same name.
+- The target is an alias too.
+
+Payers keep paying the addresses they know. When an alias is removed or gets
+another target, the server resolves an address under the domain to whoever
+holds the same username wherever the domain then leads, if anyone does.
+
 ## Example Usage
 
 ### Setting Up For Development
