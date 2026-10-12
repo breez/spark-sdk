@@ -411,6 +411,18 @@ fn migrations() -> Vec<Vec<String>> {
             // its default.
             "ALTER TABLE users ALTER COLUMN description DROP NOT NULL".to_string(),
         ],
+        vec![
+            // The server handles a request for `domain` as a request for
+            // `target_domain`. It lowercases a `Host` before it looks the
+            // name up, so both are lowercase.
+            "CREATE TABLE domain_aliases (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    target_domain VARCHAR(255) NOT NULL REFERENCES allowed_domains (domain),
+                    CHECK (domain = lower(domain)),
+                    CHECK (target_domain = lower(target_domain))
+                )"
+            .to_string(),
+        ],
     ]
 }
 

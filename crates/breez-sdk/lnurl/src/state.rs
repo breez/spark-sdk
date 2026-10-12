@@ -19,6 +19,7 @@ pub struct State<DB> {
     /// `None` disables the per-pubkey registration limit.
     pub registration_limit: Option<crate::repository::RegistrationLimit>,
     pub domains: Arc<RwLock<crate::domains::DomainMap>>,
+    pub aliases: Arc<RwLock<crate::domain_aliases::DomainAliases>>,
     pub nostr_keys: Option<nostr::Keys>,
     pub ca_cert: Option<Vec<u8>>,
     pub crl_url: Option<String>,
@@ -93,6 +94,7 @@ where
             include_spark_address: self.include_spark_address,
             registration_limit: self.registration_limit,
             domains: Arc::clone(&self.domains),
+            aliases: Arc::clone(&self.aliases),
             nostr_keys: self.nostr_keys.clone(),
             ca_cert: self.ca_cert.clone(),
             crl_url: self.crl_url.clone(),

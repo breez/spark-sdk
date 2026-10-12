@@ -106,6 +106,7 @@ pub async fn test_state(db: LnurlRepository) -> State<LnurlRepository> {
         include_spark_address: false,
         registration_limit: None,
         domains: Arc::new(RwLock::new(HashMap::new())),
+        aliases: Arc::new(RwLock::new(HashMap::new())),
         nostr_keys: None,
         ca_cert: None,
         crl_url: None,
