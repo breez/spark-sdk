@@ -111,7 +111,7 @@ db_url = "postgres://user:password@localhost:5432/lnurl_db"
 min_sendable = 1000                 # Minimum amount in millisatoshi (1 sat)
 max_sendable = 4000000000           # Maximum amount in millisatoshi (4,000,000 sats)
 max_registrations_per_day = 5       # Address registrations per pubkey per domain
-                                    # in a rolling 24h window (0 disables)
+                                    # group in a rolling 24h window (0 disables)
 domains = "yourdomain.com"          # Comma-separated list of allowed domains
 default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribution (required on mainnet)
 ```
@@ -130,7 +130,7 @@ default_api_key = "<breez-api-key>" # Fallback Breez API key for partner attribu
 | `--spark-config` | JSON file with the Spark operators and SSP to use instead of the network's: what a deployment publishes, or a serialized wallet config | (none) |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
 | `--max-sendable` | Maximum payment amount (millisatoshi) | `4000000000` |
-| `--max-registrations-per-day` | Address registrations one pubkey may perform per domain in a rolling 24h window, refused with `429` past it (`0` disables) | `5` |
+| `--max-registrations-per-day` | Address registrations one pubkey may perform per [domain group](#domain-groups) in a rolling 24h window, refused with `429` past it (`0` disables) | `5` |
 | `--webhook-domain` | Domain for the webhook URL registered with the SSP | (none) |
 | `--ssp-auth-seed` | Hex-encoded 32-byte seed for SSP authentication | (random) |
 
@@ -149,7 +149,7 @@ lnurl --help
 
 This server creates invoices on behalf of its users, so each lightning-address receive is attributed to a partner when the invoice is created.
 
-A receive is attributed to the domain's own Breez API key when one is configured for that domain, otherwise to the **default API key** (`--default-api-key` / `BREEZ_LNURL_DEFAULT_API_KEY`).
+A receive is attributed to the domain's own Breez API key when one is configured for that domain, otherwise to the **default API key** (`--default-api-key` / `BREEZ_LNURL_DEFAULT_API_KEY`). Receives through a domain in another domain's [group](#domain-groups) are attributed as that domain's are.
 
 On **mainnet the default API key is required**, and the server will not start without it. This ensures a self-hosted server attributes all of its receives (to its own partner) instead of leaving any unattributed.
 
@@ -178,7 +178,7 @@ The LNURL server provides the following endpoints:
 - `/lnurlpay/{pubkey}` - Register a username (POST) or unregister (DELETE)
 - `/lnurlpay/{pubkey}/transfer` - Hand a username over to another pubkey
 - `/lnurlpay/{pubkey}/recover` - Recover a username registration
-- `/lnurlpay/{pubkey}/metadata` - Read payment metadata (comments, zaps, preimages)
+- `/lnurlpay/{pubkey}/metadata` - Read payment metadata (the Lightning address paid, comments, zaps, preimages)
 
 ## Signed Messages
 
@@ -267,6 +267,99 @@ every held name unavailable: saying otherwise would say who a name is held for.
 `/lnurlpay/{pubkey}/available` is signed, so it can answer a wallet about a name
 held for that wallet, which is what lets a client offer the name back to the
 pubkey that released it.
+
+## Default Description
+
+A user registered with an empty description has none of their own. The server
+then shows `Pay to <username>@<domain>`, naming the domain of the request, in
+the LNURL metadata and in its responses to register, transfer and recover
+requests.
+
+A stored description that equals this sentence for a domain of the user's
+[group](#domain-groups) counts as none too. A wallet that writes the default
+itself names the domain it registered on, which is not always the domain of the
+request.
+
+## Domain Groups
+
+Several domains can serve the same users. Such domains form a group, and the
+group is named after one of them. Every other domain of the group names that
+domain in the `domain_group` column of `allowed_domains`:
+
+```sql
+INSERT INTO allowed_domains (domain, domain_group)
+VALUES ('second.example', 'first.example');
+```
+
+`alice@first.example` and `alice@second.example` are then one registration.
+Payments to either go to the same wallet, and a register, unregister or
+transfer request sent to either domain changes both.
+
+A group shares:
+
+- usernames, each with the description its owner wrote, and the usernames held
+  for the pubkey that released them
+- the registration limit: a pubkey has one budget for the whole group
+- the Breez API key and the webhook (`domain_webhooks`) of the domain the group
+  is named after
+
+Each domain keeps its own name. The domain in a [signed message](#signed-messages)
+is the one the request is sent to, and the address, callback, verify URL and
+[default description](#default-description) in a response carry that domain.
+
+A domain's group is set when the domain is allowed, as in the statement above,
+or later with an `UPDATE`. The server adds a domain from `--domains` in a group
+of its own.
+
+The server does not serve a domain whose `domain_group` names a domain that is
+itself in another domain's group. It answers requests for that domain with
+`404`, as for a domain that is not allowed, and logs the reason every time it
+refreshes the allowed domains. The database rejects a `domain_group` that is
+not an allowed domain at all.
+
+### Usernames of a Joining Domain
+
+A domain can have usernames of its own when it joins a group. The server moves
+them to the group when it starts and whenever it refreshes the allowed domains,
+which it does every minute. A group has one username per pubkey and one pubkey
+per username, and what is registered in the group stays.
+
+For a username registered under the joining domain:
+
+- If its pubkey has a username in the group, the pubkey keeps that one, with
+  its description. The server holds the joining domain's username for the
+  pubkey, unless the group already has that username registered or held.
+- Otherwise, if the username is registered to another pubkey in the group, the
+  group's registration stays and the server removes the one under the joining
+  domain. That pubkey has no username in the group afterwards, and payers of
+  its address under the joining domain pay the group's pubkey.
+- Otherwise the server moves the registration to the group, and drops the hold
+  if the group holds the username.
+
+The server moves a username held under the joining domain to the group, unless
+the group has that username registered or held. In that case it drops the
+joining domain's hold.
+
+This query lists the usernames that are registered to one pubkey under
+`second.example` and to another pubkey under `first.example`:
+
+```sql
+SELECT joining.name, joining.pubkey, existing.pubkey AS group_pubkey
+FROM users joining
+JOIN users existing
+  ON existing.name = joining.name AND existing.pubkey <> joining.pubkey
+WHERE joining.domain = 'second.example' AND existing.domain = 'first.example';
+```
+
+The server cannot undo a merge. `merged_names` has a row for every username
+that was under the joining domain: its pubkey, whether it was registered or
+held, its description, and whether the server moved it, released it (the group
+holds it for its pubkey) or dropped it.
+
+A group is not meant to change once payers know addresses under the domain.
+Payers keep paying those addresses, and after the domain is moved to another
+group, or out of its group, the server resolves them to whoever holds the same
+username there, if anyone does. The server cannot detect such a move.
 
 ## Example Usage
 
