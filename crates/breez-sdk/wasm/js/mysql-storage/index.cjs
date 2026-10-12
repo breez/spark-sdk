@@ -1506,7 +1506,6 @@ class MysqlStorage {
           if (this.logger && typeof this.logger.log === "function") {
             this.logger.log({ line: msg, level: "warn" });
           } else {
-            // eslint-disable-next-line no-console
             console.warn(`[MysqlStorage] ${msg}`);
           }
         }

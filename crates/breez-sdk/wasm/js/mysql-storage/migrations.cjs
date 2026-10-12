@@ -149,7 +149,6 @@ class MysqlMigrationManager {
     if (this.logger && typeof this.logger.log === "function") {
       this.logger.log({ line: message, level });
     } else if (level === "error") {
-      // eslint-disable-next-line no-console
       console.error(`[MysqlMigrationManager] ${message}`);
     }
   }
