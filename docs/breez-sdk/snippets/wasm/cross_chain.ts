@@ -108,7 +108,7 @@ const exampleReceivePaymentCrossChain = async (
   // amount is in the route's source-asset base units (USD-stable parity:
   // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
   // destination, and the slippage/overpay overrides.
-  const amount = '1000000'
+  const amount = BigInt(1_000_000)
   const optionalDestination = undefined
   const optionalMaxSlippageBps = 100
   const optionalTargetOverpayBps = undefined

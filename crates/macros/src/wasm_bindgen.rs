@@ -11,8 +11,15 @@ pub fn extern_wasm_bindgen(
 ) -> proc_macro::TokenStream {
     let derive_input = parse_macro_input!(input as DeriveInput);
     let (additional_definition, input, output) = extern_wasm_bindgen_from(attr, &derive_input);
+    // A tagged enum gets its Deserialize from `untagged_deserialize` instead.
+    let derive = match &derive_input.data {
+        Data::Enum(data) if is_tagged(data) => {
+            quote! { #[derive(serde::Serialize, tsify_next::Tsify)] }
+        }
+        _ => quote! { #[derive(serde::Deserialize, serde::Serialize, tsify_next::Tsify)] },
+    };
     let output = quote! {
-        #[derive(serde::Deserialize, serde::Serialize, tsify_next::Tsify)]
+        #derive
         #[tsify(from_wasm_abi, into_wasm_abi)]
         #additional_definition
         #input
@@ -65,10 +72,7 @@ fn extern_wasm_bindgen_from_enum(
     /* output_impl */ TokenStream,
 ) {
     let input_data_enum = update_data_enum(data_enum);
-    let use_tag = data_enum
-        .variants
-        .iter()
-        .any(|variant| !variant.fields.is_empty());
+    let use_tag = is_tagged(data_enum);
     let variants = data_enum.variants.iter().map(|variant| {
         let variant_name = &variant.ident;
         let field_names = get_enum_field_names(&variant.fields);
@@ -125,6 +129,7 @@ fn extern_wasm_bindgen_from_enum(
 
     let mut output_impl = TokenStream::new();
     let additional_definition = if use_tag {
+        output_impl.extend(untagged_deserialize(internal_name, &input_data_enum));
         quote! {
             #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type")]
         }
@@ -150,6 +155,68 @@ fn extern_wasm_bindgen_from_enum(
         }
     });
     (additional_definition, input_data_enum, output_impl)
+}
+
+fn is_tagged(data_enum: &DataEnum) -> bool {
+    data_enum
+        .variants
+        .iter()
+        .any(|variant| !variant.fields.is_empty())
+}
+
+/// Deserializes the tagged enum through an externally tagged twin. Serde's
+/// internally tagged derive buffers every field in a form with no u128, so
+/// a BigInt anywhere below the enum could not be read back from JS.
+fn untagged_deserialize(name: &Ident, data_enum: &DataEnum) -> TokenStream {
+    let variants = data_enum.variants.iter().map(|variant| {
+        let ident = &variant.ident;
+        let attrs = serde_attrs(&variant.attrs);
+        let mut fields = variant.fields.clone();
+        for field in &mut fields {
+            field.attrs = serde_attrs(&field.attrs).cloned().collect();
+        }
+        match fields {
+            // A unit variant arrives as `{ type }`, so it must accept an object.
+            Fields::Unit => quote! { #(#attrs)* #ident {} },
+            fields => quote! { #(#attrs)* #ident #fields },
+        }
+    });
+    let arms = data_enum.variants.iter().map(|variant| {
+        let ident = &variant.ident;
+        let names = get_enum_field_names(&variant.fields);
+        match &variant.fields {
+            Fields::Named(_) => {
+                quote! { Untagged::#ident { #(#names),* } => #name::#ident { #(#names),* } }
+            }
+            Fields::Unnamed(_) => {
+                quote! { Untagged::#ident(#(#names),*) => #name::#ident(#(#names),*) }
+            }
+            Fields::Unit => quote! { Untagged::#ident {} => #name::#ident },
+        }
+    });
+    quote! {
+        const _: () = {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+            #[allow(clippy::large_enum_variant)]
+            enum Untagged {
+                #(#variants),*
+            }
+
+            impl<'de> serde::Deserialize<'de> for #name {
+                fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                    let untagged: Untagged = crate::models::deserialize_tagged(deserializer)?;
+                    Ok(match untagged {
+                        #(#arms),*
+                    })
+                }
+            }
+        };
+    }
+}
+
+fn serde_attrs(attrs: &[syn::Attribute]) -> impl Iterator<Item = &syn::Attribute> {
+    attrs.iter().filter(|attr| attr.path().is_ident("serde"))
 }
 
 fn extern_wasm_bindgen_from_struct(
@@ -229,9 +296,56 @@ fn update_data_fields(fields: &Fields) -> Fields {
                     );
                 }
             }
+            // JS may pass a u128 as a string: earlier versions did, and stored
+            // payments still hold them that way.
+            if is_u128(&field.ty) {
+                field.attrs.push(syn::parse_quote! {
+                    #[serde(deserialize_with = "crate::models::deserialize_u128")]
+                });
+            } else if option_inner(&field.ty).is_some_and(is_u128) {
+                field.attrs.push(syn::parse_quote! {
+                    #[serde(deserialize_with = "crate::models::deserialize_option_u128")]
+                });
+                if !serde_attrs(&field.attrs).any(attr_has_default) {
+                    field.attrs.push(syn::parse_quote! { #[serde(default)] });
+                }
+            }
         }
     }
     fields
+}
+
+fn is_u128(ty: &Type) -> bool {
+    matches!(ty, Type::Path(type_path) if type_path.path.is_ident("u128"))
+}
+
+fn option_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    match args.args.first()? {
+        GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+fn attr_has_default(attr: &syn::Attribute) -> bool {
+    let mut found = false;
+    let _ = attr.parse_nested_meta(|meta| {
+        found |= meta.path.is_ident("default");
+        if meta.input.peek(syn::Token![=]) {
+            meta.value()?.parse::<syn::Expr>()?;
+        }
+        Ok(())
+    });
+    found
 }
 
 fn get_struct_fields(fields: &Fields) -> Vec<TokenStream> {

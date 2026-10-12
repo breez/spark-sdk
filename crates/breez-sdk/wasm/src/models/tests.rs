@@ -2,17 +2,18 @@ use std::collections::{HashMap, HashSet};
 
 use syn::visit::Visit;
 use tsify_next::Tsify;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use super::{
     CheckRecoverFundsRequest, CrossChainAcceptedAsset, CrossChainAddressDetails,
     CrossChainAddressFamily, CrossChainProvider, CrossChainRouteFilter, CrossChainRouteLimits,
-    CrossChainRoutePair, DeliveryMethod, PaymentRequest, RecoverFundsLeaf, RecoverFundsResponse,
-    RecoveryMethod, SparkAsset,
+    CrossChainRoutePair, DeliveryMethod, PaymentRequest, ReceivePaymentMethod, RecoverFundsLeaf,
+    RecoverFundsResponse, RecoveryMethod, SparkAsset,
 };
 
-// Values the SDK returns must be accepted back inside an internally tagged
-// enum, which buffers its fields in a form that has no u128.
+// Values the SDK returns must be accepted back, BigInts included, inside the
+// tagged enums the models macro generates.
 
 fn route_with_limits() -> CrossChainRoutePair {
     CrossChainRoutePair {
@@ -127,17 +128,77 @@ fn a_recovery_this_version_returned_is_read() {
     assert_eq!(read.recovery.leaves.len(), 1);
 }
 
-// Enums the SDK only hands to JS. Nothing reads them back, so they may hold a
-// BigInt.
-const OUTPUT_ONLY: &[&str] = &[
-    "SdkEvent",
-    "ClaimDepositOutcome",
-    "PublishSignedLnurlPayResponse",
-    "PublishSignedTransferPackageResponse",
-];
+#[wasm_bindgen_test]
+fn tagged_enums_read_bigints_beyond_u64() {
+    let method = ReceivePaymentMethod::CrossChain {
+        route: route_with_limits(),
+        amount: u128::MAX - 1,
+        destination: Some(SparkAsset::Token {
+            token_identifier: "btkn1".to_string(),
+        }),
+        fee_mode: None,
+        max_slippage_bps: None,
+        target_overpay_bps: None,
+    };
+    let js = method.into_js().unwrap();
+    let ReceivePaymentMethod::CrossChain {
+        route,
+        amount,
+        destination: Some(SparkAsset::Token { token_identifier }),
+        ..
+    } = ReceivePaymentMethod::from_js(js).unwrap()
+    else {
+        panic!("expected a cross-chain method paying out a token");
+    };
+    assert_eq!(amount, u128::MAX - 1);
+    assert_eq!(token_identifier, "btkn1");
+    let limits = route.accepted_assets[0].limits.as_ref().unwrap();
+    assert_eq!(limits.max_amount, Some(u128::MAX));
 
-// Every file that mirrors SDK types for JS, since a tagged enum in one reaches
-// structs in the others.
+    let js = ReceivePaymentMethod::SparkAddress.into_js().unwrap();
+    assert!(matches!(
+        ReceivePaymentMethod::from_js(js).unwrap(),
+        ReceivePaymentMethod::SparkAddress
+    ));
+}
+
+#[wasm_bindgen_test]
+fn tagged_enums_read_amounts_passed_as_strings() {
+    let js = js_sys::eval(
+        "({ amount: '340282366920938463463374607431768211455', expiryTime: 60, type: 'sparkInvoice' })",
+    )
+    .unwrap();
+    let ReceivePaymentMethod::SparkInvoice {
+        amount,
+        expiry_time,
+        ..
+    } = ReceivePaymentMethod::from_js(js).unwrap()
+    else {
+        panic!("expected a Spark invoice method");
+    };
+    assert_eq!(amount, Some(u128::MAX));
+    assert_eq!(expiry_time, Some(60));
+}
+
+#[wasm_bindgen_test]
+fn tagged_enums_report_what_is_wrong() {
+    let message = |source: &str| {
+        let Err(error) = ReceivePaymentMethod::from_js(js_sys::eval(source).unwrap()) else {
+            panic!("expected {source} to be rejected");
+        };
+        let error: js_sys::Error = wasm_bindgen::JsValue::from(error).dyn_into().unwrap();
+        String::from(error.message())
+    };
+    assert!(message("({ type: 'nope' })").starts_with("unknown variant `nope`"));
+    assert_eq!(message("({ amount: 1n })"), "missing field `type`");
+    assert_eq!(
+        message("({ type: 'crossChain', amount: 'lots' })"),
+        "expected a u128 BigInt, got JsValue(\"lots\")"
+    );
+}
+
+// Every file whose types cross to JS, since a type in one reaches structs in
+// the others.
 const MIRRORED: &[&str] = &[
     include_str!("mod.rs"),
     include_str!("chain_service.rs"),
@@ -147,15 +208,16 @@ const MIRRORED: &[&str] = &[
     include_str!("../sdk_builder.rs"),
     include_str!("../sdk_context.rs"),
     include_str!("../signer.rs"),
+    include_str!("../token_store/mod.rs"),
+    include_str!("../tree_store/mod.rs"),
     include_str!("../turnkey.rs"),
 ];
 
-// The rule behind the tests above, checked across every model. The models
-// macro tags each enum that carries data, and a flattened field buffers the
-// same way, so a u128 anywhere below either must use `serde_u128_as_string`
-// or `serde_option_u128_as_string`.
+// Serde buffers a flattened field, and an enum tagged by hand rather than by
+// the models macro, in a form that has no u128. A u128 below either can't be
+// read back from JS.
 #[wasm_bindgen_test]
-fn buffered_models_hold_no_bigint() {
+fn buffered_models_hold_no_u128() {
     let mut mirrored = Mirrored::default();
     for source in MIRRORED {
         mirrored.visit_file(&syn::parse_file(source).unwrap());
@@ -165,15 +227,8 @@ fn buffered_models_hold_no_bigint() {
         mut pending,
     } = mirrored;
 
-    for name in OUTPUT_ONLY {
-        assert!(
-            fields.contains_key(*name),
-            "OUTPUT_ONLY names no type: {name}"
-        );
-    }
-
     let mut seen = HashSet::new();
-    let mut bigints = Vec::new();
+    let mut u128s = Vec::new();
     while let Some(name) = pending.pop() {
         if !seen.insert(name.clone()) {
             continue;
@@ -185,24 +240,23 @@ fn buffered_models_hold_no_bigint() {
         for field in type_fields {
             let mut idents = Idents::default();
             idents.visit_type(&field.ty);
-            if !serde_attr_has(field, "u128_as_string") && idents.0.iter().any(|i| i == "u128") {
+            if idents.0.iter().any(|i| i == "u128") {
                 let field_name = field.ident.as_ref().map(ToString::to_string);
-                bigints.push(format!("{name}.{}", field_name.unwrap_or_default()));
+                u128s.push(format!("{name}.{}", field_name.unwrap_or_default()));
             }
             pending.extend(idents.0.into_iter().filter(|i| fields.contains_key(i)));
         }
     }
     assert!(
-        bigints.is_empty(),
-        "u128 below a tagged enum or a flattened field can't be read back from JS: \
-         use serde_u128_as_string, \
-         or list the enum in OUTPUT_ONLY if JS never passes it back. {bigints:?}"
+        u128s.is_empty(),
+        "u128 below a flattened field or a hand-tagged enum can't be read back from JS: \
+         mirror the enum with `extern_wasm_bindgen` instead. {u128s:?}"
     );
 }
 
-// Fields by type name, and where the walk starts: tagged enums and anything
-// flattened. Visiting rather than reading `file.items` also reaches types
-// declared inside a module.
+// Fields by type name, and where the walk starts: hand-tagged enums and
+// anything flattened. Visiting rather than reading `file.items` also reaches
+// types declared inside a module.
 #[derive(Default)]
 struct Mirrored {
     fields: HashMap<String, Vec<syn::Field>>,
@@ -212,7 +266,7 @@ struct Mirrored {
 impl Mirrored {
     fn record(&mut self, name: String, fields: Vec<syn::Field>) {
         for field in &fields {
-            if serde_attr_has(field, "flatten") {
+            if serde_attr_has(&field.attrs, "flatten") {
                 let mut idents = Idents::default();
                 idents.visit_type(&field.ty);
                 self.pending.extend(idents.0);
@@ -230,9 +284,7 @@ impl Visit<'_> for Mirrored {
 
     fn visit_item_enum(&mut self, item: &syn::ItemEnum) {
         let name = item.ident.to_string();
-        if item.variants.iter().any(|v| !v.fields.is_empty())
-            && !OUTPUT_ONLY.contains(&name.as_str())
-        {
+        if serde_attr_has(&item.attrs, "tag") || serde_attr_has(&item.attrs, "untagged") {
             self.pending.push(name.clone());
         }
         let variant_fields = item.variants.iter().flat_map(|v| v.fields.iter().cloned());
@@ -240,9 +292,11 @@ impl Visit<'_> for Mirrored {
     }
 }
 
-fn serde_attr_has(field: &syn::Field, needle: &str) -> bool {
-    field.attrs.iter().any(|attr| match &attr.meta {
-        syn::Meta::List(list) => list.tokens.to_string().contains(needle),
+fn serde_attr_has(attrs: &[syn::Attribute], needle: &str) -> bool {
+    attrs.iter().any(|attr| match &attr.meta {
+        syn::Meta::List(list) if list.path.is_ident("serde") => {
+            list.tokens.to_string().contains(needle)
+        }
         _ => false,
     })
 }

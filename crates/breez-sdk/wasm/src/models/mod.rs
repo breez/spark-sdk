@@ -11,51 +11,71 @@ use std::collections::HashMap;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
-// Helper module for serializing u128 as string
-mod serde_u128_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
+/// Reads a `{ type, ...fields }` object into `T`, the externally tagged twin
+/// that `extern_wasm_bindgen` generates for each tagged enum.
+pub(crate) fn deserialize_tagged<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    use serde::de::Error;
+    use wasm_bindgen::{JsCast, JsValue};
 
-    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
+    let object: JsValue = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+    if !object.is_object() {
+        return Err(D::Error::custom("expected an object with a `type` field"));
     }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
+    let tag = js_sys::Reflect::get(&object, &JsValue::from_str("type"))
+        .ok()
+        .filter(JsValue::is_string)
+        .ok_or_else(|| D::Error::missing_field("type"))?;
+    let untagged = js_sys::Object::new();
+    js_sys::Reflect::set(&untagged, &tag, &object)
+        .map_err(|_| D::Error::custom("failed to read the enum variant"))?;
+    serde_wasm_bindgen::from_value(untagged.into()).map_err(|e| {
+        // Rewrapping the JS error as is would print its "Error: " prefix twice.
+        let e = JsValue::from(e);
+        match e.dyn_ref::<js_sys::Error>() {
+            Some(e) => D::Error::custom(String::from(e.message())),
+            None => D::Error::custom(format!("{e:?}")),
+        }
+    })
 }
 
-mod serde_option_u128_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
+/// Reads a u128 passed as a BigInt, a decimal string or a safe integer.
+pub(crate) fn deserialize_u128<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: wasm_bindgen::JsValue = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+    u128_from_js(value)
+}
 
-    pub fn serialize<S>(value: &Option<u128>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(value) = value {
-            serializer.serialize_str(&value.to_string())
-        } else {
-            serializer.serialize_none()
-        }
+pub(crate) fn deserialize_option_u128<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: wasm_bindgen::JsValue = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
     }
+    u128_from_js(value).map(Some)
+}
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = <Option<String>>::deserialize(deserializer)?;
-        if let Some(s) = s {
-            s.parse().map_err(serde::de::Error::custom).map(Some)
-        } else {
-            Ok(None)
-        }
-    }
+fn u128_from_js<E: serde::de::Error>(value: wasm_bindgen::JsValue) -> Result<u128, E> {
+    let parsed = if value.is_bigint() {
+        u128::try_from(value.clone()).ok()
+    } else if let Some(s) = value.as_string() {
+        s.parse().ok()
+    } else if js_sys::Number::is_safe_integer(&value) {
+        value
+            .as_f64()
+            .and_then(|n| u64::try_from(n as i64).ok())
+            .map(u128::from)
+    } else {
+        None
+    };
+    parsed.ok_or_else(|| E::custom(format!("expected a u128 BigInt, got {value:?}")))
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -316,8 +336,6 @@ pub struct CrossChainAddressDetails {
     pub address_family: CrossChainAddressFamily,
     pub contract_address: Option<String>,
     pub chain_id: Option<u64>,
-    #[tsify(type = "string")]
-    #[serde(default, with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
 }
 
@@ -334,8 +352,6 @@ pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
     pub expiry_time: Option<u64>,
@@ -596,11 +612,7 @@ pub struct ConversionAsset {
 pub struct ConversionSide {
     pub chain: ConversionChain,
     pub asset: ConversionAsset,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub fee: u128,
 }
 
@@ -1160,11 +1172,6 @@ pub struct TokenMetadata {
     pub name: String,
     pub ticker: String,
     pub decimals: u32,
-    // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
-    // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
-    // Serializing as string is a workaround to avoid the issue.
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub max_supply: u128,
     pub is_freezable: bool,
 }
@@ -1179,8 +1186,6 @@ pub struct SyncWalletResponse {}
 pub enum ReceivePaymentMethod {
     SparkAddress,
     SparkInvoice {
-        #[tsify(type = "string")]
-        #[serde(with = "serde_option_u128_as_string")]
         amount: Option<u128>,
         token_identifier: Option<String>,
         expiry_time: Option<u64>,
@@ -1199,8 +1204,6 @@ pub enum ReceivePaymentMethod {
     },
     CrossChain {
         route: CrossChainRoutePair,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         amount: u128,
         destination: Option<SparkAsset>,
         fee_mode: Option<CrossChainFeeMode>,
@@ -1260,11 +1263,7 @@ pub enum SparkAsset {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteLimits)]
 pub struct CrossChainRouteLimits {
-    #[tsify(type = "string")]
-    #[serde(default, with = "serde_option_u128_as_string")]
     pub min_amount: Option<u128>,
-    #[tsify(type = "string")]
-    #[serde(default, with = "serde_option_u128_as_string")]
     pub max_amount: Option<u128>,
     pub min_usd_cents: Option<u64>,
     pub max_usd_cents: Option<u64>,
@@ -1308,8 +1307,7 @@ pub enum CrossChainProviderContext {
     Orchestra {
         quote_id: String,
         deposit_address: String,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_u128_as_string")]
+        #[serde(default)]
         deposit_amount: u128,
     },
     Boltz {
@@ -1347,35 +1345,21 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
     SparkInvoice {
         spark_invoice_details: SparkInvoiceDetails,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
     CrossChainAddress {
         route: CrossChainRoutePair,
         recipient_address: String,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         amount_in: u128,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         asset_amount_in: u128,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee_amount: u128,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         service_fee_amount: u128,
         service_fee_asset: Option<String>,
         service_fee_asset_decimals: Option<u32>,
@@ -1401,16 +1385,10 @@ pub struct ReceivePaymentResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainReceiveInfo)]
 pub struct CrossChainReceiveInfo {
     pub deposit_address: String,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub deposit_amount: u128,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub expected_received_amount: u128,
     pub destination_asset: String,
     pub token_identifier: Option<String>,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub service_fee_amount: u128,
     pub service_fee_asset: Option<String>,
     pub service_fee_asset_decimals: Option<u32>,
@@ -1510,11 +1488,7 @@ pub enum UnsignedTransferPackage {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
         token_context: Vec<u8>,
         token_identifier: String,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         amount: u128,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         is_swap: bool,
     },
@@ -1530,8 +1504,6 @@ pub enum UnsignedTransferPackage {
         payer_address: String,
         token_identifier: String,
         receivers: Vec<PullReceiver>,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         amount: u128,
         expiry_time: u64,
     },
@@ -1680,8 +1652,6 @@ pub struct ResolvedBatchRecipient {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BatchTotal)]
 pub struct BatchTotal {
     pub token_identifier: Option<String>,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
 }
 
@@ -2239,8 +2209,6 @@ pub enum ConversionInfo {
         pool_id: String,
         conversion_id: String,
         status: ConversionStatus,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
         purpose: Option<ConversionPurpose>,
         #[serde(default)]
@@ -2257,23 +2225,13 @@ pub enum ConversionInfo {
         #[serde(default)]
         asset_contract: Option<String>,
         recipient_address: String,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         asset_amount_in: Option<u128>,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
         #[serde(default)]
         external_tx_hash: Option<String>,
         status: ConversionStatus,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         fee_amount: Option<u128>,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         service_fee_amount: Option<u128>,
         #[serde(default)]
         service_fee_asset: Option<String>,
@@ -2294,21 +2252,11 @@ pub enum ConversionInfo {
         #[serde(default)]
         asset_contract: Option<String>,
         recipient_address: String,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         asset_amount_in: Option<u128>,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
         status: ConversionStatus,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         fee_amount: Option<u128>,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
         service_fee_amount: Option<u128>,
         #[serde(default)]
         service_fee_asset: Option<String>,
@@ -2439,11 +2387,7 @@ pub struct ListContactsRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenAllowanceLimit)]
 pub enum TokenAllowanceLimit {
     Unlimited,
-    Amount {
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
-        amount: u128,
-    },
+    Amount { amount: u128 },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CreateTokenAllowanceRequest)]
@@ -2513,8 +2457,6 @@ pub struct TokenAllowance {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PullReceiver)]
 pub struct PullReceiver {
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
     pub receiver_address: Option<String>,
 }

@@ -40,6 +40,14 @@ try {
 const { StorageError } = require("./errors.cjs");
 const { MysqlMigrationManager } = require("./migrations.cjs");
 
+// JSON has no BigInt, so u128 amounts are stored as decimal strings, which the
+// SDK reads back as BigInts.
+function toJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === "bigint" ? v.toString() : v
+  );
+}
+
 const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS = 10;
 
 /**
@@ -455,7 +463,7 @@ class MysqlStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to list payments (request: ${JSON.stringify(request)}): ${error.message}`,
+        `Failed to list payments (request: ${toJson(request)}): ${error.message}`,
         error
       );
     }
@@ -580,7 +588,7 @@ class MysqlStorage {
         payment.amount.toString(),
         payment.fees.toString(),
         payment.timestamp,
-        payment.method ? JSON.stringify(payment.method) : null,
+        payment.method ? toJson(payment.method) : null,
         withdrawTxId,
         spark,
       ]
@@ -612,10 +620,10 @@ class MysqlStorage {
           this.identity,
           payment.id,
           payment.details.invoiceDetails
-            ? JSON.stringify(payment.details.invoiceDetails)
+            ? toJson(payment.details.invoiceDetails)
             : null,
           payment.details.htlcDetails
-            ? JSON.stringify(payment.details.htlcDetails)
+            ? toJson(payment.details.htlcDetails)
             : null,
         ]
       );
@@ -661,11 +669,11 @@ class MysqlStorage {
         [
           this.identity,
           payment.id,
-          JSON.stringify(payment.details.metadata),
+          toJson(payment.details.metadata),
           payment.details.txHash,
           payment.details.txType,
           payment.details.invoiceDetails
-            ? JSON.stringify(payment.details.invoiceDetails)
+            ? toJson(payment.details.invoiceDetails)
             : null,
         ]
       );
@@ -798,14 +806,14 @@ class MysqlStorage {
           paymentId,
           metadata.parentPaymentId,
           metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
+            ? toJson(metadata.lnurlPayInfo)
             : null,
           metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            ? toJson(metadata.lnurlWithdrawInfo)
             : null,
           metadata.lnurlDescription,
           metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
+            ? toJson(metadata.conversionInfo)
             : null,
           metadata.conversionStatus ?? null,
         ]
@@ -885,7 +893,7 @@ class MysqlStorage {
           `UPDATE brz_unclaimed_deposits
            SET claim_error = ?
            WHERE user_id = ? AND txid = ? AND vout = ?`,
-          [JSON.stringify(payload.error), this.identity, txid, vout]
+          [toJson(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
@@ -895,7 +903,7 @@ class MysqlStorage {
           [
             payload.refundTx,
             payload.refundTxid,
-            JSON.stringify(payload.state),
+            toJson(payload.state),
             this.identity,
             txid,
             vout,
@@ -906,7 +914,7 @@ class MysqlStorage {
           `UPDATE brz_unclaimed_deposits
            SET instant_claim_status = ?
            WHERE user_id = ? AND txid = ? AND vout = ?`,
-          [JSON.stringify(payload.status), this.identity, txid, vout]
+          [toJson(payload.status), this.identity, txid, vout]
         );
       } else if (payload.type === "refundBroadcastState") {
         await this.pool.query(
@@ -914,7 +922,7 @@ class MysqlStorage {
            SET refund_state = ?
            WHERE user_id = ? AND txid = ? AND vout = ? AND refund_tx_id = ?`,
           [
-            JSON.stringify(payload.state),
+            toJson(payload.state),
             this.identity,
             txid,
             vout,
@@ -927,7 +935,7 @@ class MysqlStorage {
            SET max_claim_fee = ?
            WHERE user_id = ? AND txid = ? AND vout = ?`,
           [
-            payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+            payload.maxFee ? toJson(payload.maxFee) : null,
             this.identity,
             txid,
             vout,
@@ -1477,7 +1485,7 @@ class MysqlStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.updatedFields),
+            toJson(record.updatedFields),
             revision.toString(),
           ]
         );
@@ -1533,7 +1541,7 @@ class MysqlStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            toJson(record.data),
           ]
         );
 
@@ -1650,7 +1658,7 @@ class MysqlStorage {
               record.id.dataId,
               record.schemaVersion,
               Math.floor(Date.now() / 1000),
-              JSON.stringify(record.data),
+              toJson(record.data),
               record.revision.toString(),
             ]
           );
@@ -1813,7 +1821,7 @@ class MysqlStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            toJson(record.data),
           ]
         );
 

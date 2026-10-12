@@ -3,6 +3,14 @@
  * This provides an ES6 interface to IndexedDB storage for web browsers
  */
 
+// JSON has no BigInt, so u128 amounts are stored as decimal strings, which the
+// SDK reads back as BigInts.
+function toJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === "bigint" ? v.toString() : v
+  );
+}
+
 class MigrationManager {
   constructor(db, StorageError, logger = null) {
     this.db = db;
@@ -279,7 +287,7 @@ class MigrationManager {
                 // Add default txType to token payments
                 if (details && details.type === "token" && !details.txType) {
                   details.txType = "transfer";
-                  payment.details = JSON.stringify(details);
+                  payment.details = toJson(details);
                   paymentStore.put(payment);
                 }
               });
@@ -300,7 +308,7 @@ class MigrationManager {
                   syncInfo.last_synced_final_token_payment_id = null;
                   settingsStore.put({
                     key: "sync_offset",
-                    value: JSON.stringify(syncInfo),
+                    value: toJson(syncInfo),
                   });
                 } catch (e) {
                   // If parsing fails, just continue
@@ -379,7 +387,7 @@ class MigrationManager {
                     expiryTime: 0,
                     status: htlcStatus,
                   };
-                  payment.details = JSON.stringify(details);
+                  payment.details = toJson(details);
                   paymentStore.put(payment);
                 }
               });
@@ -399,7 +407,7 @@ class MigrationManager {
                   syncInfo.offset = 0;
                   settingsStore.put({
                     key: "sync_offset",
-                    value: JSON.stringify(syncInfo),
+                    value: toJson(syncInfo),
                   });
                 } catch (e) {
                   // If parsing fails, just continue
@@ -535,7 +543,7 @@ class MigrationManager {
                   syncInfo.offset = 0;
                   settingsStore.put({
                     key: "sync_offset",
-                    value: JSON.stringify(syncInfo),
+                    value: toJson(syncInfo),
                   });
                 } catch (e) {
                   // If parsing fails, just continue
@@ -562,7 +570,7 @@ class MigrationManager {
                       : record.conversionInfo;
                     if (!ci.type) {
                       ci.type = "amm";
-                      record.conversionInfo = JSON.stringify(ci);
+                      record.conversionInfo = toJson(ci);
                       cursor.update(record);
                     }
                   } catch (e) {
@@ -997,7 +1005,7 @@ class IndexedDBStorage {
       cursorRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments (request: ${JSON.stringify(request)}: ${cursorRequest.error?.message || "Unknown error"
+            `Failed to list payments (request: ${toJson(request)}: ${cursorRequest.error?.message || "Unknown error"
             }`,
             cursorRequest.error
           )
@@ -1414,14 +1422,14 @@ class IndexedDBStorage {
           paymentId,
           parentPaymentId: metadata.parentPaymentId ?? existing.parentPaymentId ?? null,
           lnurlPayInfo: metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
+            ? toJson(metadata.lnurlPayInfo)
             : existing.lnurlPayInfo ?? null,
           lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            ? toJson(metadata.lnurlWithdrawInfo)
             : existing.lnurlWithdrawInfo ?? null,
           lnurlDescription: metadata.lnurlDescription ?? existing.lnurlDescription ?? null,
           conversionInfo: metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
+            ? toJson(metadata.conversionInfo)
             : existing.conversionInfo ?? null,
           conversionStatus: metadata.conversionStatus ?? existing.conversionStatus ?? null,
         };
@@ -1599,22 +1607,22 @@ class IndexedDBStorage {
         let updatedDeposit = { ...existingDeposit };
 
         if (payload.type === "claimError") {
-          updatedDeposit.claimError = JSON.stringify(payload.error);
+          updatedDeposit.claimError = toJson(payload.error);
         } else if (payload.type === "refund") {
           updatedDeposit.refundTx = payload.refundTx;
           updatedDeposit.refundTxId = payload.refundTxid;
-          updatedDeposit.refundState = JSON.stringify(payload.state);
+          updatedDeposit.refundState = toJson(payload.state);
           updatedDeposit.claimError = null;
         } else if (payload.type === "instantClaim") {
-          updatedDeposit.instantClaimStatus = JSON.stringify(payload.status);
+          updatedDeposit.instantClaimStatus = toJson(payload.status);
         } else if (payload.type === "refundBroadcastState") {
           // Only while this is still the stored refund.
           if (existingDeposit.refundTxId === payload.refundTxid) {
-            updatedDeposit.refundState = JSON.stringify(payload.state);
+            updatedDeposit.refundState = toJson(payload.state);
           }
         } else if (payload.type === "maxClaimFee") {
           updatedDeposit.maxClaimFee = payload.maxFee
-            ? JSON.stringify(payload.maxFee)
+            ? toJson(payload.maxFee)
             : null;
         } else {
           reject(new StorageError(`Unknown payload type: ${payload.type}`));
@@ -2712,8 +2720,8 @@ class IndexedDBStorage {
     // Ensure details and method are serialized properly
     return {
       ...payment,
-      details: payment.details ? JSON.stringify(payment.details) : null,
-      method: payment.method ? JSON.stringify(payment.method) : null,
+      details: payment.details ? toJson(payment.details) : null,
+      method: payment.method ? toJson(payment.method) : null,
     };
   }
 
