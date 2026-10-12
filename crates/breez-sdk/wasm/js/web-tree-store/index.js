@@ -976,9 +976,6 @@ class WebTreeStore {
             }
           }
 
-
-          const leafNodes = change.concat(reserved);
-
           // Change leaves go back to the available pool.
           for (const p of change) {
             const row = this._leafRow(p, false, leafMap.get(p.id));

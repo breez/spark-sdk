@@ -7,7 +7,7 @@
 // A regression here would otherwise pass on UTC-only CI runners; this test
 // forces a positive- and a negative-offset TZ regardless of the host's clock.
 
-const { describe, test, before, after } = require("node:test");
+const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");

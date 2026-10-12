@@ -151,7 +151,7 @@ class MigrationManager {
           // sync_revision: tracks the last committed revision (from server-acknowledged
           // or server-received records). Does NOT include pending outgoing revisions.
           if (!db.objectStoreNames.contains("sync_revision")) {
-            const syncRevisionStore = db.createObjectStore("sync_revision", {
+            db.createObjectStore("sync_revision", {
               keyPath: "id",
             });
             transaction
@@ -1596,7 +1596,7 @@ class IndexedDBStorage {
           return;
         }
 
-        let updatedDeposit = { ...existingDeposit };
+        const updatedDeposit = { ...existingDeposit };
 
         if (payload.type === "claimError") {
           updatedDeposit.claimError = JSON.stringify(payload.error);
