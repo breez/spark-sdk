@@ -109,11 +109,12 @@ nix build .#local-env
 ## Code Quality
 
 ```bash
-make check              # Run all checks (fmt, clippy, tests) - use before committing
+make check              # Run all checks (fmt, clippy, JS lint, tests) - use before committing
 make fmt-check          # Check formatting
 make fmt-fix            # Fix formatting
 make clippy-check       # Run clippy lints (cargo + WASM)
 make clippy-fix         # Fix clippy issues
+make wasm-js-lint       # Run ESLint on the JS files under crates/breez-sdk/wasm/js
 ```
 
 ## Architecture
