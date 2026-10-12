@@ -342,7 +342,7 @@ pub struct UnilateralExitQuote {
     /// The sweep's fee, paid out of the value being swept rather than by the
     /// funding.
     pub sweep_fee_sat: u64,
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`.
+    /// `cpfp_fee_sat + fanout_fee_sat + refund_fee_sat + sweep_fee_sat`.
     pub total_fee_sat: u64,
 }
 
@@ -454,6 +454,7 @@ pub fn quote_unilateral_exit(
         single_utxo_funding_sat: leaves_total.saturating_add(fanout_fee_sat),
         total_fee_sat: cpfp_fee_sat
             .saturating_add(fanout_fee_sat)
+            .saturating_add(refund_fee_sat)
             .saturating_add(sweep_fee_sat),
         selected_leaves: selected,
         skipped_leaves,
@@ -2163,6 +2164,54 @@ mod tests {
             assert_eq!(direct_tx_on_chain.refund_fee_sat, 1_910);
             assert_eq!(direct_tx_on_chain.cpfp_fee_sat, 0);
             assert!(direct_tx_on_chain.per_branch_funding.is_empty());
+        }
+
+        #[test_all]
+        fn the_total_fee_of_a_quote_includes_the_refund_fee() {
+            let ordinary = leaf_node_n("ordinary", 100_000, 1);
+            let refunded = leaf_node_n("refunded", 100_000, 3);
+            let on_chain = ExitChainState {
+                nodes: vec![ConfirmedExitNode {
+                    node_id: refunded.id.clone(),
+                    confirmed_by: ExitNodeConfirmation::Cpfp,
+                    block_height: None,
+                }],
+                refunds: vec![ExitRefund {
+                    leaf_id: refunded.id.clone(),
+                    state: ExitRefundState::OnChain {
+                        tx: tx_paying(99_045, 5),
+                        vout: 0,
+                        value: 99_045,
+                        block_height: None,
+                    },
+                }],
+                ..Default::default()
+            };
+            let ids = [ordinary.id.clone(), refunded.id.clone()];
+            let nodes: HashMap<TreeNodeId, TreeNode> = [ordinary, refunded]
+                .into_iter()
+                .map(|node| (node.id.clone(), node))
+                .collect();
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(quote.refund_fee_sat, 955);
+            assert!(quote.cpfp_fee_sat > 0);
+            assert_eq!(
+                quote.total_fee_sat,
+                quote.cpfp_fee_sat + quote.fanout_fee_sat + 955 + quote.sweep_fee_sat
+            );
         }
 
         #[test_all]

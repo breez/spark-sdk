@@ -105,6 +105,7 @@ fn a_recovery_this_version_returned_is_read() {
             cooperative_fee_sats: 0,
             cpfp_fee_sats: 500,
             fanout_fee_sats: 0,
+            refund_fee_sats: 0,
             sweep_fee_sats: 400,
             leaves: vec![RecoverFundsLeaf {
                 leaf_id: "leaf-1".to_string(),
