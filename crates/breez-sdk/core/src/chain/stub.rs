@@ -21,6 +21,7 @@ pub(crate) struct ChainStub {
     pub(crate) transactions: HashMap<String, String>,
     /// Every output paid to an address, by address.
     pub(crate) address_txos: HashMap<String, Vec<Utxo>>,
+    pub(crate) recommended_fees: Option<RecommendedFees>,
     /// How many requests the stub received.
     pub(crate) requests: AtomicUsize,
 }
@@ -117,6 +118,7 @@ impl BitcoinChainService for ChainStub {
     }
 
     async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
-        Err(unreachable_chain())
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        self.recommended_fees.clone().ok_or_else(unreachable_chain)
     }
 }

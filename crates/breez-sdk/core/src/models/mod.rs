@@ -23,9 +23,10 @@ use std::{
 };
 
 use crate::{
-    BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
-    ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
-    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
+    BitcoinAddressDetails, BitcoinNetwork, Bolt11InvoiceDetails, ExternalInputParser, FiatCurrency,
+    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate, SdkError, SparkInvoiceDetails,
+    SuccessAction, SuccessActionProcessed,
+    chain::FeeMarket,
     cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
     error::{CooperativeRecoveryError, DepositClaimError},
 };
@@ -1281,7 +1282,7 @@ impl MaxFee {
     }
 
     /// The on-chain part of the ceiling, priced at the current fee market.
-    pub(crate) async fn to_fee(&self, client: &dyn BitcoinChainService) -> Result<Fee, SdkError> {
+    pub(crate) async fn to_fee(&self, fee_market: &FeeMarket<'_>) -> Result<Fee, SdkError> {
         match self {
             MaxFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
             MaxFee::Rate { sat_per_vbyte, .. } => Ok(Fee::Rate {
@@ -1291,7 +1292,7 @@ impl MaxFee {
                 leeway_sat_per_vbyte,
                 ..
             } => {
-                let recommended_fees = client.recommended_fees().await?;
+                let recommended_fees = fee_market.recommended_fees().await?;
                 let max_fee_rate = recommended_fees
                     .fastest_fee
                     .saturating_add(*leeway_sat_per_vbyte);

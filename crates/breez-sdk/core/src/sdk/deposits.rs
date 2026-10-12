@@ -23,7 +23,7 @@ use crate::{
     FetchClaimDepositQuoteResponse, InstantClaimStatus, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, MaxFee, Network, RefundDepositRequest, RefundDepositResponse,
     RefundState,
-    chain::Outspend,
+    chain::{FeeMarket, Outspend},
     error::SdkError,
     models::Payment,
     persist::UpdateDepositPayload,
@@ -158,20 +158,21 @@ impl BreezSdk {
         // own max fee when it has one, the one at maturity under the larger of that
         // and the configured one.
         let deposit_sats = detailed_utxo.value;
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
         let instant_max_fee = stored_max_fee
             .or(self.config.max_deposit_claim_fee.as_ref())
             .cloned();
         let mature_max_fee = self
-            .mature_claim_ceiling(stored_max_fee, deposit_sats)
+            .mature_claim_ceiling(stored_max_fee, deposit_sats, &fee_market)
             .await;
         let instant_max_fee_sats = self
-            .resolve_max_claim_fee(instant_max_fee)
+            .resolve_max_claim_fee(instant_max_fee, &fee_market)
             .await?
             .map(|max_fee| max_fee.ceiling_sats(deposit_sats));
         let mature = ClaimDepositQuote {
             max_fee_sats: self
-                .resolve_max_claim_fee(mature_max_fee)
+                .resolve_max_claim_fee(mature_max_fee, &fee_market)
                 .await?
                 .map(|max_fee| max_fee.ceiling_sats(deposit_sats)),
             ..mature
@@ -319,7 +320,8 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         max_fee: Option<MaxFee>,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        match self.claim_utxo(detailed_utxo, max_fee).await {
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        match self.claim_utxo(detailed_utxo, max_fee, &fee_market).await {
             Ok(transfer_id) => {
                 let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
                 let payment: Payment = transfer.try_into()?;
@@ -731,7 +733,8 @@ impl BreezSdk {
         confirmations: u32,
         row_exists: bool,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        let resolved_max_fee = self.resolve_max_claim_fee(max_fee, &fee_market).await?;
         let outcome = match self
             .instant_claim_utxo(detailed_utxo, resolved_max_fee, confirmations)
             .await

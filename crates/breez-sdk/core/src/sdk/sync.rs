@@ -14,6 +14,7 @@ use super::{
 use crate::utils::time::now_secs;
 use crate::{
     DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
+    chain::FeeMarket,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -347,11 +348,13 @@ impl BreezSdk {
         }
 
         let has_immature = all_deposits.iter().any(|deposit| !deposit.is_mature);
+        // Every ceiling in the pass is priced at the same fee market.
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         // Resolved once per pass, and only when an immature deposit could use it.
         // A deposit whose own ceiling differs from it resolves that separately, below.
         let instant_ceiling = if has_immature {
             match self
-                .resolve_max_claim_fee(self.config.max_deposit_claim_fee.clone())
+                .resolve_max_claim_fee(self.config.max_deposit_claim_fee.clone(), &fee_market)
                 .await
             {
                 Ok(resolved) => resolved,
@@ -418,9 +421,10 @@ impl BreezSdk {
                 // Mature deposit: claim via the normal path.
                 self.claim_utxo_and_resolve_deposit(
                     &detailed_utxo,
-                    self.mature_claim_ceiling(stored_max_fee, detailed_utxo.value)
+                    self.mature_claim_ceiling(stored_max_fee, detailed_utxo.value, &fee_market)
                         .await,
                     stored_max_fee.cloned(),
+                    &fee_market,
                     &mut claimed_deposits,
                     &mut unclaimed_deposits,
                 )
@@ -432,7 +436,10 @@ impl BreezSdk {
                     stored_max_fee,
                     self.config.max_deposit_claim_fee.as_ref(),
                 ) {
-                    match self.resolve_max_claim_fee(stored_max_fee.cloned()).await {
+                    match self
+                        .resolve_max_claim_fee(stored_max_fee.cloned(), &fee_market)
+                        .await
+                    {
                         Ok(resolved) => resolved,
                         Err(e) => {
                             warn!(
@@ -508,13 +515,16 @@ impl BreezSdk {
         &self,
         stored: Option<&MaxFee>,
         deposit_sats: u64,
+        fee_market: &FeeMarket<'_>,
     ) -> Option<MaxFee> {
         let config_default = self.config.max_deposit_claim_fee.as_ref();
         let (Some(stored), Some(config_default)) = (stored, config_default) else {
             return stored.or(config_default).cloned();
         };
-        let stored_sats = self.ceiling_sats(stored, deposit_sats).await;
-        let config_sats = self.ceiling_sats(config_default, deposit_sats).await;
+        let stored_sats = self.ceiling_sats(stored, deposit_sats, fee_market).await;
+        let config_sats = self
+            .ceiling_sats(config_default, deposit_sats, fee_market)
+            .await;
         match (stored_sats, config_sats) {
             (Some(stored_sats), Some(config_sats)) => Some(larger_ceiling(
                 stored,
@@ -528,8 +538,13 @@ impl BreezSdk {
 
     /// One ceiling in sats for a deposit worth `deposit_sats`, or `None` when it
     /// cannot be resolved.
-    async fn ceiling_sats(&self, max_fee: &MaxFee, deposit_sats: u64) -> Option<u64> {
-        self.resolve_max_claim_fee(Some(max_fee.clone()))
+    async fn ceiling_sats(
+        &self,
+        max_fee: &MaxFee,
+        deposit_sats: u64,
+        fee_market: &FeeMarket<'_>,
+    ) -> Option<u64> {
+        self.resolve_max_claim_fee(Some(max_fee.clone()), fee_market)
             .await
             .inspect_err(|e| warn!("Could not resolve a max claim fee: {e}"))
             .ok()
@@ -542,10 +557,14 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         max_claim_fee: Option<MaxFee>,
         stored_max_fee: Option<MaxFee>,
+        fee_market: &FeeMarket<'_>,
         claimed_deposits: &mut Vec<DepositInfo>,
         unclaimed_deposits: &mut Vec<DepositInfo>,
     ) -> Result<(), SdkError> {
-        match self.claim_utxo(detailed_utxo, max_claim_fee).await {
+        match self
+            .claim_utxo(detailed_utxo, max_claim_fee, fee_market)
+            .await
+        {
             Ok(_) => {
                 info!("Claimed utxo {}:{}", detailed_utxo.txid, detailed_utxo.vout);
                 self.storage
@@ -726,11 +745,12 @@ impl BreezSdk {
     pub(super) async fn resolve_max_claim_fee(
         &self,
         max_claim_fee: Option<MaxFee>,
+        fee_market: &FeeMarket<'_>,
     ) -> Result<Option<ResolvedMaxFee>, SdkError> {
         match max_claim_fee {
             None => Ok(None),
             Some(max_fee) => {
-                let onchain = max_fee.to_fee(self.chain_service.as_ref()).await?;
+                let onchain = max_fee.to_fee(fee_market).await?;
                 Ok(Some(ResolvedMaxFee::new(
                     onchain,
                     max_fee.proportional_ppm(),
@@ -745,6 +765,7 @@ impl BreezSdk {
         &self,
         detailed_utxo: &DetailedUtxo,
         max_claim_fee: Option<MaxFee>,
+        fee_market: &FeeMarket<'_>,
     ) -> Result<String, SdkError> {
         info!(
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
@@ -772,7 +793,9 @@ impl BreezSdk {
                 ))
             })?;
 
-        let resolved_max_fee = self.resolve_max_claim_fee(max_claim_fee).await?;
+        let resolved_max_fee = self
+            .resolve_max_claim_fee(max_claim_fee, fee_market)
+            .await?;
         let max_fee_sats = resolved_max_fee
             .as_ref()
             .map(|max_fee| max_fee.ceiling_sats(detailed_utxo.value));
