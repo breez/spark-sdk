@@ -83,6 +83,15 @@ pub struct DomainConfig {
     pub jwt: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DomainRewriteConfig {
+    pub domain: String,
+    /// The domain the server handles requests for `domain` as.
+    pub target_domain: String,
+    /// Whether usernames are registered or held under `domain` itself.
+    pub has_names: bool,
+}
+
 /// How often expired signed-message claims are pruned.
 const CLAIM_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
 
@@ -265,6 +274,9 @@ pub trait LnurlRepository {
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
 
+    /// Get the domains the server handles as another domain.
+    async fn list_domain_rewrites(&self) -> Result<Vec<DomainRewriteConfig>, LnurlRepositoryError>;
+
     /// Store the cached partner JWT for a domain.
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
 
@@ -405,6 +417,35 @@ pub mod shared_tests {
         .unwrap();
         let moved = db.get_user_by_name(domain, "pia").await.unwrap().unwrap();
         assert_eq!((moved.pubkey.as_str(), moved.description), ("qqqq", None));
+    }
+
+    /// The caller rewrites `empty.com`, `used.com` and `held.com` to
+    /// `target.com` first.
+    pub async fn list_domain_rewrites_reports_names_under_a_domain<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        register(db, "used.com", "aaaa", "alice").await.unwrap();
+        register(db, "held.com", "bbbb", "bob").await.unwrap();
+        assert!(db.delete_user("held.com", "bbbb", "bob").await.unwrap());
+        register(db, "target.com", "cccc", "carol").await.unwrap();
+
+        let mut rewrites: Vec<(String, String, bool)> = db
+            .list_domain_rewrites()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|rewrite| (rewrite.domain, rewrite.target_domain, rewrite.has_names))
+            .collect();
+        rewrites.sort();
+        assert_eq!(
+            rewrites,
+            [
+                ("empty.com".to_string(), "target.com".to_string(), false),
+                ("held.com".to_string(), "target.com".to_string(), true),
+                ("used.com".to_string(), "target.com".to_string(), true),
+            ]
+        );
     }
 
     /// Upserting a name already owned by a different pubkey returns `NameTaken`

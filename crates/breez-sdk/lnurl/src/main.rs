@@ -41,6 +41,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
+mod domain_rewrites;
 mod domains;
 mod error;
 mod invoice_paid;
@@ -375,6 +376,7 @@ where
     let default_api_key = resolve_default_api_key(args.default_api_key.as_deref(), is_mainnet)?;
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
+    let rewrites = domain_rewrites::start(repository.clone()).await?;
 
     // Makes the pre-v2 signed-message tail observable, which is what gates
     // dropping the legacy candidates.
@@ -508,6 +510,7 @@ where
             }
         },
         domains,
+        rewrites,
         nostr_keys,
         ca_cert,
         crl_url: args.crl_url,
@@ -601,6 +604,10 @@ where
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
         .route("/webhook", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state.rewrites),
+            domain_rewrites::rewrite_domain,
+        ))
         .layer(Extension(state))
         .layer(
             CorsLayer::new()

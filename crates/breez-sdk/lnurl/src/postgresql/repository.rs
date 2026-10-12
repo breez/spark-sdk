@@ -4,8 +4,8 @@ use spark_postgres::deadpool_postgres::{GenericClient, Pool};
 use spark_postgres::tokio_postgres;
 
 use crate::repository::{
-    DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
-    TransferRequest, WebhookPayloadData,
+    DomainConfig, DomainRewriteConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt,
+    RegistrationLimit, TransferRequest, WebhookPayloadData,
 };
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
@@ -669,6 +669,38 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn list_domain_rewrites(&self) -> Result<Vec<DomainRewriteConfig>, LnurlRepositoryError> {
+        let client = self.pool.get().await?;
+        // Not EXISTS: for a domain without rows, postgres answers that with a
+        // scan of the whole table.
+        let stmt = client
+            .prepare_cached(
+                "SELECT r.domain, r.target_domain,
+                        (SELECT u.pubkey FROM users u
+                         WHERE u.domain = r.domain
+                         ORDER BY u.pubkey LIMIT 1) IS NOT NULL
+                        OR (SELECT n.name FROM released_names n
+                            WHERE n.domain = r.domain
+                            ORDER BY n.name LIMIT 1) IS NOT NULL
+                 FROM domain_rewrites r",
+            )
+            .await?;
+        let rows = client.query(&stmt, &[]).await?;
+
+        let rewrites = rows
+            .into_iter()
+            .map(|row| {
+                Ok(DomainRewriteConfig {
+                    domain: row.try_get(0)?,
+                    target_domain: row.try_get(1)?,
+                    has_names: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<DomainRewriteConfig>, tokio_postgres::Error>>()?;
+
+        Ok(rewrites)
+    }
+
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
         let stmt = client
@@ -1208,6 +1240,60 @@ mod postgres_tests {
         let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::a_user_without_a_description_is_stored_without_one(&db).await;
+    }
+
+    #[tokio::test]
+    async fn list_domain_rewrites_reports_names_under_a_domain() {
+        use crate::repository::LnurlRepository;
+
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        assert!(db.list_domain_rewrites().await.unwrap().is_empty());
+
+        pool.get()
+            .await
+            .unwrap()
+            .batch_execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('target.com');
+                 INSERT INTO domain_rewrites (domain, target_domain)
+                 VALUES ('empty.com', 'target.com'),
+                        ('used.com', 'target.com'),
+                        ('held.com', 'target.com');",
+            )
+            .await
+            .unwrap();
+        shared_tests::list_domain_rewrites_reports_names_under_a_domain(&db).await;
+    }
+
+    #[tokio::test]
+    async fn the_database_refuses_a_rewrite_the_server_cannot_serve() {
+        let (_pg, pool) = test_pool().await;
+        let client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('target.com'), ('Target.com')",
+            )
+            .await
+            .unwrap();
+
+        for (domain, target_domain, accepted) in [
+            ("a.com", "missing.com", false),
+            ("A.com", "target.com", false),
+            ("a.com", "Target.com", false),
+            ("a.com", "target.com", true),
+        ] {
+            let inserted = client
+                .execute(
+                    "INSERT INTO domain_rewrites (domain, target_domain) VALUES ($1, $2)",
+                    &[&domain, &target_domain],
+                )
+                .await;
+            assert_eq!(
+                inserted.is_ok(),
+                accepted,
+                "a rewrite of '{domain}' to '{target_domain}': {inserted:?}"
+            );
+        }
     }
 
     #[tokio::test]
