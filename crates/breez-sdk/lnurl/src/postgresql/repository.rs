@@ -598,6 +598,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      z.zap_event
                  ,      GREATEST(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
                  ,      i.preimage
+                 ,      i.username || '@' || i.actual_domain
                  FROM (
                      SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                      UNION
@@ -625,6 +626,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
                     preimage: row.try_get(5)?,
+                    lightning_address: row.try_get(6)?,
                 })
             })
             .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
@@ -714,8 +716,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   invoice = excluded.invoice
@@ -723,7 +725,9 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   invoice_expiry = excluded.invoice_expiry
                  ,   updated_at = excluded.updated_at
                  ,   domain = excluded.domain
-                 ,   amount_received_sat = excluded.amount_received_sat",
+                 ,   amount_received_sat = excluded.amount_received_sat
+                 ,   actual_domain = excluded.actual_domain
+                 ,   username = excluded.username",
             )
             .await?;
         client
@@ -739,6 +743,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     &invoice.updated_at,
                     &invoice.domain,
                     &invoice.amount_received_sat,
+                    &invoice.actual_domain,
+                    &invoice.username,
                 ],
             )
             .await?;
@@ -752,7 +758,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
+                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username
                  FROM invoices
                  WHERE payment_hash = $1",
             )
@@ -770,6 +776,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     created_at: row.try_get(5)?,
                     updated_at: row.try_get(6)?,
                     domain: row.try_get(7)?,
+                    actual_domain: row.try_get(9)?,
+                    username: row.try_get(10)?,
                     amount_received_sat: row.try_get(8)?,
                 })
             })
@@ -800,6 +808,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      i.updated_at     AS i_updated_at
                  ,      i.domain         AS i_domain
                  ,      i.amount_received_sat AS i_amount_received_sat
+                 ,      i.actual_domain  AS i_actual_domain
+                 ,      i.username       AS i_username
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -834,6 +844,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     created_at: row.try_get("i_created_at")?,
                     updated_at: row.try_get("i_updated_at")?,
                     domain: row.try_get("i_domain")?,
+                    actual_domain: row.try_get("i_actual_domain")?,
+                    username: row.try_get("i_username")?,
                     amount_received_sat: row.try_get("i_amount_received_sat")?,
                 })
             })
@@ -967,7 +979,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let stmt = client
             .prepare_cached(
                 "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
-                        u.name, u.domain,
+                        COALESCE(i.username, u.name), COALESCE(i.actual_domain, i.domain),
                         sc.sender_comment,
                         i.domain,
                         z.zap_request
@@ -985,8 +997,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .into_iter()
             .map(|row| {
                 let name: Option<String> = row.try_get(5)?;
-                let user_domain: Option<String> = row.try_get(6)?;
-                let lightning_address = match (name, user_domain) {
+                let actual_domain: Option<String> = row.try_get(6)?;
+                let lightning_address = match (name, actual_domain) {
                     (Some(n), Some(d)) => Some(format!("{n}@{d}")),
                     _ => None,
                 };
@@ -1294,6 +1306,13 @@ mod postgres_tests {
                 "an alias '{domain}' of '{target_domain}': {inserted:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn metadata_names_the_address_an_invoice_was_requested_for() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::metadata_names_the_address_an_invoice_was_requested_for(&db).await;
     }
 
     #[tokio::test]

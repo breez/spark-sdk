@@ -62,6 +62,11 @@ pub struct Invoice {
     pub updated_at: i64,
     /// The domain this invoice was created for, if any.
     pub domain: Option<String>,
+    /// The domain the invoice was requested on. It is another domain than
+    /// `domain` when the server rewrote the request.
+    pub actual_domain: Option<String>,
+    /// The username the invoice was requested for.
+    pub username: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
 }
@@ -446,6 +451,57 @@ pub mod shared_tests {
                 ("used.com".to_string(), "target.com".to_string(), true),
             ]
         );
+    }
+
+    /// The metadata of a payment names the address its invoice was requested
+    /// for, which the user may have given up since. An invoice stored without
+    /// a username or without a domain gets no address.
+    pub async fn metadata_names_the_address_an_invoice_was_requested_for<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        register(db, "tips.example", "pppp", "pia").await.unwrap();
+        let invoice = |payment_hash: &str, actual_domain: Option<&str>, username: Option<&str>| {
+            super::Invoice {
+                payment_hash: payment_hash.into(),
+                user_pubkey: "pppp".into(),
+                invoice: "lnbc1".into(),
+                preimage: None,
+                invoice_expiry: i64::MAX,
+                created_at: 1,
+                updated_at: 1,
+                domain: actual_domain.map(|_| "tips.example".into()),
+                actual_domain: actual_domain.map(Into::into),
+                username: username.map(Into::into),
+                amount_received_sat: None,
+            }
+        };
+        for stored in [
+            invoice("requested-on-the-domain", Some("tips.example"), Some("pia")),
+            invoice("requested-on-an-alias", Some("cash.example"), Some("pia")),
+            invoice("without-username", Some("tips.example"), None),
+            invoice("without-domain", None, None),
+        ] {
+            db.upsert_invoice(&stored).await.unwrap();
+        }
+        register(db, "tips.example", "pppp", "pilar").await.unwrap();
+
+        let metadata = db
+            .get_metadata_by_pubkey("pppp", 0, 100, None)
+            .await
+            .unwrap();
+        let address = |payment_hash: &str| {
+            metadata
+                .iter()
+                .find(|m| m.payment_hash == payment_hash)
+                .expect("metadata for the invoice")
+                .lightning_address
+                .as_deref()
+        };
+        assert_eq!(address("requested-on-the-domain"), Some("pia@tips.example"));
+        assert_eq!(address("requested-on-an-alias"), Some("pia@cash.example"));
+        assert_eq!(address("without-username"), None);
+        assert_eq!(address("without-domain"), None);
     }
 
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
