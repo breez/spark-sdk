@@ -3539,6 +3539,114 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
     Ok(())
 }
 
+/// The operators broadcast a leaf's refund in their version once the refund's
+/// timelock and 50 more blocks have passed since the leaf's node tx confirmed.
+/// A recovery prepared after that reports that refund's fee, and its sweep pays
+/// out the leaf's value less the fees paid from it.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_refund_broadcast_by_the_operators_is_swept(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let (started_quote, started, _funding) =
+        quote_then_build_single(&sdk, CPFP_SATS, FEE_RATE).await?;
+    let [leaf] = started_quote.leaves.as_slice() else {
+        anyhow::bail!("expected one leaf, got {}", started_quote.leaves.len());
+    };
+    let own_refund = started
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Refund)
+        .expect("the exit has a refund");
+    let refund_timelock = own_refund
+        .csv_timelock_blocks
+        .expect("a refund has a relative timelock");
+    for entry in &started.transactions {
+        if entry.kind == RecoveryTxKind::Node {
+            mine(&sdk, entry).await?;
+        }
+    }
+
+    sdk.fixtures
+        .bitcoind
+        .generate_filler_blocks(u64::from(refund_timelock) + 50)
+        .await?;
+    // Both versions of the refund have the same input.
+    let refunded = decode_tx(&own_refund.tx_hex)?.input[0].previous_output;
+    wait_for_mempool_spend(&sdk, refunded).await?;
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+
+    let destination = p2tr_address(&fixed_key(0x42));
+    let quote = sdk
+        .sdk
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: None,
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::Specific {
+                leaf_ids: vec![leaf.leaf_id.clone()],
+            },
+        })
+        .await?;
+    let refund_value = quote
+        .exit_chain_state
+        .refunds
+        .iter()
+        .find_map(|refund| match &refund.state {
+            ExitRefundState::OnChain { value_sats, .. } => Some(*value_sats),
+            ExitRefundState::Swept => None,
+        })
+        .context("the quote shows no refund on-chain")?;
+    assert_eq!(quote.recoverable_value_sats, leaf.value_sats);
+    assert!(
+        refund_value < leaf.value_sats,
+        "the operators' refund pays its fee out of the leaf"
+    );
+    assert_eq!(quote.refund_fee_sats, leaf.value_sats - refund_value);
+    assert!(quote.funding.is_none(), "only the sweep is left");
+    assert_eq!(
+        quote.total_fee_sats,
+        quote.refund_fee_sats + quote.sweep_fee_sats
+    );
+
+    let built = recover(&sdk, quote.clone()).await?;
+    assert_build_matches_quote(&quote, &built);
+    assert_eq!(built.sweep_fee_sats, quote.sweep_fee_sats);
+    assert_eq!(built.total_fee_sats, quote.total_fee_sats);
+    let refund = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Refund)
+        .expect("the refund on-chain is listed");
+    assert_ne!(
+        refund.txid, own_refund.txid,
+        "the refund on-chain is the operators' version"
+    );
+    assert!(matches!(
+        refund.status,
+        ExitTransactionStatus::Confirmed { .. }
+    ));
+    let sweep = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
+        .expect("the recovery ends in its sweep");
+    let paid_out: u64 = decode_tx(&sweep.tx_hex)?
+        .output
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    assert_eq!(
+        paid_out,
+        built.recoverable_value_sats - built.refund_fee_sats - built.sweep_fee_sats,
+        "the sweep pays out the value less the fees paid from it"
+    );
+    mine(&sdk, sweep).await?;
+    Ok(())
+}
+
 /// A leaf whose exit started is recoverable, is reported once, and leaves the
 /// total once a check saw its sweep confirm. A device without a record of the
 /// leaf checks on-chain whether its refund was swept.
@@ -4218,6 +4326,29 @@ async fn wait_for_cooperative_funds(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     anyhow::bail!("no watchtower-exited funds were reported")
+}
+
+/// Waits until a transaction in bitcoind's mempool spends `outpoint`.
+async fn wait_for_mempool_spend(sdk: &LocalSdk, outpoint: OutPoint) -> Result<()> {
+    let prevout = serde_json::json!([{
+        "txid": outpoint.txid.to_string(),
+        "vout": outpoint.vout,
+    }]);
+    for _ in 0..600 {
+        let spends: Vec<serde_json::Value> = sdk
+            .fixtures
+            .bitcoind
+            .rpc("gettxspendingprevout", std::slice::from_ref(&prevout))
+            .await?;
+        if spends
+            .iter()
+            .any(|spend| spend.get("spendingtxid").is_some())
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    anyhow::bail!("no transaction in the mempool spends {outpoint}")
 }
 
 /// Each transfer takes one interval off the refund timelock, and the wallet
