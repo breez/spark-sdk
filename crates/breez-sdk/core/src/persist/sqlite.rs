@@ -436,6 +436,10 @@ impl SqliteStorage {
                 leaf_id TEXT NOT NULL PRIMARY KEY,
                 txid TEXT NOT NULL
             );",
+            "ALTER TABLE lnurl_receive_metadata ADD COLUMN lightning_address TEXT;",
+            // Clear the lnurl_metadata_updated_after setting so the SDK fetches the
+            // Lightning address of payments it already synced.
+            "DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after';",
         ]
     }
 }
@@ -1012,7 +1016,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(32)?;
+            let parent_payment_id: String = row.get(33)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1332,13 +1336,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+                 VALUES (?, ?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
+                    metadata.lightning_address,
                 ],
             )?;
         }
@@ -1838,7 +1843,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-32 are used by `map_payment`, index 33 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1870,6 +1875,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
            pm.parent_payment_id
@@ -1920,12 +1926,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let lnurl_nostr_zap_request: Option<String> = row.get(27)?;
             let lnurl_nostr_zap_receipt: Option<String> = row.get(28)?;
             let lnurl_sender_comment: Option<String> = row.get(29)?;
-            let lnurl_payment_hash: Option<String> = row.get(30)?;
+            let lnurl_lightning_address: Option<String> = row.get(30)?;
+            let lnurl_payment_hash: Option<String> = row.get(31)?;
             let lnurl_receive_metadata = if lnurl_payment_hash.is_some() {
                 Some(LnurlReceiveMetadata {
                     nostr_zap_request: lnurl_nostr_zap_request,
                     nostr_zap_receipt: lnurl_nostr_zap_receipt,
                     sender_comment: lnurl_sender_comment,
+                    lightning_address: lnurl_lightning_address,
                 })
             } else {
                 None
@@ -1995,8 +2003,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         }
         _ => None,
     };
-    // Read conversion_status from payment_metadata (column 31)
-    let conversion_status: Option<ConversionStatus> = row.get(31)?;
+    // Read conversion_status from payment_metadata (column 32)
+    let conversion_status: Option<ConversionStatus> = row.get(32)?;
     let conversion_details = conversion_status.map(|status| ConversionDetails {
         status,
         conversions: vec![],

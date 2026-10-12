@@ -73,6 +73,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM brz_payments p
@@ -1036,18 +1037,20 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                nostr_zap_request = EXCLUDED.nostr_zap_request,
                nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-               sender_comment = EXCLUDED.sender_comment`,
+               sender_comment = EXCLUDED.sender_comment,
+               lightning_address = EXCLUDED.lightning_address`,
             [
               this.identity,
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
+              item.lightningAddress || null,
             ]
           );
         }
@@ -1105,6 +1108,7 @@ class PostgresStorage {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          lightningAddress: row.lnurl_lightning_address || null,
         };
       }
 

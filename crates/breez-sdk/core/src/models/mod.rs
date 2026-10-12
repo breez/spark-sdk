@@ -3071,6 +3071,9 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+    /// The Lightning address the payment was sent to. Unset when the LNURL server does not
+    /// report it.
+    pub lightning_address: Option<String>,
 }
 
 /// Mode of a manually-triggered optimization run.

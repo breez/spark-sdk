@@ -653,6 +653,15 @@ class MigrationManager {
           }
         },
       },
+      {
+        name: "Force lnurl_receive_metadata re-sync for the lightning address",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("lnurl_metadata_updated_after");
+          }
+        },
+      },
     ];
   }
 }
@@ -681,7 +690,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 23; // Current schema version (= migration count)
+    this.dbVersion = 24; // Current schema version (= migration count)
   }
 
   /**
@@ -2007,6 +2016,7 @@ class IndexedDBStorage {
           nostrZapRequest: item.nostrZapRequest || null,
           nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
+          lightningAddress: item.lightningAddress || null,
         });
 
         request.onsuccess = () => {
@@ -3040,6 +3050,7 @@ class IndexedDBStorage {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
+            lightningAddress: lnurlReceiveMetadata.lightningAddress || null,
           };
         }
         resolve(payment);
