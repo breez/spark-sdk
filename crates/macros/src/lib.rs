@@ -1,6 +1,7 @@
 mod async_trait;
 mod derive_from;
 mod derive_into;
+mod instance_span;
 mod testing;
 mod wasm_bindgen;
 
@@ -39,6 +40,13 @@ pub fn derive_from(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn derive_into(attr: TokenStream, item: TokenStream) -> TokenStream {
     derive_into::derive_into(attr, item)
+}
+
+/// Runs a `BreezSdk` method in a span carrying the instance's identifier, so
+/// every log line it emits can be attributed to the instance.
+#[proc_macro_attribute]
+pub fn instance_span(args: TokenStream, input: TokenStream) -> TokenStream {
+    instance_span::instance_span(args, input)
 }
 
 /// Attribute macro to async test only non-WASM targets

@@ -182,6 +182,7 @@ impl BreezSdk {
     ///
     /// The state goes stale as the wallet is used: export again whenever a
     /// `UnilateralExitStateChanged` event arrives.
+    #[macros::instance_span]
     pub async fn export_unilateral_exit_state(
         &self,
     ) -> Result<ExportUnilateralExitStateResponse, SdkError> {
@@ -215,6 +216,7 @@ impl BreezSdk {
     /// An out of date exit state can restore funds that have since been spent,
     /// so the balance may read high until the next sync reconciles it with the
     /// Spark operators.
+    #[macros::instance_span]
     pub async fn import_unilateral_exit_state(
         &self,
         request: ImportUnilateralExitStateRequest,

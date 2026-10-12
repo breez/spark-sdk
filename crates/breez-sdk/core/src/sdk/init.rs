@@ -20,6 +20,7 @@ impl BreezSdk {
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
 
         let sdk = Self {
+            instance_id: params.instance_id,
             config: params.config,
             spark_wallet: params.spark_wallet,
             storage: params.storage,

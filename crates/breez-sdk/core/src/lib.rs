@@ -45,7 +45,7 @@ pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
 };
 pub use issuer::*;
-pub use logger::{DEFAULT_FILTER, parse_log_filter};
+pub use logger::{DEFAULT_FILTER, event_instance_id, record_instance_id, sdk_log_filter};
 pub use models::*;
 pub use persist::{
     ChainTransaction, ConversionFilter, LeafRecovery, PaymentMetadata, SetLnurlMetadataItem,

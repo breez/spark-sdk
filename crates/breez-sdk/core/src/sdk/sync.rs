@@ -816,6 +816,7 @@ impl BreezSdk {
     /// which governs only the automatic collection: syncing is how to run one at
     /// a moment of your choosing with that turned off.
     #[allow(unused_variables)]
+    #[macros::instance_span]
     pub async fn sync_wallet(
         &self,
         request: SyncWalletRequest,

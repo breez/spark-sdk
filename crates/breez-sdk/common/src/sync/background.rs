@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
-use tracing::{debug, error, warn};
+use tracing::{Instrument, debug, error, warn};
 
 use crate::sync::{
     model::{IncomingChange, OutgoingChange, RecordId},
@@ -108,11 +108,14 @@ impl SyncProcessor {
         pull_trigger_tx: watch::Sender<()>,
     ) {
         let clone = Arc::clone(self);
-        tokio::spawn(async move {
-            clone
-                .subscribe_updates_forever(shutdown_receiver, pull_trigger_tx)
-                .await;
-        });
+        tokio::spawn(
+            async move {
+                clone
+                    .subscribe_updates_forever(shutdown_receiver, pull_trigger_tx)
+                    .await;
+            }
+            .in_current_span(),
+        );
     }
 
     /// Apply the LATEST outgoing record to the relational data store before starting the sync loops.
@@ -211,7 +214,9 @@ impl SyncProcessor {
         pull_trigger: watch::Receiver<()>,
     ) {
         let clone = Arc::clone(self);
-        tokio::spawn(async move { clone.sync_loop(shutdown_receiver, pull_trigger).await });
+        tokio::spawn(
+            async move { clone.sync_loop(shutdown_receiver, pull_trigger).await }.in_current_span(),
+        );
     }
 
     async fn sync_loop(
@@ -420,6 +425,7 @@ impl SyncProcessor {
                     error!("Failed to send backoff trigger: {}", e);
                 }
             }
+            .in_current_span()
         });
         *backoff_handle = Some(BackoffHandle {
             started_at: now,

@@ -2547,6 +2547,10 @@ pub trait Logger: Send + Sync {
 pub struct LogEntry {
     pub line: String,
     pub level: String,
+    /// Identity public key of the SDK instance that emitted the line, telling
+    /// apart the logs of several instances in one process. Unset for lines not
+    /// emitted by an instance.
+    pub instance_id: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

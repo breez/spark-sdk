@@ -31,6 +31,7 @@ pub(in crate::sdk) mod validation;
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    #[macros::instance_span]
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,
@@ -38,6 +39,7 @@ impl BreezSdk {
         receive::receive_payment(self, request).await
     }
 
+    #[macros::instance_span]
     pub async fn claim_htlc_payment(
         &self,
         request: ClaimHtlcPaymentRequest,
@@ -45,6 +47,7 @@ impl BreezSdk {
         receive::claim_htlc_payment(self, request).await
     }
 
+    #[macros::instance_span]
     pub async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,
@@ -83,6 +86,7 @@ impl BreezSdk {
         skip_all,
         fields(payment_id = tracing::field::Empty),
     )]
+    #[macros::instance_span]
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,
@@ -106,6 +110,7 @@ impl BreezSdk {
     /// A batch that pays a Spark invoice is limited to a single token: the
     /// operators reject a transaction that carries an invoice and pays more
     /// than one. Send those as one batch per token.
+    #[macros::instance_span]
     pub async fn prepare_send_batch(
         &self,
         request: PrepareSendBatchRequest,
@@ -122,6 +127,7 @@ impl BreezSdk {
     /// Look for the batch with a `Token` payment details filter on the
     /// transaction hash before sending it again.
     #[instrument(level = "info", target = "breez_sdk_core::send_batch", skip_all)]
+    #[macros::instance_span]
     pub async fn send_batch(
         &self,
         request: SendBatchRequest,
@@ -135,6 +141,7 @@ impl BreezSdk {
     ///
     /// Publish the signed package with
     /// [`BreezSdk::publish_signed_transfer_package`], which returns every payment.
+    #[macros::instance_span]
     pub async fn build_unsigned_batch_package(
         &self,
         request: BuildUnsignedBatchPackageRequest,
@@ -146,6 +153,7 @@ impl BreezSdk {
         .await
     }
 
+    #[macros::instance_span]
     pub async fn build_unsigned_transfer_package(
         &self,
         request: BuildUnsignedTransferPackageRequest,
@@ -160,6 +168,7 @@ impl BreezSdk {
 
     /// Builds the package a client signs to approve a prepared pull.
     #[allow(clippy::unused_async)]
+    #[macros::instance_span]
     pub async fn build_unsigned_pull_package(
         &self,
         request: BuildUnsignedPullPackageRequest,
@@ -172,6 +181,7 @@ impl BreezSdk {
         target = "breez_sdk_core::publish_signed_transfer_package",
         skip_all
     )]
+    #[macros::instance_span]
     pub async fn publish_signed_transfer_package(
         &self,
         request: PublishSignedTransferPackageRequest,
@@ -190,6 +200,7 @@ impl BreezSdk {
         target = "breez_sdk_core::publish_signed_pull_package",
         skip_all
     )]
+    #[macros::instance_span]
     pub async fn publish_signed_pull_package(
         &self,
         request: PublishSignedPullPackageRequest,
@@ -202,6 +213,7 @@ impl BreezSdk {
         .await
     }
 
+    #[macros::instance_span]
     pub async fn fetch_conversion_limits(
         &self,
         request: FetchConversionLimitsRequest,
@@ -222,6 +234,7 @@ impl BreezSdk {
     /// landed). The SDK's periodic background schedule runs only the local
     /// part; the reconcile runs at SDK init and on each call to this method, so
     /// this is the explicit entry point for driving a full pass on demand.
+    #[macros::instance_span]
     pub async fn refund_pending_conversions(
         &self,
     ) -> Result<RefundPendingConversionsResponse, SdkError> {
@@ -244,6 +257,7 @@ impl BreezSdk {
     ///
     /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
     /// * `Err(SdkError)` - If there was an error accessing the storage
+    #[macros::instance_span]
     pub async fn list_payments(
         &self,
         request: ListPaymentsRequest,
@@ -302,6 +316,7 @@ impl BreezSdk {
         Ok(ListPaymentsResponse { payments })
     }
 
+    #[macros::instance_span]
     pub async fn get_payment(
         &self,
         request: GetPaymentRequest,

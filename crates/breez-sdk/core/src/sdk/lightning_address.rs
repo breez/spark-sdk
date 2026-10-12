@@ -76,6 +76,7 @@ impl BreezSdk {
     /// The check is signed with the wallet's identity key, so every call costs
     /// a signing operation and a server round trip: run it when the user
     /// finishes typing, not on every keystroke.
+    #[macros::instance_span]
     pub async fn check_lightning_address_available(
         &self,
         req: CheckLightningAddressRequest,
@@ -91,6 +92,7 @@ impl BreezSdk {
         Ok(available)
     }
 
+    #[macros::instance_span]
     pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let cached = cache.fetch_lightning_address().await?;
@@ -100,6 +102,7 @@ impl BreezSdk {
         Ok(cached.flatten())
     }
 
+    #[macros::instance_span]
     pub async fn register_lightning_address(
         &self,
         request: RegisterLightningAddressRequest,
@@ -139,6 +142,7 @@ impl BreezSdk {
     /// [`TransferAuthorization`] to hand to the new owner, who
     /// claims it via [`BreezSdk::claim_lightning_address_transfer`].
     /// Errors if the current owner has no lightning address registered.
+    #[macros::instance_span]
     pub async fn authorize_lightning_address_transfer(
         &self,
         request: AuthorizeTransferRequest,
@@ -184,6 +188,7 @@ impl BreezSdk {
     /// using the [`TransferAuthorization`] from
     /// [`BreezSdk::authorize_lightning_address_transfer`]. Completes the
     /// takeover and returns the newly-owned address.
+    #[macros::instance_span]
     pub async fn claim_lightning_address_transfer(
         &self,
         request: ClaimTransferRequest,
@@ -246,6 +251,7 @@ impl BreezSdk {
     /// stands only this wallet can register it, so payers who kept the old
     /// address are not redirected to someone else. How long a hold stands is
     /// the server's policy.
+    #[macros::instance_span]
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(address_info) = cache.fetch_lightning_address().await?.flatten() else {

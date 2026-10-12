@@ -7,7 +7,7 @@
 use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, oneshot};
-use tracing::debug;
+use tracing::{Instrument, debug};
 
 use super::{SyncRequest, SyncType};
 use crate::error::SdkError;
@@ -76,9 +76,12 @@ impl SyncCoordinator {
 
         if should_run {
             let coordinator = self.clone();
-            tokio::spawn(async move {
-                coordinator.run_sync_loop().await;
-            });
+            tokio::spawn(
+                async move {
+                    coordinator.run_sync_loop().await;
+                }
+                .in_current_span(),
+            );
         }
     }
 

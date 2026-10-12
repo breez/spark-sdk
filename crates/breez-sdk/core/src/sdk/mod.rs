@@ -89,6 +89,8 @@ impl SyncRequest {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
+    /// The wallet's identity public key, which tags the instance's log lines.
+    pub(crate) instance_id: String,
     pub(crate) config: Config,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) storage: Arc<dyn Storage>,
@@ -130,6 +132,7 @@ pub(crate) type SdkInputParser =
     breez_sdk_common::input::InputParser<Arc<dyn HttpClient>, breez_sdk_common::dns::Resolver>;
 
 pub(crate) struct BreezSdkParams {
+    pub instance_id: String,
     pub config: Config,
     pub input_parser: Arc<SdkInputParser>,
     pub storage: Arc<dyn Storage>,

@@ -177,9 +177,11 @@ impl RestClientChainService {
         Fut: std::future::Future<Output = Result<T, ChainServiceError>> + Send,
         T: Send + 'static,
     {
+        use tracing::Instrument;
+
         let inner = self.inner.clone();
         self.runtime_handle
-            .spawn(async move { work(inner).await })
+            .spawn(async move { work(inner).await }.in_current_span())
             .await
             .map_err(|e| ChainServiceError::Generic(format!("join error: {e}")))?
     }

@@ -23,7 +23,7 @@ use platform_utils::tokio;
 use platform_utils::tokio::sync::OnceCell;
 use spark_wallet::SparkWallet;
 use tokio::{select, sync::watch, time::sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 use super::{
     CrossChainAcceptedAsset, CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext,
@@ -134,25 +134,28 @@ impl BoltzService {
     /// connect. Continues until the client is warm by any path or the SDK shuts down.
     fn spawn_resume_monitor(self: &Arc<Self>, mut shutdown_receiver: watch::Receiver<()>) {
         let service = Arc::clone(self);
-        tokio::spawn(async move {
-            loop {
-                if service.client.initialized() {
-                    return;
-                }
-                match Self::has_active_swaps(&service.storage).await {
-                    Ok(true) => match service.client().await {
-                        Ok(_) => return,
-                        Err(e) => warn!("Boltz resume monitor: warm failed, will retry: {e:?}"),
-                    },
-                    Ok(false) => {}
-                    Err(e) => warn!("Boltz resume monitor: active-swap check failed: {e:?}"),
-                }
-                select! {
-                    _ = shutdown_receiver.changed() => return,
-                    () = sleep(super::MONITOR_INTERVAL) => {}
+        tokio::spawn(
+            async move {
+                loop {
+                    if service.client.initialized() {
+                        return;
+                    }
+                    match Self::has_active_swaps(&service.storage).await {
+                        Ok(true) => match service.client().await {
+                            Ok(_) => return,
+                            Err(e) => warn!("Boltz resume monitor: warm failed, will retry: {e:?}"),
+                        },
+                        Ok(false) => {}
+                        Err(e) => warn!("Boltz resume monitor: active-swap check failed: {e:?}"),
+                    }
+                    select! {
+                        _ = shutdown_receiver.changed() => return,
+                        () = sleep(super::MONITOR_INTERVAL) => {}
+                    }
                 }
             }
-        });
+            .in_current_span(),
+        );
     }
 
     async fn has_active_swaps(storage: &Arc<dyn Storage>) -> Result<bool, SdkError> {
@@ -198,6 +201,7 @@ impl BoltzService {
                         event_listener::reconcile_pending_boltz_conversions(&client, &storage)
                             .await;
                     }
+                    .in_current_span()
                 });
 
                 info!("Boltz client lazily initialized");
