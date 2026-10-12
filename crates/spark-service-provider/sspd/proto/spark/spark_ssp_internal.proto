@@ -6,16 +6,19 @@ syntax = "proto3";
 package spark_ssp_internal;
 
 option go_package = "github.com/lightsparkdev/spark/proto/spark_ssp_internal";
-import "spark/common.proto";
 import "spark/spark.proto";
 import "validate/validate.proto";
 
 // The part of the operators' service provider API that Breez's service provider
 // calls, under the names Lightspark's operators serve it by. The upstream
 // definition of this service is not public.
+//
+// In every call that signs, the service provider sends a job it has already
+// signed against operator commitments from get_signing_commitments, as a wallet
+// does in the public API, and the operators answer with the finished signature.
 service SparkSspInternalService {
     rpc prepare_tree_address(spark.PrepareTreeAddressRequest) returns (spark.PrepareTreeAddressResponse) {}
-    rpc create_tree(spark.CreateTreeRequest) returns (spark.CreateTreeResponse) {}
+    rpc create_tree(CreateTreeRequest) returns (spark.FinalizeNodeSignaturesResponse) {}
     rpc finalize_node_signatures(spark.FinalizeNodeSignaturesRequest) returns (spark.FinalizeNodeSignaturesResponse) {}
     rpc query_nodes(spark.QueryNodesRequest) returns (spark.QueryNodesResponse) {}
     rpc initiate_counter_transfer(CounterTransferRequest) returns (spark.StartTransferResponse) {}
@@ -26,19 +29,39 @@ service SparkSspInternalService {
     rpc sign_static_deposit_sweep_tx(SignStaticDepositSweepTxRequest) returns (SignStaticDepositSweepTxResponse) {}
 }
 
+// spark.CreationNode with every transaction signed by the service provider.
+message CreationNode {
+    spark.UserSignedTxSigningJob node_tx_signing_job = 1;
+    spark.UserSignedTxSigningJob refund_tx_signing_job = 2;
+    repeated CreationNode children = 3;
+    spark.UserSignedTxSigningJob direct_node_tx_signing_job = 4;
+    spark.UserSignedTxSigningJob direct_refund_tx_signing_job = 5;
+    spark.UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 6;
+}
+
+// Every job in the request names the same set of operators.
+message CreateTreeRequest {
+    oneof source {
+        spark.NodeOutput parent_node_output = 1;
+        spark.UTXO on_chain_utxo = 2;
+    }
+    CreationNode node = 3;
+    bytes user_identity_public_key = 4;
+}
+
 message InitiateStaticDepositUtxoSwapRequest {
     spark.UTXO on_chain_utxo = 1;
     bytes ssp_signature = 2;
     bytes user_signature = 3;
     spark.StartTransferRequest transfer = 4;
-    spark.SigningJob spend_tx_signing_job = 5;
+    spark.UserSignedTxSigningJob spend_tx_signing_job = 5;
     spark.HashVariant hash_variant = 6;
     // Unset uses the network's default.
     optional uint32 confirmation_threshold = 7;
 }
 
 message InitiateStaticDepositUtxoSwapResponse {
-    spark.SigningResult spend_tx_signing_result = 1;
+    bytes spend_tx_signature = 1;
     spark.Transfer transfer = 2;
     spark.DepositAddressQueryResult deposit_address = 3;
 }
@@ -63,8 +86,8 @@ message SweepInput {
     spark.UTXO on_chain_utxo = 1;
     // Index of this UTXO in the sweep transaction's input list.
     uint32 vin = 2;
-    // The SSP's round-1 commitment for this input.
-    common.SigningCommitment user_signing_commitment = 3;
+    // Every input of a sweep names the same set of operators.
+    spark.InputSigningData signing_data = 3;
 }
 
 message SignStaticDepositSweepTxRequest {
@@ -77,15 +100,13 @@ message SignStaticDepositSweepTxRequest {
     bytes ssp_signature = 4;
 }
 
-message SweepInputSigningResult {
+message SweepInputSignature {
     uint32 vin = 1;
-    spark.SigningResult signing_result = 2;
-    // The verifying key of the deposit address this input spends from.
-    bytes verifying_key = 3 [(validate.rules).bytes.len = 33];
+    bytes signature = 2;
 }
 
 message SweptInputs {
-    repeated SweepInputSigningResult results = 1;
+    repeated SweepInputSignature signatures = 1;
 }
 
 enum SweepIneligibleReason {
@@ -154,12 +175,11 @@ message ClaimInstantStaticDepositUtxoSwapRequest {
     // Optional secondary transfer package, present iff the reservation has a secondary credit.
     spark.StartTransferRequest transfer = 3;
     // Transaction the SSP built spending the UTXO to an address it owns.
-    spark.SigningJob spend_tx_signing_job = 4;
+    spark.UserSignedTxSigningJob spend_tx_signing_job = 4;
 }
 
 message ClaimInstantStaticDepositUtxoSwapResponse {
-    // SE co-signature over the SSP's spend transaction.
-    spark.SigningResult spend_tx_signing_result = 1;
+    bytes spend_tx_signature = 1;
     // Secondary transfer, present iff the reservation carried a secondary credit.
     spark.Transfer transfer = 2;
     spark.DepositAddressQueryResult deposit_address = 3;

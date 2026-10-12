@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::{
-    Amount, OutPoint, Transaction, TxOut, Txid,
+    Amount, OutPoint, TapSighash, Transaction, TxOut, Txid,
     consensus::{deserialize, serialize},
     secp256k1::PublicKey,
 };
 
-use super::frost::{SignAggregateFrostParams, sign_aggregate_frost};
+use crate::frost::{SignedShare, operator_commitments, sign_share};
 use spark::{
     Network,
     bitcoin::sighash_from_tx,
     core::initial_zero_timelock_sequence,
     operator::{
         OperatorPool,
-        rpc::{self as operator_rpc, spark::SigningJob},
+        rpc::{self as operator_rpc, spark::UserSignedTxSigningJob},
     },
-    signer::{FrostSigningCommitmentsWithNonces, SecretSource, Signer, signing_path},
+    signer::{SecretSource, Signer, signing_path},
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::transactions::create_initial_timelock_refund_txs,
 };
@@ -27,20 +27,6 @@ use spark::services::ServiceError;
 
 /// The operators refuse to finalize more nodes than this in one call.
 pub const DEFAULT_MAX_NODES_PER_REQUEST: usize = 1000;
-
-fn collect_signing_pairs<'a>(
-    response_node: &'a operator_rpc::spark::CreationResponseNode,
-    data: &'a NodeBuildData,
-    out: &mut Vec<(
-        &'a operator_rpc::spark::CreationResponseNode,
-        &'a NodeBuildData,
-    )>,
-) {
-    out.push((response_node, data));
-    for (child_data, child_response) in data.children.iter().zip(response_node.children.iter()) {
-        collect_signing_pairs(child_response, child_data, out);
-    }
-}
 
 fn fits_in_one_call(blueprint: &TreeBlueprint, max_nodes: usize) -> bool {
     nodes_needed(blueprint) <= max_nodes
@@ -134,8 +120,8 @@ impl TreeSource {
         }
     }
 
-    fn to_create_source(&self) -> operator_rpc::spark::create_tree_request::Source {
-        use operator_rpc::spark::create_tree_request::Source;
+    fn to_create_source(&self) -> crate::operator_rpc::create_tree_request::Source {
+        use crate::operator_rpc::create_tree_request::Source;
         match self {
             Self::OnChainUtxo(utxo) => Source::OnChainUtxo(utxo.clone()),
             Self::ParentNodeOutput(output) => Source::ParentNodeOutput(output.clone()),
@@ -150,9 +136,6 @@ struct NodeBuildData {
     cpfp_tx: Transaction,
     cpfp_refund_tx: Option<Transaction>,
     direct_from_cpfp_refund_tx: Option<Transaction>,
-    node_nonce: FrostSigningCommitmentsWithNonces,
-    refund_nonce: Option<FrostSigningCommitmentsWithNonces>,
-    direct_from_cpfp_refund_nonce: Option<FrostSigningCommitmentsWithNonces>,
     parent_output: TxOut,
     children: Vec<NodeBuildData>,
 }
@@ -437,11 +420,11 @@ impl TreeDepositService {
             )
             .await?;
 
-        let creation_node = Self::to_creation_node(&node_tree)?;
+        let creation_node = self.sign_node_tree(&node_tree).await?;
 
-        let create_response = crate::operator_rpc::create_tree(
+        let created = crate::operator_rpc::create_tree(
             &self.operator_pool.get_coordinator().client,
-            operator_rpc::spark::CreateTreeRequest {
+            crate::operator_rpc::CreateTreeRequest {
                 source: Some(source.to_create_source()),
                 node: Some(creation_node),
                 user_identity_public_key: self.identity_public_key.serialize().to_vec(),
@@ -449,26 +432,9 @@ impl TreeDepositService {
         )
         .await?;
 
-        let response_node = create_response.node.ok_or(ServiceError::Generic(
-            "Missing response node from create_tree".to_string(),
-        ))?;
-
-        let node_signatures = self
-            .aggregate_signatures(&response_node, &node_tree)
-            .await?;
-
-        let finalize_resp = crate::operator_rpc::finalize_node_signatures(
-            &self.operator_pool.get_coordinator().client,
-            operator_rpc::spark::FinalizeNodeSignaturesRequest {
-                intent: operator_rpc::common::SignatureIntent::Creation as i32,
-                node_signatures,
-            },
-        )
-        .await?;
-
         // Matched to the plan by transaction id, so the nodes come out in tree
         // order whatever order the operators list them in.
-        let finalized = finalize_resp
+        let finalized = created
             .nodes
             .into_iter()
             .map(|node| {
@@ -638,32 +604,22 @@ impl TreeDepositService {
             )
         };
 
-        let node_nonce = self.signer.generate_random_signing_commitment().await?;
-
         // Only a leaf is refunded: a split's refund would spend the output its
         // subtree's root spends.
-        let (cpfp_refund_tx, direct_from_cpfp_refund_tx, refund_nonce, dfcr_nonce) =
-            if blueprint.is_leaf() {
-                let refund_txs = create_initial_timelock_refund_txs(
-                    &cpfp_tx,
-                    None,
-                    &key_tree.public_key,
-                    self.network,
-                )?;
-                let dfcr_tx = refund_txs.direct_from_cpfp_tx.ok_or(ServiceError::Generic(
-                    "Missing direct_from_cpfp refund tx".to_string(),
-                ))?;
-                let rn = self.signer.generate_random_signing_commitment().await?;
-                let dfcr_n = self.signer.generate_random_signing_commitment().await?;
-                (
-                    Some(refund_txs.cpfp_tx),
-                    Some(dfcr_tx),
-                    Some(rn),
-                    Some(dfcr_n),
-                )
-            } else {
-                (None, None, None, None)
-            };
+        let (cpfp_refund_tx, direct_from_cpfp_refund_tx) = if blueprint.is_leaf() {
+            let refund_txs = create_initial_timelock_refund_txs(
+                &cpfp_tx,
+                None,
+                &key_tree.public_key,
+                self.network,
+            )?;
+            let dfcr_tx = refund_txs.direct_from_cpfp_tx.ok_or(ServiceError::Generic(
+                "Missing direct_from_cpfp refund tx".to_string(),
+            ))?;
+            (Some(refund_txs.cpfp_tx), Some(dfcr_tx))
+        } else {
+            (None, None)
+        };
 
         let children = if is_branch {
             let cpfp_tx = &cpfp_tx;
@@ -692,175 +648,47 @@ impl TreeDepositService {
             cpfp_tx,
             cpfp_refund_tx,
             direct_from_cpfp_refund_tx,
-            node_nonce,
-            refund_nonce,
-            direct_from_cpfp_refund_nonce: dfcr_nonce,
             parent_output,
             children,
         })
     }
 
-    fn to_creation_node(
-        data: &NodeBuildData,
-    ) -> Result<operator_rpc::spark::CreationNode, ServiceError> {
-        let job = |tx: &Transaction,
-                   nonce: Option<&FrostSigningCommitmentsWithNonces>|
-         -> Result<SigningJob, ServiceError> {
-            Ok(SigningJob {
-                signing_public_key: data.signing_public_key.serialize().to_vec(),
-                raw_tx: serialize(tx),
-                signing_nonce_commitment: nonce.map(|n| n.commitments.try_into()).transpose()?,
-            })
-        };
-        Ok(operator_rpc::spark::CreationNode {
-            node_tx_signing_job: Some(job(&data.cpfp_tx, Some(&data.node_nonce))?),
-            refund_tx_signing_job: data
-                .cpfp_refund_tx
-                .as_ref()
-                .map(|tx| job(tx, data.refund_nonce.as_ref()))
-                .transpose()?,
-            children: data
-                .children
-                .iter()
-                .map(Self::to_creation_node)
-                .collect::<Result<_, _>>()?,
-            direct_node_tx_signing_job: None,
-            direct_refund_tx_signing_job: None,
-            direct_from_cpfp_refund_tx_signing_job: data
-                .direct_from_cpfp_refund_tx
-                .as_ref()
-                .map(|tx| job(tx, data.direct_from_cpfp_refund_nonce.as_ref()))
-                .transpose()?,
-        })
-    }
-
-    async fn aggregate_node_signatures(
+    /// Signs every transaction of the tree the operators co-sign, against
+    /// commitments the operators make for this call.
+    async fn sign_node_tree(
         &self,
-        response_node: &operator_rpc::spark::CreationResponseNode,
-        data: &NodeBuildData,
-    ) -> Result<operator_rpc::spark::NodeSignatures, ServiceError> {
-        let node_signing_result = response_node
-            .node_tx_signing_result
-            .as_ref()
-            .map(std::convert::TryInto::try_into)
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
+        root: &NodeBuildData,
+    ) -> Result<crate::operator_rpc::CreationNode, ServiceError> {
+        let mut unsigned = Vec::new();
+        collect_unsigned(root, &mut unsigned)?;
 
-        let node_sighash = sighash_from_tx(&data.cpfp_tx, 0, &data.parent_output)?;
-
-        let node_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            sighash: &node_sighash,
-            signing_public_key: &data.signing_public_key,
-            aggregating_public_key: &data.signing_public_key,
-            signing_private_key: &data.signing_key,
-            self_nonce_commitment: &data.node_nonce,
-            adaptor_public_key: None,
-            verifying_key: &data.verifying_key,
-            signing_result: node_signing_result,
-        })
-        .await
-        .map_err(|e| ServiceError::Generic(format!("FROST signing failed for node tx: {e}")))?;
-
-        let mut refund_sig_bytes = Vec::new();
-        let mut dfcr_sig_bytes = Vec::new();
-        let cpfp_output = data.cpfp_tx.output.first().ok_or_else(|| {
-            ServiceError::Generic("a node transaction has no outputs".to_string())
-        })?;
-
-        {
-            if let (Some(refund_tx), Some(refund_nonce)) =
-                (&data.cpfp_refund_tx, &data.refund_nonce)
-            {
-                let refund_signing_result = response_node
-                    .refund_tx_signing_result
-                    .as_ref()
-                    .ok_or(ServiceError::MissingTreeSignatures)?
-                    .try_into()?;
-                let refund_sighash = sighash_from_tx(refund_tx, 0, cpfp_output)?;
-
-                let refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
-                    signer: &self.signer,
-                    sighash: &refund_sighash,
-                    signing_public_key: &data.signing_public_key,
-                    aggregating_public_key: &data.signing_public_key,
-                    signing_private_key: &data.signing_key,
-                    self_nonce_commitment: refund_nonce,
-                    adaptor_public_key: None,
-                    verifying_key: &data.verifying_key,
-                    signing_result: refund_signing_result,
-                })
-                .await
-                .map_err(|e| {
-                    ServiceError::Generic(format!("FROST signing failed for refund tx: {e}"))
-                })?;
-
-                refund_sig_bytes = refund_signature
-                    .serialize()
-                    .map_err(|_| ServiceError::InvalidSignatureShare)?;
-            }
-
-            // The operators sign the direct-from-CPFP refund only alongside a direct
-            // refund.
-            if let (Some(dfcr_tx), Some(dfcr_nonce), Some(dfcr_sr)) = (
-                &data.direct_from_cpfp_refund_tx,
-                &data.direct_from_cpfp_refund_nonce,
-                &response_node.direct_from_cpfp_refund_tx_signing_result,
-            ) {
-                let dfcr_signing_result = dfcr_sr.try_into()?;
-                let dfcr_sighash = sighash_from_tx(dfcr_tx, 0, cpfp_output)?;
-
-                let dfcr_signature = sign_aggregate_frost(SignAggregateFrostParams {
-                    signer: &self.signer,
-                    sighash: &dfcr_sighash,
-                    signing_public_key: &data.signing_public_key,
-                    aggregating_public_key: &data.signing_public_key,
-                    signing_private_key: &data.signing_key,
-                    self_nonce_commitment: dfcr_nonce,
-                    adaptor_public_key: None,
-                    verifying_key: &data.verifying_key,
-                    signing_result: dfcr_signing_result,
-                })
-                .await
-                .map_err(|e| {
-                    ServiceError::Generic(format!(
-                        "FROST signing failed for direct_from_cpfp refund tx: {e}"
-                    ))
-                })?;
-
-                dfcr_sig_bytes = dfcr_signature
-                    .serialize()
-                    .map_err(|_| ServiceError::InvalidSignatureShare)?;
-            }
+        let pairs = u32::try_from(unsigned.len().div_ceil(2))
+            .map_err(|_| ServiceError::Generic("the tree has too many transactions".to_string()))?;
+        let commitments =
+            operator_commitments(&self.operator_pool.get_coordinator().client, pairs, 2).await?;
+        if commitments.len() < unsigned.len() {
+            return Err(ServiceError::Generic(format!(
+                "asked the operators for {} signing commitments, got {}",
+                unsigned.len(),
+                commitments.len()
+            )));
         }
 
-        Ok(operator_rpc::spark::NodeSignatures {
-            node_id: response_node.node_id.clone(),
-            node_tx_signature: node_signature
-                .serialize()
-                .map_err(|_| ServiceError::InvalidSignatureShare)?
-                .clone(),
-            refund_tx_signature: refund_sig_bytes,
-            direct_node_tx_signature: Vec::new(),
-            direct_refund_tx_signature: Vec::new(),
-            direct_from_cpfp_refund_tx_signature: dfcr_sig_bytes,
-        })
-    }
-
-    async fn aggregate_signatures(
-        &self,
-        response_node: &operator_rpc::spark::CreationResponseNode,
-        node_tree: &NodeBuildData,
-    ) -> Result<Vec<operator_rpc::spark::NodeSignatures>, ServiceError> {
-        let mut pairs = Vec::new();
-        collect_signing_pairs(response_node, node_tree, &mut pairs);
-        let signatures = futures::future::try_join_all(
-            pairs
-                .into_iter()
-                .map(|(response, data)| self.aggregate_node_signatures(response, data)),
-        )
-        .await?;
-        Ok(signatures)
+        let mut shares = Vec::with_capacity(unsigned.len());
+        for ((sighash, data), commitments) in unsigned.into_iter().zip(commitments) {
+            shares.push(
+                sign_share(
+                    &self.signer,
+                    &sighash,
+                    &data.signing_key,
+                    &data.signing_public_key,
+                    &data.verifying_key,
+                    commitments,
+                )
+                .await?,
+            );
+        }
+        to_creation_node(root, &mut shares.into_iter())
     }
 
     fn proto_node_to_tree_node(
@@ -948,6 +776,62 @@ struct VerifyingKeyTree {
 struct CallNodes {
     frontier: Vec<TreeNode>,
     branches: Vec<TreeNode>,
+}
+
+/// The sighash of every transaction the operators co-sign, in the order
+/// [`to_creation_node`] hands out the shares.
+fn collect_unsigned<'a>(
+    data: &'a NodeBuildData,
+    out: &mut Vec<(TapSighash, &'a NodeBuildData)>,
+) -> Result<(), ServiceError> {
+    out.push((
+        sighash_from_tx(&data.cpfp_tx, 0, &data.parent_output)?,
+        data,
+    ));
+    if let Some(refund_tx) = &data.cpfp_refund_tx {
+        let cpfp_output = data.cpfp_tx.output.first().ok_or_else(|| {
+            ServiceError::Generic("a node transaction has no outputs".to_string())
+        })?;
+        out.push((sighash_from_tx(refund_tx, 0, cpfp_output)?, data));
+    }
+    for child in &data.children {
+        collect_unsigned(child, out)?;
+    }
+    Ok(())
+}
+
+fn to_creation_node(
+    data: &NodeBuildData,
+    shares: &mut impl Iterator<Item = SignedShare>,
+) -> Result<crate::operator_rpc::CreationNode, ServiceError> {
+    let mut signed = |tx: &Transaction| {
+        shares
+            .next()
+            .map(|share| share.into_signing_job(&data.signing_public_key, tx))
+            .ok_or_else(|| ServiceError::Generic("a transaction has no share".to_string()))
+    };
+    let node_tx_signing_job = Some(signed(&data.cpfp_tx)?);
+    let refund_tx_signing_job = data.cpfp_refund_tx.as_ref().map(&mut signed).transpose()?;
+    Ok(crate::operator_rpc::CreationNode {
+        node_tx_signing_job,
+        refund_tx_signing_job,
+        children: data
+            .children
+            .iter()
+            .map(|child| to_creation_node(child, shares))
+            .collect::<Result<_, _>>()?,
+        direct_node_tx_signing_job: None,
+        direct_refund_tx_signing_job: None,
+        // The operators sign the direct-from-CPFP refund only alongside a direct
+        // refund, so the SSP sends this one without a share.
+        direct_from_cpfp_refund_tx_signing_job: data.direct_from_cpfp_refund_tx.as_ref().map(
+            |tx| UserSignedTxSigningJob {
+                signing_public_key: data.signing_public_key.serialize().to_vec(),
+                raw_tx: serialize(tx),
+                ..Default::default()
+            },
+        ),
+    })
 }
 
 fn collect_call_nodes(

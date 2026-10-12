@@ -24,10 +24,7 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::signer::{
-    FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces, LeafSigningKey, SignerError,
-    SparkSigner,
-};
+use crate::signer::{FrostJob, FrostShareResult, LeafSigningKey, SignerError, SparkSigner};
 use crate::ssp::BitcoinNetwork;
 use crate::token::bech32m_encode_token_id;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
@@ -120,7 +117,7 @@ pub struct SignedTx {
     pub tx: Transaction,
     pub user_signature: SignatureShare,
     pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
-    pub self_nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub self_nonce_commitment: SigningCommitments,
     pub network: Network,
 }
 
@@ -146,7 +143,7 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
             leaf_id: signed_tx.node_id.to_string(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
-            signing_nonce_commitment: Some(signed_tx.self_nonce_commitment.commitments.try_into()?),
+            signing_nonce_commitment: Some(signed_tx.self_nonce_commitment.try_into()?),
             signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,
             }),

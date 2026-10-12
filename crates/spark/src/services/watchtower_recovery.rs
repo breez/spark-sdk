@@ -73,7 +73,7 @@ impl WatchtowerRecoveryService {
                 recovery_tx_signing_job: Some(SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: serialize(&recovery_tx),
-                    signing_nonce_commitment: Some(nonce_commitment.commitments.try_into()?),
+                    signing_nonce_commitment: Some(nonce_commitment.try_into()?),
                 }),
                 user_signature: user_signature.serialize_der().to_vec(),
             })

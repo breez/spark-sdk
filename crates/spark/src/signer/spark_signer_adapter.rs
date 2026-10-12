@@ -19,8 +19,8 @@ use prost::Message as _;
 
 use super::spark_signer::*;
 use super::{
-    AggregateFrostRequest, FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit,
-    SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+    AggregateFrostRequest, CommitAndSignFrostRequest, CommittedFrostShare, SecretSource,
+    SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
 };
 use crate::operator::rpc::spark as proto;
 use crate::utils::frost::aggregate_frost;
@@ -76,7 +76,7 @@ impl SparkSignerAdapter {
     ) -> Result<
         (
             PublicKey,
-            FrostSigningCommitmentsWithNonces,
+            frost_secp256k1_tr::round1::SigningCommitments,
             bitcoin::secp256k1::ecdsa::Signature,
         ),
         SignerError,
@@ -96,7 +96,7 @@ impl SparkSignerAdapter {
         derivation: &FrostDerivation,
         sighash: &[u8; 32],
         verifying_key: &PublicKey,
-        nonce_commitment: &FrostSigningCommitmentsWithNonces,
+        nonce_commitment: &frost_secp256k1_tr::round1::SigningCommitments,
         operators: OperatorShares,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
         let OperatorShares {
@@ -125,7 +125,7 @@ impl SparkSignerAdapter {
             statechain_public_keys,
             verifying_key,
             statechain_commitments,
-            self_commitment: &nonce_commitment.commitments,
+            self_commitment: nonce_commitment,
             public_key: &aggregating_public_key,
             self_signature: &user_signature,
             adaptor_public_key: None,
@@ -144,21 +144,22 @@ impl SparkSignerAdapter {
     ) -> Result<FrostShareResult, SignerError> {
         let private_key = self.secret_source_for(derivation)?;
         let public_key = self.signer.public_key_from_secret(&private_key).await?;
-        let self_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let signature_share = self
+        let CommittedFrostShare {
+            commitments,
+            signature_share,
+        } = self
             .signer
-            .sign_frost(SignFrostRequest {
+            .commit_and_sign_frost(CommitAndSignFrostRequest {
                 message: sighash,
                 public_key: &public_key,
                 private_key: &private_key,
                 verifying_key,
-                self_nonce_commitment: &self_nonce_commitment,
                 statechain_commitments: operator_commitments,
                 adaptor_public_key,
             })
             .await?;
         Ok(FrostShareResult {
-            commitment: self_nonce_commitment,
+            commitment: commitments,
             signature_share,
         })
     }

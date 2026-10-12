@@ -57,20 +57,34 @@ pub enum SecretToSplit {
     Preimage(Vec<u8>),
 }
 
-#[derive(Debug, Clone)]
-pub struct FrostSigningCommitmentsWithNonces {
-    pub commitments: SigningCommitments,
-    pub nonces_ciphertext: Vec<u8>,
-}
-
 pub struct SignFrostRequest<'a> {
     pub message: &'a [u8],
     pub public_key: &'a PublicKey,
     pub private_key: &'a SecretSource,
     pub verifying_key: &'a PublicKey,
-    pub self_nonce_commitment: &'a FrostSigningCommitmentsWithNonces,
+    pub self_nonce_commitment: &'a SigningCommitments,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub adaptor_public_key: Option<&'a PublicKey>,
+}
+
+/// A [`SignFrostRequest`] without the nonce commitment: the signer generates
+/// that itself, so there is nothing for a caller to supply.
+pub struct CommitAndSignFrostRequest<'a> {
+    pub message: &'a [u8],
+    pub public_key: &'a PublicKey,
+    pub private_key: &'a SecretSource,
+    pub verifying_key: &'a PublicKey,
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    pub adaptor_public_key: Option<&'a PublicKey>,
+}
+
+/// The round-1 commitment and round-2 share from one
+/// [`Signer::commit_and_sign_frost`] call.
+///
+/// [`Signer::commit_and_sign_frost`]: crate::signer::Signer::commit_and_sign_frost
+pub struct CommittedFrostShare {
+    pub commitments: SigningCommitments,
+    pub signature_share: SignatureShare,
 }
 
 pub struct AggregateFrostRequest<'a> {

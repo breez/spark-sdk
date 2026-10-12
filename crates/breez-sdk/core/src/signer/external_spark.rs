@@ -104,6 +104,11 @@ pub trait ExternalSparkSigner: Send + Sync {
     ) -> Result<ExternalPreparedStaticDeposit, SignerError>;
 
     /// Begin a static-deposit refund (user-commits-first).
+    ///
+    /// The implementation keeps the nonce behind the returned commitment until
+    /// [`sign_static_deposit_refund`](Self::sign_static_deposit_refund)
+    /// consumes it, and signs with it once: signing twice under one nonce leaks
+    /// the signing share.
     async fn start_static_deposit_refund(
         &self,
         request: ExternalStartStaticDepositRefundRequest,
@@ -119,6 +124,11 @@ pub trait ExternalSparkSigner: Send + Sync {
     /// the leaf's signing key (derived from `leaf_id`), a fresh FROST nonce
     /// commitment, and the identity key's ECDSA signature over the SHA-256 hash
     /// of `user_statement`.
+    ///
+    /// The implementation keeps the nonce behind the returned commitment until
+    /// [`sign_watchtower_exit_recovery`](Self::sign_watchtower_exit_recovery)
+    /// consumes it, and signs with it once: signing twice under one nonce leaks
+    /// the signing share.
     async fn start_watchtower_exit_recovery(
         &self,
         request: ExternalStartWatchtowerExitRecoveryRequest,

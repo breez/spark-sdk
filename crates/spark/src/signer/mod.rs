@@ -1,6 +1,7 @@
 mod default_signer;
 mod error;
 mod models;
+mod nonce_store;
 mod secret_sharing;
 mod spark_signer;
 mod spark_signer_adapter;
@@ -11,6 +12,7 @@ use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
 use bitcoin::taproot::TapNodeHash;
+use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::{
@@ -19,6 +21,7 @@ pub use default_signer::{
 };
 pub use error::SignerError;
 pub use models::*;
+pub use nonce_store::NonceStore;
 pub use spark_signer::*;
 pub use spark_signer_adapter::SparkSignerAdapter;
 pub use spark_signer_adapter::signing_path;
@@ -58,9 +61,15 @@ pub trait Signer: Send + Sync + 'static {
         tap_tweak: Option<TapNodeHash>,
     ) -> Result<schnorr::Signature, SignerError>;
 
-    async fn generate_random_signing_commitment(
-        &self,
-    ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
+    /// Generates a nonce commitment for one later FROST signing round.
+    ///
+    /// Only for a flow that must publish its commitment before the operators
+    /// return the rest of the signing package; everything else uses
+    /// [`Signer::commit_and_sign_frost`], which keeps the nonce inside the
+    /// signer. The commitment is valid for exactly one [`Signer::sign_frost`],
+    /// and an implementation must enforce that: signing twice under one nonce
+    /// leaks the signing share, which is full compromise of the key.
+    async fn generate_random_signing_commitment(&self) -> Result<SigningCommitments, SignerError>;
 
     async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError>;
 
@@ -93,18 +102,32 @@ pub trait Signer: Send + Sync + 'static {
         private_key: &SecretSource,
     ) -> Result<PublicKey, SignerError>;
 
+    /// Generates a nonce and produces the FROST share over `message` with it,
+    /// returning both.
+    ///
+    /// The nonce never leaves the signer, so there is none for a caller to
+    /// forge or to present twice. The default for every FROST job; see
+    /// [`Signer::generate_random_signing_commitment`] for the exception.
+    async fn commit_and_sign_frost<'a>(
+        &self,
+        request: CommitAndSignFrostRequest<'a>,
+    ) -> Result<CommittedFrostShare, SignerError>;
+
     /// Creates a FROST signature share for threshold signing
     ///
     /// This function generates a partial signature (signature share) that will be combined
     /// with other shares from statechain participants to create a complete threshold signature.
-    /// It uses pre-generated nonce commitments and the corresponding signing key.
+    /// It signs with the nonce behind a commitment from
+    /// [`Signer::generate_random_signing_commitment`] and consumes it: a second
+    /// call with the same commitment must fail with `UnknownNonceCommitment`
+    /// rather than sign.
     ///
     /// # Parameters
     /// * `message` - The message being signed
     /// * `public_key` - The public key associated with the local signing key
     /// * `private_key` - Private key used for signing
     /// * `verifying_key` - The group's verifying key (threshold public key)
-    /// * `self_commitment` - The local user's previously generated commitment
+    /// * `self_nonce_commitment` - The local user's previously generated commitment
     /// * `statechain_commitments` - Map of identifier to commitment values from statechain participants
     /// * `adaptor_public_key` - Optional adaptor public key for adaptor signatures
     ///

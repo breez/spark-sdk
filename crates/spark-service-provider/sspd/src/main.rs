@@ -840,9 +840,6 @@ fn spawn_static_deposit_worker(
     claims: wakeup::Wakeup,
     token: &CancellationToken,
 ) {
-    let finalizer = Arc::new(static_deposit::SparkStaticDepositSpendFinalizer::new(
-        Arc::clone(&ssp_wallet.spark.signer),
-    )) as Arc<dyn static_deposit::StaticDepositSpendFinalizer>;
     let spend_cosigner = Arc::new(static_deposit::SparkStaticDepositSpendCosigner::new(
         Arc::clone(static_deposit_store),
         Arc::clone(&ssp_wallet.spark.operator_pool),
@@ -853,7 +850,6 @@ fn spawn_static_deposit_worker(
         store: Arc::clone(static_deposit_store),
         quotes: Arc::clone(instant_quote_store),
         chain: Arc::clone(static_deposit_chain),
-        finalizer,
         spend_cosigner,
         credit_settler: Arc::clone(static_deposit_service) as Arc<_>,
         blocks,

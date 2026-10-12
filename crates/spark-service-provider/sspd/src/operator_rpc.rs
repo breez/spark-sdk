@@ -1,7 +1,7 @@
 use spark::operator::rpc::spark::{
-    AdaptorPublicKeyPackage, CreateTreeRequest, CreateTreeResponse, FinalizeNodeSignaturesRequest,
-    FinalizeNodeSignaturesResponse, GetUtxosForAddressRequest, GetUtxosForAddressResponse,
-    PrepareTreeAddressRequest, PrepareTreeAddressResponse, QueryNodesRequest, QueryNodesResponse,
+    AdaptorPublicKeyPackage, FinalizeNodeSignaturesResponse, GetUtxosForAddressRequest,
+    GetUtxosForAddressResponse, PrepareTreeAddressRequest, PrepareTreeAddressResponse,
+    QueryNodesRequest, QueryNodesResponse,
 };
 use spark::operator::rpc::{HeaderInterceptor, SparkRpcClient};
 use tonic::service::interceptor::InterceptedService;
@@ -16,11 +16,11 @@ pub mod proto {
 use proto::spark_ssp_internal::spark_ssp_internal_service_client::SparkSspInternalServiceClient;
 pub use proto::spark_ssp_internal::{
     ClaimInstantStaticDepositUtxoSwapRequest, ClaimInstantStaticDepositUtxoSwapResponse,
-    CounterTransferRequest, InitiateStaticDepositUtxoSwapRequest,
+    CounterTransferRequest, CreateTreeRequest, CreationNode, InitiateStaticDepositUtxoSwapRequest,
     InitiateStaticDepositUtxoSwapResponse, ReserveInstantStaticDepositUtxoSwapRequest,
     ReserveInstantStaticDepositUtxoSwapResponse, ReturnStuckTransferRequest,
     ReturnStuckTransferResponse, SignStaticDepositSweepTxRequest, SignStaticDepositSweepTxResponse,
-    SweepInput, sign_static_deposit_sweep_tx_response,
+    SweepInput, create_tree_request, sign_static_deposit_sweep_tx_response,
 };
 
 use spark::operator::rpc::OperatorRpcError;
@@ -69,10 +69,11 @@ pub async fn prepare_tree_address(
     .await
 }
 
+/// The operators create the tree and finalize it in this one call.
 pub async fn create_tree(
     client: &SparkRpcClient,
     req: CreateTreeRequest,
-) -> Result<CreateTreeResponse> {
+) -> Result<FinalizeNodeSignaturesResponse> {
     with_auth_retry(client, |interceptor| {
         let mut c = ssp_client(client, interceptor);
         let req = req.clone();
@@ -227,19 +228,6 @@ pub async fn get_utxos_for_address(
         let mut c = SparkServiceClient::with_interceptor(client.transport().clone(), interceptor);
         let req = req.clone();
         async move { c.get_utxos_for_address(req).await }
-    })
-    .await
-}
-
-/// Completes the nodes of a tree `create_tree` started.
-pub async fn finalize_node_signatures(
-    client: &SparkRpcClient,
-    req: FinalizeNodeSignaturesRequest,
-) -> Result<FinalizeNodeSignaturesResponse> {
-    with_auth_retry(client, |interceptor| {
-        let mut c = ssp_client(client, interceptor);
-        let req = req.clone();
-        async move { c.finalize_node_signatures(req).await }
     })
     .await
 }

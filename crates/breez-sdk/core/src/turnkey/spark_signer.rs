@@ -34,9 +34,9 @@ use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
-    AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult,
-    FrostSigningCommitmentsWithNonces, NewLeafKey, OperatorPackage, OperatorRecipient,
-    SecretSource, SignFrostRequest, Signer, SparkAddress, TreeNodeId, aggregate_frost,
+    AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult, NewLeafKey,
+    NonceStore, OperatorPackage, OperatorRecipient, SecretSource, SignFrostRequest, Signer,
+    SparkAddress, TreeNodeId, aggregate_frost,
 };
 
 use crate::Network;
@@ -142,8 +142,8 @@ fn frost_job_to_request(job: &FrostJob) -> Result<SparkSignatureRequest, Turnkey
 }
 
 /// Rebuilds a `FrostShareResult` from Turnkey's partial signature. The secret
-/// nonces stay in the enclave, so `nonces_ciphertext` is empty: downstream code
-/// only reads the public commitment and the share (see module docs).
+/// nonces stay in the enclave; only the public commitment and the share come
+/// back out (see module docs).
 fn partial_signature_to_share(
     sig: &SparkPartialSignature,
 ) -> Result<FrostShareResult, TurnkeyError> {
@@ -158,10 +158,7 @@ fn partial_signature_to_share(
         SignatureShare::deserialize(&decode("signatureShare", &sig.signature_share)?)
             .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
     Ok(FrostShareResult {
-        commitment: FrostSigningCommitmentsWithNonces {
-            commitments: SigningCommitments::new(hiding, binding),
-            nonces_ciphertext: Vec::new(),
-        },
+        commitment: SigningCommitments::new(hiding, binding),
         signature_share,
     })
 }
@@ -313,6 +310,10 @@ pub(crate) struct TurnkeySparkSigner {
     // start/sign pair need not re-export. Exportable by design (the SSP co-signs
     // with them); in-memory only, never persisted.
     static_deposit_secret_keys: Mutex<HashMap<u32, SecretKey>>,
+    // `local_static_deposit_signer` builds a signer per call, so the refund's
+    // start/sign pair are two different ones. They share this store, which is
+    // what keeps the commitment from the start valid for exactly one sign.
+    frost_nonces: Arc<NonceStore>,
 }
 
 impl TurnkeySparkSigner {
@@ -344,6 +345,7 @@ impl TurnkeySparkSigner {
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_secret_keys: Mutex::new(HashMap::new()),
+            frost_nonces: Arc::new(NonceStore::new()),
         }
     }
 
@@ -572,10 +574,10 @@ impl TurnkeySparkSigner {
     /// key is addressed via the empty derivation path).
     async fn local_static_deposit_signer(&self, index: u32) -> Result<DefaultSigner, SignerError> {
         let secret = self.export_static_deposit_key(index).await?;
-        Ok(DefaultSigner::from_master(xpriv_from_secret(
-            secret,
-            self.network,
-        )))
+        Ok(DefaultSigner::with_nonce_store(
+            xpriv_from_secret(secret, self.network),
+            Arc::clone(&self.frost_nonces),
+        ))
     }
 }
 
@@ -839,8 +841,9 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             user_statement,
         } = request;
         let signing_public_key = self.static_deposit_public_key(index).await?;
-        // User-commits-first: the nonce (encrypted to the local signer) is
-        // generated now and reconstructed in sign_static_deposit_refund.
+        // User-commits-first: the nonce is generated now and held in the store
+        // the per-call local signers share until sign_static_deposit_refund
+        // consumes it.
         let nonce_commitment = self
             .local_static_deposit_signer(index)
             .await?
@@ -891,7 +894,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             statechain_public_keys,
             verifying_key: &verifying_key,
             statechain_commitments,
-            self_commitment: &nonce_commitment.commitments,
+            self_commitment: &nonce_commitment,
             public_key: &aggregating_public_key,
             self_signature: &user_signature,
             adaptor_public_key: None,

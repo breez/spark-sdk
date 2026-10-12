@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
-use super::{FrostSigningCommitmentsWithNonces, SignerError};
+use super::SignerError;
 use crate::services::TransferId;
 use crate::tree::{TreeNode, TreeNodeId};
 
@@ -92,7 +92,7 @@ pub struct FrostJob {
 #[derive(Debug, Clone)]
 pub struct FrostShareResult {
     /// The user's nonce commitment (round-1 output: hiding + binding).
-    pub commitment: FrostSigningCommitmentsWithNonces,
+    pub commitment: SigningCommitments,
     /// The user's signature share (round-2 output).
     pub signature_share: SignatureShare,
 }
@@ -237,7 +237,7 @@ pub struct StartedStaticDepositRefund {
     /// The user's FROST nonce commitment: forward it to the operators, then
     /// pass it back into
     /// [`sign_static_deposit_refund`](SparkSigner::sign_static_deposit_refund).
-    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub nonce_commitment: SigningCommitments,
     /// ECDSA identity signature over `user_statement`.
     pub user_signature: ecdsa::Signature,
 }
@@ -254,7 +254,7 @@ pub struct SignStaticDepositRefundRequest {
     pub verifying_key: PublicKey,
     /// The nonce commitment returned by
     /// [`start_static_deposit_refund`](SparkSigner::start_static_deposit_refund).
-    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub nonce_commitment: SigningCommitments,
     /// Operators' round-1 commitments for the refund tx.
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
     /// Operators' round-2 signature shares for the refund tx.
@@ -274,7 +274,7 @@ pub struct StartWatchtowerExitRecoveryRequest {
 #[derive(Debug, Clone)]
 pub struct StartedWatchtowerExitRecovery {
     pub signing_public_key: PublicKey,
-    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub nonce_commitment: SigningCommitments,
     pub user_signature: ecdsa::Signature,
 }
 
@@ -283,7 +283,7 @@ pub struct SignWatchtowerExitRecoveryRequest {
     pub leaf_id: TreeNodeId,
     pub sighash: [u8; 32],
     pub verifying_key: PublicKey,
-    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    pub nonce_commitment: SigningCommitments,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
     pub statechain_signatures: BTreeMap<Identifier, SignatureShare>,
     pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,

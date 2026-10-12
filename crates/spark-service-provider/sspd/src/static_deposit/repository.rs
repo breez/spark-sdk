@@ -1,27 +1,8 @@
 use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
-use spark::operator::rpc::spark as pb;
 use spark::services::TransferId;
-use spark::signer::FrostSigningCommitmentsWithNonces;
 
 use crate::handover::HandoverReservation;
-
-/// The operators' answer to co-signing a claim's spend. Their signature shares make
-/// a valid signature only with a share made from the prep's nonce.
-#[derive(Debug, Clone)]
-pub struct StaticDepositSpendContext {
-    pub verifying_public_key: PublicKey,
-    pub signing_result: pb::SigningResult,
-}
-
-/// Built with the claim, at the fee rate its fee check used. Kept across retries of
-/// the call that co-signs it: the operators answer a repeated claim of a completed
-/// INSTANT swap with the signing result they made first.
-#[derive(Debug, Clone)]
-pub struct StaticDepositSpendPrep {
-    pub spend_tx: Transaction,
-    pub nonce: FrostSigningCommitmentsWithNonces,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingCredit {
@@ -48,8 +29,9 @@ pub struct StaticDepositClaimRecord {
     /// settle it if their answer is lost.
     pub pending_credit: Option<PendingCredit>,
     pub utxo_swap_id: Option<String>,
-    pub spend_prep: StaticDepositSpendPrep,
-    pub spend_context: Option<StaticDepositSpendContext>,
+    /// Built with the claim, at the fee rate its fee check used.
+    pub spend_tx: Transaction,
+    pub signed_spend_transaction: Option<Transaction>,
     pub spend_broadcast_txid: Option<String>,
     pub spend_confirmed: bool,
     /// Set once the SSP gives up on an INSTANT claim whose deposit vanished before it
@@ -90,11 +72,11 @@ pub trait StaticDepositClaimStore: Send + Sync {
         utxo_swap_id: &str,
     ) -> Result<(), String>;
     /// Also forgets the pending credit.
-    async fn set_spend_context(
+    async fn set_signed_spend_transaction(
         &self,
         id: &str,
         transfer_id: &str,
-        context: &StaticDepositSpendContext,
+        transaction: &Transaction,
     ) -> Result<(), String>;
     async fn set_spend_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String>;
     async fn set_spend_confirmed(&self, id: &str) -> Result<(), String>;
@@ -180,16 +162,16 @@ impl StaticDepositClaimStore for InMemoryStaticDepositClaimStore {
         Ok(())
     }
 
-    async fn set_spend_context(
+    async fn set_signed_spend_transaction(
         &self,
         id: &str,
         transfer_id: &str,
-        context: &StaticDepositSpendContext,
+        transaction: &Transaction,
     ) -> Result<(), String> {
         if let Some(record) = self.records.write().await.get_mut(id) {
             record.transfer_id = Some(transfer_id.to_string());
             record.pending_credit = None;
-            record.spend_context = Some(context.clone());
+            record.signed_spend_transaction = Some(transaction.clone());
             record.updated_at = chrono::Utc::now();
         }
         Ok(())
@@ -293,20 +275,25 @@ mod tests {
     use super::{
         InMemoryInstantStaticDepositQuoteStore, InMemoryStaticDepositClaimStore,
         InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore, StaticDepositClaimRecord,
-        StaticDepositClaimStore, StaticDepositSpendContext,
+        StaticDepositClaimStore,
     };
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use spark::operator::rpc::spark as pb;
-    use spark::signer::{DefaultSigner, Signer};
-
-    use super::StaticDepositSpendPrep;
 
     fn pubkey(byte: u8) -> PublicKey {
         let secp = Secp256k1::new();
         PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[byte; 32]).expect("secret"))
     }
 
-    async fn record(id: &str, txid: &str) -> StaticDepositClaimRecord {
+    fn spend_tx() -> bitcoin::Transaction {
+        bitcoin::Transaction {
+            version: bitcoin::transaction::Version::non_standard(3),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    fn record(id: &str, txid: &str) -> StaticDepositClaimRecord {
         StaticDepositClaimRecord {
             id: id.to_string(),
             user_identity_public_key: pubkey(1),
@@ -323,32 +310,13 @@ mod tests {
             transfer_id: None,
             pending_credit: None,
             utxo_swap_id: None,
-            spend_prep: StaticDepositSpendPrep {
-                spend_tx: bitcoin::Transaction {
-                    version: bitcoin::transaction::Version::non_standard(3),
-                    lock_time: bitcoin::absolute::LockTime::ZERO,
-                    input: Vec::new(),
-                    output: Vec::new(),
-                },
-                nonce: DefaultSigner::new(&[7u8; 32], spark::Network::Regtest)
-                    .expect("signer")
-                    .generate_random_signing_commitment()
-                    .await
-                    .expect("nonce"),
-            },
-            spend_context: None,
+            spend_tx: spend_tx(),
+            signed_spend_transaction: None,
             spend_broadcast_txid: None,
             spend_confirmed: false,
             deposit_lost: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-        }
-    }
-
-    fn spend_context() -> StaticDepositSpendContext {
-        StaticDepositSpendContext {
-            verifying_public_key: pubkey(2),
-            signing_result: pb::SigningResult::default(),
         }
     }
 
@@ -370,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_and_pending_filter() {
         let store = InMemoryStaticDepositClaimStore::default();
-        store.insert(&record("s1", "aa").await).await.unwrap();
+        store.insert(&record("s1", "aa")).await.unwrap();
 
         assert!(store.pending().await.unwrap().is_empty());
 
@@ -397,7 +365,7 @@ mod tests {
         assert!(store.get_by_transfer_id("nope").await.unwrap().is_none());
 
         store
-            .set_spend_context("s1", "transfer-1", &spend_context())
+            .set_signed_spend_transaction("s1", "transfer-1", &spend_tx())
             .await
             .unwrap();
         assert_eq!(store.pending().await.unwrap().len(), 1);
@@ -413,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn instant_claim_state_machine() {
         let store = InMemoryStaticDepositClaimStore::default();
-        let mut rec = record("i1", "bb").await;
+        let mut rec = record("i1", "bb");
         rec.is_instant = true;
         store.insert(&rec).await.unwrap();
 
@@ -426,7 +394,7 @@ mod tests {
         let reserved = store.get("i1").await.unwrap().unwrap();
         assert_eq!(reserved.transfer_id.as_deref(), Some("transfer-i1"));
         assert_eq!(reserved.utxo_swap_id.as_deref(), Some("swap-i1"));
-        assert!(reserved.spend_context.is_none());
+        assert!(reserved.signed_spend_transaction.is_none());
         assert_eq!(store.pending().await.unwrap().len(), 1);
 
         store.set_deposit_lost("i1").await.unwrap();

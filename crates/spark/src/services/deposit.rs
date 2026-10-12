@@ -604,7 +604,7 @@ impl DepositService {
                     refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&refund_tx),
-                        signing_nonce_commitment: Some(nonce_commitment.commitments.try_into()?),
+                        signing_nonce_commitment: Some(nonce_commitment.try_into()?),
                     }),
                     hash_variant: 0,
                 },
@@ -851,9 +851,7 @@ impl DepositService {
                         leaf_id: String::new(),
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_root_tx),
-                        signing_nonce_commitment: Some(
-                            cpfp_root_share.commitment.commitments.try_into()?,
-                        ),
+                        signing_nonce_commitment: Some(cpfp_root_share.commitment.try_into()?),
                         user_signature: cpfp_root_share.signature_share.serialize().to_vec(),
                         signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                             signing_commitments: cpfp_root_commitments
@@ -867,9 +865,7 @@ impl DepositService {
                         leaf_id: String::new(),
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_refund_tx),
-                        signing_nonce_commitment: Some(
-                            cpfp_refund_share.commitment.commitments.try_into()?,
-                        ),
+                        signing_nonce_commitment: Some(cpfp_refund_share.commitment.try_into()?),
                         user_signature: cpfp_refund_share.signature_share.serialize().to_vec(),
                         signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                             signing_commitments: cpfp_refund_commitments
@@ -885,10 +881,7 @@ impl DepositService {
                             signing_public_key: signing_public_key.serialize().to_vec(),
                             raw_tx: serialize(&direct_from_cpfp_refund_tx),
                             signing_nonce_commitment: Some(
-                                direct_from_cpfp_refund_share
-                                    .commitment
-                                    .commitments
-                                    .try_into()?,
+                                direct_from_cpfp_refund_share.commitment.try_into()?,
                             ),
                             user_signature: direct_from_cpfp_refund_share
                                 .signature_share

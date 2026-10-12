@@ -53,7 +53,6 @@ pub struct ExternalTreeNodeId {
 pub struct ExternalFrostCommitments {
     pub hiding_commitment: Vec<u8>,
     pub binding_commitment: Vec<u8>,
-    pub nonces_ciphertext: Vec<u8>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalIdentifier)]

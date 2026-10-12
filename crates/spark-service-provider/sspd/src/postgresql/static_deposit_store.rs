@@ -4,19 +4,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
-use frost_secp256k1_tr::round1::SigningCommitments;
-use prost::Message as _;
 use sqlx::PgPool;
 
-use spark::operator::rpc::spark as pb;
 use spark::services::TransferId;
-use spark::signer::FrostSigningCommitmentsWithNonces;
 
 use crate::handover::HandoverReservation;
 use crate::static_deposit::repository::{
-    PendingCredit, StaticDepositClaimRecord, StaticDepositClaimStore, StaticDepositSpendContext,
-    StaticDepositSpendPrep,
+    PendingCredit, StaticDepositClaimRecord, StaticDepositClaimStore,
 };
 
 #[derive(sqlx::FromRow)]
@@ -39,10 +35,7 @@ struct StaticDepositClaimRow {
     reserved_leaf_ids: Option<Vec<String>>,
     utxo_swap_id: Option<String>,
     prep_spend_tx: Vec<u8>,
-    prep_spend_nonce_commitments: Vec<u8>,
-    prep_spend_nonce_ciphertext: Vec<u8>,
-    verifying_public_key: Option<Vec<u8>>,
-    spend_tx_signing_result: Option<Vec<u8>>,
+    signed_spend_transaction: Option<Vec<u8>>,
     spend_broadcast_txid: Option<String>,
     spend_confirmed: bool,
     deposit_lost: bool,
@@ -54,8 +47,14 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
     type Error = String;
 
     fn try_from(row: StaticDepositClaimRow) -> Result<Self, String> {
-        let spend_prep = row_spend_prep(&row)?;
-        let spend_context = row_spend_context(&row)?;
+        let spend_tx = bitcoin::consensus::deserialize(&row.prep_spend_tx)
+            .map_err(|err| format!("invalid prep spend tx: {err}"))?;
+        let signed_spend_transaction = row
+            .signed_spend_transaction
+            .as_deref()
+            .map(bitcoin::consensus::deserialize)
+            .transpose()
+            .map_err(|err| format!("invalid signed spend transaction: {err}"))?;
         let pending_credit = match (row.pending_transfer_id, row.reservation_id) {
             (Some(transfer_id), Some(id)) => Some(PendingCredit {
                 transfer_id: TransferId::from_str(&transfer_id)
@@ -99,8 +98,8 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             transfer_id: row.transfer_id,
             pending_credit,
             utxo_swap_id: row.utxo_swap_id,
-            spend_prep,
-            spend_context,
+            spend_tx,
+            signed_spend_transaction,
             spend_broadcast_txid: row.spend_broadcast_txid,
             spend_confirmed: row.spend_confirmed,
             deposit_lost: row.deposit_lost,
@@ -112,39 +111,6 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
 
 fn sats_to_i64(sats: u64) -> Result<i64, String> {
     i64::try_from(sats).map_err(|e| format!("amount exceeds i64: {e}"))
-}
-
-fn row_spend_prep(row: &StaticDepositClaimRow) -> Result<StaticDepositSpendPrep, String> {
-    Ok(StaticDepositSpendPrep {
-        spend_tx: bitcoin::consensus::deserialize(&row.prep_spend_tx)
-            .map_err(|err| format!("invalid prep spend tx: {err}"))?,
-        nonce: FrostSigningCommitmentsWithNonces {
-            commitments: SigningCommitments::deserialize(&row.prep_spend_nonce_commitments)
-                .map_err(|err| format!("invalid prep nonce commitments: {err}"))?,
-            nonces_ciphertext: row.prep_spend_nonce_ciphertext.clone(),
-        },
-    })
-}
-
-fn row_spend_context(
-    row: &StaticDepositClaimRow,
-) -> Result<Option<StaticDepositSpendContext>, String> {
-    match (
-        row.verifying_public_key.as_ref(),
-        row.spend_tx_signing_result.as_ref(),
-    ) {
-        (None, None) => Ok(None),
-        (Some(verifying_public_key), Some(signing_result)) => Ok(Some(StaticDepositSpendContext {
-            verifying_public_key: PublicKey::from_slice(verifying_public_key)
-                .map_err(|err| format!("invalid verifying key: {err}"))?,
-            signing_result: pb::SigningResult::decode(signing_result.as_slice())
-                .map_err(|err| format!("invalid signing result: {err}"))?,
-        })),
-        _ => Err(format!(
-            "static deposit claim {} has a partially-populated spend context",
-            row.id
-        )),
-    }
 }
 
 pub struct PostgresStaticDepositClaimStore {
@@ -161,16 +127,14 @@ impl PostgresStaticDepositClaimStore {
 impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     async fn insert(&self, record: &StaticDepositClaimRecord) -> Result<(), String> {
         let credit = record.pending_credit.as_ref();
-        let prep = &record.spend_prep;
         sqlx::query(
             r#"INSERT INTO brz_ssp_static_deposit_claims
                (id, user_identity_public_key, txid, vout, network, deposit_address,
                 credit_amount_sats, is_instant, deposit_amount_sats,
                 encrypted_deposit_secret_key, quote_signature, user_signature,
-                pending_transfer_id, reservation_id, reserved_leaf_ids,
-                prep_spend_tx, prep_spend_nonce_commitments, prep_spend_nonce_ciphertext)
+                pending_transfer_id, reservation_id, reserved_leaf_ids, prep_spend_tx)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                       $15, $16, $17, $18)"#,
+                       $15, $16)"#,
         )
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
@@ -194,14 +158,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         }))
-        .bind(bitcoin::consensus::serialize(&prep.spend_tx))
-        .bind(
-            prep.nonce
-                .commitments
-                .serialize()
-                .map_err(|e| format!("failed to serialize prep nonce commitments: {e}"))?,
-        )
-        .bind(&prep.nonce.nonces_ciphertext)
+        .bind(bitcoin::consensus::serialize(&record.spend_tx))
         .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
@@ -299,25 +256,23 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         Ok(())
     }
 
-    async fn set_spend_context(
+    async fn set_signed_spend_transaction(
         &self,
         id: &str,
         transfer_id: &str,
-        context: &StaticDepositSpendContext,
+        transaction: &Transaction,
     ) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
                SET transfer_id = $2,
-                   verifying_public_key = $3,
-                   spend_tx_signing_result = $4,
+                   signed_spend_transaction = $3,
                    pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
         .bind(id)
         .bind(transfer_id)
-        .bind(context.verifying_public_key.serialize().to_vec())
-        .bind(context.signing_result.encode_to_vec())
+        .bind(bitcoin::consensus::serialize(transaction))
         .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;

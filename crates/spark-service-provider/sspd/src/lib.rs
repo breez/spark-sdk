@@ -17,6 +17,7 @@ pub mod bitcoind;
 pub mod chain;
 pub mod coop_exit;
 pub mod fees;
+pub mod frost;
 pub mod graphql;
 pub mod handover;
 pub mod internal_server;

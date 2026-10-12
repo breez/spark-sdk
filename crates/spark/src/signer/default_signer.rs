@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
@@ -9,13 +11,15 @@ use bitcoin::{
 };
 use frost_core::round1::Nonce;
 use frost_secp256k1_tr::keys::{EvenY, KeyPackage, SigningShare, Tweak, VerifyingShare};
-use frost_secp256k1_tr::round1::SigningNonces;
+use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, VerifyingKey};
 use thiserror::Error;
 
+use crate::signer::nonce_store::NonceStore;
 use crate::signer::{
-    EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest, secret_sharing,
+    CommitAndSignFrostRequest, CommittedFrostShare, EncryptedSecret, SignFrostRequest,
+    secret_sharing,
 };
 use crate::signer::{SecretSource, SecretToSplit};
 use crate::{
@@ -92,6 +96,22 @@ pub struct DefaultSigner {
     /// The master node every key is derived from.
     master: Xpriv,
     secp: Secp256k1<All>,
+    /// The nonces this signer has issued and not yet signed with. Shared across
+    /// clones so a commitment stays valid for exactly one `sign_frost`.
+    nonces: Arc<NonceStore>,
+}
+
+/// Draws a fresh hiding/binding nonce pair from the thread RNG.
+fn generate_signing_nonces() -> Result<SigningNonces, SignerError> {
+    let (binding_sk, hiding_sk) = {
+        let mut rng = thread_rng();
+        (SecretKey::new(&mut rng), SecretKey::new(&mut rng))
+    };
+    let binding = Nonce::deserialize(&binding_sk.secret_bytes())
+        .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
+    let hiding = Nonce::deserialize(&hiding_sk.secret_bytes())
+        .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
+    Ok(SigningNonces::from_nonces(hiding, binding))
 }
 
 #[derive(Debug, Error)]
@@ -123,9 +143,18 @@ impl DefaultSigner {
     /// Builds a signer rooted at `master`. Every key derives from it by BIP32
     /// path; the identity / ECIES key is its `0'` child.
     pub fn from_master(master: Xpriv) -> Self {
+        Self::with_nonce_store(master, Arc::new(NonceStore::new()))
+    }
+
+    /// Builds a signer rooted at `master` that tracks its FROST nonces in
+    /// `nonces` rather than a store of its own. Backends that build a
+    /// short-lived signer per call need this: a commitment issued by one such
+    /// signer is signed with by the next, so the store has to outlive both.
+    pub fn with_nonce_store(master: Xpriv, nonces: Arc<NonceStore>) -> Self {
         DefaultSigner {
             master,
             secp: Secp256k1::new(),
+            nonces,
         }
     }
 }
@@ -178,23 +207,102 @@ impl DefaultSigner {
         Ok(secret_key)
     }
 
-    fn encrypt_nonces_ecies(
+    /// Produces the round-2 share for `signing_nonces`.
+    fn frost_share(
         &self,
-        nonces: &SigningNonces,
-        receiver_public_key: &PublicKey,
-    ) -> Result<Vec<u8>, SignerError> {
-        let nonces_bytes = nonces.serialize().map_err(|e| {
-            SignerError::SerializationError(format!("failed to serialize nonces: {e}"))
-        })?;
-        self.encrypt_message_ecies(&nonces_bytes, receiver_public_key)
-    }
+        request: SignFrostRequest<'_>,
+        signing_nonces: &SigningNonces,
+    ) -> Result<SignatureShare, SignerError> {
+        // Derive a deterministic identifier for the local user from the string "user"
+        let user_identifier =
+            Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
 
-    fn decrypt_nonces_ecies(&self, ciphertext: &[u8]) -> Result<SigningNonces, SignerError> {
-        let plaintext = self.decrypt_message_ecies(ciphertext)?;
-        let nonces = SigningNonces::deserialize(&plaintext).map_err(|e| {
-            SignerError::SerializationError(format!("failed to deserialize nonces: {e}"))
+        // Create a signing package containing the message, commitments, and participant groups
+        // This is used by the FROST protocol to coordinate the multi-party signing process
+        let signing_package = crate::utils::frost::frost_signing_package(
+            user_identifier,
+            request.message,
+            request.statechain_commitments,
+            request.self_nonce_commitment,
+            request.adaptor_public_key,
+        )?;
+
+        let secret_key = request.private_key.to_secret_key(self)?;
+
+        // Convert the Bitcoin secret key to FROST SigningShare format
+        // This allows it to be used with the FROST API for creating signature shares
+        let signing_share = SigningShare::deserialize(&secret_key.secret_bytes()).map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize secret key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
         })?;
-        Ok(nonces)
+
+        // Convert the Bitcoin public key to FROST VerifyingShare format
+        // This represents the user's public verification key in the threshold scheme
+        let verifying_share = VerifyingShare::deserialize(
+            request.public_key.serialize().as_slice(),
+        )
+        .map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize private as public key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
+        })?;
+
+        // Convert the group's Bitcoin public key to FROST VerifyingKey format
+        // This is the aggregate public key that will verify the final threshold signature
+        let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
+            .map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize verifying key: {e} (culprit: {:?})",
+                    e.culprit()
+                ))
+            })?;
+
+        // Create a key package containing all the necessary cryptographic material
+        // for the user's participation in the threshold signing protocol
+        let untweaked_key_package = KeyPackage::new(
+            user_identifier,
+            signing_share,
+            verifying_share,
+            verifying_key,
+            1, // Minimum signers required (set to 1 for this user's perspective)
+        );
+
+        // We don't want to tweak the key with merkle root, but we need to make sure the key is even.
+        // Then the total verifying key will need to tweak with the merkle root.
+        let merkle_root = Vec::new(); // For taproot signatures, we provide an empty merkle root
+        let tweaked_key_package = untweaked_key_package.clone().tweak(Some(&merkle_root));
+        let even_y_key_package = untweaked_key_package
+            .clone()
+            .into_even_y(Some(verifying_key.has_even_y()));
+        let key_package = KeyPackage::new(
+            *even_y_key_package.identifier(),
+            *even_y_key_package.signing_share(),
+            *even_y_key_package.verifying_share(),
+            *tweaked_key_package.verifying_key(),
+            *tweaked_key_package.min_signers(),
+        );
+
+        tracing::trace!("signing_package: {:?}", signing_package);
+        tracing::trace!("signing_nonces: {:?}", signing_nonces);
+        tracing::trace!("key_package: {:?}", key_package);
+
+        // Generate the user's signature share using the FROST round2 signing algorithm
+        // This combines the message, nonces, and key package to produce a partial signature
+        let signature_share =
+            frost_secp256k1_tr::round2::sign(&signing_package, signing_nonces, &key_package)
+                .map_err(|e| {
+                    SignerError::FrostError(format!(
+                        "Failed to sign: {e} (culprit: {:?})",
+                        e.culprit()
+                    ))
+                })?;
+
+        // Return the generated signature share to be combined with other shares
+        // from the statechain participants to form a complete threshold signature
+        Ok(signature_share)
     }
 }
 
@@ -261,27 +369,11 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    async fn generate_random_signing_commitment(
-        &self,
-    ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
-        let (binding_sk, hiding_sk) = {
-            let mut rng = thread_rng();
-            (SecretKey::new(&mut rng), SecretKey::new(&mut rng))
-        };
-        let binding = Nonce::deserialize(&binding_sk.secret_bytes())
-            .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
-        let hiding = Nonce::deserialize(&hiding_sk.secret_bytes())
-            .map_err(|e| SignerError::NonceCreationError(e.to_string()))?;
-
-        let nonces = SigningNonces::from_nonces(hiding, binding);
-        let nonces_ciphertext =
-            self.encrypt_nonces_ecies(&nonces, &self.encryption_public_key()?)?;
+    async fn generate_random_signing_commitment(&self) -> Result<SigningCommitments, SignerError> {
+        let nonces = generate_signing_nonces()?;
         let commitments = *nonces.commitments();
-
-        Ok(FrostSigningCommitmentsWithNonces {
-            commitments,
-            nonces_ciphertext,
-        })
+        self.nonces.insert(nonces)?;
+        Ok(commitments)
     }
 
     async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError> {
@@ -429,107 +521,44 @@ impl Signer for DefaultSigner {
         Ok(shares)
     }
 
+    async fn commit_and_sign_frost<'a>(
+        &self,
+        request: CommitAndSignFrostRequest<'a>,
+    ) -> Result<CommittedFrostShare, SignerError> {
+        tracing::trace!("default_signer::commit_and_sign_frost");
+
+        let signing_nonces = generate_signing_nonces()?;
+        let commitments = *signing_nonces.commitments();
+        let signature_share = self.frost_share(
+            SignFrostRequest {
+                message: request.message,
+                public_key: request.public_key,
+                private_key: request.private_key,
+                verifying_key: request.verifying_key,
+                self_nonce_commitment: &commitments,
+                statechain_commitments: request.statechain_commitments,
+                adaptor_public_key: request.adaptor_public_key,
+            },
+            &signing_nonces,
+        )?;
+
+        Ok(CommittedFrostShare {
+            commitments,
+            signature_share,
+        })
+    }
+
     async fn sign_frost<'a>(
         &self,
         request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError> {
         tracing::trace!("default_signer::sign_frost");
 
-        // Derive a deterministic identifier for the local user from the string "user"
-        let user_identifier =
-            Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
+        // Taken before anything else that can fail, so a caller cannot trip a
+        // later step and retry the nonce.
+        let signing_nonces = self.nonces.take(request.self_nonce_commitment)?;
 
-        // Create a signing package containing the message, commitments, and participant groups
-        // This is used by the FROST protocol to coordinate the multi-party signing process
-        let signing_package = crate::utils::frost::frost_signing_package(
-            user_identifier,
-            request.message,
-            request.statechain_commitments,
-            &request.self_nonce_commitment.commitments,
-            request.adaptor_public_key,
-        )?;
-
-        // Decrypt the nonces that were previously generated when creating the commitment
-        // These nonces are critical for the security of the Schnorr signature scheme
-        let signing_nonces =
-            self.decrypt_nonces_ecies(&request.self_nonce_commitment.nonces_ciphertext)?;
-
-        let secret_key = request.private_key.to_secret_key(self)?;
-
-        // Convert the Bitcoin secret key to FROST SigningShare format
-        // This allows it to be used with the FROST API for creating signature shares
-        let signing_share = SigningShare::deserialize(&secret_key.secret_bytes()).map_err(|e| {
-            SignerError::SerializationError(format!(
-                "Failed to deserialize secret key: {e} (culprit: {:?})",
-                e.culprit()
-            ))
-        })?;
-
-        // Convert the Bitcoin public key to FROST VerifyingShare format
-        // This represents the user's public verification key in the threshold scheme
-        let verifying_share = VerifyingShare::deserialize(
-            request.public_key.serialize().as_slice(),
-        )
-        .map_err(|e| {
-            SignerError::SerializationError(format!(
-                "Failed to deserialize private as public key: {e} (culprit: {:?})",
-                e.culprit()
-            ))
-        })?;
-
-        // Convert the group's Bitcoin public key to FROST VerifyingKey format
-        // This is the aggregate public key that will verify the final threshold signature
-        let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
-            .map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize verifying key: {e} (culprit: {:?})",
-                    e.culprit()
-                ))
-            })?;
-
-        // Create a key package containing all the necessary cryptographic material
-        // for the user's participation in the threshold signing protocol
-        let untweaked_key_package = KeyPackage::new(
-            user_identifier,
-            signing_share,
-            verifying_share,
-            verifying_key,
-            1, // Minimum signers required (set to 1 for this user's perspective)
-        );
-
-        // We don't want to tweak the key with merkle root, but we need to make sure the key is even.
-        // Then the total verifying key will need to tweak with the merkle root.
-        let merkle_root = Vec::new(); // For taproot signatures, we provide an empty merkle root
-        let tweaked_key_package = untweaked_key_package.clone().tweak(Some(&merkle_root));
-        let even_y_key_package = untweaked_key_package
-            .clone()
-            .into_even_y(Some(verifying_key.has_even_y()));
-        let key_package = KeyPackage::new(
-            *even_y_key_package.identifier(),
-            *even_y_key_package.signing_share(),
-            *even_y_key_package.verifying_share(),
-            *tweaked_key_package.verifying_key(),
-            *tweaked_key_package.min_signers(),
-        );
-
-        tracing::trace!("signing_package: {:?}", signing_package);
-        tracing::trace!("signing_nonces: {:?}", signing_nonces);
-        tracing::trace!("key_package: {:?}", key_package);
-
-        // Generate the user's signature share using the FROST round2 signing algorithm
-        // This combines the message, nonces, and key package to produce a partial signature
-        let signature_share =
-            frost_secp256k1_tr::round2::sign(&signing_package, &signing_nonces, &key_package)
-                .map_err(|e| {
-                    SignerError::FrostError(format!(
-                        "Failed to sign: {e} (culprit: {:?})",
-                        e.culprit()
-                    ))
-                })?;
-
-        // Return the generated signature share to be combined with other shares
-        // from the statechain participants to form a complete threshold signature
-        return Ok(signature_share);
+        self.frost_share(request, &signing_nonces)
     }
 }
 
@@ -552,10 +581,16 @@ pub(crate) mod tests {
     use macros::async_test_all;
     use std::str::FromStr;
 
-    use crate::signer::{EncryptedSecret, SecretSource, Signer, SignerError};
+    use crate::signer::{
+        CommitAndSignFrostRequest, EncryptedSecret, NonceStore, SecretSource, SignFrostRequest,
+        Signer, SignerError,
+    };
     use crate::utils::verify_signature::verify_signature_ecdsa;
     use crate::{Network, signer::default_signer::DefaultSigner};
     use bitcoin::bip32::DerivationPath;
+    use frost_core::round1::Nonce;
+    use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
+    use std::sync::Arc;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -927,18 +962,159 @@ pub(crate) mod tests {
         assert_eq!(expected_public_key, result_public_key);
     }
 
+    /// Builds a `sign_frost` request over `commitment` for the static-deposit
+    /// key, with no operator commitments (the signer's own share is all this
+    /// exercises).
+    fn frost_request<'a>(
+        message: &'a [u8],
+        public_key: &'a PublicKey,
+        private_key: &'a SecretSource,
+        commitment: &'a SigningCommitments,
+    ) -> SignFrostRequest<'a> {
+        SignFrostRequest {
+            message,
+            public_key,
+            private_key,
+            verifying_key: public_key,
+            self_nonce_commitment: commitment,
+            statechain_commitments: std::collections::BTreeMap::new(),
+            adaptor_public_key: None,
+        }
+    }
+
     #[async_test_all]
-    async fn test_generate_random_signing_commitment_nonces_round_trip() {
+    async fn test_commit_and_sign_frost_leaves_no_replayable_nonce() {
         let signer = create_test_signer();
-        let commitments = signer
+        let private_key = SecretSource::Derived(DerivationPath::from_str("m/3'/0'").unwrap());
+        let public_key = signer.public_key_from_secret(&private_key).await.unwrap();
+
+        let share = signer
+            .commit_and_sign_frost(CommitAndSignFrostRequest {
+                message: &[1u8; 32],
+                public_key: &public_key,
+                private_key: &private_key,
+                verifying_key: &public_key,
+                statechain_commitments: std::collections::BTreeMap::new(),
+                adaptor_public_key: None,
+            })
+            .await
+            .expect("commit_and_sign_frost should succeed");
+
+        // The nonce was consumed inside the call, so its commitment cannot be
+        // carried round to the commit-then-sign path.
+        let commitment = share.commitments;
+        let err = signer
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &commitment,
+            ))
+            .await
+            .expect_err("a committed-and-signed nonce must not sign again");
+        assert!(matches!(err, SignerError::UnknownNonceCommitment));
+    }
+
+    #[async_test_all]
+    async fn test_sign_frost_rejects_reused_nonce_commitment() {
+        let signer = create_test_signer();
+        let private_key = SecretSource::Derived(DerivationPath::from_str("m/3'/0'").unwrap());
+        let public_key = signer.public_key_from_secret(&private_key).await.unwrap();
+        let commitment = signer
             .generate_random_signing_commitment()
             .await
             .expect("Failed to generate frost signing commitments");
 
-        let signing_nonces = signer
-            .decrypt_nonces_ecies(&commitments.nonces_ciphertext)
-            .expect("Failed to decrypt nonces");
+        signer
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &commitment,
+            ))
+            .await
+            .expect("first sign_frost should succeed");
 
-        assert_eq!(&commitments.commitments, signing_nonces.commitments());
+        // Same message again: two shares under one nonce leak the signing share
+        // even over one message, because the operators choose the commitments
+        // that go into the binding factor and can vary them between attempts.
+        let err = signer
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &commitment,
+            ))
+            .await
+            .expect_err("second sign_frost over the same nonce must fail");
+        assert!(matches!(err, SignerError::UnknownNonceCommitment));
+    }
+
+    #[async_test_all]
+    async fn test_sign_frost_rejects_foreign_nonce_commitment() {
+        let signer = create_test_signer();
+        let private_key = SecretSource::Derived(DerivationPath::from_str("m/3'/0'").unwrap());
+        let public_key = signer.public_key_from_secret(&private_key).await.unwrap();
+
+        // Nothing stops a caller presenting a well-formed commitment of its own
+        // choosing; it is rejected because the signer never issued it.
+        let nonces = {
+            let mut rng = thread_rng();
+            SigningNonces::from_nonces(
+                Nonce::deserialize(&SecretKey::new(&mut rng).secret_bytes()).unwrap(),
+                Nonce::deserialize(&SecretKey::new(&mut rng).secret_bytes()).unwrap(),
+            )
+        };
+        let forged = *nonces.commitments();
+
+        let err = signer
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &forged,
+            ))
+            .await
+            .expect_err("sign_frost must reject a commitment it did not issue");
+        assert!(matches!(err, SignerError::UnknownNonceCommitment));
+    }
+
+    /// Backends that build a short-lived signer per call commit on one signer and
+    /// sign on another. A shared store keeps the commitment usable across that
+    /// gap, and still only once.
+    #[async_test_all]
+    async fn test_sign_frost_accepts_nonce_from_signer_sharing_the_store() {
+        let store = Arc::new(NonceStore::new());
+        let master = account_master_key(&[42u8; 32], Network::Regtest, None).unwrap();
+        let committing = DefaultSigner::with_nonce_store(master, Arc::clone(&store));
+        let signing = DefaultSigner::with_nonce_store(master, store);
+
+        let private_key = SecretSource::Derived(DerivationPath::from_str("m/3'/0'").unwrap());
+        let public_key = signing.public_key_from_secret(&private_key).await.unwrap();
+        let commitment = committing
+            .generate_random_signing_commitment()
+            .await
+            .unwrap();
+
+        signing
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &commitment,
+            ))
+            .await
+            .expect("a shared store carries the commitment across signers");
+
+        let err = signing
+            .sign_frost(frost_request(
+                &[1u8; 32],
+                &public_key,
+                &private_key,
+                &commitment,
+            ))
+            .await
+            .expect_err("the shared nonce is still single-use");
+        assert!(matches!(err, SignerError::UnknownNonceCommitment));
     }
 }

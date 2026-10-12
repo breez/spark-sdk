@@ -50,7 +50,7 @@ pub(crate) async fn operator_commitments(
     let mut commitments = BTreeMap::new();
     for id in 1..=operators {
         let commitment = signer.generate_random_signing_commitment().await.unwrap();
-        commitments.insert(Identifier::try_from(id).unwrap(), commitment.commitments);
+        commitments.insert(Identifier::try_from(id).unwrap(), commitment);
     }
     commitments
 }

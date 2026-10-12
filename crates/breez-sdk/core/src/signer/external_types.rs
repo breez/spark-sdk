@@ -228,7 +228,10 @@ impl ExternalFrostSignature {
     }
 }
 
-/// FFI-safe representation of `spark_wallet::FrostSigningCommitmentsWithNonces`
+/// FFI-safe representation of a FROST round-1 nonce commitment.
+///
+/// The nonces themselves never cross this boundary: a signer keeps them until
+/// it signs, which is what makes them single-use.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalFrostCommitments {
@@ -236,31 +239,28 @@ pub struct ExternalFrostCommitments {
     pub hiding_commitment: Vec<u8>,
     /// Serialized binding nonce commitment (variable length, typically 33 bytes compressed point)
     pub binding_commitment: Vec<u8>,
-    /// Encrypted nonces ciphertext
-    pub nonces_ciphertext: Vec<u8>,
 }
 
 impl ExternalFrostCommitments {
     pub fn from_frost_commitments(
-        commitments: &spark_wallet::FrostSigningCommitmentsWithNonces,
+        commitments: &frost_secp256k1_tr::round1::SigningCommitments,
     ) -> Result<Self, SdkError> {
-        let hiding_commitment = commitments.commitments.hiding().serialize().map_err(|e| {
+        let hiding_commitment = commitments.hiding().serialize().map_err(|e| {
             SdkError::Generic(format!("Failed to serialize hiding commitment: {e}"))
         })?;
-        let binding_commitment = commitments.commitments.binding().serialize().map_err(|e| {
+        let binding_commitment = commitments.binding().serialize().map_err(|e| {
             SdkError::Generic(format!("Failed to serialize binding commitment: {e}"))
         })?;
 
         Ok(Self {
             hiding_commitment,
             binding_commitment,
-            nonces_ciphertext: commitments.nonces_ciphertext.clone(),
         })
     }
 
     pub fn to_frost_commitments(
         &self,
-    ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {
+    ) -> Result<frost_secp256k1_tr::round1::SigningCommitments, SdkError> {
         use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 
         let hiding = NonceCommitment::deserialize(&self.hiding_commitment).map_err(|e| {
@@ -270,12 +270,7 @@ impl ExternalFrostCommitments {
             SdkError::Generic(format!("Failed to deserialize binding commitment: {e}"))
         })?;
 
-        let commitments = SigningCommitments::new(hiding, binding);
-
-        Ok(spark_wallet::FrostSigningCommitmentsWithNonces {
-            commitments,
-            nonces_ciphertext: self.nonces_ciphertext.clone(),
-        })
+        Ok(SigningCommitments::new(hiding, binding))
     }
 }
 

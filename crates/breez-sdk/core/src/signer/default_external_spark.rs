@@ -642,7 +642,7 @@ mod tests {
         let signing_package = SigningPackage::new_with_adaptor(
             BTreeMap::from([
                 (operator.identifier, commitments),
-                (user, started.nonce_commitment.commitments),
+                (user, started.nonce_commitment),
             ]),
             Some(vec![
                 BTreeSet::from([operator.identifier]),

@@ -261,7 +261,7 @@ impl Swap {
                 statechain_public_keys: signing_result_data.public_keys,
                 verifying_key: &verifying_key,
                 statechain_commitments: signing_result_data.signing_commitments,
-                self_commitment: &signed_tx.self_nonce_commitment.commitments,
+                self_commitment: &signed_tx.self_nonce_commitment,
                 public_key: &signed_tx.signing_public_key,
                 self_signature: &signed_tx.user_signature,
                 adaptor_public_key: Some(&cpfp_adaptor_public_key),
