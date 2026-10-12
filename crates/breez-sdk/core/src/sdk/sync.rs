@@ -504,7 +504,7 @@ impl BreezSdk {
     /// The ceiling a mature deposit's automatic claim runs under. Both sides are
     /// resolved here because comparing them needs sats, and a ceiling that will not
     /// resolve leaves the deposit on its own, which is what was asked for.
-    async fn mature_claim_ceiling(
+    pub(super) async fn mature_claim_ceiling(
         &self,
         stored: Option<&MaxFee>,
         deposit_sats: u64,

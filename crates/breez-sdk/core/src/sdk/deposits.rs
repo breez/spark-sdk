@@ -153,6 +153,34 @@ impl BreezSdk {
             .stored_deposit(&detailed_utxo.txid.to_string(), detailed_utxo.vout)
             .await?;
         let is_mature = self.is_deposit_mature_at(&detailed_utxo, confirmations, stored.as_ref());
+
+        // Each claim runs under its own ceiling: the early one under the deposit's
+        // own max fee when it has one, the one at maturity under the larger of that
+        // and the configured one.
+        let deposit_sats = detailed_utxo.value;
+        let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
+        let instant_max_fee = stored_max_fee
+            .or(self.config.max_deposit_claim_fee.as_ref())
+            .cloned();
+        let mature_max_fee = self
+            .mature_claim_ceiling(stored_max_fee, deposit_sats)
+            .await;
+        let instant_max_fee_sats = self
+            .resolve_max_claim_fee(instant_max_fee)
+            .await?
+            .map(|max_fee| max_fee.ceiling_sats(deposit_sats));
+        let mature = ClaimDepositQuote {
+            max_fee_sats: self
+                .resolve_max_claim_fee(mature_max_fee)
+                .await?
+                .map(|max_fee| max_fee.ceiling_sats(deposit_sats)),
+            ..mature
+        };
+        let instant = instant.map(|quote| ClaimDepositQuote {
+            max_fee_sats: instant_max_fee_sats,
+            ..quote
+        });
+
         // Withhold the early claim unless it credits sooner than maturity. The
         // depth it becomes claimable at is reported, not filtered on.
         let instant = instant.filter(|quote| {
@@ -1048,7 +1076,7 @@ fn claim_deposit_quote(
         confirmations_required,
         credit_amount_sats,
         fee_sats,
-        fee_rate_sat_per_vbyte: fee_sats.div_ceil(CLAIM_TX_SIZE_VBYTES),
+        max_fee_sats: None,
         is_estimate,
     }
 }
@@ -1462,21 +1490,18 @@ mod tests {
 
     #[test]
     fn quotes_the_fee_as_the_credit_shortfall() {
-        // 20_000 deposit crediting 18_810 costs 1_190, which over the 99 vbyte
-        // claim tx rounds up to 13 sat/vbyte.
+        // 20_000 deposit crediting 18_810 costs 1_190.
         let quote = claim_deposit_quote(1, 20_000, 18_810, false);
         assert_eq!(quote.confirmations_required, 1);
         assert_eq!(quote.credit_amount_sats, 18_810);
         assert_eq!(quote.fee_sats, 1_190);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 13);
         assert!(!quote.is_estimate);
     }
 
     #[test]
-    fn quotes_a_free_claim_at_a_zero_rate() {
+    fn quotes_a_free_claim_at_a_zero_fee() {
         let quote = claim_deposit_quote(3, 20_000, 20_000, true);
         assert_eq!(quote.fee_sats, 0);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 0);
         assert!(quote.is_estimate);
     }
 
@@ -1486,7 +1511,6 @@ mod tests {
         // wrap into an enormous fee if it ever does.
         let quote = claim_deposit_quote(0, 20_000, 25_000, false);
         assert_eq!(quote.fee_sats, 0);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 0);
     }
 
     #[test]

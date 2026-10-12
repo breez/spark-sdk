@@ -214,7 +214,7 @@ pub struct _ClaimDepositQuote {
     pub confirmations_required: u32,
     pub credit_amount_sats: u64,
     pub fee_sats: u64,
-    pub fee_rate_sat_per_vbyte: u64,
+    pub max_fee_sats: Option<u64>,
     pub is_estimate: bool,
 }
 

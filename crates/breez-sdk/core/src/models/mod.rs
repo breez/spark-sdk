@@ -1488,9 +1488,10 @@ pub struct ClaimDepositQuote {
     pub credit_amount_sats: u64,
     /// The deposit value less the credit.
     pub fee_sats: u64,
-    /// `fee_sats` as a fee rate over the claim transaction, so it is comparable
-    /// with a max fee expressed as a rate.
-    pub fee_rate_sat_per_vbyte: u64,
+    /// The most this claim may cost for this deposit, in sats, under the max claim
+    /// fee that applies to it. The SDK claims automatically when `fee_sats` is
+    /// within it. Unset when automatic claiming is off.
+    pub max_fee_sats: Option<u64>,
     /// The provider would not quote this yet, so the fee is derived from current
     /// on-chain fees and the real one may differ.
     pub is_estimate: bool,
@@ -1511,10 +1512,9 @@ pub struct FetchClaimDepositQuoteResponse {
     /// distinguished here from having nothing to offer: both mean there is no early
     /// claim to show right now, and the one worth retrying is the transient one.
     ///
-    /// Priced regardless of the configured maximum claim fee, which is usually far
-    /// below a spread. It is quoted so it can be offered, so claiming it needs a max
-    /// fee of at least its `fee_sats`. Below that the claim fails with
-    /// `MaxDepositClaimFeeExceeded` and the deposit waits for maturity.
+    /// Priced regardless of the max claim fee, so it can be offered: its
+    /// `fee_sats` within its `max_fee_sats` means the SDK claims it on its own.
+    /// Claiming it by hand needs a max fee of at least its `fee_sats`.
     pub instant: Option<ClaimDepositQuote>,
     /// Claiming once the deposit matures.
     pub mature: ClaimDepositQuote,

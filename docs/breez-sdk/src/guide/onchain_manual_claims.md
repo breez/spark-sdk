@@ -10,7 +10,8 @@ A deposit the SDK does not claim on its own, usually because the claim costs mor
 
 - {{#name confirmations_required}} is the depth the claim becomes available at, not the number of blocks left to wait. On the {{#name instant}} quote, 0 means an instant claim and 1 or 2 an expedited one.
 - The {{#name instant}} quote is absent when no early claim is offered right now: the provider will not front this deposit, the deposit has already reached the standard claim depth, the early claim would credit no sooner, or the provider could not be reached. Only the last one is worth retrying.
-- The {{#name instant}} quote shows the provider's price, whether or not the max claim fee allows it.
+- Each quote's {{#name max_fee_sats}} is the most that claim may cost for this deposit, under the max claim fee that applies to it. A {{#name fee_sats}} within it means the SDK makes that claim on its own. It is unset when automatic claiming is off.
+- The {{#name instant}} quote shows the provider's price, whether or not it is within its {{#name max_fee_sats}}.
 - The {{#name mature}} quote is always present. It is flagged {{#name is_estimate}} when the provider will not quote the deposit yet, and its fee is then estimated from current on-chain fees.
 
 What to offer depends on what the SDK would do anyway. Check the middle column first: where the SDK claims by itself, a dialog defaulting to the standard claim shows the user one outcome and delivers another.
@@ -18,9 +19,9 @@ What to offer depends on what the SDK would do anyway. Check the middle column f
 | Quote | What the SDK will do | What to offer |
 |---|---|---|
 | No {{#name instant}} quote | Standard claim | The standard claim only |
-| {{#name instant}} quote, depth not reached yet | Claim early once the depth arrives, if the fee fits the max claim fee | The standard claim, with the early claim shown as available in N blocks |
-| {{#name instant}} quote at a reachable depth, fee above the max claim fee | Wait for the standard claim | Both, the early claim requiring a higher max fee |
-| {{#name instant}} quote at a reachable depth, fee within the max claim fee | Claim early by itself | The early claim, or no choice at all |
+| {{#name instant}} quote, depth not reached yet | Claim early once the depth arrives, if {{#name fee_sats}} is within {{#name max_fee_sats}} | The standard claim, with the early claim shown as available in N blocks |
+| {{#name instant}} quote at a reachable depth, {{#name fee_sats}} above {{#name max_fee_sats}} | Wait for the standard claim | Both, the early claim requiring a higher max fee |
+| {{#name instant}} quote at a reachable depth, {{#name fee_sats}} within {{#name max_fee_sats}} | Claim early by itself | The early claim, or no choice at all |
 
 ## Claiming
 
