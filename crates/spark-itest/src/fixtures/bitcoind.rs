@@ -263,7 +263,11 @@ impl BitcoindFixture {
     /// fans out over ZMQ to the operator cluster's chain watchers), which
     /// surfaces as a spurious timeout even though bitcoind is healthy.
     pub async fn generate_blocks(&self, count: u64) -> Result<Vec<String>> {
-        let address = self.mining_address.to_string();
+        self.generate_to(&self.mining_address.to_string(), count)
+            .await
+    }
+
+    async fn generate_to(&self, address: &str, count: u64) -> Result<Vec<String>> {
         let mut hashes = Vec::new();
         let mut remaining = count;
         while remaining > 0 {
@@ -284,11 +288,7 @@ impl BitcoindFixture {
     /// blocks, so tracking a coinbase for each one slows the call until it
     /// outruns the RPC timeout.
     pub async fn generate_filler_blocks(&self, count: u64) -> Result<Vec<String>> {
-        self.rpc_call::<Vec<String>>(
-            "generatetoaddress",
-            &[json!(count), json!(DEFAULT_MINING_ADDRESS)],
-        )
-        .await
+        self.generate_to(DEFAULT_MINING_ADDRESS, count).await
     }
 
     pub async fn broadcast_transaction(&self, tx: &Transaction) -> Result<Txid> {
