@@ -2,6 +2,7 @@ use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use breez_sdk_common::{
     buy::cashapp::{CashAppProvider, cash_app_lightning_address},
     input::CrossChainAddressFamily,
+    lnurl::pay::validate_user_input,
 };
 use spark_wallet::MasterIdentityPublicKeyUpdate;
 use std::str::FromStr;
@@ -640,40 +641,24 @@ impl BreezSdk {
             None,
         )
         .await?;
-        check_lightning_address_bounds(
-            prepared.info.expected_received_amount,
+        let amount_msat = u64::try_from(prepared.info.expected_received_amount)
+            .ok()
+            .and_then(|sats| sats.checked_mul(1000))
+            .ok_or_else(|| SdkError::InvalidInput("Amount is too large".to_string()))?;
+        validate_user_input(
+            amount_msat,
+            &None,
             recipient.pay_request.min_sendable,
             recipient.pay_request.max_sendable,
-        )?;
+            0,
+        )
+        .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
 
         Ok(BridgeToCashAppResponse {
             payment_request: prepared.payment_request,
             info: prepared.info,
         })
     }
-}
-
-/// Checks `amount_sats` against a Lightning address's sendable range, in
-/// millisats.
-fn check_lightning_address_bounds(
-    amount_sats: u128,
-    min_sendable_msat: u64,
-    max_sendable_msat: u64,
-) -> Result<(), SdkError> {
-    let amount_msat = amount_sats.saturating_mul(1000);
-    if amount_msat < u128::from(min_sendable_msat) {
-        return Err(SdkError::InvalidInput(format!(
-            "The recipient accepts at least {} sats, but would receive about {amount_sats} sats",
-            min_sendable_msat.div_ceil(1000)
-        )));
-    }
-    if amount_msat > u128::from(max_sendable_msat) {
-        return Err(SdkError::InvalidInput(format!(
-            "The recipient accepts at most {} sats, but would receive about {amount_sats} sats",
-            max_sendable_msat / 1000
-        )));
-    }
-    Ok(())
 }
 
 /// Whether `route` advertises `required` as a fundable delivery method. An
@@ -780,9 +765,8 @@ fn parse_compressed_public_key(hex_encoded: &str) -> Result<PublicKey, SdkError>
 #[cfg(test)]
 mod tests {
     use super::{
-        CashAppProvider, SdkError, bridge_from_cash_app_response, check_lightning_address_bounds,
-        deposit_target, parse_compressed_public_key, reject_reserved_namespace,
-        route_supports_delivery_method,
+        CashAppProvider, SdkError, bridge_from_cash_app_response, deposit_target,
+        parse_compressed_public_key, reject_reserved_namespace, route_supports_delivery_method,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
     use crate::{CrossChainFeeMode, CrossChainProvider, CrossChainRoutePair, DeliveryMethod};
@@ -991,21 +975,5 @@ mod tests {
                 "expected {input} to be rejected"
             );
         }
-    }
-
-    #[test_all]
-    fn check_lightning_address_bounds_accepts_inside_and_rejects_outside() {
-        // Cash App's floor is 1 sat. Its ceiling varies per account.
-        let (min_msat, max_msat) = (1_000, 1_185_220_000);
-        assert!(check_lightning_address_bounds(1, min_msat, max_msat).is_ok());
-        assert!(check_lightning_address_bounds(1_185_220, min_msat, max_msat).is_ok());
-        assert!(matches!(
-            check_lightning_address_bounds(0, min_msat, max_msat),
-            Err(SdkError::InvalidInput(_))
-        ));
-        assert!(matches!(
-            check_lightning_address_bounds(1_185_221, min_msat, max_msat),
-            Err(SdkError::InvalidInput(_))
-        ));
     }
 }

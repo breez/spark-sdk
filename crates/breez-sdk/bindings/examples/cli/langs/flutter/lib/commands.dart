@@ -398,7 +398,10 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         print('--cross-chain-to-bitcoin conflicts with --token-identifier');
         return;
       }
-      final route = await _selectCrossChainRoute(sdk, CrossChainRouteFilter.receive(contractAddress: null, deliveryMethod: null));
+      final route = await _selectCrossChainRoute(
+        sdk,
+        CrossChainRouteFilter.receive(contractAddress: null, deliveryMethod: null),
+      );
       if (route == null) return;
       final crossChainFeesIncluded = results.flag('cross-chain-fees-included');
       final feeMode = crossChainFeesIncluded ? CrossChainFeeMode.feesIncluded : null;
