@@ -2892,27 +2892,12 @@ mod tests {
     // verify_signature_ecdsa. These exercise the candidate sets and that
     // verification directly, without constructing a wallet.
 
-    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use crate::test_support::{sign, transfer_key};
     use spark::utils::verify_signature::verify_signature_ecdsa;
 
     const TEST_DOMAIN: &str = "lnurl.example.com";
     const OTHER_DOMAIN: &str = "other.example.com";
     const TEST_DESCRIPTION: &str = "Pay to alice";
-
-    /// Deterministic keypair from a seed byte.
-    fn transfer_key(seed: u8) -> (SecretKey, PublicKey) {
-        let secp = Secp256k1::new();
-        let secret = SecretKey::from_slice(&[seed; 32]).expect("valid secret key");
-        let public = PublicKey::from_secret_key(&secp, &secret);
-        (secret, public)
-    }
-
-    /// Sign `message` the way the SDK does: ECDSA over `sha256(message)`.
-    fn sign(secret: &SecretKey, message: &str) -> Signature {
-        let secp = Secp256k1::new();
-        let digest = sha256::Hash::hash(message.as_bytes());
-        secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), secret)
-    }
 
     /// The candidate `signature` verifies against, mirroring what
     /// [`verify_candidates`] accepts.
