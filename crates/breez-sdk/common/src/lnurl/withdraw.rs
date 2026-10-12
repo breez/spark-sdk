@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::lnurl::{
     LnurlErrorDetails,
     error::{LnurlError, LnurlResult},
-    security,
+    parse_endpoint_error, security,
 };
 
 use platform_utils::HttpClient;
@@ -27,7 +27,7 @@ pub async fn execute_lnurl_withdraw<C: HttpClient + ?Sized>(
     #[cfg(all(target_family = "wasm", target_os = "unknown"))]
     let _ = (dns_preflight, &validated);
     let response = http_client.get(callback_url, None).await?;
-    if let Ok(err) = response.json::<LnurlErrorDetails>() {
+    if let Some(err) = parse_endpoint_error(&response.body) {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
     Ok(ValidatedCallbackResponse::EndpointSuccess)
