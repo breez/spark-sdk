@@ -546,21 +546,23 @@ impl TryFrom<PreimageRequest> for SparkHtlcDetails {
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| SdkError::Generic(format!("Invalid expiry time: {e}")))?
                 .as_secs(),
-            status: value.status.into(),
+            status: value.status.try_into()?,
         })
     }
 }
 
-impl From<PreimageRequestStatus> for SparkHtlcStatus {
-    fn from(status: PreimageRequestStatus) -> Self {
+impl TryFrom<PreimageRequestStatus> for SparkHtlcStatus {
+    type Error = SdkError;
+    fn try_from(status: PreimageRequestStatus) -> Result<Self, Self::Error> {
         match status {
-            // An unrecognized status is not known to be final. The payment's own status
-            // comes from its transfer, so this only affects the HTLC details.
-            PreimageRequestStatus::WaitingForPreimage | PreimageRequestStatus::Unknown => {
-                SparkHtlcStatus::WaitingForPreimage
-            }
-            PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
-            PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
+            PreimageRequestStatus::WaitingForPreimage => Ok(SparkHtlcStatus::WaitingForPreimage),
+            PreimageRequestStatus::PreimageShared => Ok(SparkHtlcStatus::PreimageShared),
+            PreimageRequestStatus::Returned => Ok(SparkHtlcStatus::Returned),
+            // No public status fits: any of them would claim a state we don't know,
+            // e.g. `WaitingForPreimage` would list the HTLC as claimable.
+            PreimageRequestStatus::Unknown => Err(SdkError::Generic(
+                "Unrecognized preimage request status".to_string(),
+            )),
         }
     }
 }
@@ -764,5 +766,33 @@ mod tests {
         assert_eq!(payment.payment_type, PaymentType::Receive);
         assert_eq!(payment.status, PaymentStatus::Pending);
         assert_eq!(payment.amount, 1_010);
+    }
+
+    #[test_all]
+    fn a_spark_htlc_with_an_unknown_preimage_status_is_pending_without_details() {
+        use bitcoin::hashes::{Hash, sha256};
+
+        let (ours, other, ssp) = (pk(1), pk(7), pk(2));
+        let preimage_request = PreimageRequest {
+            payment_hash: sha256::Hash::hash(b"preimage"),
+            status: PreimageRequestStatus::Unknown,
+            created_time: SystemTime::now(),
+            expiry_time: SystemTime::now(),
+            preimage: None,
+        };
+        let wallet_transfer = WalletTransfer::from_transfer(
+            transfer(other, ours, TransferType::PreimageSwap),
+            None,
+            Some(preimage_request),
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        // No HTLC details, so an `htlc_status` filter can't list it as claimable.
+        assert!(payment.details.is_none());
+        assert_eq!(payment.method, PaymentMethod::Spark);
+        assert_eq!(payment.status, PaymentStatus::Pending);
     }
 }
