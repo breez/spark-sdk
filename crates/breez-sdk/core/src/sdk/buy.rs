@@ -19,6 +19,7 @@ const USDC_ASSET: &str = "USDC";
 const USD_AMOUNT_DECIMALS: u32 = 6;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[macros::instance_span]
 impl BreezSdk {
     /// Initiates a Bitcoin purchase flow via an external provider.
     ///

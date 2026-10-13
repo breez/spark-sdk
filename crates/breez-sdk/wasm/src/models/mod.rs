@@ -2330,8 +2330,6 @@ pub enum MoonpayDelivery {
         amount_sat: Option<u64>,
     },
     CrossChain {
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         amount: u128,
         fee_mode: Option<CrossChainFeeMode>,
     },

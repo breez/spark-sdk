@@ -25,7 +25,7 @@ const buyBitcoin = async (sdk: BreezSdk) => {
 const buyBitcoinViaCrossChain = async (sdk: BreezSdk) => {
   // ANCHOR: buy-bitcoin-cross-chain
   // USD amount to receive, in 6-decimal base units ($50)
-  const amount = '50000000'
+  const amount = BigInt(50_000_000)
 
   const response = await sdk.buyBitcoin({
     type: 'moonpay',
