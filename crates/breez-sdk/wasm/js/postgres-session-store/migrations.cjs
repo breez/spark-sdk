@@ -158,6 +158,13 @@ class SessionStoreMigrationManager {
           )`,
         ],
       },
+      {
+        name: "Add refresh token columns to brz_sessions",
+        sql: [
+          `ALTER TABLE brz_sessions ADD COLUMN IF NOT EXISTS refresh_token TEXT`,
+          `ALTER TABLE brz_sessions ADD COLUMN IF NOT EXISTS refresh_token_expiration BIGINT`,
+        ],
+      },
     ];
   }
 }

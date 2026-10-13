@@ -80,13 +80,14 @@ class PostgresSessionStore {
    * if no session is cached. The Rust adapter maps `null` to
    * `SessionStoreError::NotFound`.
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
-   * @returns {Promise<{token: string, expiration: number} | null>}
+   * @returns {Promise<{token: string, expiration: number, refreshToken?: string, refreshTokenExpiration?: number} | null>}
    */
   async getSession(serviceIdentityKey) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       const { rows } = await this.pool.query(
-        `SELECT token, expiration FROM brz_sessions
+        `SELECT token, expiration, refresh_token, refresh_token_expiration
+         FROM brz_sessions
          WHERE user_id = $1 AND service_identity_key = $2`,
         [this.identity, serviceKey]
       );
@@ -97,6 +98,11 @@ class PostgresSessionStore {
       return {
         token: row.token,
         expiration: Number(row.expiration),
+        refreshToken: row.refresh_token ?? undefined,
+        refreshTokenExpiration:
+          row.refresh_token_expiration == null
+            ? undefined
+            : Number(row.refresh_token_expiration),
       };
     } catch (error) {
       throw new SessionStoreError(
@@ -109,17 +115,29 @@ class PostgresSessionStore {
   /**
    * Upserts a session for the given service identity key.
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
-   * @param {{token: string, expiration: number}} session
+   * @param {{token: string, expiration: number, refreshToken?: string, refreshTokenExpiration?: number}} session
    */
   async setSession(serviceIdentityKey, session) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       await this.pool.query(
-        `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO brz_sessions
+           (user_id, service_identity_key, token, expiration,
+            refresh_token, refresh_token_expiration)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id, service_identity_key)
-         DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration`,
-        [this.identity, serviceKey, session.token, session.expiration]
+         DO UPDATE SET token = EXCLUDED.token,
+                       expiration = EXCLUDED.expiration,
+                       refresh_token = EXCLUDED.refresh_token,
+                       refresh_token_expiration = EXCLUDED.refresh_token_expiration`,
+        [
+          this.identity,
+          serviceKey,
+          session.token,
+          session.expiration,
+          session.refreshToken ?? null,
+          session.refreshTokenExpiration ?? null,
+        ]
       );
     } catch (error) {
       throw new SessionStoreError(
