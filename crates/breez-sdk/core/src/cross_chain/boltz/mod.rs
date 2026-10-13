@@ -1283,7 +1283,10 @@ mod tests {
                 Arc::clone(&storage),
                 "pay_settles".to_string(),
                 fallback,
-                fast_schedule(),
+                PollSchedule {
+                    timeout: Duration::from_secs(10),
+                    ..fast_schedule()
+                },
             )
             .await;
 
