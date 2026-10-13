@@ -274,12 +274,20 @@ async fn check_recover_funds(
     let checked = sdk
         .check_recover_funds(CheckRecoverFundsRequest { recovery })
         .await?;
-    println!("Verdict: {:?}", checked.verdict);
-    if let RecoveryVerdict::Redo { .. } = checked.verdict {
-        println!(
-            "  (this recovery cannot finish: run {})",
-            redo_command(&checked.recovery)
-        );
+    match &checked.verdict {
+        RecoveryVerdict::Valid | RecoveryVerdict::Done => {
+            println!("Verdict: {:?}", checked.verdict);
+        }
+        RecoveryVerdict::Redo { reasons } => {
+            println!("Verdict: Redo");
+            for reason in reasons {
+                println!("  {reason:?}");
+            }
+            println!(
+                "  (this recovery cannot finish: run {})",
+                redo_command(&checked.recovery)
+            );
+        }
     }
     print_recovery(&checked.recovery);
     write_recovery(output_file.unwrap_or(input_file), &checked.recovery)?;
