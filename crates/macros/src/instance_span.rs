@@ -15,18 +15,17 @@ pub fn instance_span(
         }
         // The target must match `INSTANCE_SPAN_TARGET` in the SDK's logger, whose
         // filters keep it enabled. Error level keeps it enabled under any other
-        // subscriber's filter that lets anything through.
-        method.attrs.insert(
-            0,
-            parse_quote! {
-                #[::tracing::instrument(
-                    target = "breez_sdk_spark_instance",
-                    level = "error",
-                    skip_all,
-                    fields(instance = %self.instance_id),
-                )]
-            },
-        );
+        // subscriber's filter that lets anything through. Appended so it is the
+        // outermost span: the last `#[instrument]` listed wraps the others, and a
+        // method's own span must stay current for it to record its fields.
+        method.attrs.push(parse_quote! {
+            #[::tracing::instrument(
+                target = "breez_sdk_spark_instance",
+                level = "error",
+                skip_all,
+                fields(instance = %self.instance_id),
+            )]
+        });
     }
     quote!(#item).into()
 }

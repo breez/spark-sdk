@@ -460,31 +460,46 @@ mod tests {
         assert_eq!(recorder.instance_of("warned").as_deref(), Some("alice"));
     }
 
-    #[test]
-    fn log_file_leaves_out_instance_spans() {
-        #[derive(Clone, Default)]
-        struct Buffer(Arc<Mutex<Vec<u8>>>);
+    /// Collects what a formatting layer writes.
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
 
-        impl std::io::Write for Buffer {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    impl std::io::Write for Buffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
         }
 
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Buffer {
+        /// A subscriber formatting what passes `filter` into this buffer, spans
+        /// included, the way the log file does.
+        fn subscriber(
+            &self,
+            filter: tracing_subscriber::filter::Targets,
+        ) -> impl tracing::Subscriber + Send + Sync {
+            let writer = self.clone();
+            tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(move || writer.clone())
+                    .with_filter(filter),
+            )
+        }
+
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    #[test]
+    fn log_file_leaves_out_instance_spans() {
         let buffer = Buffer::default();
-        let writer = buffer.clone();
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(move || writer.clone())
-                .with_filter(file_log_filter(None)),
-        );
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(buffer.subscriber(file_log_filter(None)), || {
             instance_span("alice").in_scope(|| {
                 tracing::info_span!(target: "brz_logtest_file", "inner").in_scope(|| {
                     info!(target: "brz_logtest_file", "logged");
@@ -492,7 +507,7 @@ mod tests {
             });
         });
 
-        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        let output = buffer.contents();
         assert!(
             output.contains("inner: brz_logtest_file: logged"),
             "got {output}"
@@ -512,6 +527,33 @@ mod tests {
                 .await
                 .unwrap();
         }
+
+        #[tracing::instrument(
+            target = "brz_logtest_record",
+            skip_all,
+            fields(payment_id = tracing::field::Empty),
+        )]
+        pub fn record_in_own_span(&self) {
+            tracing::Span::current().record("payment_id", "abc");
+            info!(target: "brz_logtest_record", "recorded");
+        }
+    }
+
+    #[test]
+    fn instance_span_macro_leaves_method_span_current() {
+        let buffer = Buffer::default();
+        let subscriber = buffer.subscriber(sdk_log_filter(Some("brz_logtest_record=info")));
+        tracing::subscriber::with_default(subscriber, || {
+            Instance {
+                instance_id: "alice".to_string(),
+            }
+            .record_in_own_span();
+        });
+        let output = buffer.contents();
+        assert!(
+            output.contains("record_in_own_span{payment_id=\"abc\"}"),
+            "got {output}"
+        );
     }
 
     #[macros::async_test_all]
