@@ -3017,10 +3017,10 @@ pub enum CpfpFundingKind {
     },
 }
 
-/// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when it
-/// is worth more than what recovering it costs. That cost leaves out the shared
-/// fan-out fee, so funding several unilateral exits from one UTXO adds
-/// `fanout_fee_sats` on top: compare `recoverable_value_sats` with
+/// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when
+/// what is left of its funds exceeds what recovering it costs. That cost leaves
+/// out the shared fan-out fee, so funding several unilateral exits from one UTXO
+/// adds `fanout_fee_sats` on top: compare `recoverable_value_sats` with
 /// `total_fee_sats`, or fund one UTXO per branch to avoid the fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -3198,8 +3198,8 @@ pub struct PrepareRecoverFundsRequest {
     /// builds. Below the network's relay minimum, zero included, nodes do not
     /// relay the transactions: they have to reach a miner another way.
     pub fee_rate_sat_per_vbyte: u64,
-    /// The kind of UTXO that will fund a unilateral exit. Needed only when the
-    /// selection holds one with steps left to broadcast.
+    /// The kind of UTXO that will fund a unilateral exit. Needed when a
+    /// transaction of a unilateral exit in the quote has a CPFP child.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub funding_kind: Option<CpfpFundingKind>,
     /// The Bitcoin address the recovered funds are sent to.
@@ -3232,7 +3232,7 @@ pub struct PrepareRecoverFundsResponse {
     /// Paid by the final sweep, off the value it moves.
     pub sweep_fee_sats: u64,
     /// What to fund the unilateral exit with. Unset when nothing needs funding:
-    /// every leaf is recovered cooperatively, or only sweeps are left.
+    /// no transaction of the recovery has a CPFP child.
     pub funding: Option<RecoveryFunding>,
     pub fee_rate_sat_per_vbyte: u64,
     pub destination: String,
@@ -3267,8 +3267,10 @@ pub struct SkippedLeaf {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SkippedLeafReason {
-    /// At the quote's fee rate, recovering the leaf costs at least what it holds.
-    /// A low enough fee rate brings the leaf back into the quote.
+    /// At the quote's fee rate, recovering the leaf costs at least what is left
+    /// of its funds: `value_sats`, less the fee of each direct transaction in its
+    /// exit and the fee the operators paid out of the leaf when they broadcast
+    /// its refund. A low enough fee rate brings the leaf back into the quote.
     FeeExceedsValue,
     /// The SDK read the chain and found no output holding the leaf's funds.
     FundsNotFound,
