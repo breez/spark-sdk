@@ -823,13 +823,6 @@ fn evaluate_leaf_costs(
             if covered_txids.contains(&txid) {
                 continue;
             }
-            // A node already on-chain is not built again, so it is not counted at
-            // all rather than counted and subtracted: the first node that is
-            // still to be built is the one the funding pays for directly, and is
-            // costed on the weight of that funding.
-            if node.status == TreeNodeStatus::OnChain {
-                continue;
-            }
             let input_weight = if already_funded_ancestor {
                 params.single_cpfp_input_weight
             } else {
@@ -2809,7 +2802,7 @@ mod tests {
         }
 
         #[test_all]
-        fn onchain_ancestor_lowers_estimated_cost() {
+        fn a_node_the_scan_did_not_record_is_charged_whatever_its_status() {
             let chain = |root_status: TreeNodeStatus| -> HashMap<TreeNodeId, TreeNode> {
                 let mut root = crate::tree::tests::create_test_tree_node("root", 1_000_000);
                 root.node_tx = anchor_tx_n(1);
@@ -2835,12 +2828,13 @@ mod tests {
                     .estimated_cost
             };
 
-            // Available root: root + leaf + refund each bumped (175) plus the sweep
-            // input (167). OnChain root is already paid, dropping its 175 bump.
+            // Root, leaf and refund each get a child (175 each), and the sweep
+            // costs 167. The builder builds the root's child whatever status the
+            // operators report for the root.
             let cost_all = cost_of(&chain(TreeNodeStatus::Available));
             let cost_onchain = cost_of(&chain(TreeNodeStatus::OnChain));
             assert_eq!(cost_all, 692);
-            assert_eq!(cost_onchain, 517);
+            assert_eq!(cost_onchain, 692);
         }
 
         #[test_all]

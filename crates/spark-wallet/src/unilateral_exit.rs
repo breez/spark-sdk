@@ -2595,6 +2595,50 @@ mod exit_build_tests {
         assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
     }
 
+    #[test]
+    fn quote_matches_the_build_for_a_node_only_the_operators_report_on_chain() {
+        let mut root = node("root", None, anchor_tx(1), None);
+        root.status = TreeNodeStatus::OnChain;
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
+        let leaf_id = leaf.id.clone();
+        let nodes = to_node_map(vec![root, leaf]);
+        // The scan did not find the root in a block.
+        let on_chain = ExitChainState::default();
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+
+        let quote = quote_unilateral_exit(
+            &nodes,
+            std::slice::from_ref(&leaf_id),
+            UnilateralExitLeafFilter::All,
+            272,
+            change_len,
+            dust,
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let plan = plan_unilateral_exit(
+            nodes,
+            std::slice::from_ref(&leaf_id),
+            UnilateralExitLeafFilter::All,
+            vec![funding(quote.single_utxo_funding_sat)],
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let build = build_unilateral_exit(&plan, &on_chain, FEE_RATE).unwrap();
+
+        assert!(build.branches[0].txs.iter().all(|tx| tx.to_sign.is_some()));
+        assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+    }
+
     /// The fee of a sweep of the refund outputs and change inputs in `build`, as
     /// `create_refund_sweep_transaction` computes it.
     fn sweep_fee(build: &UnilateralExitBuild, destination_script_len: usize) -> u64 {
