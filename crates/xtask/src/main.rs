@@ -45,6 +45,7 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
             "db-storage-api",
             "secp-lowmemory",
             "release-max-level-debug",
+            "boltz",
         ]),
     ),
     // `fido2` hardware-key support.

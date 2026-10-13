@@ -5,7 +5,9 @@
 
 // Boltz is not registered as a provider (see `sdk_builder`): the service is not
 // operational, and it is unclear when or whether it will be again. The modules
-// stay compiled so the wiring can be restored in one place.
+// stay in the tree behind the `boltz` feature so the wiring can be restored in
+// one place.
+#[cfg(feature = "boltz")]
 #[allow(dead_code)]
 pub(crate) mod boltz;
 mod cached_fiat;

@@ -33,6 +33,10 @@ turnkey = ["dep:turnkey_enclave_encrypt"]
 # Additionally accept P-256 (Turnkey's default) API keys for stamping, alongside
 # the always-available secp256k1. Pulls in the `p256` crate.
 turnkey-p256 = ["turnkey", "dep:p256"]
+# With this feature, cargo compiles the Boltz cross-chain provider. The SDK
+# does not register it, so the SDK behaves the same either way. Cargo turns the
+# feature on for the crate's own tests.
+boltz = ["dep:boltz-client"]
 # Smaller libsecp256k1 precomputed tables: about 1 MB less binary for slightly
 # slower signing and verification.
 secp-lowmemory = ["bitcoin/secp-lowmemory"]
@@ -56,7 +60,7 @@ base64.workspace = true
 bip39.workspace = true
 bitcoin.workspace = true
 bitflags.workspace = true
-boltz-client.workspace = true
+boltz-client = { workspace = true, optional = true }
 breez-sdk-common.workspace = true
 platform-utils.workspace = true
 chrono.workspace = true
@@ -102,7 +106,7 @@ tokio-tungstenite-wasm = { workspace = true, optional = true }
 
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
-breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+breez-sdk-spark = { workspace = true, features = ["boltz", "test-utils"] }
 # Tests compare the SDK's log filter against `EnvFilter`.
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
