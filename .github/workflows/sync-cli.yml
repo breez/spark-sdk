@@ -8,6 +8,8 @@
 # A language whose sync job fails is excluded from the PR. When every language
 # syncs cleanly, the PR squash-merges automatically once the gating CI checks
 # pass (integration test checks are excluded from the gate: they are flaky).
+# Failures that also occur on the base commit are ignored. Others get up to
+# three Claude fix commits, and a fixed PR then waits for human review.
 #
 # To add a new language: create a TOML in sync-prompts/langs/ and add a
 # matrix entry below.
@@ -328,8 +330,8 @@ jobs:
     needs: [setup, sync]
     if: ${{ !inputs.dry-run && !cancelled() }}
     runs-on: ubuntu-latest
-    # Generous budget: the auto-merge step waits up to ~60 minutes for CI.
-    timeout-minutes: 90
+    # Generous budget: the auto-merge step waits for up to four CI rounds.
+    timeout-minutes: 330
 
     permissions:
       contents: write
@@ -543,7 +545,7 @@ jobs:
             fi
             BODY+=$'\n'"> Consider re-running the sync for these languages."
           else
-            BODY+=$'\n\n'"All languages synced cleanly. This PR merges automatically once the gating CI checks pass (integration test checks excluded)."
+            BODY+=$'\n\n'"All languages synced cleanly. This PR merges automatically once the gating CI checks pass (integration test checks and failures already on the base commit excluded). If CI needs an automated fix, it waits for review instead."
           fi
 
           # The bot branch is throwaway (rebuilt from main each run), so
@@ -574,39 +576,128 @@ jobs:
       # auto-merge is disabled and main has no required checks, so the
       # wait-and-merge lives here. Integration test checks never gate the
       # merge: they run against live faucets and Docker and are flaky.
-      # On a gating check failure or timeout the PR stays open for review.
+      #
+      # A check that also fails on the base commit is pre-existing and does
+      # not block the merge. Any other failure gets a Claude fix pass that may
+      # edit only the language CLIs. CI reruns on each pushed fix, up to
+      # MAX_FIX_ATTEMPTS. A PR that needed a fix never merges here: once CI
+      # passes it waits for a human review. A PR-caused failure in a check
+      # that already fails on main reads as pre-existing.
       - name: Auto-merge when CI passes
         if: steps.apply.outputs.has_changes == 'true' && steps.apply.outputs.all_clean == 'true'
         env:
           GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           PR_NUMBER: ${{ steps.create-pr.outputs.pr_number }}
+          BASE_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          LANGS_DIR: crates/breez-sdk/bindings/examples/cli/langs/
+          MAX_FIX_ATTEMPTS: 3
           IGNORED_CHECKS: '^(Integration test|Breez integration tests|Rust CLI binding tests|WASM binding tests)'
+          FIX_PROMPT: |
+            The CI checks whose failed-step logs are in ci-logs/ fail on this
+            PR but not on its base commit, so the language CLI changes under
+            crates/breez-sdk/bindings/examples/cli/langs/ likely caused them.
+            Fix the cause with the smallest change, editing only files under
+            that directory, and follow the CLI Modification Policy in
+            CLAUDE.md. Do not commit. If the failure is unrelated to those
+            files, change nothing.
         run: |
-          echo "::notice::All languages synced cleanly. Waiting for CI on PR #${PR_NUMBER}."
-          # Give CI a moment to register its check runs on the fresh push.
-          sleep 60
-          for _ in $(seq 1 118); do
-            CHECKS=$(gh pr checks "$PR_NUMBER" --json name,bucket 2>/dev/null || true)
-            if ! echo "$CHECKS" | jq -e 'type == "array"' > /dev/null 2>&1; then
-              CHECKS='[]'
+          # Prints the gating checks once none is pending; fails on timeout.
+          wait_for_ci() {
+            sleep 60
+            for _ in $(seq 1 118); do
+              CHECKS=$(gh pr checks "$PR_NUMBER" --json name,bucket,link 2>/dev/null || true)
+              echo "$CHECKS" | jq -e 'type == "array"' > /dev/null 2>&1 || CHECKS='[]'
+              GATING=$(echo "$CHECKS" | jq -c --arg re "$IGNORED_CHECKS" '[.[] | select(.name | test($re) | not)]')
+              if echo "$GATING" | jq -e 'length > 0 and all(.bucket != "pending")' > /dev/null; then
+                echo "$GATING"
+                return 0
+              fi
+              sleep 30
+            done
+            return 1
+          }
+
+          # Prints the names of checks that failed on the base commit; fails
+          # while any check named in $1 is still running there.
+          base_failures() {
+            RUNS=$(gh api --paginate "repos/$REPO/commits/$BASE_SHA/check-runs?per_page=100" \
+              --jq '.check_runs[]' | jq -s '.') || return 1
+            if echo "$RUNS" | jq -e --argjson names "$1" \
+              'any(.[]; (.name as $n | $names | index($n)) and .status != "completed")' > /dev/null; then
+              return 1
             fi
-            GATING=$(echo "$CHECKS" | jq --arg re "$IGNORED_CHECKS" '[.[] | select(.name | test($re) | not)]')
-            TOTAL=$(echo "$GATING" | jq 'length')
-            FAILING=$(echo "$GATING" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length')
-            PENDING=$(echo "$GATING" | jq '[.[] | select(.bucket == "pending")] | length')
-            if [ "$FAILING" -gt 0 ]; then
-              echo "::warning::Gating CI checks failed on PR #${PR_NUMBER}. Leaving it open for review."
-              echo "$GATING" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  failed: \(.name)"'
-              exit 0
-            fi
-            if [ "$TOTAL" -gt 0 ] && [ "$PENDING" -eq 0 ]; then
+            echo "$RUNS" | jq -c '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name] | unique'
+          }
+
+          finish() {
+            if [ "$ATTEMPT" -gt 0 ]; then
+              gh pr comment "$PR_NUMBER" --body "CI passes after ${ATTEMPT} automated fix commit(s). Review the fix commits before merging."
+              echo "::notice::PR #${PR_NUMBER} needed fixes. Left open for review."
+            else
               gh pr merge "$PR_NUMBER" --squash
               echo "::notice::PR #${PR_NUMBER} merged."
+            fi
+            exit 0
+          }
+
+          echo "::notice::All languages synced cleanly. Waiting for CI on PR #${PR_NUMBER}."
+          ATTEMPT=0
+          while true; do
+            if ! GATING=$(wait_for_ci); then
+              echo "::warning::Timed out waiting for CI on PR #${PR_NUMBER}. Leaving it open."
               exit 0
             fi
-            sleep 30
+            FAILING=$(echo "$GATING" | jq -c '[.[] | select(.bucket == "fail" or .bucket == "cancel")]')
+            [ "$FAILING" = "[]" ] && finish
+
+            BASE_FAILED=""
+            for _ in $(seq 1 60); do
+              BASE_FAILED=$(base_failures "$(echo "$FAILING" | jq -c 'map(.name)')") && break
+              BASE_FAILED=""
+              sleep 30
+            done
+            if [ -z "$BASE_FAILED" ]; then
+              echo "::warning::Timed out waiting for CI on base commit ${BASE_SHA}. Leaving PR #${PR_NUMBER} open."
+              exit 0
+            fi
+
+            NEW=$(echo "$FAILING" | jq -c --argjson base "$BASE_FAILED" '[.[] | select(.name as $n | $base | index($n) | not)]')
+            if [ "$NEW" = "[]" ]; then
+              echo "::notice::Only pre-existing failures (also failing on ${BASE_SHA}): $(echo "$FAILING" | jq -r 'map(.name) | join(", ")')"
+              finish
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "::warning::Failures caused by this PR: $(echo "$NEW" | jq -r 'map(.name) | join(", ")')"
+            if [ "$ATTEMPT" -gt "$MAX_FIX_ATTEMPTS" ]; then
+              echo "::warning::Still failing after ${MAX_FIX_ATTEMPTS} fix attempts. Leaving PR #${PR_NUMBER} open."
+              exit 0
+            fi
+
+            mkdir -p ci-logs
+            echo "$NEW" | jq -r '.[] | "\(.name)\t\(.link)"' | while IFS=$'\t' read -r NAME LINK; do
+              JOB=$(echo "$LINK" | grep -oE '/job/[0-9]+' | cut -d/ -f3 || true)
+              [ -n "$JOB" ] || continue
+              gh run view --job "$JOB" --log-failed 2>/dev/null | tail -n 500 \
+                > "ci-logs/$(echo "$NAME" | tr -c 'A-Za-z0-9\n' '_').log" || true
+            done
+            npx -y @anthropic-ai/claude-code -p "$FIX_PROMPT" \
+              --model claude-opus-4-6 \
+              --allowed-tools "Read,Edit,Write,Glob,Grep" || true
+            rm -rf ci-logs
+
+            git add -A "$LANGS_DIR"
+            if git diff --cached --quiet; then
+              echo "::warning::The fix pass changed no language CLI file. Leaving PR #${PR_NUMBER} open."
+              exit 0
+            fi
+            git commit -qm "fix: repair CI failures in synced CLIs (attempt ${ATTEMPT})"
+            # Drop anything the fix pass touched outside the language CLIs.
+            git checkout -q -- . && git clean -fdq
+            git push origin HEAD
           done
-          echo "::warning::Timed out waiting for CI on PR #${PR_NUMBER}. Leaving it open."
 
       - name: Cleanup branch on failure
         if: failure()
