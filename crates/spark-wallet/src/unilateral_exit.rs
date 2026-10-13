@@ -1740,6 +1740,18 @@ mod exit_build_tests {
         tx
     }
 
+    fn tx_paying(value: u64, nonce: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::from_height(nonce).unwrap(),
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
     fn node(
         id: &str,
         parent: Option<&str>,
@@ -1809,6 +1821,7 @@ mod exit_build_tests {
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
+                needs_funding: true,
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
@@ -2024,12 +2037,14 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    needs_funding: true,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    needs_funding: true,
                 },
             ],
             fan_out_psbt: None,
@@ -2109,12 +2124,14 @@ mod exit_build_tests {
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    needs_funding: true,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
                     value: 100_000,
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
+                    needs_funding: true,
                 },
             ],
             fan_out_psbt: Some(fan_out_psbt),
@@ -2526,6 +2543,70 @@ mod exit_build_tests {
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
         assert!(build.fan_out.is_some());
         assert_eq!(build.branches.len(), 3);
+    }
+
+    #[test]
+    fn quote_and_plan_match_the_build_of_a_direct_refund() {
+        let root = node("root", None, anchor_tx(1), None);
+        let mut leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
+        // The output of each direct transaction holds its input less 955 sats.
+        let direct_refund = tx_paying(98_090, 5);
+        leaf.direct_tx = Some(tx_paying(99_045, 4));
+        leaf.direct_refund_tx = Some(direct_refund.clone());
+        let nodes = to_node_map(vec![root, leaf]);
+        let leaf_id = id("leaf");
+        let on_chain = ExitChainState {
+            nodes: vec![
+                ConfirmedExitNode {
+                    node_id: leaf_id.clone(),
+                    confirmed_by: ExitNodeConfirmation::Direct,
+                    block_height: None,
+                },
+                ConfirmedExitNode {
+                    node_id: id("root"),
+                    confirmed_by: ExitNodeConfirmation::Cpfp,
+                    block_height: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+
+        let quote = quote_unilateral_exit(
+            &nodes,
+            std::slice::from_ref(&leaf_id),
+            UnilateralExitLeafFilter::All,
+            272,
+            change_len,
+            dust,
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let plan = plan_unilateral_exit(
+            nodes,
+            std::slice::from_ref(&leaf_id),
+            UnilateralExitLeafFilter::All,
+            Vec::new(),
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let build = build_unilateral_exit(&plan, &on_chain, FEE_RATE).unwrap();
+
+        let txs = &build.branches[0].txs;
+        assert_eq!(txs.last().unwrap().txid, direct_refund.compute_txid());
+        assert!(txs.iter().all(|tx| tx.to_sign.is_none()));
+        assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+        assert!(quote.per_branch_funding.is_empty());
+        assert!(plan.per_branch_funding[0].1.is_empty());
     }
 }
 
