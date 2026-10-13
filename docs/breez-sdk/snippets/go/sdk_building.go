@@ -90,7 +90,7 @@ func (s EncryptingSessionStore) GetSession(
 	if err != nil {
 		return breez_sdk_spark.Session{}, err
 	}
-	// Decrypt session.Token here before returning it.
+	// Decrypt session.Token and session.RefreshToken here before returning it.
 	return session, nil
 }
 
@@ -98,7 +98,7 @@ func (s EncryptingSessionStore) SetSession(
 	serviceIdentityKey string,
 	session breez_sdk_spark.Session,
 ) error {
-	// Encrypt session.Token here before persisting it.
+	// Encrypt session.Token and session.RefreshToken here before persisting it.
 	return s.inner.SetSession(serviceIdentityKey, session)
 }
 
