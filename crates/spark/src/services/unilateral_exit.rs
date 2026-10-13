@@ -755,6 +755,9 @@ pub fn evaluate_unilateral_exit_leaf_costs(
 
     let mut selected: Vec<UnilateralExitSelectedLeaf> = Vec::new();
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
+    // The sweep of the leaves selected so far.
+    let mut sweep_input_weight = Weight::ZERO;
+    let mut sweep_fee: u64 = 0;
 
     for (leaf_id, leaf) in &leaves {
         let (refund_tx, nodes) = match exit_transactions(tree_nodes, leaf, on_chain) {
@@ -806,28 +809,17 @@ pub fn evaluate_unilateral_exit_leaf_costs(
             ));
         }
 
-        let per_leaf_input_weight = p2tr_key_path_input_weight() + params.single_cpfp_input_weight;
-        let sweep_input_weight =
-            |count: u64| Weight::from_wu(count.saturating_mul(per_leaf_input_weight.to_wu()));
-        let sweep_cost = if selected.is_empty() {
-            compute_sweep_fee(
-                per_leaf_input_weight,
-                params.destination_script_len,
-                params.fee_rate_sat_per_kw,
-            )
-        } else {
-            let selected_count = selected.len() as u64;
-            compute_sweep_fee(
-                sweep_input_weight(selected_count.saturating_add(1)),
-                params.destination_script_len,
-                params.fee_rate_sat_per_kw,
-            )
-            .saturating_sub(compute_sweep_fee(
-                sweep_input_weight(selected_count),
-                params.destination_script_len,
-                params.fee_rate_sat_per_kw,
-            ))
-        };
+        let mut leaf_input_weight = p2tr_key_path_input_weight();
+        if refund_tx.is_some() {
+            // The change of the refund's child is an input of the sweep too.
+            leaf_input_weight += params.single_cpfp_input_weight;
+        }
+        let sweep_cost = compute_sweep_fee(
+            sweep_input_weight + leaf_input_weight,
+            params.destination_script_len,
+            params.fee_rate_sat_per_kw,
+        )
+        .saturating_sub(sweep_fee);
 
         let total_marginal_cost = cpfp_cost.saturating_add(sweep_cost);
 
@@ -842,6 +834,8 @@ pub fn evaluate_unilateral_exit_leaf_costs(
             for node in &nodes {
                 covered_txids.insert(node.node_tx.compute_txid());
             }
+            sweep_input_weight += leaf_input_weight;
+            sweep_fee = sweep_fee.saturating_add(sweep_cost);
         }
     }
 
@@ -1963,6 +1957,56 @@ mod tests {
 
             assert_eq!(selected[0].cpfp_cost, 0);
             assert!(!selected[0].needs_funding);
+        }
+
+        #[test_all]
+        fn the_sweep_fee_is_based_on_the_sweeps_inputs() {
+            let (nodes, root_id, leaf_ids) = root_with_leaves(&[1_000_000, 500_000]);
+            let mut on_chain = on_chain_state(&[root_id, leaf_ids[1].clone()], &[]);
+            on_chain.refunds = vec![refund_on_chain(&leaf_ids[1], 500_000)];
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &leaf_ids,
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            // Two refunds, and the change of the child built for the first.
+            let inputs = p2tr_key_path_input_weight() * 2 + Weight::from_wu(272);
+            assert_eq!(quote.selected_leaves.len(), 2);
+            assert_eq!(quote.sweep_fee_sat, compute_sweep_fee(inputs, 22, 250));
+        }
+
+        #[test_all]
+        fn a_refund_in_a_block_is_charged_for_no_change_input() {
+            // The leaf holds more than the fee of a sweep of its refund alone (990)
+            // and less than the fee of a sweep with a change input as well (1,670).
+            let (nodes, root_id, leaf_ids) = root_with_leaves(&[1_500]);
+            let mut on_chain = on_chain_state(&[root_id, leaf_ids[0].clone()], &[]);
+            on_chain.refunds = vec![refund_on_chain(&leaf_ids[0], 1_500)];
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &leaf_ids,
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                DUST,
+                2_500,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(quote.selected_leaves.len(), 1);
+            assert_eq!(quote.sweep_fee_sat, 990);
         }
 
         #[test_all]
