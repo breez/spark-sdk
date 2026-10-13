@@ -68,7 +68,7 @@ build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-li
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 package-android: build-android
-	rm $(FFI_DIR)kotlin/jniLibs/**/*spark.so
+	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs langs/android/lib/src/main
 	cp -r $(FFI_DIR)kotlin/main/kotlin/breez_sdk_spark langs/android/lib/src/main/kotlin/
 	cd langs/android && ./gradlew assemble

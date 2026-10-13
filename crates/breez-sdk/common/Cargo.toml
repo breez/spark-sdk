@@ -9,7 +9,6 @@ browser-tests = [] # Enable browser wasm-pack tests
 test-utils = []
 
 [lib]
-crate-type = ["staticlib", "cdylib", "lib"]
 name = "breez_sdk_common"
 
 [lints]

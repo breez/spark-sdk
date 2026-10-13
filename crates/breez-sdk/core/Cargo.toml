@@ -45,7 +45,6 @@ release-max-level-debug = [
 ]
 
 [lib]
-crate-type = ["staticlib", "cdylib", "lib"]
 name = "breez_sdk_spark"
 
 [lints]
