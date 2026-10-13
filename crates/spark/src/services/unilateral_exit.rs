@@ -713,6 +713,11 @@ fn exit_transactions<'a>(
     let ancestors = walk_unilateral_exit_chain(tree_nodes, leaf).map_err(|missing| {
         format!("incomplete ancestor chain (parent {missing} missing from the tree map)")
     })?;
+    // The builder builds nothing in a stopped branch. It still lists a refund
+    // that is on-chain at the leaf's address for the sweep.
+    if on_chain.stopped_leaves.contains(&leaf.id) {
+        return Ok((None, Vec::new()));
+    }
     // A leaf that went out through its direct tx is refunded by its
     // `direct_refund_tx`, which pays its own fee.
     let gets_child = !on_chain.has_refund(&leaf.id) && !on_chain.went_direct(&leaf.id);
@@ -1790,6 +1795,18 @@ mod tests {
             leaf.direct_refund_tx = Some(tx_paying(leaf.value - 2 * DIRECT_FEE, 101));
         }
 
+        fn refund_on_chain(leaf_id: &TreeNodeId, value: u64) -> ExitRefund {
+            ExitRefund {
+                leaf_id: leaf_id.clone(),
+                state: ExitRefundState::OnChain {
+                    tx: tx_paying(value, 9),
+                    vout: 0,
+                    value,
+                    block_height: None,
+                },
+            }
+        }
+
         /// A settled step is not counted, rather than counted and taken off
         /// afterwards, so the first step still to be built is the one funded
         /// directly and is costed on the weight of that funding. Subtracting after
@@ -1914,6 +1931,26 @@ mod tests {
             set_direct_txs(nodes.get_mut(&leaf_ids[0]).unwrap());
             let mut on_chain = on_chain_state(&[root_id, leaf_ids[0].clone()], &[]);
             on_chain.nodes[1].confirmed_by = ExitNodeConfirmation::Direct;
+
+            let selected = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                &leaf_ids,
+                &cost_params(),
+                UnilateralExitLeafFilter::All,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(selected[0].cpfp_cost, 0);
+            assert!(!selected[0].needs_funding);
+        }
+
+        #[test_all]
+        fn a_leaf_on_a_stopped_branch_needs_no_funding() {
+            let (nodes, root_id, leaf_ids) = root_with_leaves(&[1_000_000]);
+            let mut on_chain = on_chain_state(&[root_id], &[]);
+            on_chain.refunds = vec![refund_on_chain(&leaf_ids[0], 1_000_000)];
+            on_chain.stopped_leaves.clone_from(&leaf_ids);
 
             let selected = evaluate_unilateral_exit_leaf_costs(
                 &nodes,
