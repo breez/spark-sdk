@@ -17,10 +17,10 @@ use crate::SparkWalletError;
 /// Which leaves to unilaterally exit.
 #[derive(Clone, Debug)]
 pub enum ExitLeafSelection {
-    /// Exit every available leaf whose value exceeds its marginal exit cost.
+    /// Exit every stored leaf that is profitable to exit.
     Auto,
-    /// Exit the leaves in one of the [`EXITING_STATUSES`] whose value exceeds
-    /// their marginal exit cost.
+    /// Exit the leaves in one of the [`EXITING_STATUSES`] that are profitable to
+    /// exit.
     Exiting,
     /// Exit exactly these leaves, regardless of profitability.
     Specific(Vec<TreeNodeId>),
