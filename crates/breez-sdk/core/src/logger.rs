@@ -504,9 +504,9 @@ mod tests {
         instance_id: String,
     }
 
+    #[macros::instance_span]
     impl Instance {
-        #[macros::instance_span]
-        async fn log_here_and_in_task(&self) {
+        pub async fn log_here_and_in_task(&self) {
             use tracing::Instrument;
             info!(target: "brz_logtest_macro", "in method");
             platform_utils::tokio::spawn(

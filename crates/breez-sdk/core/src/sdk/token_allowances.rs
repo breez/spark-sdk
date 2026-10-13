@@ -13,11 +13,11 @@ use super::BreezSdk;
 
 const DEFAULT_LIST_LIMIT: u32 = 100;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
     /// Grants a spender an allowance over this wallet's tokens.
-    #[macros::instance_span]
     pub async fn create_token_allowance(
         &self,
         request: CreateTokenAllowanceRequest,
@@ -45,7 +45,6 @@ impl BreezSdk {
     }
 
     /// Revokes an allowance this wallet granted.
-    #[macros::instance_span]
     pub async fn revoke_token_allowance(
         &self,
         request: RevokeTokenAllowanceRequest,
@@ -57,7 +56,6 @@ impl BreezSdk {
     }
 
     /// Lists allowances this wallet granted or received.
-    #[macros::instance_span]
     pub async fn list_token_allowances(
         &self,
         request: ListTokenAllowancesRequest,
@@ -87,7 +85,6 @@ impl BreezSdk {
     }
 
     /// Prepares a pull from a wallet that granted this wallet an allowance.
-    #[macros::instance_span]
     pub async fn prepare_pull_payment(
         &self,
         request: PreparePullPaymentRequest,
@@ -119,7 +116,6 @@ impl BreezSdk {
     }
 
     /// Signs and broadcasts a prepared pull, and can be retried with the same prepare response.
-    #[macros::instance_span]
     pub async fn pull_payment(
         &self,
         request: PullPaymentRequest,

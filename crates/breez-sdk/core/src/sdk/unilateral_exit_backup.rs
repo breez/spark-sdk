@@ -173,6 +173,7 @@ fn parse_exit_state<'a, T: Deserialize<'a>>(exit_state: &'a str) -> Result<T, Sd
         .map_err(|e| SdkError::InvalidInput(format!("Invalid exit state: {e}")))
 }
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -182,7 +183,6 @@ impl BreezSdk {
     ///
     /// The state goes stale as the wallet is used: export again whenever a
     /// `UnilateralExitStateChanged` event arrives.
-    #[macros::instance_span]
     pub async fn export_unilateral_exit_state(
         &self,
     ) -> Result<ExportUnilateralExitStateResponse, SdkError> {
@@ -216,7 +216,6 @@ impl BreezSdk {
     /// An out of date exit state can restore funds that have since been spent,
     /// so the balance may read high until the next sync reconciles it with the
     /// Spark operators.
-    #[macros::instance_span]
     pub async fn import_unilateral_exit_state(
         &self,
         request: ImportUnilateralExitStateRequest,

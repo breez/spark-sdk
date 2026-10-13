@@ -39,6 +39,7 @@ use super::{
     },
 };
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -46,7 +47,6 @@ impl BreezSdk {
     /// exact fees, and how much to fund. It records a recovery or sweep it finds
     /// in a block, so the SDK leaves those funds out of the total to recover at
     /// the next sync.
-    #[macros::instance_span]
     pub async fn prepare_recover_funds(
         &self,
         request: PrepareRecoverFundsRequest,
@@ -130,7 +130,6 @@ impl BreezSdk {
     /// the operators co-sign each cooperative recovery, and `signer` signs the
     /// spends of `funding_inputs` for the unilateral exit. Returns every
     /// transaction in broadcast order, without broadcasting.
-    #[macros::instance_span]
     pub async fn recover_funds(
         &self,
         request: RecoverFundsRequest,
@@ -212,7 +211,6 @@ impl BreezSdk {
     /// Reads a recovery you kept back against the chain: which of its
     /// transactions are now in a block, and whether it can still be finished as
     /// it stands.
-    #[macros::instance_span]
     pub async fn check_recover_funds(
         &self,
         request: CheckRecoverFundsRequest,

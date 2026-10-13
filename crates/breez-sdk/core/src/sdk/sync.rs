@@ -805,6 +805,7 @@ impl BreezSdk {
     }
 }
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -816,7 +817,6 @@ impl BreezSdk {
     /// which governs only the automatic collection: syncing is how to run one at
     /// a moment of your choosing with that turned off.
     #[allow(unused_variables)]
-    #[macros::instance_span]
     pub async fn sync_wallet(
         &self,
         request: SyncWalletRequest,

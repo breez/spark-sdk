@@ -15,10 +15,10 @@ use super::BreezSdk;
 
 mod pay;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
-    #[macros::instance_span]
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
@@ -26,12 +26,10 @@ impl BreezSdk {
         pay::prepare(self, request).await
     }
 
-    #[macros::instance_span]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         pay::send(self, request).await
     }
 
-    #[macros::instance_span]
     pub async fn build_unsigned_lnurl_pay_package(
         &self,
         request: BuildUnsignedLnurlPayPackageRequest,
@@ -39,7 +37,6 @@ impl BreezSdk {
         pay::build_package(self, &request.prepare_response).await
     }
 
-    #[macros::instance_span]
     pub async fn publish_signed_lnurl_pay_package(
         &self,
         request: PublishSignedLnurlPayPackageRequest,
@@ -73,7 +70,6 @@ impl BreezSdk {
     /// Result containing either:
     /// * `LnurlWithdrawResponse` - The payment details if the withdraw request was successful
     /// * `SdkError` - If there was an error during the withdraw process
-    #[macros::instance_span]
     pub async fn lnurl_withdraw(
         &self,
         request: LnurlWithdrawRequest,
@@ -177,7 +173,6 @@ impl BreezSdk {
     /// This method implements the LNURL-auth protocol as specified in LUD-04 and LUD-05.
     /// It derives a domain-specific linking key, signs the challenge, and sends the
     /// authentication request to the service.
-    #[macros::instance_span]
     pub async fn lnurl_auth(
         &self,
         request_data: LnurlAuthRequestDetails,

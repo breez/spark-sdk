@@ -42,8 +42,9 @@ pub fn derive_into(attr: TokenStream, item: TokenStream) -> TokenStream {
     derive_into::derive_into(attr, item)
 }
 
-/// Runs a `BreezSdk` method in a span carrying the instance's identifier, so
-/// every log line it emits can be attributed to the instance.
+/// Runs each public method of a `BreezSdk` impl block in a span carrying the
+/// instance's identifier, so every log line it emits can be attributed to the
+/// instance.
 #[proc_macro_attribute]
 pub fn instance_span(args: TokenStream, input: TokenStream) -> TokenStream {
     instance_span::instance_span(args, input)

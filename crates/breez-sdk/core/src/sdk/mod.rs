@@ -578,4 +578,73 @@ mod tests {
     fn parse_spark_config_rejects_what_is_not_one() {
         assert!(parse_spark_config("{}".to_string()).is_err());
     }
+
+    /// Whether an impl block's body declares a public method taking `self`.
+    fn has_public_method(body: &[&str]) -> bool {
+        let next_lines = body.iter().skip(1).map(Some).chain(std::iter::once(None));
+        body.iter().zip(next_lines).any(|(line, next)| {
+            let Some(signature) = line.strip_prefix("    pub ") else {
+                return false;
+            };
+            if !signature.starts_with("fn ") && !signature.starts_with("async fn ") {
+                return false;
+            }
+            // The receiver is on the signature's first line or right after it.
+            line.contains("self") || next.is_some_and(|next| next.contains("self"))
+        })
+    }
+
+    fn rust_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+
+    /// Public `BreezSdk` methods log in their instance's span only through
+    /// `#[macros::instance_span]` on their impl block, which is easy to forget
+    /// on a new one.
+    #[test]
+    fn impl_blocks_with_public_methods_have_an_instance_span() {
+        let mut files = Vec::new();
+        rust_files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let mut missing = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = source.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if !line.starts_with("impl BreezSdk") {
+                    continue;
+                }
+                let body: Vec<&str> = lines[i..]
+                    .iter()
+                    .skip(1)
+                    .copied()
+                    .take_while(|l| *l != "}")
+                    .collect();
+                if !has_public_method(&body) {
+                    continue;
+                }
+                let has_attribute = lines[..i]
+                    .iter()
+                    .rev()
+                    .take_while(|l| l.starts_with("#[") || l.starts_with("///"))
+                    .any(|l| *l == "#[macros::instance_span]");
+                if !has_attribute {
+                    missing.push(format!("{}:{}", path.display(), i.saturating_add(1)));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "impl blocks missing #[macros::instance_span]: {missing:?}"
+        );
+    }
 }

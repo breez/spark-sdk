@@ -5,6 +5,7 @@ use crate::{
 
 use super::BreezSdk;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -17,7 +18,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// The created contact or an error
-    #[macros::instance_span]
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
         let name = validate_contact_input(&request.name, &request.payment_identifier)?;
         let payment_identifier = request.payment_identifier.trim().to_string();
@@ -48,7 +48,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// The updated contact or an error
-    #[macros::instance_span]
     pub async fn update_contact(&self, request: UpdateContactRequest) -> Result<Contact, SdkError> {
         let name = validate_contact_input(&request.name, &request.payment_identifier)?;
         let payment_identifier = request.payment_identifier.trim().to_string();
@@ -81,7 +80,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// Success or an error
-    #[macros::instance_span]
     pub async fn delete_contact(&self, id: String) -> Result<(), SdkError> {
         // Validate contact exists
         self.storage.get_contact(id.clone()).await?;
@@ -99,7 +97,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A list of contacts or an error
-    #[macros::instance_span]
     pub async fn list_contacts(
         &self,
         request: ListContactsRequest,

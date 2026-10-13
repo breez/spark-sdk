@@ -33,6 +33,7 @@ use super::payments::validation::{
 };
 use super::{BreezSdk, helpers::get_deposit_address};
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -50,7 +51,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    #[macros::instance_span]
     pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
         self.event_emitter.add_external_listener(listener).await
     }
@@ -64,7 +64,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// `true` if the listener was found and removed, `false` otherwise
-    #[macros::instance_span]
     pub async fn remove_event_listener(&self, id: &str) -> bool {
         self.event_emitter.remove_external_listener(id).await
     }
@@ -80,7 +79,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
-    #[macros::instance_span]
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         info!("Disconnecting Breez SDK");
         self.event_emitter.clear_external_listeners().await;
@@ -99,7 +97,6 @@ impl BreezSdk {
         Ok(())
     }
 
-    #[macros::instance_span]
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
         Ok(self.input_parser.parse(input).await?.into())
     }
@@ -115,7 +112,6 @@ impl BreezSdk {
     ///
     /// Fails with a `CrossChainDisabled` error when cross-chain payments are not
     /// enabled in the config. An empty list means no route matches the filter.
-    #[macros::instance_span]
     pub async fn get_cross_chain_routes(
         &self,
         filter: &CrossChainRouteFilter,
@@ -143,14 +139,12 @@ impl BreezSdk {
 
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
-    #[macros::instance_span]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
         self.runtime.get_info(self, request).await
     }
 
     /// List fiat currencies for which there is a known exchange rate,
     /// sorted by the canonical name of the currency.
-    #[macros::instance_span]
     pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
         let currencies = self
             .fiat_service
@@ -163,7 +157,6 @@ impl BreezSdk {
     }
 
     /// List the latest rates of fiat currencies, sorted by name.
-    #[macros::instance_span]
     pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
         let rates = self
             .fiat_service
@@ -176,7 +169,6 @@ impl BreezSdk {
     }
 
     /// Get the recommended BTC fees based on the configured chain service.
-    #[macros::instance_span]
     pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
         Ok(self.chain_service.recommended_fees().await?)
     }
@@ -187,7 +179,6 @@ impl BreezSdk {
     ///
     /// If the metadata is not found locally in cache, it will be queried from
     /// the Spark network and then cached.
-    #[macros::instance_span]
     pub async fn get_tokens_metadata(
         &self,
         request: GetTokensMetadataRequest,
@@ -213,7 +204,6 @@ impl BreezSdk {
     ///
     /// Messages in the `breez-lnurl:` namespace are refused: it is reserved for
     /// the SDK's own requests to the Lightning address server.
-    #[macros::instance_span]
     pub async fn sign_message(
         &self,
         request: SignMessageRequest,
@@ -239,7 +229,6 @@ impl BreezSdk {
     /// Verifies a message signature against the provided public key. The message
     /// is SHA256 hashed before verification. The signature can be hex encoded
     /// in either DER or compact format.
-    #[macros::instance_span]
     pub async fn check_message(
         &self,
         request: CheckMessageRequest,
@@ -265,7 +254,6 @@ impl BreezSdk {
     /// Returns the user settings for the wallet.
     ///
     /// Some settings are fetched from the Spark network so network requests are performed.
-    #[macros::instance_span]
     pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
         // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
         self.maybe_ensure_spark_private_mode_initialized().await?;
@@ -289,7 +277,6 @@ impl BreezSdk {
     /// Updates the user settings for the wallet.
     ///
     /// Some settings are updated on the Spark network so network requests may be performed.
-    #[macros::instance_span]
     pub async fn update_user_settings(
         &self,
         request: UpdateUserSettingsRequest,
@@ -328,7 +315,6 @@ impl BreezSdk {
     }
 
     /// Returns an instance of the [`TokenIssuer`] for managing token issuance.
-    #[macros::instance_span]
     pub fn get_token_issuer(&self) -> TokenIssuer {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
     }
@@ -350,7 +336,6 @@ impl BreezSdk {
     ///
     /// Manual runs do not emit events; events ([`SdkEvent::AutoOptimization`])
     /// are reserved for the background auto-optimizer.
-    #[macros::instance_span]
     pub async fn optimize_leaves(
         &self,
         request: OptimizeLeavesRequest,
@@ -378,7 +363,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A response containing the unique identifier of the registered webhook
-    #[macros::instance_span]
     pub async fn register_webhook(
         &self,
         request: RegisterWebhookRequest,
@@ -400,7 +384,6 @@ impl BreezSdk {
     /// # Arguments
     ///
     /// * `request` - The unregister request containing the webhook ID
-    #[macros::instance_span]
     pub async fn unregister_webhook(
         &self,
         request: UnregisterWebhookRequest,
@@ -417,7 +400,6 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A list of registered webhooks with their IDs, URLs, and subscribed event types
-    #[macros::instance_span]
     pub async fn list_webhooks(&self) -> Result<Vec<Webhook>, SdkError> {
         let webhooks = self
             .spark_wallet
@@ -434,7 +416,6 @@ impl BreezSdk {
     ///
     /// - [`BuyBitcoinRequest::Moonpay`]: Fiat-to-Bitcoin via on-chain deposit.
     /// - [`BuyBitcoinRequest::CashApp`]: Lightning invoice + `cash.app` deep link (mainnet only).
-    #[macros::instance_span]
     pub async fn buy_bitcoin(
         &self,
         request: BuyBitcoinRequest,
@@ -485,7 +466,6 @@ impl BreezSdk {
     /// Creates a cross-chain order and returns a `cash.app` deep link the payer
     /// opens. Once paid, the provider delivers the stablecoin to `address`. No
     /// funds move through the Spark wallet. Only available on mainnet.
-    #[macros::instance_span]
     pub async fn prepare_payment_link(
         &self,
         request: PreparePaymentLinkRequest,

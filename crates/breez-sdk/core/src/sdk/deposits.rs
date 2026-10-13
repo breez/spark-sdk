@@ -49,10 +49,10 @@ fn maturity_confirmations(network: Network) -> u32 {
 const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
 const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
-    #[macros::instance_span]
     pub async fn claim_deposit(
         &self,
         request: ClaimDepositRequest,
@@ -134,7 +134,6 @@ impl BreezSdk {
     ///
     /// Fails with `DepositTooSmall` for a deposit worth too little to claim at the
     /// current fees.
-    #[macros::instance_span]
     pub async fn fetch_claim_deposit_quote(
         &self,
         request: FetchClaimDepositQuoteRequest,
@@ -185,7 +184,6 @@ impl BreezSdk {
         })
     }
 
-    #[macros::instance_span]
     pub async fn refund_deposit(
         &self,
         request: RefundDepositRequest,
@@ -277,7 +275,6 @@ impl BreezSdk {
     }
 
     #[allow(unused_variables)]
-    #[macros::instance_span]
     pub async fn list_unclaimed_deposits(
         &self,
         request: ListUnclaimedDepositsRequest,
