@@ -1984,7 +1984,9 @@ impl SparkWallet {
     /// Builds a sweep PSBT that pulls every leaf's refund output and every
     /// leaf's terminal CPFP-change output into a single payment to
     /// `destination`. Refund inputs are signed internally; CPFP-change inputs
-    /// are left unsigned for an external signer.
+    /// are left unsigned for an external signer. Also builds a sweep whose
+    /// output is below the dust limit of `destination`: nodes do not relay such
+    /// a sweep.
     pub async fn create_refund_sweep_transaction(
         &self,
         refund_outputs: Vec<RefundOutput>,
@@ -2069,12 +2071,6 @@ impl SparkWallet {
             )));
         }
         let output_value = total_value.saturating_sub(fee);
-        let dust_limit = dest_script.minimal_non_dust().to_sat();
-        if output_value < dust_limit {
-            return Err(SparkWalletError::ValidationError(format!(
-                "Sweep output ({output_value} sats) is below the dust limit ({dust_limit} sats) for the destination address"
-            )));
-        }
 
         let unsigned_tx = Transaction {
             version: Version::TWO,
@@ -4537,6 +4533,39 @@ mod tests {
             &output_key,
         )
         .expect("the sweep signs with the key the refund pays to");
+    }
+
+    #[macros::async_test_all]
+    async fn a_sweep_is_built_with_an_output_below_the_dust_limit() {
+        let wallet = wallet_over(Arc::new(InMemoryTreeStore::new())).await;
+        let held_under = TreeNodeId::generate();
+        let held_key = wallet
+            .spark_signer
+            .get_public_key_for_leaf(&held_under)
+            .await
+            .unwrap();
+        let destination = Address::p2tr(
+            &Secp256k1::new(),
+            held_key.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        );
+        let refund = RefundOutput {
+            outpoint: OutPoint::null(),
+            leaf_id: "leaf".parse().unwrap(),
+            value: 200,
+            signing_key: LeafSigningKey {
+                derived_from: held_under,
+            },
+        };
+
+        let psbt = wallet
+            .create_refund_sweep_transaction(vec![refund], Vec::new(), destination.clone(), 250)
+            .await
+            .unwrap();
+
+        let output = &psbt.unsigned_tx.output[0];
+        assert!(output.value < destination.script_pubkey().minimal_non_dust());
     }
 
     #[macros::async_test_all]
