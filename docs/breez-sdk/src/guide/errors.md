@@ -26,7 +26,7 @@ An operation on the Spark network failed, such as a transfer or a call to the Sp
     <a class="header" href="#insufficient-funds">InsufficientFunds</a>
 </h3>
 
-The balance can't cover the payment and its fees. When the shortfall is in a token, {{#name token_identifier}} names the token. It is unset when the shortfall is in sats or no single token can be named. You can check balances with [{{#name get_info}}](./get_info.md).
+The balance can't cover the payment and its fees. {{#name token_identifier}} is set when there are insufficient funds to make a token payment. You can check balances with [{{#name get_info}}](./get_info.md).
 
 <h3 id="invalid-uuid">
     <a class="header" href="#invalid-uuid">InvalidUuid</a>
