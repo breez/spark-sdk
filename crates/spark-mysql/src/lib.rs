@@ -11,6 +11,9 @@
 //! Targets `MySQL` 8.0+ (uses native `JSON` type, `CHECK` constraints, and `GET_LOCK`
 //! for application-level write serialization).
 
+// The spawn and reqwest rules in the root clippy.toml guard shipped code, not tests.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 mod advisory_lock;
 pub mod config;
 pub mod error;

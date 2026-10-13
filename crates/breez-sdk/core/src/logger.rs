@@ -507,13 +507,10 @@ mod tests {
     #[macros::instance_span]
     impl Instance {
         pub async fn log_here_and_in_task(&self) {
-            use tracing::Instrument;
             info!(target: "brz_logtest_macro", "in method");
-            platform_utils::tokio::spawn(
-                async { info!(target: "brz_logtest_macro", "in task") }.in_current_span(),
-            )
-            .await
-            .unwrap();
+            platform_utils::spawn(async { info!(target: "brz_logtest_macro", "in task") })
+                .await
+                .unwrap();
         }
     }
 

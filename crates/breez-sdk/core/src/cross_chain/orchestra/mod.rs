@@ -28,7 +28,7 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::error::SdkError;
 use crate::events::{EventEmitter, EventListener, SdkEvent};
@@ -278,55 +278,51 @@ impl OrchestraService {
         let event_emitter = Arc::clone(&self.event_emitter);
         let has_active_receives = Arc::clone(&self.has_active_receives);
         let mut trigger_receiver = monitor_trigger.subscribe();
-        let span = tracing::Span::current();
 
-        tokio::spawn(
-            async move {
-                // Probe clock for expired receive quotes, keyed by quote id.
-                // In-memory on purpose: a persisted one writes through
-                // `SyncedStorage` and replicates a bump to every device. A
-                // restart costs one extra probe per expired row.
-                let mut probe_clock: HashMap<String, u64> = HashMap::new();
-                // Spark invoice of the inbound payment that woke this pass.
-                let mut paid_invoice: Option<String> = None;
-                loop {
-                    if let Err(e) =
-                        Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
-                            .await
-                    {
-                        error!("Orchestra send-monitor poll failed: {e:?}");
-                    }
-                    if let Err(e) = Self::poll_in_flight_receives(
-                        &storage,
-                        &swap_storage,
-                        &client,
-                        &spark_wallet,
-                        fiat_service.as_ref(),
-                        &event_emitter,
-                        &has_active_receives,
-                        &mut probe_clock,
-                        paid_invoice.take().as_deref(),
-                    )
-                    .await
-                    {
-                        error!("Orchestra receive-monitor poll failed: {e:?}");
-                    }
+        platform_utils::spawn(async move {
+            // Probe clock for expired receive quotes, keyed by quote id.
+            // In-memory on purpose: a persisted one writes through
+            // `SyncedStorage` and replicates a bump to every device. A
+            // restart costs one extra probe per expired row.
+            let mut probe_clock: HashMap<String, u64> = HashMap::new();
+            // Spark invoice of the inbound payment that woke this pass.
+            let mut paid_invoice: Option<String> = None;
+            loop {
+                if let Err(e) =
+                    Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
+                        .await
+                {
+                    error!("Orchestra send-monitor poll failed: {e:?}");
+                }
+                if let Err(e) = Self::poll_in_flight_receives(
+                    &storage,
+                    &swap_storage,
+                    &client,
+                    &spark_wallet,
+                    fiat_service.as_ref(),
+                    &event_emitter,
+                    &has_active_receives,
+                    &mut probe_clock,
+                    paid_invoice.take().as_deref(),
+                )
+                .await
+                {
+                    error!("Orchestra receive-monitor poll failed: {e:?}");
+                }
 
-                    select! {
-                        _ = shutdown_receiver.changed() => {
-                            info!("Orchestra monitor shutdown signal received");
-                            return;
-                        }
-                        wake = trigger_receiver.recv() => {
-                            debug!("Orchestra monitor triggered");
-                            paid_invoice = wake.ok().flatten();
-                        }
-                        () = tokio::time::sleep(super::MONITOR_INTERVAL) => {}
+                select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("Orchestra monitor shutdown signal received");
+                        return;
                     }
+                    wake = trigger_receiver.recv() => {
+                        debug!("Orchestra monitor triggered");
+                        paid_invoice = wake.ok().flatten();
+                    }
+                    () = tokio::time::sleep(super::MONITOR_INTERVAL) => {}
                 }
             }
-            .instrument(span),
-        );
+        });
     }
 
     /// Submits a deposit that was transferred but never acknowledged, and

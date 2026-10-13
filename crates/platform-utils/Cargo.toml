@@ -29,6 +29,7 @@ tracing.workspace = true
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 http.workspace = true
 hyper-util.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 tokio-socks.workspace = true
 tower-service.workspace = true
 

@@ -10,7 +10,7 @@ use platform_utils::tokio::sync::RwLock;
 use serde::Deserialize;
 use spark_wallet::{HeaderProvider, HeaderProviderError};
 use tokio::sync::oneshot;
-use tracing::{Instrument, warn};
+use tracing::warn;
 
 use crate::persist::Storage;
 
@@ -259,49 +259,45 @@ fn jwt_exp(token: &str) -> Option<u64> {
 }
 
 fn spawn_refresh_task(inner: Arc<Inner>, mut shutdown_rx: oneshot::Receiver<()>) {
-    let span = tracing::Span::current();
-    tokio::spawn(
-        async move {
-            // If a fresh token is already in storage, install it before the
-            // first fetch so headers() can start serving it immediately.
-            let has_cached = load_cached_token(&inner).await;
-            if has_cached {
-                let sleep = next_refresh_after_success(&inner).await;
-                tokio::select! {
-                    biased;
-                    _ = &mut shutdown_rx => return,
-                    () = tokio::time::sleep(sleep) => {}
-                }
+    platform_utils::spawn(async move {
+        // If a fresh token is already in storage, install it before the
+        // first fetch so headers() can start serving it immediately.
+        let has_cached = load_cached_token(&inner).await;
+        if has_cached {
+            let sleep = next_refresh_after_success(&inner).await;
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => return,
+                () = tokio::time::sleep(sleep) => {}
             }
+        }
 
-            let mut backoff_attempt: u32 = 0;
-            loop {
-                match fetch_new_jwt(&inner.api_key, &inner.http_client).await {
-                    Ok(token) => {
-                        store_token(&inner, token).await;
-                        backoff_attempt = 0;
-                        let sleep = next_refresh_after_success(&inner).await;
-                        tokio::select! {
-                            biased;
-                            _ = &mut shutdown_rx => return,
-                            () = tokio::time::sleep(sleep) => {}
-                        }
+        let mut backoff_attempt: u32 = 0;
+        loop {
+            match fetch_new_jwt(&inner.api_key, &inner.http_client).await {
+                Ok(token) => {
+                    store_token(&inner, token).await;
+                    backoff_attempt = 0;
+                    let sleep = next_refresh_after_success(&inner).await;
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => return,
+                        () = tokio::time::sleep(sleep) => {}
                     }
-                    Err(err) => {
-                        let sleep = backoff_duration(backoff_attempt);
-                        warn!("Could not fetch new JWT (retrying in {:?}): {err}", sleep);
-                        backoff_attempt = backoff_attempt.saturating_add(1);
-                        tokio::select! {
-                            biased;
-                            _ = &mut shutdown_rx => return,
-                            () = tokio::time::sleep(sleep) => {}
-                        }
+                }
+                Err(err) => {
+                    let sleep = backoff_duration(backoff_attempt);
+                    warn!("Could not fetch new JWT (retrying in {:?}): {err}", sleep);
+                    backoff_attempt = backoff_attempt.saturating_add(1);
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => return,
+                        () = tokio::time::sleep(sleep) => {}
                     }
                 }
             }
         }
-        .instrument(span),
-    );
+    });
 }
 
 /// Builds a syntactically valid JWT carrying the given `exp` claim (with a

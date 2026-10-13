@@ -1,3 +1,6 @@
+// The spawn and reqwest rules in the root clippy.toml guard shipped code, not tests.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 #[cfg(feature = "uniffi")]
 pub mod bindings;
 mod chain;

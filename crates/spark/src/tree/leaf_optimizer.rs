@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, watch};
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     services::Swap,
@@ -255,14 +255,11 @@ impl LeafOptimizer {
         };
 
         let optimizer = Arc::clone(self);
-        tokio::spawn(
-            async move {
-                // The auto path always runs to completion and emits events.
-                // Errors are logged; outcomes are reported via events.
-                let _ = optimizer.run_inner(None, true, running_guard).await;
-            }
-            .in_current_span(),
-        );
+        platform_utils::spawn(async move {
+            // The auto path always runs to completion and emits events.
+            // Errors are logged; outcomes are reported via events.
+            let _ = optimizer.run_inner(None, true, running_guard).await;
+        });
     }
 
     /// Manually drives leaf optimization.

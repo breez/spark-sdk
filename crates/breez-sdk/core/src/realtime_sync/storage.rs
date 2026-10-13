@@ -14,7 +14,7 @@ use breez_sdk_common::sync::{
     SchemaVersion, SyncService,
 };
 use serde_json::Value;
-use tracing::{Instrument, debug, error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
@@ -28,7 +28,6 @@ use crate::{
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
     utils::{payments::emit_payment_metadata_updated, time::now_secs},
 };
-use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
@@ -174,15 +173,11 @@ impl SyncedStorage {
 
     pub fn initial_setup(self: &Arc<Self>) {
         let clone = Arc::clone(self);
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                if let Err(e) = clone.feed_existing_payment_metadata().await {
-                    error!("Failed to feed existing payment metadata for sync: {}", e);
-                }
+        platform_utils::spawn(async move {
+            if let Err(e) = clone.feed_existing_payment_metadata().await {
+                error!("Failed to feed existing payment metadata for sync: {}", e);
             }
-            .instrument(span),
-        );
+        });
     }
 
     /// Feed existing payment metadata into sync storage. This is really only needed the first time sync is set up,
@@ -450,69 +445,65 @@ impl SyncedRecordHandler {
         let client = Arc::clone(client);
         let storage = Arc::clone(&self.storage);
         let event_emitter = Arc::clone(&self.event_emitter);
-        let span = tracing::Span::current();
 
-        tokio::spawn(
-            async move {
-                let cache = ObjectCacheRepository::new(Arc::clone(&storage));
-                let old = cache
-                    .fetch_lightning_address()
-                    .await
-                    .ok()
-                    .flatten()
-                    .flatten();
+        platform_utils::spawn(async move {
+            let cache = ObjectCacheRepository::new(Arc::clone(&storage));
+            let old = cache
+                .fetch_lightning_address()
+                .await
+                .ok()
+                .flatten()
+                .flatten();
 
-                let resp = match client.recover_lightning_address().await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        warn!("Failed to recover lightning address after sync trigger: {e:?}");
-                        if let Err(e) = storage
-                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
-                            .await
-                        {
-                            error!("Failed to reset lightning address cache: {e:?}");
-                        }
-                        return;
+            let resp = match client.recover_lightning_address().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    warn!("Failed to recover lightning address after sync trigger: {e:?}");
+                    if let Err(e) = storage
+                        .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                        .await
+                    {
+                        error!("Failed to reset lightning address cache: {e:?}");
                     }
-                };
-
-                let new = if let Some(resp) = resp {
-                    let address_info = resp.into();
-                    if let Err(e) = cache.save_lightning_address(&address_info, true).await {
-                        error!("Failed to save recovered lightning address: {e:?}");
-                        if let Err(e) = storage
-                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
-                            .await
-                        {
-                            error!("Failed to reset lightning address cache: {e:?}");
-                        }
-                        return;
-                    }
-                    Some(address_info)
-                } else {
-                    if let Err(e) = cache.delete_lightning_address(true).await {
-                        error!("Failed to delete lightning address from cache: {e:?}");
-                        if let Err(e) = storage
-                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
-                            .await
-                        {
-                            error!("Failed to reset lightning address cache: {e:?}");
-                        }
-                        return;
-                    }
-                    None
-                };
-
-                if old != new {
-                    event_emitter
-                        .emit(&SdkEvent::LightningAddressChanged {
-                            lightning_address: new,
-                        })
-                        .await;
+                    return;
                 }
+            };
+
+            let new = if let Some(resp) = resp {
+                let address_info = resp.into();
+                if let Err(e) = cache.save_lightning_address(&address_info, true).await {
+                    error!("Failed to save recovered lightning address: {e:?}");
+                    if let Err(e) = storage
+                        .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                        .await
+                    {
+                        error!("Failed to reset lightning address cache: {e:?}");
+                    }
+                    return;
+                }
+                Some(address_info)
+            } else {
+                if let Err(e) = cache.delete_lightning_address(true).await {
+                    error!("Failed to delete lightning address from cache: {e:?}");
+                    if let Err(e) = storage
+                        .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                        .await
+                    {
+                        error!("Failed to reset lightning address cache: {e:?}");
+                    }
+                    return;
+                }
+                None
+            };
+
+            if old != new {
+                event_emitter
+                    .emit(&SdkEvent::LightningAddressChanged {
+                        lightning_address: new,
+                    })
+                    .await;
             }
-            .instrument(span),
-        );
+        });
 
         RecordOutcome::Completed
     }

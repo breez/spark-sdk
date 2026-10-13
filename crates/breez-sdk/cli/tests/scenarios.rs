@@ -3,6 +3,10 @@
 //! scenario name. The whole suite soft-skips unless `FAUCET_USERNAME` is set
 //! (see `harness::engine::run_scenario`).
 
+// Not SDK code: the spawn and reqwest rules in the root clippy.toml guard what
+// integrators ship.
+#![allow(clippy::disallowed_methods)]
+
 mod harness;
 
 use anyhow::Result;

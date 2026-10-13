@@ -11,7 +11,7 @@ use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, watch};
 use tokio::time::sleep;
-use tracing::{Instrument, debug, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::events::{SdkEvent, StableBalanceConversionKind};
 use crate::persist::{ObjectCacheRepository, Storage};
@@ -552,67 +552,66 @@ impl StableBalance {
     /// 3. Processes tasks serially (per-receive first, then auto-convert)
     pub(crate) fn spawn_conversion_worker(&self, mut shutdown_receiver: watch::Receiver<()>) {
         let stable_balance = self.clone();
-        let span = tracing::Span::current();
 
-        tokio::spawn(
-            async move {
-                // Pre-warm effective values cache
-                if let Some(token_id) = stable_balance.get_active_token_identifier().await
-                    && let Err(e) = stable_balance.core.get_or_init_effective_values(&token_id).await
-                {
-                    warn!("Failed to pre-warm effective values: {e:?}");
+        platform_utils::spawn(async move {
+            // Pre-warm effective values cache
+            if let Some(token_id) = stable_balance.get_active_token_identifier().await
+                && let Err(e) = stable_balance
+                    .core
+                    .get_or_init_effective_values(&token_id)
+                    .await
+            {
+                warn!("Failed to pre-warm effective values: {e:?}");
+            }
+
+            // Wait for initial sync before processing any tasks
+            tokio::select! {
+                _ = shutdown_receiver.changed() => {
+                    info!("Conversion worker shutdown before initial sync");
+                    return;
                 }
+                () = stable_balance.core.synced_notify.notified() => {
+                    debug!("Conversion worker: initial sync completed");
+                }
+            }
 
-                // Wait for initial sync before processing any tasks
+            // Cold-start: queue auto-convert for any existing excess balance
+            stable_balance.core.queue.push_auto_convert().await;
+
+            // Main processing loop
+            debug!("Conversion worker: entering main loop");
+            loop {
+                // Register notify future BEFORE checking the queue to avoid missed wakeups
+                let notified = stable_balance.core.queue.notify.notified();
+
+                // Drain all available tasks. The delay comes back from the
+                // same call that withheld the task, so the sleep below
+                // cannot miss a deadline that passed between two reads.
+                let retry_delay = loop {
+                    match stable_balance.core.queue.next_task_or_delay().await {
+                        Ok(Some(task)) => stable_balance.process_task(&task).await,
+                        Ok(None) => break None,
+                        Err(remaining) => break Some(remaining),
+                    }
+                };
+
+                debug!(
+                    "Conversion worker: queue drained, waiting for new tasks (retry in {retry_delay:?})"
+                );
                 tokio::select! {
                     _ = shutdown_receiver.changed() => {
-                        info!("Conversion worker shutdown before initial sync");
+                        info!("Conversion worker shutdown");
                         return;
                     }
-                    () = stable_balance.core.synced_notify.notified() => {
-                        debug!("Conversion worker: initial sync completed");
+                    () = notified => {
+                        debug!("Conversion worker: woken by notify");
                     }
-                }
-
-                // Cold-start: queue auto-convert for any existing excess balance
-                stable_balance.core.queue.push_auto_convert().await;
-
-                // Main processing loop
-                debug!("Conversion worker: entering main loop");
-                loop {
-                    // Register notify future BEFORE checking the queue to avoid missed wakeups
-                    let notified = stable_balance.core.queue.notify.notified();
-
-                    // Drain all available tasks. The delay comes back from the
-                    // same call that withheld the task, so the sleep below
-                    // cannot miss a deadline that passed between two reads.
-                    let retry_delay = loop {
-                        match stable_balance.core.queue.next_task_or_delay().await {
-                            Ok(Some(task)) => stable_balance.process_task(&task).await,
-                            Ok(None) => break None,
-                            Err(remaining) => break Some(remaining),
-                        }
-                    };
-
-                    debug!(
-                        "Conversion worker: queue drained, waiting for new tasks (retry in {retry_delay:?})"
-                    );
-                    tokio::select! {
-                        _ = shutdown_receiver.changed() => {
-                            info!("Conversion worker shutdown");
-                            return;
-                        }
-                        () = notified => {
-                            debug!("Conversion worker: woken by notify");
-                        }
-                        () = sleep(retry_delay.unwrap_or_default()), if retry_delay.is_some() => {
-                            debug!("Conversion worker: woken by backoff expiry");
-                        }
+                    () = sleep(retry_delay.unwrap_or_default()), if retry_delay.is_some() => {
+                        debug!("Conversion worker: woken by backoff expiry");
                     }
                 }
             }
-            .instrument(span),
-        );
+        });
     }
 
     /// Run one dequeued task and settle it on the queue.

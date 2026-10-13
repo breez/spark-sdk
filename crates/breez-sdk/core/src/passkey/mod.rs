@@ -304,7 +304,7 @@ impl Passkey {
             // it off the critical path rather than blocking on slow relays.
             // store_label is idempotent, so the bounded retry is safe.
             let label = label.clone();
-            tokio::spawn(async move {
+            platform_utils::spawn(async move {
                 for attempt in 0..3u32 {
                     match client.store_label(&label).await {
                         Ok(()) => return,

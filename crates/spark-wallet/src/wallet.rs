@@ -79,7 +79,7 @@ use spark::{
 };
 use tokio::sync::{broadcast, watch};
 use tonic_types::StatusExt;
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::watchtower_exit::WatchtowerExitOutput;
 use crate::{
@@ -3066,15 +3066,11 @@ impl BackgroundProcessor {
 
     pub async fn run_background_tasks(self: &Arc<Self>, cancellation_token: watch::Receiver<()>) {
         let cloned_self = Arc::clone(self);
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                cloned_self
-                    .run_background_tasks_inner(cancellation_token)
-                    .await;
-            }
-            .instrument(span),
-        );
+        platform_utils::spawn(async move {
+            cloned_self
+                .run_background_tasks_inner(cancellation_token)
+                .await;
+        });
     }
 
     async fn run_background_tasks_inner(self: &Arc<Self>, cancellation_token: watch::Receiver<()>) {
@@ -3083,33 +3079,25 @@ impl BackgroundProcessor {
         let reconnect_interval = self.reconnect_interval;
         let identity_public_key = self.identity_public_key;
         let mut cancellation_token_for_events = cancellation_token.clone();
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                subscribe_server_events(
-                    identity_public_key,
-                    operator_pool,
-                    &event_tx,
-                    reconnect_interval,
-                    &mut cancellation_token_for_events,
-                )
-                .await;
-            }
-            .instrument(span),
-        );
+        platform_utils::spawn(async move {
+            subscribe_server_events(
+                identity_public_key,
+                operator_pool,
+                &event_tx,
+                reconnect_interval,
+                &mut cancellation_token_for_events,
+            )
+            .await;
+        });
 
         let exit_state_rx = self.exit_state_changed_rx.clone();
         let cloned_self = Arc::clone(self);
         let cancellation_token_for_exit_state = cancellation_token.clone();
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                cloned_self
-                    .forward_exit_state_changes(exit_state_rx, cancellation_token_for_exit_state)
-                    .await;
-            }
-            .instrument(span),
-        );
+        platform_utils::spawn(async move {
+            cloned_self
+                .forward_exit_state_changes(exit_state_rx, cancellation_token_for_exit_state)
+                .await;
+        });
 
         if let Err(e) = self.tree_service.refresh_leaves().await {
             error!("Error refreshing leaves on startup: {:?}", e);
@@ -3126,15 +3114,11 @@ impl BackgroundProcessor {
         {
             let cloned_self = Arc::clone(self);
             let cancellation_token_clone = cancellation_token.clone();
-            let span = tracing::Span::current();
-            tokio::spawn(
-                async move {
-                    cloned_self
-                        .run_token_output_optimization(interval, cancellation_token_clone)
-                        .await;
-                }
-                .instrument(span),
-            );
+            platform_utils::spawn(async move {
+                cloned_self
+                    .run_token_output_optimization(interval, cancellation_token_clone)
+                    .await;
+            });
         }
 
         self.process_events(event_stream).await;
