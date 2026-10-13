@@ -3,6 +3,12 @@ name: Docs
 on:
   workflow_call:
 
+# These jobs only need a library to generate bindings from and to build
+# against, so cargo builds it here without the release profile's LTO.
+env:
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+
 jobs:
   check-snippets:
     name: ${{ matrix.platform }}
