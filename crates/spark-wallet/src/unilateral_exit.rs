@@ -1691,7 +1691,8 @@ mod exit_build_tests {
         Identifier,
         services::{
             ServiceError, UnilateralExitLeafFilter, UnilateralExitSelectedLeaf,
-            compute_cpfp_package_fee, plan_unilateral_exit, quote_unilateral_exit,
+            compute_cpfp_package_fee, compute_sweep_fee, plan_unilateral_exit,
+            quote_unilateral_exit,
         },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
@@ -2534,6 +2535,22 @@ mod exit_build_tests {
         assert_eq!(build.branches.len(), 3);
     }
 
+    /// The fee of a sweep of the refund outputs and change inputs in `build`, as
+    /// `create_refund_sweep_transaction` computes it.
+    fn sweep_fee(build: &UnilateralExitBuild, destination_script_len: usize) -> u64 {
+        let refunds = p2tr_key_path_input_weight() * build.refund_outputs.len() as u64;
+        let change: u64 = build
+            .cpfp_change_inputs
+            .iter()
+            .map(|input| input.signed_input_weight)
+            .sum();
+        compute_sweep_fee(
+            refunds + Weight::from_wu(change),
+            destination_script_len,
+            FEE_RATE,
+        )
+    }
+
     #[test]
     fn quote_and_plan_match_the_build_of_a_direct_refund() {
         let root = node("root", None, anchor_tx(1), None);
@@ -2594,6 +2611,7 @@ mod exit_build_tests {
         assert_eq!(txs.last().unwrap().txid, direct_refund.compute_txid());
         assert!(txs.iter().all(|tx| tx.to_sign.is_none()));
         assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+        assert_eq!(quote.sweep_fee_sat, sweep_fee(&build, change_len));
         assert!(quote.per_branch_funding.is_empty());
         assert!(plan.per_branch_funding[0].1.is_empty());
     }
@@ -2670,6 +2688,7 @@ mod exit_build_tests {
         assert!(sibling_txs[0].to_sign.is_none());
         assert!(sibling_txs[1..].iter().all(|tx| tx.to_sign.is_some()));
         assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+        assert_eq!(quote.sweep_fee_sat, sweep_fee(&build, change_len));
         let funded: Vec<&TreeNodeId> = quote.per_branch_funding.iter().map(|(id, _)| id).collect();
         assert_eq!(funded, [&leaf_ids[1]]);
     }
