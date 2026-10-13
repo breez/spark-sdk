@@ -219,45 +219,8 @@ impl BreezSdk {
             std::mem::take(&mut recovery.transactions)
                 .into_iter()
                 .partition(|tx| tx.kind == RecoveryTxKind::Cooperative);
-        let outputs = cooperative
-            .iter()
-            .map(recovered_output)
-            .collect::<Result<Vec<OutPoint>, SdkError>>()?;
-        // The chain service reports an output of a transaction it does not know
-        // as unspent, so for an unverified recovery the SDK also checks that the
-        // output's transaction is in a block.
-        let unverified_outputs: Vec<ChainQuery> = cooperative
-            .iter()
-            .zip(&outputs)
-            .filter(|(tx, _)| tx.status == ExitTransactionStatus::Unverified)
-            .map(|(_, output)| ChainQuery::TxConfirmed(output.txid))
-            .collect();
         let mut queries = ChainQueries::new(self.chain_service.clone());
-        queries
-            .resolve(|observed| {
-                let outspends = outputs.iter().copied().map(ChainQuery::Outspend);
-                let wanted = outspends
-                    .chain(unverified_outputs.iter().cloned())
-                    .collect();
-                ((), without_result(wanted, observed))
-            })
-            .await;
-        let mut recovered: Vec<(String, ChainTransaction)> = Vec::new();
-        for (tx, output) in cooperative.iter_mut().zip(&outputs) {
-            let spend = output_spend(queries.observed(), *output);
-            let output_in_block = tx.status != ExitTransactionStatus::Unverified
-                || matches!(
-                    result_of(queries.observed(), &ChainQuery::TxConfirmed(output.txid)),
-                    Some(ChainResult::Confirmed {
-                        confirmed: true,
-                        ..
-                    })
-                );
-            tx.status = cooperative_recovery_status(&spend, output_in_block, tx.status);
-            if let (Some(leaf_id), Some(spend)) = (&tx.node_id, spend.in_block()) {
-                recovered.push((leaf_id.clone(), spend));
-            }
-        }
+        let recovered = check_cooperative_recoveries(&mut queries, &mut cooperative).await?;
         let diverged = check_recovery_transactions(&mut queries, &mut unilateral).await?;
         recovery.transactions = cooperative.into_iter().chain(unilateral).collect();
         self.record_finished(&recovery.transactions, recovered)
@@ -460,37 +423,7 @@ impl BreezSdk {
                 return;
             }
         };
-        let now = now_secs();
-        // The SDK stores a spend only for a leaf that has a stored recovery.
-        let recovered = recovered
-            .into_iter()
-            .filter(|(leaf_id, spend)| {
-                stored
-                    .get(leaf_id)
-                    .is_some_and(|leaf| leaf.watchtower_exit_spend.as_ref() != Some(spend))
-            })
-            .map(|(leaf_id, spend)| UpdateLeafRecovery {
-                leaf_id,
-                chain_checked_at: Some(now),
-                watchtower_exit_spend: Some(spend),
-                ..Default::default()
-            });
-        let swept = swept
-            .into_iter()
-            .filter(|(leaf_id, sweep)| {
-                stored
-                    .get(leaf_id)
-                    .is_none_or(|leaf| leaf.unilateral_exit_sweep.as_ref() != Some(sweep))
-            })
-            .map(|(leaf_id, sweep)| UpdateLeafRecovery {
-                leaf_id,
-                chain_checked_at: Some(now),
-                unilateral_exit_sweep: Some(sweep),
-                ..Default::default()
-            });
-        for update in recovered.chain(swept).collect::<Vec<_>>() {
-            self.store_leaf_recovery(update).await;
-        }
+        store_finished(self.storage.as_ref(), &stored, recovered, swept).await;
     }
 
     async fn cosign_cooperative_recoveries(
@@ -874,6 +807,47 @@ fn after_finished_checks(
     (stored, moved)
 }
 
+/// Stores each spend in `recovered` and each sweep in `swept` that is not in
+/// `stored` yet.
+async fn store_finished(
+    storage: &dyn Storage,
+    stored: &HashMap<String, LeafRecovery>,
+    recovered: Vec<(String, ChainTransaction)>,
+    swept: Vec<(String, ChainTransaction)>,
+) {
+    let now = now_secs();
+    // The SDK stores a spend only for a leaf that has a stored recovery.
+    let recovered = recovered
+        .into_iter()
+        .filter(|(leaf_id, spend)| {
+            stored
+                .get(leaf_id)
+                .is_some_and(|leaf| leaf.watchtower_exit_spend.as_ref() != Some(spend))
+        })
+        .map(|(leaf_id, spend)| UpdateLeafRecovery {
+            leaf_id,
+            chain_checked_at: Some(now),
+            watchtower_exit_spend: Some(spend),
+            ..Default::default()
+        });
+    let swept = swept
+        .into_iter()
+        .filter(|(leaf_id, sweep)| {
+            stored
+                .get(leaf_id)
+                .is_none_or(|leaf| leaf.unilateral_exit_sweep.as_ref() != Some(sweep))
+        })
+        .map(|(leaf_id, sweep)| UpdateLeafRecovery {
+            leaf_id,
+            chain_checked_at: Some(now),
+            unilateral_exit_sweep: Some(sweep),
+            ..Default::default()
+        });
+    for update in recovered.chain(swept).collect::<Vec<_>>() {
+        store_update(storage, update).await;
+    }
+}
+
 /// Returns whether storing `update` succeeded. The SDK only logs a failure: it
 /// can get what the update holds again, from the chain service or the
 /// operators.
@@ -1080,6 +1054,53 @@ fn recovered_output(tx: &RecoveryTransaction) -> Result<OutPoint, SdkError> {
         .ok_or_else(|| {
             SdkError::InvalidInput(format!("Cooperative recovery {} spends nothing", tx.txid))
         })
+}
+
+/// Updates the statuses of the cooperative recoveries `transactions` from the
+/// chain. Returns the spend in a block of each recovered output, by leaf id.
+async fn check_cooperative_recoveries(
+    queries: &mut ChainQueries,
+    transactions: &mut [RecoveryTransaction],
+) -> Result<Vec<(String, ChainTransaction)>, SdkError> {
+    let outputs = transactions
+        .iter()
+        .map(recovered_output)
+        .collect::<Result<Vec<OutPoint>, SdkError>>()?;
+    // The chain service reports an output of a transaction it does not know
+    // as unspent, so for an unverified recovery the SDK also checks that the
+    // output's transaction is in a block.
+    let unverified_outputs: Vec<ChainQuery> = transactions
+        .iter()
+        .zip(&outputs)
+        .filter(|(tx, _)| tx.status == ExitTransactionStatus::Unverified)
+        .map(|(_, output)| ChainQuery::TxConfirmed(output.txid))
+        .collect();
+    queries
+        .resolve(|observed| {
+            let outspends = outputs.iter().copied().map(ChainQuery::Outspend);
+            let wanted = outspends
+                .chain(unverified_outputs.iter().cloned())
+                .collect();
+            ((), without_result(wanted, observed))
+        })
+        .await;
+    let mut recovered: Vec<(String, ChainTransaction)> = Vec::new();
+    for (tx, output) in transactions.iter_mut().zip(&outputs) {
+        let spend = output_spend(queries.observed(), *output);
+        let output_in_block = tx.status != ExitTransactionStatus::Unverified
+            || matches!(
+                result_of(queries.observed(), &ChainQuery::TxConfirmed(output.txid)),
+                Some(ChainResult::Confirmed {
+                    confirmed: true,
+                    ..
+                })
+            );
+        tx.status = cooperative_recovery_status(&spend, output_in_block, tx.status);
+        if let (Some(leaf_id), Some(spend)) = (&tx.node_id, spend.in_block()) {
+            recovered.push((leaf_id.clone(), spend));
+        }
+    }
+    Ok(recovered)
 }
 
 /// The status of a cooperative recovery, from the `spend` of its input:
