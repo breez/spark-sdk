@@ -11,7 +11,6 @@ import {
   ExitLeafSelection,
   ExitTransactionStatus_Tags,
   RecoveryMethod,
-  RecoveryRedoReason,
   RecoveryVerdict_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -155,8 +154,9 @@ const exampleCheckRecovery = async (sdk: BreezSdk, stored: RecoverFundsResponse)
       // Prepare and build again, naming the same leaves. Pass
       // recovery.fundingInputs back and the SDK follows them to whatever
       // they have become.
-      const { reason } = checked.verdict.inner
-      console.log(`Build the recovery again: ${RecoveryRedoReason[reason]}`)
+      for (const reason of checked.verdict.inner.reasons) {
+        console.log(`Build the recovery again: ${reason.tag}`)
+      }
       break
     }
   }

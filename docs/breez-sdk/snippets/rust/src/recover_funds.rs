@@ -162,11 +162,13 @@ async fn check_recovery(sdk: &BreezSdk, stored: RecoverFundsResponse) -> Result<
         RecoveryVerdict::Done => {
             println!("Every transaction confirmed: the recovery is done");
         }
-        RecoveryVerdict::Redo { reason } => {
+        RecoveryVerdict::Redo { reasons } => {
             // Prepare and build again, naming the same leaves. Pass
             // recovery.funding_inputs back and the SDK follows them to whatever
             // they have become.
-            println!("Build the recovery again: {reason:?}");
+            for reason in reasons {
+                println!("Build the recovery again: {reason:?}");
+            }
         }
     }
     // ANCHOR_END: check-recover-funds

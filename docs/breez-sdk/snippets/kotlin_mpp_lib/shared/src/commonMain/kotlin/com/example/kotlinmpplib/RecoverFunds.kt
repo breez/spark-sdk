@@ -138,7 +138,9 @@ class RecoverFunds {
             is RecoveryVerdict.Redo -> {
                 // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
                 // back and the SDK follows them to whatever they have become.
-                // Log.v("Breez", "Build the recovery again: ${verdict.reason}")
+                for (reason in verdict.reasons) {
+                    // Log.v("Breez", "Build the recovery again: ${reason}")
+                }
             }
         }
         // ANCHOR_END: check-recover-funds

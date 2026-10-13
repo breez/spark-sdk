@@ -167,7 +167,9 @@ func CheckRecovery(sdk *breez_sdk_spark.BreezSdk, stored breez_sdk_spark.Recover
 		// Prepare and build again, naming the same leaves. Pass
 		// recovery.FundingInputs back and the SDK follows them to whatever
 		// they have become.
-		log.Printf("Build the recovery again: %v", verdict.Reason)
+		for _, reason := range verdict.Reasons {
+			log.Printf("Build the recovery again: %v", reason)
+		}
 	}
 	// ANCHOR_END: check-recover-funds
 

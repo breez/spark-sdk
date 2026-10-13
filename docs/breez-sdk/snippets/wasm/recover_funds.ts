@@ -127,7 +127,9 @@ const exampleCheckRecovery = async (sdk: BreezSdk, stored: RecoverFundsResponse)
     case 'redo': {
       // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
       // back and the SDK follows them to whatever they have become.
-      console.log(`Build the recovery again: ${checked.verdict.reason}`)
+      for (const reason of checked.verdict.reasons) {
+        console.log(`Build the recovery again: ${JSON.stringify(reason)}`)
+      }
       break
     }
   }

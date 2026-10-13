@@ -133,7 +133,9 @@ Future<void> checkRecovery(BreezSdk sdk, RecoverFundsResponse stored) async {
     // Prepare and build again, naming the same leaves. Pass
     // recovery.fundingInputs back and the SDK follows them to whatever they
     // have become.
-    print("Build the recovery again: ${verdict.reason}");
+    for (RecoveryRedoReason reason in verdict.reasons) {
+      print("Build the recovery again: $reason");
+    }
   }
   // ANCHOR_END: check-recover-funds
 }

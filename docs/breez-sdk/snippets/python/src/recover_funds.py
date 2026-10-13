@@ -155,7 +155,8 @@ async def check_recovery(sdk: BreezSdk, stored: RecoverFundsResponse):
             # Prepare and build again, naming the same leaves. Pass
             # recovery.funding_inputs back and the SDK follows them to whatever
             # they have become.
-            logging.debug(f"Build the recovery again: {checked.verdict.reason}")
+            for reason in checked.verdict.reasons:
+                logging.debug(f"Build the recovery again: {reason}")
         # ANCHOR_END: check-recover-funds
     except Exception as error:
         logging.error(error)

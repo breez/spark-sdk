@@ -148,11 +148,14 @@ namespace BreezSdkSnippets
                 case RecoveryVerdict.Done:
                     Console.WriteLine("Every transaction confirmed: the recovery is done");
                     break;
-                case RecoveryVerdict.Redo { reason: var reason }:
+                case RecoveryVerdict.Redo { reasons: var reasons }:
                     // Prepare and build again, naming the same leaves. Pass
                     // recovery.fundingInputs back and the SDK follows them to whatever
                     // they have become.
-                    Console.WriteLine($"Build the recovery again: {reason}");
+                    foreach (var reason in reasons)
+                    {
+                        Console.WriteLine($"Build the recovery again: {reason}");
+                    }
                     break;
             }
             // ANCHOR_END: check-recover-funds

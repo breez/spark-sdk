@@ -122,10 +122,12 @@ func checkRecovery(sdk: BreezSdk, stored: RecoverFundsResponse) async throws {
         }
     case .done:
         print("Every transaction confirmed: the recovery is done")
-    case .redo(let reason):
+    case .redo(let reasons):
         // Prepare and build again, naming the same leaves. Pass recovery.fundingInputs
         // back and the SDK follows them to whatever they have become.
-        print("Build the recovery again: \(reason)")
+        for reason in reasons {
+            print("Build the recovery again: \(reason)")
+        }
     }
     // ANCHOR_END: check-recover-funds
 }
