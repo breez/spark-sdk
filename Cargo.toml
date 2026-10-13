@@ -173,7 +173,6 @@ bitflags = "2.10.0"
 boltz-client = { git = "https://github.com/breez/boltz-client", rev = "aea35af1628d1fb259ebf85266f96215cfdabcb5" }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
-built = { version = "0.8.0", features = ["git2"] }
 bytes = "1.10.1"
 cargo_metadata = "0.18"
 cbc = "0.1.2"

@@ -1,3 +1,5 @@
+use std::process::Command;
+
 fn main() {
     let target_family =
         std::env::var("CARGO_CFG_TARGET_FAMILY").expect("CARGO_CFG_TARGET_FAMILY not set");
@@ -23,5 +25,21 @@ fn main() {
 
     println!("cargo:rerun-if-changed=protos");
 
-    built::write_built_file().expect("Failed to acquire build-time information");
+    if let Some(version) = git_version() {
+        println!("cargo:rustc-env=SPARK_GIT_VERSION={version}");
+    }
+}
+
+fn git_version() -> Option<String> {
+    // Find the repository from this directory: git sets GIT_DIR for the hooks
+    // of a linked worktree, and that can be another repository, such as the
+    // repository of an app that depends on this crate.
+    let output = Command::new("git")
+        .args(["describe", "--tags", "--always", "--abbrev=7"])
+        .env_remove("GIT_DIR")
+        .output()
+        .ok()?;
+    let version = String::from_utf8(output.stdout).ok()?;
+    let version = version.trim();
+    (output.status.success() && !version.is_empty()).then(|| version.to_string())
 }

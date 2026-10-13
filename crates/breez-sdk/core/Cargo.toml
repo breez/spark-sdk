@@ -116,6 +116,3 @@ rcgen.workspace = true
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test.workspace = true
-
-[build-dependencies]
-built.workspace = true
