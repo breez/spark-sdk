@@ -2597,6 +2597,82 @@ mod exit_build_tests {
         assert!(quote.per_branch_funding.is_empty());
         assert!(plan.per_branch_funding[0].1.is_empty());
     }
+
+    #[test]
+    fn quote_and_plan_match_the_build_of_a_stopped_branch() {
+        let root = node("root", None, anchor_tx(1), None);
+        let mut stopped = node("stopped", Some("root"), anchor_tx(2), Some(refund_tx(3)));
+        // Worth more than its sibling, so it comes first.
+        stopped.value = 100_001;
+        let mut sibling = node("sibling", Some("root"), anchor_tx(4), Some(refund_tx(5)));
+        sibling.vout = 1;
+        let stopped_id = stopped.id.clone();
+        let leaf_ids = [stopped_id.clone(), sibling.id.clone()];
+        let nodes = to_node_map(vec![root, stopped, sibling]);
+        let refund = tx_paying(100_001, 9);
+        let on_chain = ExitChainState {
+            nodes: vec![ConfirmedExitNode {
+                node_id: id("root"),
+                confirmed_by: ExitNodeConfirmation::Cpfp,
+                block_height: None,
+            }],
+            refunds: vec![ExitRefund {
+                leaf_id: stopped_id.clone(),
+                state: ExitRefundState::OnChain {
+                    tx: refund.clone(),
+                    vout: 0,
+                    value: 100_001,
+                    block_height: None,
+                },
+            }],
+            stopped_leaves: vec![stopped_id],
+            ..Default::default()
+        };
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+
+        let quote = quote_unilateral_exit(
+            &nodes,
+            &leaf_ids,
+            UnilateralExitLeafFilter::All,
+            272,
+            change_len,
+            dust,
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let plan = plan_unilateral_exit(
+            nodes,
+            &leaf_ids,
+            UnilateralExitLeafFilter::All,
+            vec![funding(quote.single_utxo_funding_sat)],
+            FEE_RATE,
+            change_len,
+            &on_chain,
+        )
+        .unwrap();
+        let build = build_unilateral_exit(&plan, &on_chain, FEE_RATE).unwrap();
+
+        let stopped_txs = &build.branches[0].txs;
+        assert_eq!(stopped_txs.len(), 1);
+        assert_eq!(stopped_txs[0].txid, refund.compute_txid());
+        assert!(stopped_txs[0].to_sign.is_none());
+        assert!(plan.per_branch_funding[0].1.is_empty());
+
+        let sibling_txs = &build.branches[1].txs;
+        assert_eq!(sibling_txs.len(), 3, "root, node, refund");
+        assert!(sibling_txs[0].to_sign.is_none());
+        assert!(sibling_txs[1..].iter().all(|tx| tx.to_sign.is_some()));
+        assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+        let funded: Vec<&TreeNodeId> = quote.per_branch_funding.iter().map(|(id, _)| id).collect();
+        assert_eq!(funded, [&leaf_ids[1]]);
+    }
 }
 
 #[cfg(test)]
