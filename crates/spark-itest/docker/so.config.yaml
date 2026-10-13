@@ -26,6 +26,9 @@ knobs:
     # Off by default: the token transaction events on the SubscribeToEvents
     # stream, from which the SDK reports a token payment before its next sync.
     spark.so.tokens.tx_events_enabled: 1
+    # A rollout percentage (default 0) for refresh tokens. Left at 0, the operator
+    # issues none and the SDK signs a new challenge whenever a session expires.
+    spark.so.authn.refresh_tokens_enabled: 100
     # Routes the SSP's counter transfer through the consensus flow, which fences a
     # swap's primary transfer on every operator rather than the coordinator alone.
     spark.so.use_consensus_initiate_counter_transfer: 1

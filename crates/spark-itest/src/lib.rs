@@ -9,3 +9,4 @@ pub mod helpers;
 pub mod images;
 pub mod lightning_stack;
 pub mod mempool;
+pub mod session_refresh;
