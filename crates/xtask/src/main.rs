@@ -50,7 +50,7 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     ),
     // `fido2` hardware-key support.
     ("cli", ClippyFeatures::All),
-    // `uniffi-cli` and `span-trace`.
+    // `span-trace`.
     ("breez-sdk-spark-bindings", ClippyFeatures::All),
     // The React Native build: no database backends or their API.
     ("breez-sdk-spark-bindings", ClippyFeatures::NoDefault(&[])),

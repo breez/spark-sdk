@@ -113,6 +113,7 @@ debug = "line-tables-only"
 resolver = "2"
 members = [
   "crates/breez-sdk/bindings",
+  "crates/breez-sdk/uniffi-bindgen",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
   "crates/breez-sdk/core",
