@@ -119,4 +119,3 @@ wasm-bindgen-test.workspace = true
 
 [build-dependencies]
 built.workspace = true
-uniffi = { workspace = true, features = ["build"], optional = true }

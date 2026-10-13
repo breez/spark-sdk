@@ -38,7 +38,6 @@ uniffi = { workspace = true, features = ["tokio"] }
 
 [build-dependencies]
 glob.workspace = true
-uniffi = { workspace = true, features = ["build"] }
 
 [lints]
 workspace = true
