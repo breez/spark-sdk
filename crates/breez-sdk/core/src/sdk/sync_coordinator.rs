@@ -76,7 +76,7 @@ impl SyncCoordinator {
 
         if should_run {
             let coordinator = self.clone();
-            tokio::spawn(async move {
+            platform_utils::spawn(async move {
                 coordinator.run_sync_loop().await;
             });
         }

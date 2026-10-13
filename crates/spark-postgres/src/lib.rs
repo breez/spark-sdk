@@ -8,6 +8,9 @@
 //! configuration, and a generic migration runner) that can be reused by downstream
 //! crates for their own `PostgreSQL` storage needs.
 
+// The spawn and reqwest rules in the root clippy.toml guard shipped code, not tests.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 mod advisory_lock;
 pub mod config;
 pub mod error;

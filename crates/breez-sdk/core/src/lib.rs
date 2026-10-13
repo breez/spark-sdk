@@ -1,3 +1,6 @@
+// The spawn and reqwest rules in the root clippy.toml guard shipped code, not tests.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 #[cfg(feature = "uniffi")]
 pub mod bindings;
 mod chain;
@@ -45,7 +48,7 @@ pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
 };
 pub use issuer::*;
-pub use logger::{DEFAULT_FILTER, parse_log_filter};
+pub use logger::{DEFAULT_FILTER, event_instance_id, record_instance_id, sdk_log_filter};
 pub use models::*;
 pub use persist::{
     ChainTransaction, ConversionFilter, LeafRecovery, PaymentMetadata, SetLnurlMetadataItem,

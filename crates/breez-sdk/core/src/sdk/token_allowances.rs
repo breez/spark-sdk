@@ -13,6 +13,7 @@ use super::BreezSdk;
 
 const DEFAULT_LIST_LIMIT: u32 = 100;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {

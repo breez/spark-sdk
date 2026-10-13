@@ -255,7 +255,7 @@ impl LeafOptimizer {
         };
 
         let optimizer = Arc::clone(self);
-        tokio::spawn(async move {
+        platform_utils::spawn(async move {
             // The auto path always runs to completion and emits events.
             // Errors are logged; outcomes are reported via events.
             let _ = optimizer.run_inner(None, true, running_guard).await;

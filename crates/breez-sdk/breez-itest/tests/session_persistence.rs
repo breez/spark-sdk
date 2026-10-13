@@ -7,6 +7,10 @@
 //! challenge-response handshake. The MySQL variant in
 //! `session_persistence_mysql.rs` runs the exact same workflow.
 
+// Not SDK code: the spawn and reqwest rules in the root clippy.toml guard what
+// integrators ship.
+#![allow(clippy::disallowed_methods)]
+
 use anyhow::Result;
 use breez_sdk_itest::*;
 use rand::RngCore;

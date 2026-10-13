@@ -1,10 +1,15 @@
-use std::fs::OpenOptions;
-use tracing::{Event, Subscriber};
+use std::{fmt::Debug, fs::OpenOptions};
+use tracing::{
+    Event, Span, Subscriber,
+    field::{Field, Visit},
+    span::{Attributes, Id},
+};
 use tracing_subscriber::{
     Layer,
     filter::{LevelFilter, Targets},
     fmt::{FormatFields, format::Writer},
     layer::{Context, SubscriberExt},
+    registry::LookupSpan,
     util::SubscriberInitExt,
 };
 
@@ -37,12 +42,37 @@ pub const DEFAULT_FILTER: &str = concat!(
     ",tonic=warn",
 );
 
+/// Target of the spans that carry an SDK instance's identifier in their
+/// `instance` field. It must match the target `macros::instance_span` emits.
+const INSTANCE_SPAN_TARGET: &str = "breez_sdk_spark_instance";
+const INSTANCE_FIELD: &str = "instance";
+
+/// The filter of the layers that forward log entries to the app: `filter` in
+/// `RUST_LOG` syntax, or [`DEFAULT_FILTER`], with instance spans always enabled
+/// so that every entry that passes it can be attributed to its instance.
+#[doc(hidden)]
+pub fn sdk_log_filter(filter: Option<&str>) -> Targets {
+    parse_log_filter(filter.unwrap_or(DEFAULT_FILTER))
+        .with_target(INSTANCE_SPAN_TARGET, LevelFilter::TRACE)
+}
+
+/// The filter of the log file. Instance spans are left out: the file prints the
+/// spans each line was emitted in, and every line would carry the identity key.
+fn file_log_filter(filter: Option<&str>) -> Targets {
+    parse_log_filter(filter.unwrap_or(DEFAULT_FILTER))
+        .with_target(INSTANCE_SPAN_TARGET, LevelFilter::OFF)
+}
+
+/// A span attributing what runs in it to the SDK instance `instance_id`.
+pub(crate) fn instance_span(instance_id: &str) -> Span {
+    tracing::error_span!(target: INSTANCE_SPAN_TARGET, "sdk", instance = instance_id)
+}
+
 /// Parses a log filter in `RUST_LOG` syntax: comma-separated `target=level`
 /// directives and bare levels, where the most specific target wins. Directives
 /// that filter on spans or fields (`target[span{field=value}]=level`) are not
 /// supported and are ignored, like any other directive that does not parse.
-#[doc(hidden)]
-pub fn parse_log_filter(filter: &str) -> Targets {
+fn parse_log_filter(filter: &str) -> Targets {
     let directives: Vec<_> = filter
         .split(',')
         .map(str::trim)
@@ -84,6 +114,57 @@ fn parse_directive(directive: &str) -> Option<(Option<&str>, LevelFilter)> {
     }
 }
 
+/// An instance identifier, stored in the extensions of the span that carries it.
+struct InstanceId(String);
+
+#[derive(Default)]
+struct InstanceVisitor(Option<String>);
+
+impl Visit for InstanceVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == INSTANCE_FIELD {
+            self.0 = Some(value.to_string());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+        if field.name() == INSTANCE_FIELD {
+            self.0 = Some(format!("{value:?}"));
+        }
+    }
+}
+
+/// Stores the instance identifier of a new instance span, for
+/// [`event_instance_id`] to find. Call from `Layer::on_new_span`.
+#[doc(hidden)]
+pub fn record_instance_id<S>(attrs: &Attributes<'_>, id: &Id, ctx: &Context<'_, S>)
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    if attrs.metadata().target() != INSTANCE_SPAN_TARGET {
+        return;
+    }
+    let mut visitor = InstanceVisitor::default();
+    attrs.record(&mut visitor);
+    if let (Some(instance_id), Some(span)) = (visitor.0, ctx.span(id)) {
+        span.extensions_mut().replace(InstanceId(instance_id));
+    }
+}
+
+/// The identifier of the SDK instance an event was emitted in: the one carried
+/// by its closest instance span.
+#[doc(hidden)]
+pub fn event_instance_id<S>(event: &Event<'_>, ctx: &Context<'_, S>) -> Option<String>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    ctx.event_scope(event)?.find_map(|span| {
+        span.extensions()
+            .get::<InstanceId>()
+            .map(|instance| instance.0.clone())
+    })
+}
+
 pub(crate) struct GlobalSdkLogger {
     /// Optional external log listener, that can receive a stream of log statements
     pub(crate) log_listener: Option<Box<dyn Logger>>,
@@ -91,9 +172,13 @@ pub(crate) struct GlobalSdkLogger {
 
 impl<S> Layer<S> for GlobalSdkLogger
 where
-    S: Subscriber,
+    S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        record_instance_id(attrs, id, &ctx);
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if let Some(s) = self.log_listener.as_ref() {
             let mut buf = String::new();
             let writer = Writer::new(&mut buf);
@@ -105,6 +190,7 @@ where
                 s.log(LogEntry {
                     line: buf,
                     level: event.metadata().level().to_string(),
+                    instance_id: event_instance_id(event, &ctx),
                 });
             }
         }
@@ -116,13 +202,11 @@ pub(super) fn init_logging(
     app_logger: Option<Box<dyn Logger>>,
     log_filter: Option<&str>,
 ) -> Result<(), SdkError> {
-    let filter = log_filter.unwrap_or(DEFAULT_FILTER);
-
     let registry = tracing_subscriber::registry().with(
         GlobalSdkLogger {
             log_listener: app_logger,
         }
-        .with_filter(parse_log_filter(filter)),
+        .with_filter(sdk_log_filter(log_filter)),
     );
 
     if let Some(log_dir) = log_dir {
@@ -141,7 +225,7 @@ pub(super) fn init_logging(
         // which spans actually emit.
         #[cfg(feature = "span-trace")]
         let fmt_layer = fmt_layer.with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
-        let fmt_layer = fmt_layer.with_filter(parse_log_filter(filter));
+        let fmt_layer = fmt_layer.with_filter(file_log_filter(log_filter));
         registry.with(fmt_layer).try_init()?;
     } else {
         registry.try_init()?;
@@ -158,7 +242,8 @@ mod tests {
     use tracing_subscriber::{EnvFilter, Registry, layer::Filter};
 
     use super::{
-        Context, DEFAULT_FILTER, Event, GlobalSdkLogger, Layer, SubscriberExt, parse_log_filter,
+        Context, DEFAULT_FILTER, Event, GlobalSdkLogger, Layer, SubscriberExt, file_log_filter,
+        instance_span, parse_log_filter, sdk_log_filter,
     };
     use crate::{LogEntry, Logger};
 
@@ -308,5 +393,180 @@ mod tests {
             enabled_events(parse_log_filter("info, spark = debug ")),
             enabled_events(parse_log_filter("info,spark=debug"))
         );
+    }
+
+    /// External logger that records the message and instance of every entry.
+    #[derive(Clone, Default)]
+    struct EntryRecorder(Arc<Mutex<Vec<LogEntry>>>);
+
+    impl Logger for EntryRecorder {
+        fn log(&self, l: LogEntry) {
+            self.0.lock().unwrap().push(l);
+        }
+    }
+
+    impl EntryRecorder {
+        /// A subscriber forwarding to this recorder through `sdk_log_filter(filter)`.
+        fn subscriber(&self, filter: &str) -> impl tracing::Subscriber + Send + Sync {
+            tracing_subscriber::registry().with(
+                GlobalSdkLogger {
+                    log_listener: Some(Box::new(self.clone())),
+                }
+                .with_filter(sdk_log_filter(Some(filter))),
+            )
+        }
+
+        fn instance_of(&self, line: &str) -> Option<String> {
+            let entries = self.0.lock().unwrap();
+            let entry = entries
+                .iter()
+                .find(|entry| entry.line == line)
+                .unwrap_or_else(|| panic!("`{line}` not logged, got {entries:?}"));
+            entry.instance_id.clone()
+        }
+    }
+
+    #[test]
+    fn external_logger_receives_closest_instance() {
+        let recorder = EntryRecorder::default();
+        tracing::subscriber::with_default(recorder.subscriber("brz_logtest_instance=info"), || {
+            info!(target: "brz_logtest_instance", "outside");
+            instance_span("alice").in_scope(|| {
+                // Spans between the instance span and the event don't hide it.
+                tracing::info_span!(target: "brz_logtest_instance", "inner").in_scope(|| {
+                    info!(target: "brz_logtest_instance", "in alice");
+                });
+                instance_span("bob").in_scope(|| {
+                    info!(target: "brz_logtest_instance", "in bob");
+                });
+            });
+        });
+        assert_eq!(recorder.instance_of("outside"), None);
+        assert_eq!(recorder.instance_of("in alice").as_deref(), Some("alice"));
+        assert_eq!(recorder.instance_of("in bob").as_deref(), Some("bob"));
+    }
+
+    #[test]
+    fn instance_survives_filters_that_exclude_its_span() {
+        let recorder = EntryRecorder::default();
+        // `off` disables every target the filter doesn't name, the instance
+        // span's included.
+        let filter = "off,brz_logtest_filtered=warn";
+        tracing::subscriber::with_default(recorder.subscriber(filter), || {
+            instance_span("alice").in_scope(|| {
+                warn!(target: "brz_logtest_filtered", "warned");
+            });
+        });
+        assert_eq!(recorder.instance_of("warned").as_deref(), Some("alice"));
+    }
+
+    /// Collects what a formatting layer writes.
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Buffer {
+        /// A subscriber formatting what passes `filter` into this buffer, spans
+        /// included, the way the log file does.
+        fn subscriber(
+            &self,
+            filter: tracing_subscriber::filter::Targets,
+        ) -> impl tracing::Subscriber + Send + Sync {
+            let writer = self.clone();
+            tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(move || writer.clone())
+                    .with_filter(filter),
+            )
+        }
+
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    #[test]
+    fn log_file_leaves_out_instance_spans() {
+        let buffer = Buffer::default();
+        tracing::subscriber::with_default(buffer.subscriber(file_log_filter(None)), || {
+            instance_span("alice").in_scope(|| {
+                tracing::info_span!(target: "brz_logtest_file", "inner").in_scope(|| {
+                    info!(target: "brz_logtest_file", "logged");
+                });
+            });
+        });
+
+        let output = buffer.contents();
+        assert!(
+            output.contains("inner: brz_logtest_file: logged"),
+            "got {output}"
+        );
+        assert!(!output.contains("alice"), "got {output}");
+    }
+
+    struct Instance {
+        instance_id: String,
+    }
+
+    #[macros::instance_span]
+    impl Instance {
+        pub async fn log_here_and_in_task(&self) {
+            info!(target: "brz_logtest_macro", "in method");
+            platform_utils::spawn(async { info!(target: "brz_logtest_macro", "in task") })
+                .await
+                .unwrap();
+        }
+
+        #[tracing::instrument(
+            target = "brz_logtest_record",
+            skip_all,
+            fields(payment_id = tracing::field::Empty),
+        )]
+        pub fn record_in_own_span(&self) {
+            tracing::Span::current().record("payment_id", "abc");
+            info!(target: "brz_logtest_record", "recorded");
+        }
+    }
+
+    #[test]
+    fn instance_span_macro_leaves_method_span_current() {
+        let buffer = Buffer::default();
+        let subscriber = buffer.subscriber(sdk_log_filter(Some("brz_logtest_record=info")));
+        tracing::subscriber::with_default(subscriber, || {
+            Instance {
+                instance_id: "alice".to_string(),
+            }
+            .record_in_own_span();
+        });
+        let output = buffer.contents();
+        assert!(
+            output.contains("record_in_own_span{payment_id=\"abc\"}"),
+            "got {output}"
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn instance_span_macro_attributes_method_and_spawned_tasks() {
+        let recorder = EntryRecorder::default();
+        let _guard =
+            tracing::subscriber::set_default(recorder.subscriber("brz_logtest_macro=info"));
+        Instance {
+            instance_id: "alice".to_string(),
+        }
+        .log_here_and_in_task()
+        .await;
+        assert_eq!(recorder.instance_of("in method").as_deref(), Some("alice"));
+        assert_eq!(recorder.instance_of("in task").as_deref(), Some("alice"));
     }
 }

@@ -10,7 +10,7 @@ use platform_utils::tokio::sync::RwLock;
 use serde::Deserialize;
 use spark_wallet::{HeaderProvider, HeaderProviderError};
 use tokio::sync::oneshot;
-use tracing::{Instrument, warn};
+use tracing::warn;
 
 use crate::persist::Storage;
 
@@ -259,49 +259,48 @@ fn jwt_exp(token: &str) -> Option<u64> {
 }
 
 fn spawn_refresh_task(inner: Arc<Inner>, mut shutdown_rx: oneshot::Receiver<()>) {
-    let span = tracing::Span::current();
-    tokio::spawn(
-        async move {
-            // If a fresh token is already in storage, install it before the
-            // first fetch so headers() can start serving it immediately.
-            let has_cached = load_cached_token(&inner).await;
-            if has_cached {
-                let sleep = next_refresh_after_success(&inner).await;
-                tokio::select! {
-                    biased;
-                    _ = &mut shutdown_rx => return,
-                    () = tokio::time::sleep(sleep) => {}
-                }
+    // Not `platform_utils::spawn`: the task serves every instance sharing the
+    // context, so it must not keep the span of the instance that started it.
+    #[allow(clippy::disallowed_methods)]
+    tokio::spawn(async move {
+        // If a fresh token is already in storage, install it before the
+        // first fetch so headers() can start serving it immediately.
+        let has_cached = load_cached_token(&inner).await;
+        if has_cached {
+            let sleep = next_refresh_after_success(&inner).await;
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => return,
+                () = tokio::time::sleep(sleep) => {}
             }
+        }
 
-            let mut backoff_attempt: u32 = 0;
-            loop {
-                match fetch_new_jwt(&inner.api_key, &inner.http_client).await {
-                    Ok(token) => {
-                        store_token(&inner, token).await;
-                        backoff_attempt = 0;
-                        let sleep = next_refresh_after_success(&inner).await;
-                        tokio::select! {
-                            biased;
-                            _ = &mut shutdown_rx => return,
-                            () = tokio::time::sleep(sleep) => {}
-                        }
+        let mut backoff_attempt: u32 = 0;
+        loop {
+            match fetch_new_jwt(&inner.api_key, &inner.http_client).await {
+                Ok(token) => {
+                    store_token(&inner, token).await;
+                    backoff_attempt = 0;
+                    let sleep = next_refresh_after_success(&inner).await;
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => return,
+                        () = tokio::time::sleep(sleep) => {}
                     }
-                    Err(err) => {
-                        let sleep = backoff_duration(backoff_attempt);
-                        warn!("Could not fetch new JWT (retrying in {:?}): {err}", sleep);
-                        backoff_attempt = backoff_attempt.saturating_add(1);
-                        tokio::select! {
-                            biased;
-                            _ = &mut shutdown_rx => return,
-                            () = tokio::time::sleep(sleep) => {}
-                        }
+                }
+                Err(err) => {
+                    let sleep = backoff_duration(backoff_attempt);
+                    warn!("Could not fetch new JWT (retrying in {:?}): {err}", sleep);
+                    backoff_attempt = backoff_attempt.saturating_add(1);
+                    tokio::select! {
+                        biased;
+                        _ = &mut shutdown_rx => return,
+                        () = tokio::time::sleep(sleep) => {}
                     }
                 }
             }
         }
-        .instrument(span),
-    );
+    });
 }
 
 /// Builds a syntactically valid JWT carrying the given `exp` claim (with a
@@ -477,5 +476,94 @@ mod persistence_tests {
         let inner = inner_with_storage(None);
         store_token(&inner, make_jwt(u64::from(now()) + 3600)).await;
         assert!(inner.token.read().await.is_some());
+    }
+
+    /// Fails every request, so the refresh task warns on its first fetch.
+    struct Unreachable;
+
+    #[macros::async_trait]
+    impl HttpClient for Unreachable {
+        async fn get(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Err(platform_utils::HttpError::Connect(
+                "unreachable".to_string(),
+            ))
+        }
+        async fn post(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Err(platform_utils::HttpError::Connect(
+                "unreachable".to_string(),
+            ))
+        }
+        async fn delete(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            Err(platform_utils::HttpError::Connect(
+                "unreachable".to_string(),
+            ))
+        }
+    }
+
+    /// Records the instance of every warning the provider logs.
+    #[derive(Clone, Default)]
+    struct WarningInstances(Arc<Mutex<Vec<Option<String>>>>);
+
+    impl<S> tracing_subscriber::Layer<S> for WarningInstances
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            crate::logger::record_instance_id(attrs, id, &ctx);
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let meta = event.metadata();
+            if *meta.level() == tracing::Level::WARN
+                && meta.target() == "breez_sdk_spark::jwt_header_provider"
+            {
+                let instance = crate::logger::event_instance_id(event, &ctx);
+                self.0.lock().unwrap().push(instance);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_task_keeps_no_instance_span() {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let warnings = WarningInstances::default();
+        let _guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(warnings.clone()));
+        let provider = BreezJwtHeaderProvider::new("key".to_string(), Arc::new(Unreachable));
+        crate::logger::instance_span("alice").in_scope(|| provider.start(None));
+
+        for _ in 0..100 {
+            if !warnings.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let warnings = warnings.0.lock().unwrap().clone();
+        assert!(!warnings.is_empty(), "the refresh task logged no warning");
+        assert!(warnings.iter().all(Option::is_none), "got {warnings:?}");
     }
 }

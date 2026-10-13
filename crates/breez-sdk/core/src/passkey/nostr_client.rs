@@ -5,7 +5,6 @@ use std::sync::{Arc, OnceLock};
 
 use bitcoin::secp256k1::{Keypair, XOnlyPublicKey};
 use platform_utils::time::Duration;
-use platform_utils::tokio;
 use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;
@@ -177,7 +176,7 @@ impl NostrSaltClient {
 
         let client = self.clone();
 
-        tokio::spawn(async move {
+        platform_utils::spawn(async move {
             if let Err(e) = client.sync_relay_list(events).await {
                 warn!("NIP-65 relay sync failed: {e}");
                 client.relay_sync_triggered.store(false, Ordering::Release);

@@ -6,6 +6,10 @@
 //! SDK init + a no-op query through every SDK to force pool acquisition,
 //! plus snapshots of `pg_stat_activity` taken from a separate connection.
 
+// Not SDK code: the spawn and reqwest rules in the root clippy.toml guard what
+// integrators ship.
+#![allow(clippy::disallowed_methods)]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

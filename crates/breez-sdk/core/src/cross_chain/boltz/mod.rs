@@ -134,7 +134,7 @@ impl BoltzService {
     /// connect. Continues until the client is warm by any path or the SDK shuts down.
     fn spawn_resume_monitor(self: &Arc<Self>, mut shutdown_receiver: watch::Receiver<()>) {
         let service = Arc::clone(self);
-        tokio::spawn(async move {
+        platform_utils::spawn(async move {
             loop {
                 if service.client.initialized() {
                     return;
@@ -191,7 +191,7 @@ impl BoltzService {
                 // was dropped (see `reconcile_pending_boltz_conversions`). Spawned
                 // so a large payment history doesn't delay the first cross-chain
                 // call; it only reads local storage and the local swap rows.
-                tokio::spawn({
+                platform_utils::spawn({
                     let client = Arc::clone(&client);
                     let storage = Arc::clone(&self.storage);
                     async move {

@@ -1,3 +1,7 @@
+// Not SDK code: the spawn and reqwest rules in the root clippy.toml guard what
+// integrators ship.
+#![allow(clippy::disallowed_methods)]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

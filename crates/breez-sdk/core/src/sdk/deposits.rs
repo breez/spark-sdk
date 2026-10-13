@@ -49,6 +49,7 @@ fn maturity_confirmations(network: Network) -> u32 {
 const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
 const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {

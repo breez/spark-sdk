@@ -7,6 +7,7 @@ use flutter_rust_bridge::frb;
 pub struct _LogEntry {
     pub line: String,
     pub level: String,
+    pub instance_id: Option<String>,
 }
 
 pub struct BindingLogger {

@@ -8,10 +8,10 @@ use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
 use spark_wallet::{
-    InMemorySessionStore, SessionStore, SparkSigner, SparkWallet, SparkWalletConfig,
+    InMemorySessionStore, PublicKey, SessionStore, SparkSigner, SparkWallet, SparkWalletConfig,
 };
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, warn};
 
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
@@ -27,7 +27,7 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::backend::{ResolvedStores, StorageBackend},
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
-    sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
+    sdk::{BreezSdk, BreezSdkParams, SdkRuntime, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
     signer::{breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner},
     stable_balance::StableBalance,
@@ -441,18 +441,39 @@ impl SdkBuilder {
         }
     }
 
-    /// Builds the `BreezSdk` instance from the configured components, reading
-    /// top-to-bottom as a sequence of named assembly steps.
-    #[allow(clippy::too_many_lines)]
+    /// Builds the `BreezSdk` instance from the configured components.
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         self.config.validate()?;
         let runtime = runtime_from_config(&self.config);
-        let background_services_enabled = runtime.starts_background_services();
-        validate_server_mode(&self.config, background_services_enabled)?;
+        validate_server_mode(&self.config, runtime.starts_background_services())?;
 
-        self.warn_about_unproxied_overrides();
-        let signers = build_signers(&self.config, self.signer_source)?;
+        let signers = build_signers(&self.config, &self.signer_source)?;
         validate_signer_capabilities(&self.config, signers.ecies.is_some())?;
+        let identity_public_key = signers
+            .spark
+            .get_identity_public_key()
+            .await
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+        // Everything the instance logs, here and in the tasks it spawns, is
+        // attributed to it.
+        let span = crate::logger::instance_span(&identity_public_key.to_string());
+        self.build_instance(runtime, signers, identity_public_key)
+            .instrument(span)
+            .await
+    }
+
+    /// Assembles the instance, reading top-to-bottom as a sequence of named
+    /// assembly steps.
+    #[allow(clippy::too_many_lines)]
+    async fn build_instance(
+        self,
+        runtime: SdkRuntime,
+        signers: Signers,
+        identity_public_key: PublicKey,
+    ) -> Result<BreezSdk, SdkError> {
+        let background_services_enabled = runtime.starts_background_services();
+        self.warn_about_unproxied_overrides();
 
         let creates_context = self.context.is_none();
         let context = resolve_context(self.context, &self.config).await?;
@@ -462,7 +483,8 @@ impl SdkBuilder {
             &context,
             self.config.network,
         )?;
-        let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
+        let stores =
+            resolve_storage(self.storage, &context, &identity_public_key, &self.config).await?;
         // Start the partner-JWT provider now that storage is resolved. When the builder
         // creates its own context (no shared context supplied), bind the resolved
         // storage so the token warm-starts and survives restarts; a shared context
@@ -603,6 +625,7 @@ impl SdkBuilder {
             .await;
 
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
+            instance_id: identity_public_key.to_string(),
             input_parser,
             config: self.config,
             storage,
@@ -692,7 +715,7 @@ fn validate_signer_capabilities(config: &Config, has_ecies: bool) -> Result<(), 
 /// (when the signer can perform ECIES/HMAC) the `ecies` signer plus the
 /// real-time-sync and lnurl-auth signers. A signing-only external signer can do
 /// neither, so `ecies`, `rtsync`, and `lnurl_auth` are all left `None`.
-fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers, SdkError> {
+fn build_signers(config: &Config, signer_source: &SignerSource) -> Result<Signers, SdkError> {
     use crate::signer::{
         BreezSigner, EciesSigner, ExternalBreezSignerAdapter, ExternalSigningSignerAdapter,
         ExternalSparkSignerAdapter, HmacSigner,
@@ -714,6 +737,7 @@ fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers
         } => {
             let seed_bytes = seed.to_bytes()?;
             let network = config.network.into();
+            let account_number = *account_number;
             // One `BreezSignerImpl` implements all three capability traits.
             let signer = Arc::new(BreezSignerImpl::new(
                 spark_wallet::identity_master_key(&seed_bytes, network, account_number)
@@ -728,16 +752,17 @@ fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers
             (signer.clone(), Some(signer.clone()), Some(signer), spark)
         }
         SignerSource::External { breez, spark } => {
-            let spark: Arc<dyn SparkSigner> = Arc::new(ExternalSparkSignerAdapter::new(spark));
+            let spark: Arc<dyn SparkSigner> =
+                Arc::new(ExternalSparkSignerAdapter::new(Arc::clone(spark)));
             match breez {
                 ExternalBreez::Full(breez) => {
                     // The full adapter implements all three capability traits.
-                    let signer = Arc::new(ExternalBreezSignerAdapter::new(breez));
+                    let signer = Arc::new(ExternalBreezSignerAdapter::new(Arc::clone(breez)));
                     (signer.clone(), Some(signer.clone()), Some(signer), spark)
                 }
                 ExternalBreez::SigningOnly(breez) => {
                     let base: Arc<dyn BreezSigner> =
-                        Arc::new(ExternalSigningSignerAdapter::new(breez));
+                        Arc::new(ExternalSigningSignerAdapter::new(Arc::clone(breez)));
                     (base, None, None, spark)
                 }
             }
@@ -801,7 +826,7 @@ async fn resolve_context(
 async fn resolve_storage(
     supplied: Option<Arc<dyn StorageBackend>>,
     context: &SdkContext,
-    spark_signer: &Arc<dyn SparkSigner>,
+    identity_public_key: &PublicKey,
     config: &Config,
 ) -> Result<Arc<ResolvedStores>, SdkError> {
     let storage_backend: Arc<dyn StorageBackend> = match (supplied, context.storage_backend.clone())
@@ -816,10 +841,6 @@ async fn resolve_storage(
         }
         (None, None) => return Err(SdkError::Generic("No storage configured".to_string())),
     };
-    let identity_public_key = spark_signer
-        .get_identity_public_key()
-        .await
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
     storage_backend
         .create_stores(config.network, identity_public_key.serialize().to_vec())
         .await
@@ -1467,7 +1488,7 @@ mod tests {
         // Seed source: full capability, so rtsync + lnurl-auth signers are built.
         let full = super::build_signers(
             &config,
-            super::SignerSource::Seed {
+            &super::SignerSource::Seed {
                 seed: test_seed(),
                 account_number: None,
             },
@@ -1490,7 +1511,7 @@ mod tests {
         );
         let signing_only = super::build_signers(
             &config,
-            super::SignerSource::External {
+            &super::SignerSource::External {
                 breez: super::ExternalBreez::SigningOnly(breez),
                 spark,
             },
@@ -2455,8 +2476,8 @@ mod tests {
         let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
             .await
             .expect("regtest context");
-        let signer = test_spark_signer();
-        let err = super::resolve_storage(None, &ctx, &signer, &config)
+        let identity_public_key = test_spark_signer().get_identity_public_key().await.unwrap();
+        let err = super::resolve_storage(None, &ctx, &identity_public_key, &config)
             .await
             .err()
             .expect("expected no-storage error");
@@ -2478,13 +2499,14 @@ mod tests {
         })
         .await
         .expect("regtest context");
-        let signer = test_spark_signer();
+        let identity_public_key = test_spark_signer().get_identity_public_key().await.unwrap();
         let builder_storage =
             default_storage("/tmp/breez-sdk-test-resolve-storage-builder".to_string());
-        let err = super::resolve_storage(Some(builder_storage), &ctx, &signer, &config)
-            .await
-            .err()
-            .expect("expected duplicate-storage error");
+        let err =
+            super::resolve_storage(Some(builder_storage), &ctx, &identity_public_key, &config)
+                .await
+                .err()
+                .expect("expected duplicate-storage error");
         assert!(
             err.to_string()
                 .contains("storage is configured on both the SdkBuilder and the shared SdkContext"),

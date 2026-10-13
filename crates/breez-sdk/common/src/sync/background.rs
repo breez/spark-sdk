@@ -108,7 +108,7 @@ impl SyncProcessor {
         pull_trigger_tx: watch::Sender<()>,
     ) {
         let clone = Arc::clone(self);
-        tokio::spawn(async move {
+        platform_utils::spawn(async move {
             clone
                 .subscribe_updates_forever(shutdown_receiver, pull_trigger_tx)
                 .await;
@@ -211,7 +211,9 @@ impl SyncProcessor {
         pull_trigger: watch::Receiver<()>,
     ) {
         let clone = Arc::clone(self);
-        tokio::spawn(async move { clone.sync_loop(shutdown_receiver, pull_trigger).await });
+        platform_utils::spawn(
+            async move { clone.sync_loop(shutdown_receiver, pull_trigger).await },
+        );
     }
 
     async fn sync_loop(
@@ -412,7 +414,7 @@ impl SyncProcessor {
         }
 
         debug!("Scheduling backoff trigger in {:?}", duration);
-        let new_handle = tokio::spawn({
+        let new_handle = platform_utils::spawn({
             let backoff_trigger_tx = backoff_trigger_tx.clone();
             async move {
                 tokio::time::sleep(duration).await;

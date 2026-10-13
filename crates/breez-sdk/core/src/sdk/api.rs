@@ -33,6 +33,7 @@ use super::payments::validation::{
 };
 use super::{BreezSdk, helpers::get_deposit_address};
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {

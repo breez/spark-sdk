@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use platform_utils::time::SystemTime;
 
-use platform_utils::tokio;
 use platform_utils::tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tracing::{info, trace, warn};
 use uuid::Uuid;
@@ -234,7 +233,7 @@ impl InMemoryTreeStore {
         let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
 
         // Spawn the processor task - it will exit when command_tx is dropped
-        tokio::spawn(Self::run_processor(command_rx, balance_changed_tx));
+        platform_utils::spawn(Self::run_processor(command_rx, balance_changed_tx));
 
         Self {
             command_tx,

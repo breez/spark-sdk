@@ -7,7 +7,7 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
@@ -38,16 +38,12 @@ pub(super) struct ClientRuntime;
 /// wakes it: with automatic collection off, only a sync does, and it does not
 /// sweep at startup.
 fn spawn_exit_chain_downloader(sdk: &BreezSdk) {
-    let span = tracing::Span::current();
-    tokio::spawn(
-        run_downloader(
-            sdk.exit_chain_trigger.clone(),
-            Arc::clone(&sdk.spark_wallet) as Arc<dyn ExitChainSource>,
-            sdk.shutdown_sender.subscribe(),
-            sdk.config.exit_chain_auto_fetch_enabled,
-        )
-        .instrument(span),
-    );
+    platform_utils::spawn(run_downloader(
+        sdk.exit_chain_trigger.clone(),
+        Arc::clone(&sdk.spark_wallet) as Arc<dyn ExitChainSource>,
+        sdk.shutdown_sender.subscribe(),
+        sdk.config.exit_chain_auto_fetch_enabled,
+    ));
 }
 
 #[macros::async_trait]
@@ -139,52 +135,47 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
     let mut sync_requests = sdk.sync_coordinator.subscribe();
     let mut last_sync_time = SystemTime::now();
     let sync_interval = u64::from(sdk.config.sync_interval_secs);
-    let span = tracing::Span::current();
 
-    tokio::spawn(
-        async move {
-            let balance_watcher =
-                BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
-            let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
+    platform_utils::spawn(async move {
+        let balance_watcher = BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
+        let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
 
-            loop {
-                select! {
-                    _ = shutdown_receiver.changed() => {
-                        if !sdk.remove_event_listener(&balance_watcher_id).await {
-                            error!("Failed to remove balance watcher listener");
-                        }
-                        info!("Client runtime loop shutdown signal received");
-                        return;
+        loop {
+            select! {
+                _ = shutdown_receiver.changed() => {
+                    if !sdk.remove_event_listener(&balance_watcher_id).await {
+                        error!("Failed to remove balance watcher listener");
                     }
+                    info!("Client runtime loop shutdown signal received");
+                    return;
+                }
 
-                    event = wallet_events.recv() => {
-                        Box::pin(on_wallet_event(&sdk, event)).await;
+                event = wallet_events.recv() => {
+                    Box::pin(on_wallet_event(&sdk, event)).await;
+                }
+
+                sync_request = sync_requests.recv() => {
+                    if on_sync_request(
+                        &sdk,
+                        sync_request,
+                        &shutdown_receiver,
+                        &initial_synced_sender,
+                    )
+                    .await
+                    {
+                        last_sync_time = SystemTime::now();
                     }
+                }
 
-                    sync_request = sync_requests.recv() => {
-                        if on_sync_request(
-                            &sdk,
-                            sync_request,
-                            &shutdown_receiver,
-                            &initial_synced_sender,
-                        )
-                        .await
-                        {
-                            last_sync_time = SystemTime::now();
-                        }
-                    }
-
-                    () = tokio::time::sleep(Duration::from_secs(10)) => {
-                        let now = SystemTime::now();
-                        if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
-                            sdk.sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
-                        }
+                () = tokio::time::sleep(Duration::from_secs(10)) => {
+                    let now = SystemTime::now();
+                    if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
+                        sdk.sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
                     }
                 }
             }
         }
-        .instrument(span),
-    );
+    });
 }
 
 async fn on_wallet_event(sdk: &BreezSdk, event: Result<WalletEvent, broadcast::error::RecvError>) {
@@ -535,18 +526,14 @@ fn spawn_conversion_refunder(
     shutdown_receiver: watch::Receiver<()>,
 ) {
     let refund_requests = token_converter.subscribe_refund_requests();
-    let span = tracing::Span::current();
 
-    tokio::spawn(
-        run_conversion_refunder(
-            token_converter,
-            event_emitter,
-            refund_requests,
-            shutdown_receiver,
-            Duration::from_secs(STRANDED_INPUT_SETTLE_SECS),
-        )
-        .instrument(span),
-    );
+    platform_utils::spawn(run_conversion_refunder(
+        token_converter,
+        event_emitter,
+        refund_requests,
+        shutdown_receiver,
+        Duration::from_secs(STRANDED_INPUT_SETTLE_SECS),
+    ));
 }
 
 /// Runs refund passes on a timer and on request, and settles the stranded

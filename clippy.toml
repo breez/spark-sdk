@@ -9,7 +9,13 @@
 # `DefaultHttpClient::default()` cannot be listed here: clippy does not match
 # trait-impl paths. It survives only in test and tooling crates, which are not
 # a leak vector for integrators.
+#
+# Tasks spawned with `tokio::spawn` lose the span they were spawned in, and with
+# it the SDK instance their logs are attributed to. Spawn them through
+# `platform_utils::spawn` instead. WASM builds have no tokio runtime, so the
+# path is allowed not to resolve there.
 disallowed-methods = [
+  { path = "tokio::task::spawn", reason = "spawn via platform_utils::spawn so the task keeps the current span", allow-invalid = true },
   { path = "reqwest::Client::new", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
   { path = "reqwest::Client::builder", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },
   { path = "reqwest::ClientBuilder::new", reason = "build clients via platform_utils::create_http_client_with_proxy so they honour Config.proxy" },

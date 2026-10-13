@@ -1,7 +1,7 @@
 use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
-use tracing::{Instrument, debug, error, info};
+use tracing::{debug, error, info};
 
 use crate::{Network, error::SdkError, persist::ObjectCacheRepository};
 
@@ -20,6 +20,7 @@ impl BreezSdk {
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
 
         let sdk = Self {
+            instance_id: params.instance_id,
             config: params.config,
             spark_wallet: params.spark_wallet,
             storage: params.storage,
@@ -57,41 +58,33 @@ impl BreezSdk {
 
     pub(crate) fn spawn_spark_private_mode_initialization(&self) {
         let sdk = self.clone();
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                if let Err(e) = sdk.maybe_ensure_spark_private_mode_initialized().await {
-                    error!("Failed to initialize spark private mode: {e:?}");
-                }
+        platform_utils::spawn(async move {
+            if let Err(e) = sdk.maybe_ensure_spark_private_mode_initialized().await {
+                error!("Failed to initialize spark private mode: {e:?}");
             }
-            .instrument(span),
-        );
+        });
     }
 
     /// Refreshes the user's lightning address on the server on startup.
     pub(crate) fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
-        let span = tracing::Span::current();
-        tokio::spawn(
-            async move {
-                if sdk.config.lnurl_domain.is_none() {
-                    return;
-                }
-
-                match sdk.recover_lightning_address().await {
-                    Ok(None) => info!("no lightning address to recover on startup"),
-                    Ok(Some(value)) => {
-                        info!("recovered lightning address on startup");
-                        debug!(
-                            "address: {}, lnurl url: {}, lnurl bech32: {}",
-                            value.lightning_address, value.lnurl.url, value.lnurl.bech32
-                        );
-                    }
-                    Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
-                }
+        platform_utils::spawn(async move {
+            if sdk.config.lnurl_domain.is_none() {
+                return;
             }
-            .instrument(span),
-        );
+
+            match sdk.recover_lightning_address().await {
+                Ok(None) => info!("no lightning address to recover on startup"),
+                Ok(Some(value)) => {
+                    info!("recovered lightning address on startup");
+                    debug!(
+                        "address: {}, lnurl url: {}, lnurl bech32: {}",
+                        value.lightning_address, value.lnurl.url, value.lnurl.bech32
+                    );
+                }
+                Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
+            }
+        });
     }
 
     pub(super) async fn maybe_ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {

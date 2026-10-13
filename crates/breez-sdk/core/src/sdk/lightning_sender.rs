@@ -16,7 +16,7 @@ use platform_utils::tokio;
 use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId};
 use tokio::select;
 use tokio::sync::{oneshot, watch};
-use tracing::{Instrument, error, info, warn};
+use tracing::{error, info, warn};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -330,53 +330,49 @@ impl LightningSender {
         let payment = payment.clone();
         let payment_id = payment_id.clone();
         let mut shutdown = self.shutdown_sender.subscribe();
-        let span = tracing::Span::current();
 
-        tokio::spawn(
-            async move {
-                // Drive the poll loop until we either reach a terminal status,
-                // hit the attempt cap, or get a shutdown signal.
-                let terminal_payment: Option<Payment> = 'poll: {
-                    for i in 0..MAX_POLL_ATTEMPTS {
-                        info!(
-                            "Polling lightning send payment {} attempt {}",
-                            payment_id, i
-                        );
-                        select! {
-                            _ = shutdown.changed() => {
-                                info!("Shutdown signal received");
-                                break 'poll None;
-                            },
-                            p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                                if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                                    info!("Polling payment status = {} {:?}", payment.status, p.status);
-                                    if payment.status != PaymentStatus::Pending {
-                                        info!("Polling payment completed status = {}", payment.status);
-                                        break 'poll Some(payment);
-                                    }
+        platform_utils::spawn(async move {
+            // Drive the poll loop until we either reach a terminal status,
+            // hit the attempt cap, or get a shutdown signal.
+            let terminal_payment: Option<Payment> = 'poll: {
+                for i in 0..MAX_POLL_ATTEMPTS {
+                    info!(
+                        "Polling lightning send payment {} attempt {}",
+                        payment_id, i
+                    );
+                    select! {
+                        _ = shutdown.changed() => {
+                            info!("Shutdown signal received");
+                            break 'poll None;
+                        },
+                        p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
+                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
+                                info!("Polling payment status = {} {:?}", payment.status, p.status);
+                                if payment.status != PaymentStatus::Pending {
+                                    info!("Polling payment completed status = {}", payment.status);
+                                    break 'poll Some(payment);
                                 }
-
-                                let sleep_time = if i < 5 {
-                                    Duration::from_secs(1)
-                                } else {
-                                    Duration::from_secs(i.into())
-                                };
-                                tokio::time::sleep(sleep_time).await;
                             }
+
+                            let sleep_time = if i < 5 {
+                                Duration::from_secs(1)
+                            } else {
+                                Duration::from_secs(i.into())
+                            };
+                            tokio::time::sleep(sleep_time).await;
                         }
                     }
-                    None
-                };
+                }
+                None
+            };
 
-                let Some(payment) = terminal_payment else {
-                    return;
-                };
+            let Some(payment) = terminal_payment else {
+                return;
+            };
 
-                let _ = tx.send(payment.clone());
-                record_payment_update(&storage, &event_emitter, payment, true).await;
-            }
-            .instrument(span),
-        );
+            let _ = tx.send(payment.clone());
+            record_payment_update(&storage, &event_emitter, payment, true).await;
+        });
 
         rx
     }

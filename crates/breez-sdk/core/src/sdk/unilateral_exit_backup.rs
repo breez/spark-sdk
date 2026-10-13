@@ -173,6 +173,7 @@ fn parse_exit_state<'a, T: Deserialize<'a>>(exit_state: &'a str) -> Result<T, Sd
         .map_err(|e| SdkError::InvalidInput(format!("Invalid exit state: {e}")))
 }
 
+#[macros::instance_span]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {

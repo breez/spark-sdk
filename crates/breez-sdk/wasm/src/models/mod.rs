@@ -1785,6 +1785,7 @@ pub struct GetPaymentResponse {
 pub struct LogEntry {
     pub line: String,
     pub level: String,
+    pub instance_id: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMetadata)]
