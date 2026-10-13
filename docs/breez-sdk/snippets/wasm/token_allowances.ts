@@ -5,8 +5,8 @@ const exampleCreateTokenAllowance = async (sdk: BreezSdk) => {
   const response = await sdk.createTokenAllowance({
     spenderAddress: '<spender spark address>',
     tokenIdentifier: '<token identifier>',
-    maxPerPayment: { type: 'amount', amount: '5000000' },
-    maxTotal: { type: 'amount', amount: '100000000' },
+    maxPerPayment: { type: 'amount', amount: BigInt(5_000_000) },
+    maxTotal: { type: 'amount', amount: BigInt(100_000_000) },
     expiryTime: 1_798_761_600,
     allowedRecipients: []
   })
@@ -34,7 +34,7 @@ const examplePullPayment = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.preparePullPayment({
     payerAddress: '<payer spark address>',
     tokenIdentifier: '<token identifier>',
-    receivers: [{ amount: '5000000' }]
+    receivers: [{ amount: BigInt(5_000_000) }]
   })
   console.log(`Pulling ${prepareResponse.amount}`)
 

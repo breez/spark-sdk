@@ -27,6 +27,14 @@ try {
 const { StorageError } = require("./errors.cjs");
 const { MigrationManager } = require("./migrations.cjs");
 
+// JSON has no BigInt, so u128 amounts are stored as decimal strings, which the
+// SDK reads back as BigInts.
+function toJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === "bigint" ? v.toString() : v
+  );
+}
+
 /**
  * Base query for payment lookups.
  * All columns are accessed by name in _rowToPayment.
@@ -329,7 +337,7 @@ class SqliteStorage {
     } catch (error) {
       return Promise.reject(
         new StorageError(
-          `Failed to list payments (request: ${JSON.stringify(request)}: ${
+          `Failed to list payments (request: ${toJson(request)}: ${
             error.message
           }`,
           error
@@ -446,7 +454,7 @@ class SqliteStorage {
       amount: payment.amount.toString(),
       fees: payment.fees.toString(),
       timestamp: payment.timestamp,
-      method: payment.method ? JSON.stringify(payment.method) : null,
+      method: payment.method ? toJson(payment.method) : null,
       withdrawTxId:
         payment.details?.type === "withdraw" ? payment.details.txId : null,
       spark: payment.details?.type === "spark" ? 1 : null,
@@ -468,10 +476,10 @@ class SqliteStorage {
       sparkInsert.run({
         id: payment.id,
         invoiceDetails: payment.details.invoiceDetails
-          ? JSON.stringify(payment.details.invoiceDetails)
+          ? toJson(payment.details.invoiceDetails)
           : null,
         htlcDetails: payment.details.htlcDetails
-          ? JSON.stringify(payment.details.htlcDetails)
+          ? toJson(payment.details.htlcDetails)
           : null,
       });
     }
@@ -492,11 +500,11 @@ class SqliteStorage {
     if (payment.details?.type === "token") {
       tokenInsert.run({
         id: payment.id,
-        metadata: JSON.stringify(payment.details.metadata),
+        metadata: toJson(payment.details.metadata),
         txHash: payment.details.txHash,
         txType: payment.details.txType,
         invoiceDetails: payment.details.invoiceDetails
-          ? JSON.stringify(payment.details.invoiceDetails)
+          ? toJson(payment.details.invoiceDetails)
           : null,
       });
     }
@@ -635,13 +643,13 @@ class SqliteStorage {
       stmt.run(
         paymentId,
         metadata.parentPaymentId,
-        metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
+        metadata.lnurlPayInfo ? toJson(metadata.lnurlPayInfo) : null,
         metadata.lnurlWithdrawInfo
-          ? JSON.stringify(metadata.lnurlWithdrawInfo)
+          ? toJson(metadata.lnurlWithdrawInfo)
           : null,
         metadata.lnurlDescription,
         metadata.conversionInfo
-          ? JSON.stringify(metadata.conversionInfo)
+          ? toJson(metadata.conversionInfo)
           : null,
         metadata.conversionStatus ?? null
       );
@@ -738,7 +746,7 @@ class SqliteStorage {
           WHERE txid = ? AND vout = ?
         `);
 
-        stmt.run(JSON.stringify(payload.error), txid, vout);
+        stmt.run(toJson(payload.error), txid, vout);
       } else if (payload.type === "refund") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
@@ -749,7 +757,7 @@ class SqliteStorage {
         stmt.run(
           payload.refundTx,
           payload.refundTxid,
-          JSON.stringify(payload.state),
+          toJson(payload.state),
           txid,
           vout
         );
@@ -760,7 +768,7 @@ class SqliteStorage {
           WHERE txid = ? AND vout = ?
         `);
 
-        stmt.run(JSON.stringify(payload.status), txid, vout);
+        stmt.run(toJson(payload.status), txid, vout);
       } else if (payload.type === "refundBroadcastState") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
@@ -768,7 +776,7 @@ class SqliteStorage {
           WHERE txid = ? AND vout = ? AND refund_tx_id = ?
         `);
 
-        stmt.run(JSON.stringify(payload.state), txid, vout, payload.refundTxid);
+        stmt.run(toJson(payload.state), txid, vout, payload.refundTxid);
       } else if (payload.type === "maxClaimFee") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits
@@ -777,7 +785,7 @@ class SqliteStorage {
         `);
 
         stmt.run(
-          payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+          payload.maxFee ? toJson(payload.maxFee) : null,
           txid,
           vout
         );
@@ -1188,7 +1196,7 @@ class SqliteStorage {
           record.id.dataId,
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.updatedFields),
+          toJson(record.updatedFields),
           revision.toString()
         );
 
@@ -1239,7 +1247,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          toJson(record.data)
         );
 
         // Update sync_revision to track the highest known revision
@@ -1365,7 +1373,7 @@ class SqliteStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            toJson(record.data),
             record.revision.toString()
           );
         }
@@ -1559,7 +1567,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          toJson(record.data)
         );
 
         // Update sync_revision to track the highest known revision

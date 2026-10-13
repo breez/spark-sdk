@@ -28,6 +28,14 @@ try {
 const { StorageError } = require("./errors.cjs");
 const { PostgresMigrationManager } = require("./migrations.cjs");
 
+// JSON has no BigInt, so u128 amounts are stored as decimal strings, which the
+// SDK reads back as BigInts.
+function toJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === "bigint" ? v.toString() : v
+  );
+}
+
 /**
  * Base query for payment lookups.
  * All columns are accessed by name in _rowToPayment.
@@ -373,7 +381,7 @@ class PostgresStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to list payments (request: ${JSON.stringify(request)}): ${error.message}`,
+        `Failed to list payments (request: ${toJson(request)}): ${error.message}`,
         error
       );
     }
@@ -464,7 +472,7 @@ class PostgresStorage {
         payment.amount.toString(),
         payment.fees.toString(),
         payment.timestamp,
-        payment.method ? JSON.stringify(payment.method) : null,
+        payment.method ? toJson(payment.method) : null,
         withdrawTxId,
         spark,
       ]
@@ -496,10 +504,10 @@ class PostgresStorage {
           this.identity,
           payment.id,
           payment.details.invoiceDetails
-            ? JSON.stringify(payment.details.invoiceDetails)
+            ? toJson(payment.details.invoiceDetails)
             : null,
           payment.details.htlcDetails
-            ? JSON.stringify(payment.details.htlcDetails)
+            ? toJson(payment.details.htlcDetails)
             : null,
         ]
       );
@@ -545,11 +553,11 @@ class PostgresStorage {
         [
           this.identity,
           payment.id,
-          JSON.stringify(payment.details.metadata),
+          toJson(payment.details.metadata),
           payment.details.txHash,
           payment.details.txType,
           payment.details.invoiceDetails
-            ? JSON.stringify(payment.details.invoiceDetails)
+            ? toJson(payment.details.invoiceDetails)
             : null,
         ]
       );
@@ -677,14 +685,14 @@ class PostgresStorage {
           paymentId,
           metadata.parentPaymentId,
           metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
+            ? toJson(metadata.lnurlPayInfo)
             : null,
           metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            ? toJson(metadata.lnurlWithdrawInfo)
             : null,
           metadata.lnurlDescription,
           metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
+            ? toJson(metadata.conversionInfo)
             : null,
           metadata.conversionStatus ?? null,
         ]
@@ -763,7 +771,7 @@ class PostgresStorage {
           `UPDATE brz_unclaimed_deposits
            SET claim_error = $1
            WHERE user_id = $2 AND txid = $3 AND vout = $4`,
-          [JSON.stringify(payload.error), this.identity, txid, vout]
+          [toJson(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
@@ -773,7 +781,7 @@ class PostgresStorage {
           [
             payload.refundTx,
             payload.refundTxid,
-            JSON.stringify(payload.state),
+            toJson(payload.state),
             this.identity,
             txid,
             vout,
@@ -784,7 +792,7 @@ class PostgresStorage {
           `UPDATE brz_unclaimed_deposits
            SET instant_claim_status = $1
            WHERE user_id = $2 AND txid = $3 AND vout = $4`,
-          [JSON.stringify(payload.status), this.identity, txid, vout]
+          [toJson(payload.status), this.identity, txid, vout]
         );
       } else if (payload.type === "refundBroadcastState") {
         await this.pool.query(
@@ -792,7 +800,7 @@ class PostgresStorage {
            SET refund_state = $1
            WHERE user_id = $2 AND txid = $3 AND vout = $4 AND refund_tx_id = $5`,
           [
-            JSON.stringify(payload.state),
+            toJson(payload.state),
             this.identity,
             txid,
             vout,
@@ -805,7 +813,7 @@ class PostgresStorage {
            SET max_claim_fee = $1
            WHERE user_id = $2 AND txid = $3 AND vout = $4`,
           [
-            payload.maxFee ? JSON.stringify(payload.maxFee) : null,
+            payload.maxFee ? toJson(payload.maxFee) : null,
             this.identity,
             txid,
             vout,
@@ -1384,7 +1392,7 @@ class PostgresStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.updatedFields),
+            toJson(record.updatedFields),
             revision.toString(),
           ]
         );
@@ -1444,7 +1452,7 @@ class PostgresStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            toJson(record.data),
           ]
         );
 
@@ -1575,7 +1583,7 @@ class PostgresStorage {
               record.id.dataId,
               record.schemaVersion,
               Math.floor(Date.now() / 1000),
-              JSON.stringify(record.data),
+              toJson(record.data),
               record.revision.toString(),
             ]
           );
@@ -1762,7 +1770,7 @@ class PostgresStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            toJson(record.data),
           ]
         );
 
