@@ -9,7 +9,7 @@
 # syncs cleanly, the PR squash-merges automatically once the gating CI checks
 # pass (integration test checks are excluded from the gate: they are flaky).
 # Failures that also occur on the base commit are ignored. Others get up to
-# three Claude fix commits, and a fixed PR then waits for human review.
+# three Claude fix commits, and the PR merges once CI passes.
 #
 # To add a new language: create a TOML in sync-prompts/langs/ and add a
 # matrix entry below.
@@ -545,7 +545,7 @@ jobs:
             fi
             BODY+=$'\n'"> Consider re-running the sync for these languages."
           else
-            BODY+=$'\n\n'"All languages synced cleanly. This PR merges automatically once the gating CI checks pass (integration test checks and failures already on the base commit excluded). If CI needs an automated fix, it waits for review instead."
+            BODY+=$'\n\n'"All languages synced cleanly. This PR merges automatically once the gating CI checks pass (integration test checks and failures already on the base commit excluded). New failures get automated fix commits first."
           fi
 
           # The bot branch is throwaway (rebuilt from main each run), so
@@ -580,9 +580,8 @@ jobs:
       # A check that also fails on the base commit is pre-existing and does
       # not block the merge. Any other failure gets a Claude fix pass that may
       # edit only the language CLIs. CI reruns on each pushed fix, up to
-      # MAX_FIX_ATTEMPTS. A PR that needed a fix never merges here: once CI
-      # passes it waits for a human review. A PR-caused failure in a check
-      # that already fails on main reads as pre-existing.
+      # MAX_FIX_ATTEMPTS, and the PR merges once CI passes. A PR-caused
+      # failure in a check that already fails on main reads as pre-existing.
       - name: Auto-merge when CI passes
         if: steps.apply.outputs.has_changes == 'true' && steps.apply.outputs.all_clean == 'true'
         env:
@@ -632,13 +631,8 @@ jobs:
           }
 
           finish() {
-            if [ "$ATTEMPT" -gt 0 ]; then
-              gh pr comment "$PR_NUMBER" --body "CI passes after ${ATTEMPT} automated fix commit(s). Review the fix commits before merging."
-              echo "::notice::PR #${PR_NUMBER} needed fixes. Left open for review."
-            else
-              gh pr merge "$PR_NUMBER" --squash
-              echo "::notice::PR #${PR_NUMBER} merged."
-            fi
+            gh pr merge "$PR_NUMBER" --squash
+            echo "::notice::PR #${PR_NUMBER} merged after ${ATTEMPT} fix commit(s)."
             exit 0
           }
 
