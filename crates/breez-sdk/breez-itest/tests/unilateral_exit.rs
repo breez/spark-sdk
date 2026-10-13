@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bitcoin::secp256k1::SecretKey;
@@ -4077,20 +4078,26 @@ async fn stored_leaves(sdk: &LocalSdk) -> Result<HashMap<String, String>> {
         .collect()
 }
 
+/// Every operator connects the blocks mined past a refund's timelock one by
+/// one before it reports the refund confirmed.
+const LEAF_STATUS_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Syncs, mining a block between tries, until the wallet stores the leaf in
 /// `status`.
 async fn wait_for_leaf_status(sdk: &LocalSdk, leaf_id: &str, status: &str) -> Result<()> {
-    let mut stored = None;
-    for _ in 0..30 {
+    let deadline = Instant::now() + LEAF_STATUS_TIMEOUT;
+    loop {
         sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        stored = stored_leaves(sdk).await?.remove(leaf_id);
+        let stored = stored_leaves(sdk).await?.remove(leaf_id);
         if stored.as_deref() == Some(status) {
             return Ok(());
         }
+        if Instant::now() >= deadline {
+            anyhow::bail!("leaf {leaf_id} is stored as {stored:?}, not {status}");
+        }
         sdk.fixtures.bitcoind.generate_blocks(1).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    anyhow::bail!("leaf {leaf_id} is stored as {stored:?}, not {status}")
 }
 
 /// Reads the events waiting, and says whether one reported recoverable funds.
