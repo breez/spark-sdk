@@ -48,7 +48,8 @@ impl SessionStore for PostgresSessionStore {
         let service_key = service_identity_key.serialize().to_vec();
         let row = client
             .query_opt(
-                r"SELECT token, expiration FROM brz_sessions
+                r"SELECT token, expiration, refresh_token, refresh_token_expiration
+                  FROM brz_sessions
                   WHERE user_id = $1 AND service_identity_key = $2",
                 &[&self.identity, &service_key],
             )
@@ -57,9 +58,22 @@ impl SessionStore for PostgresSessionStore {
         let row = row.ok_or(SessionStoreError::NotFound)?;
         let token: String = row.get(0);
         let expiration: i64 = row.get(1);
+        let refresh_token: Option<String> = row.get(2);
+        let refresh_token_expiration: Option<i64> = row.get(3);
         let expiration = u64::try_from(expiration)
             .map_err(|e| SessionStoreError::Generic(format!("invalid expiration: {e}")))?;
-        Ok(Session { token, expiration })
+        let refresh_token_expiration = refresh_token_expiration
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|e| {
+                SessionStoreError::Generic(format!("invalid refresh token expiration: {e}"))
+            })?;
+        Ok(Session {
+            token,
+            expiration,
+            refresh_token,
+            refresh_token_expiration,
+        })
     }
 
     async fn set_session(
@@ -71,13 +85,32 @@ impl SessionStore for PostgresSessionStore {
         let service_key = service_identity_key.serialize().to_vec();
         let expiration = i64::try_from(session.expiration)
             .map_err(|e| SessionStoreError::Generic(format!("expiration overflow: {e}")))?;
+        let refresh_token_expiration = session
+            .refresh_token_expiration
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|e| {
+                SessionStoreError::Generic(format!("refresh token expiration overflow: {e}"))
+            })?;
         client
             .execute(
-                r"INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
-                  VALUES ($1, $2, $3, $4)
+                r"INSERT INTO brz_sessions
+                    (user_id, service_identity_key, token, expiration,
+                     refresh_token, refresh_token_expiration)
+                  VALUES ($1, $2, $3, $4, $5, $6)
                   ON CONFLICT (user_id, service_identity_key)
-                  DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration",
-                &[&self.identity, &service_key, &session.token, &expiration],
+                  DO UPDATE SET token = EXCLUDED.token,
+                                expiration = EXCLUDED.expiration,
+                                refresh_token = EXCLUDED.refresh_token,
+                                refresh_token_expiration = EXCLUDED.refresh_token_expiration",
+                &[
+                    &self.identity,
+                    &service_key,
+                    &session.token,
+                    &expiration,
+                    &session.refresh_token,
+                    &refresh_token_expiration,
+                ],
             )
             .await
             .map_err(map_err)?;
@@ -130,16 +163,23 @@ impl PostgresSessionStore {
     }
 
     fn migrations() -> Vec<Vec<String>> {
-        vec![vec![
-            "CREATE TABLE IF NOT EXISTS brz_sessions (
-                user_id BYTEA NOT NULL,
-                service_identity_key BYTEA NOT NULL,
-                token TEXT NOT NULL,
-                expiration BIGINT NOT NULL,
-                PRIMARY KEY (user_id, service_identity_key)
-            )"
-            .to_string(),
-        ]]
+        vec![
+            vec![
+                "CREATE TABLE IF NOT EXISTS brz_sessions (
+                    user_id BYTEA NOT NULL,
+                    service_identity_key BYTEA NOT NULL,
+                    token TEXT NOT NULL,
+                    expiration BIGINT NOT NULL,
+                    PRIMARY KEY (user_id, service_identity_key)
+                )"
+                .to_string(),
+            ],
+            vec![
+                "ALTER TABLE brz_sessions ADD COLUMN IF NOT EXISTS refresh_token TEXT".to_string(),
+                "ALTER TABLE brz_sessions ADD COLUMN IF NOT EXISTS refresh_token_expiration BIGINT"
+                    .to_string(),
+            ],
+        ]
     }
 }
 
@@ -250,5 +290,17 @@ mod tests {
     async fn test_get_after_unrelated_set() {
         let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_get_after_unrelated_set(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_token_round_trip() {
+        let fixture = PostgresSessionStoreTestFixture::new().await;
+        shared_tests::test_refresh_token_round_trip(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_clears_refresh_token() {
+        let fixture = PostgresSessionStoreTestFixture::new().await;
+        shared_tests::test_overwrite_clears_refresh_token(&fixture.store).await;
     }
 }

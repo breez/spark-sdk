@@ -20,6 +20,8 @@ pub enum SessionStoreError {
 pub struct Session {
     pub token: String,
     pub expiration: u64,
+    pub refresh_token: Option<String>,
+    pub refresh_token_expiration: Option<u64>,
 }
 
 /// Sessions within this margin of expiry are treated as already invalid, so a
@@ -27,12 +29,20 @@ pub struct Session {
 /// call it authenticates.
 const EXPIRY_MARGIN_SECS: u64 = 30;
 
+fn outlives_margin(expiration: u64) -> bool {
+    let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    expiration > duration.as_secs().saturating_add(EXPIRY_MARGIN_SECS)
+}
+
 impl Session {
-    pub fn is_valid(&self) -> bool {
-        let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-            return false;
-        };
-        self.expiration > duration.as_secs().saturating_add(EXPIRY_MARGIN_SECS)
+    pub fn has_valid_token(&self) -> bool {
+        outlives_margin(self.expiration)
+    }
+
+    pub fn has_valid_refresh_token(&self) -> bool {
+        self.refresh_token.is_some() && self.refresh_token_expiration.is_some_and(outlives_margin)
     }
 }
 
@@ -47,6 +57,7 @@ pub trait SessionStore: Send + Sync {
         service_identity_key: &PublicKey,
         session: Session,
     ) -> Result<(), SessionStoreError>;
+    async fn invalidate(&self, _service_identity_key: &PublicKey) {}
 }
 
 #[derive(Default)]
@@ -97,22 +108,55 @@ mod session_validity_tests {
         Session {
             token: "token".to_string(),
             expiration,
+            refresh_token: None,
+            refresh_token_expiration: None,
+        }
+    }
+
+    fn session_with_refresh(refresh_token_expiration: Option<u64>) -> Session {
+        Session {
+            token: "token".to_string(),
+            expiration: 0,
+            refresh_token: Some("refresh".to_string()),
+            refresh_token_expiration,
         }
     }
 
     #[test_all]
-    fn expired_session_is_invalid() {
-        assert!(!session(now_secs().saturating_sub(10)).is_valid());
+    fn expired_token_is_invalid() {
+        assert!(!session(now_secs().saturating_sub(10)).has_valid_token());
     }
 
     #[test_all]
-    fn session_expiring_within_margin_is_invalid() {
-        assert!(!session(now_secs() + EXPIRY_MARGIN_SECS / 2).is_valid());
+    fn token_expiring_within_margin_is_invalid() {
+        assert!(!session(now_secs() + EXPIRY_MARGIN_SECS / 2).has_valid_token());
     }
 
     #[test_all]
-    fn session_outliving_margin_is_valid() {
-        assert!(session(now_secs() + EXPIRY_MARGIN_SECS + 60).is_valid());
+    fn token_outliving_margin_is_valid() {
+        assert!(session(now_secs() + EXPIRY_MARGIN_SECS + 60).has_valid_token());
+    }
+
+    #[test_all]
+    fn refresh_token_outliving_margin_is_valid() {
+        let session = session_with_refresh(Some(now_secs() + EXPIRY_MARGIN_SECS + 60));
+        assert!(session.has_valid_refresh_token());
+    }
+
+    #[test_all]
+    fn expired_refresh_token_is_invalid() {
+        let session = session_with_refresh(Some(now_secs().saturating_sub(10)));
+        assert!(!session.has_valid_refresh_token());
+    }
+
+    #[test_all]
+    fn refresh_token_without_expiration_is_invalid() {
+        assert!(!session_with_refresh(None).has_valid_refresh_token());
+    }
+
+    #[test_all]
+    fn session_without_refresh_token_has_no_valid_refresh_token() {
+        assert!(!session(now_secs() + 3600).has_valid_refresh_token());
     }
 }
 
@@ -145,5 +189,15 @@ mod in_memory_tests {
     #[async_test_all]
     async fn test_get_after_unrelated_set() {
         shared_tests::test_get_after_unrelated_set(&InMemorySessionStore::default()).await;
+    }
+
+    #[async_test_all]
+    async fn test_refresh_token_round_trip() {
+        shared_tests::test_refresh_token_round_trip(&InMemorySessionStore::default()).await;
+    }
+
+    #[async_test_all]
+    async fn test_overwrite_clears_refresh_token() {
+        shared_tests::test_overwrite_clears_refresh_token(&InMemorySessionStore::default()).await;
     }
 }

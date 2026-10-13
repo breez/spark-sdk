@@ -79,6 +79,8 @@ impl From<SessionStoreError> for spark_wallet::SessionStoreError {
 pub struct Session {
     pub token: String,
     pub expiration: u64,
+    pub refresh_token: Option<String>,
+    pub refresh_token_expiration: Option<u64>,
 }
 
 impl From<spark_wallet::Session> for Session {
@@ -86,6 +88,8 @@ impl From<spark_wallet::Session> for Session {
         Self {
             token: s.token,
             expiration: s.expiration,
+            refresh_token: s.refresh_token,
+            refresh_token_expiration: s.refresh_token_expiration,
         }
     }
 }
@@ -95,6 +99,8 @@ impl From<Session> for spark_wallet::Session {
         Self {
             token: s.token,
             expiration: s.expiration,
+            refresh_token: s.refresh_token,
+            refresh_token_expiration: s.refresh_token_expiration,
         }
     }
 }

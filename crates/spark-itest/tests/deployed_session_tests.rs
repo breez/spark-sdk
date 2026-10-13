@@ -63,6 +63,8 @@ impl SessionStore for StaleTokenSessionStore {
             return Ok(Session {
                 token: STALE_TOKEN.to_string(),
                 expiration: FAR_FUTURE_EXPIRATION,
+                refresh_token: None,
+                refresh_token_expiration: None,
             });
         }
         self.inner.get_session(service_identity_key).await

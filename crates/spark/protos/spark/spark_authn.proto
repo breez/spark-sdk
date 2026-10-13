@@ -4,12 +4,17 @@ package spark_authn;
 
 option go_package = "github.com/lightsparkdev/spark/proto/spark_authn";
 
+import "google/protobuf/timestamp.proto";
+
 service SparkAuthnService {
     // Request a new authentication challenge for a public key
     rpc get_challenge(GetChallengeRequest) returns (GetChallengeResponse) {}
 
     // Verify a signed challenge and return a session token
     rpc verify_challenge(VerifyChallengeRequest) returns (VerifyChallengeResponse) {}
+
+    // Exchange a refresh token for a new session token without requiring a signature.
+    rpc refresh_session(RefreshSessionRequest) returns (RefreshSessionResponse) {}
 }
 
 // Challenge represents the core challenge data
@@ -61,6 +66,10 @@ message VerifyChallengeRequest {
 
     // Client's public key (uncompressed secp256k1 public key)
     bytes public_key = 3;
+
+    // Whether to also issue a refresh token. Defaults to false, so a caller that authenticates
+    // once and exits neither stores server-side state nor holds a long-lived credential.
+    bool request_refresh_token = 4;
 }
 
 // Response after successful authentication
@@ -70,4 +79,37 @@ message VerifyChallengeResponse {
 
     // Token expiration timestamp (UTC Unix seconds)
     int64 expiration_timestamp = 2;
+
+    // Token that mints new session tokens without a signature. Rotated on every use. Empty
+    // unless the request set request_refresh_token.
+    string refresh_token = 3;
+
+    // When the refresh token expires if unused, in whole seconds
+    google.protobuf.Timestamp refresh_token_expiration = 4;
+}
+
+// Request to exchange a refresh token for a new session token
+message RefreshSessionRequest {
+    // The refresh token previously issued by verify_challenge or refresh_session
+    string refresh_token = 1;
+
+    // Client-generated UUID identifying this refresh attempt, persisted by the client before
+    // sending. Lets the server answer a retried request idempotently instead of treating the
+    // retry as token theft.
+    string refresh_attempt_id = 2;
+}
+
+// Response after a successful refresh
+message RefreshSessionResponse {
+    // Session token for subsequent API calls
+    string session_token = 1;
+
+    // When the session token expires, in whole seconds
+    google.protobuf.Timestamp expiration = 2;
+
+    // The rotated refresh token replacing the one just presented
+    string refresh_token = 3;
+
+    // When the rotated refresh token expires if unused, in whole seconds
+    google.protobuf.Timestamp refresh_token_expiration = 4;
 }

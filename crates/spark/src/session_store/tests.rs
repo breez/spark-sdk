@@ -20,6 +20,22 @@ fn session(token: &str, expiration: u64) -> Session {
     Session {
         token: token.to_string(),
         expiration,
+        refresh_token: None,
+        refresh_token_expiration: None,
+    }
+}
+
+fn session_with_refresh(
+    token: &str,
+    expiration: u64,
+    refresh_token: &str,
+    refresh_token_expiration: u64,
+) -> Session {
+    Session {
+        token: token.to_string(),
+        expiration,
+        refresh_token: Some(refresh_token.to_string()),
+        refresh_token_expiration: Some(refresh_token_expiration),
     }
 }
 
@@ -94,4 +110,40 @@ pub async fn test_get_after_unrelated_set(store: &dyn SessionStore) {
         store.get_session(&pk2).await,
         Err(SessionStoreError::NotFound)
     ));
+}
+
+pub async fn test_refresh_token_round_trip(store: &dyn SessionStore) {
+    let pk = create_public_key(1);
+    store
+        .set_session(
+            &pk,
+            session_with_refresh("token-A", 1_000_000_000, "refresh-A", 1_500_000_000),
+        )
+        .await
+        .expect("set_session");
+
+    let stored = store.get_session(&pk).await.expect("get_session");
+    assert_eq!(stored.token, "token-A");
+    assert_eq!(stored.refresh_token.as_deref(), Some("refresh-A"));
+    assert_eq!(stored.refresh_token_expiration, Some(1_500_000_000));
+}
+
+pub async fn test_overwrite_clears_refresh_token(store: &dyn SessionStore) {
+    let pk = create_public_key(1);
+    store
+        .set_session(
+            &pk,
+            session_with_refresh("token-A", 1_000_000_000, "refresh-A", 1_500_000_000),
+        )
+        .await
+        .expect("set with refresh token");
+    store
+        .set_session(&pk, session("token-B", 2_000_000_000))
+        .await
+        .expect("set without refresh token");
+
+    let stored = store.get_session(&pk).await.expect("get_session");
+    assert_eq!(stored.token, "token-B");
+    assert_eq!(stored.refresh_token, None);
+    assert_eq!(stored.refresh_token_expiration, None);
 }
