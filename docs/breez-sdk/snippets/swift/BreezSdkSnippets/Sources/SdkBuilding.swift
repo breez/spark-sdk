@@ -80,12 +80,12 @@ class EncryptingSessionStore: SessionStore {
 
     func getSession(serviceIdentityKey: String) async throws -> Session {
         let session = try await inner.getSession(serviceIdentityKey: serviceIdentityKey)
-        // Decrypt session.token here before returning it.
+        // Decrypt session.token and session.refreshToken here before returning it.
         return session
     }
 
     func setSession(serviceIdentityKey: String, session: Session) async throws {
-        // Encrypt session.token here before persisting it.
+        // Encrypt session.token and session.refreshToken here before persisting it.
         try await inner.setSession(serviceIdentityKey: serviceIdentityKey, session: session)
     }
 }

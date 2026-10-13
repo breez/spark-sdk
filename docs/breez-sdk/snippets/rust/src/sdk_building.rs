@@ -98,7 +98,7 @@ impl SessionStore for EncryptingSessionStore {
         service_identity_key: PublicKey,
     ) -> Result<Session, SessionStoreError> {
         let session = self.inner.get_session(service_identity_key).await?;
-        // Decrypt session.token here before returning it.
+        // Decrypt session.token and session.refresh_token here before returning it.
         Ok(session)
     }
 
@@ -107,7 +107,7 @@ impl SessionStore for EncryptingSessionStore {
         service_identity_key: PublicKey,
         session: Session,
     ) -> Result<(), SessionStoreError> {
-        // Encrypt session.token here before persisting it.
+        // Encrypt session.token and session.refresh_token here before persisting it.
         self.inner.set_session(service_identity_key, session).await
     }
 }
