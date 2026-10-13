@@ -1095,11 +1095,12 @@ fn walk_branch(
             return;
         };
         let info = match result {
-            ChainResult::Spend(Some(info)) => *info,
-            // Unspent: frontier, driven fresh. Its confirmed parent funds it from
-            // its on-chain CPFP change.
-            ChainResult::Spend(None) => {
-                trace!(%leaf_id, node = %node.id, "walk: frontier reached (output unspent), driving fresh");
+            ChainResult::Spend(Some(info)) if info.confirmed => *info,
+            // The scan ignores a spender that is only in the mempool. No spender
+            // in a block: the frontier, built from here. Its confirmed parent funds
+            // it from its on-chain CPFP change.
+            ChainResult::Spend(_) => {
+                trace!(%leaf_id, node = %node.id, "walk: frontier reached (no spender in a block)");
                 return;
             }
             ChainResult::Unavailable => {
@@ -1134,12 +1135,6 @@ fn walk_branch(
         let direct_txid = node.direct_tx.as_ref().map(Transaction::compute_txid);
 
         if info.spender_txid == node_txid {
-            // An unconfirmed (mempool) node_tx is the frontier: drive from here so
-            // the child is (re)built.
-            if !info.confirmed {
-                trace!(%leaf_id, node = %node.id, "walk: node_tx in mempool (unconfirmed), frontier");
-                return;
-            }
             trace!(%leaf_id, node = %node.id, is_leaf, "walk: confirmed via cpfp node_tx");
             nodes.insert(
                 node.id.clone(),
@@ -3782,6 +3777,53 @@ mod interpret_tests {
             !interp.resolved.refunds.contains_key(&leaf_id),
             "a stopped branch drives no refund"
         );
+    }
+
+    #[test]
+    fn interpret_ignores_a_spender_that_is_only_in_the_mempool() {
+        let deposit = OutPoint {
+            txid: Txid::from_byte_array([1u8; 32]),
+            vout: 0,
+        };
+        let root_tx = tx_spending(deposit, 1);
+        let root_txid = root_tx.compute_txid();
+        let root = treenode("root", None, root_tx, 0);
+
+        let leaf_parent_out = OutPoint {
+            txid: root_txid,
+            vout: 0,
+        };
+        let leaf_tx = tx_spending(leaf_parent_out, 2);
+        let leaf_txid = leaf_tx.compute_txid();
+        let leaf_direct = tx_spending(leaf_parent_out, 3);
+        let leaf_direct_txid = leaf_direct.compute_txid();
+        let mut leaf = treenode("leaf", Some("root"), leaf_tx, 0);
+        leaf.direct_tx = Some(leaf_direct);
+        leaf.direct_refund_tx = Some(tx_spending(
+            OutPoint {
+                txid: leaf_direct_txid,
+                vout: 0,
+            },
+            4,
+        ));
+        let leaf_id = leaf.id.clone();
+        let prepared = prepared_of(root, leaf);
+
+        // The leaf's node tx, its direct tx, then a transaction that is not the
+        // leaf's.
+        let foreign_txid = Txid::from_byte_array([9u8; 32]);
+        for spender in [leaf_txid, leaf_direct_txid, foreign_txid] {
+            let observed = vec![
+                spent(deposit, root_txid),
+                spent_unconfirmed(leaf_parent_out, spender),
+                no_refund(&leaf_id),
+            ];
+            let interp = interpret_chain(&prepared, &observed);
+
+            assert!(!interp.resolved.nodes.contains_key(&leaf_id));
+            assert!(!interp.resolved.refunds.contains_key(&leaf_id));
+            assert!(!interp.resolved.stopped.contains(&leaf_id));
+        }
     }
 
     #[test]
