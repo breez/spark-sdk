@@ -688,7 +688,7 @@ pub(super) async fn outputs_from_storage(
 /// operators' current ones when `ancestors_current`, else the stored ones. For
 /// a leaf in `from_storage` the SDK takes the stored output without a lookup,
 /// and only checks what spent it.
-async fn store_watchtower_exit_lookups(
+pub(super) async fn store_watchtower_exit_lookups(
     leaves: &[TreeNode],
     nodes: &HashMap<TreeNodeId, TreeNode>,
     ancestors_current: bool,

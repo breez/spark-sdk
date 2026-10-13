@@ -3599,7 +3599,17 @@ async fn test_an_exit_is_recoverable_until_swept(#[case] backend: SignerBackend)
         matches!(verdict, RecoveryVerdict::Done)
     })
     .await?;
-    wait_for_recoverable_total(&sdk, 0).await?;
+    assert_eq!(
+        get_info(&sdk).await?.recoverable_funds_sats,
+        0,
+        "check_recover_funds found the sweep in a block and took the leaf out"
+    );
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    assert_eq!(
+        get_info(&sdk).await?.recoverable_funds_sats,
+        0,
+        "the leaf stays out after a sync"
+    );
     let after = prepare_recovery(
         &sdk,
         &utxo.address,
@@ -3924,11 +3934,32 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         .await
         .context("a recovery is done once any recovery of the output confirmed")?;
     }
-    wait_for_recoverable_total(&sdk, 0).await?;
+    assert_eq!(
+        get_info(&sdk).await?.recoverable_funds_sats,
+        0,
+        "check_recover_funds found a recovery in a block and took the leaf out"
+    );
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    assert_eq!(
+        get_info(&sdk).await?.recoverable_funds_sats,
+        0,
+        "the leaf stays out after a sync"
+    );
     assert_eq!(
         stored_leaves(&sdk).await?.get(&leaf_id).map(String::as_str),
         Some("WatchtowerExitRecovered"),
         "a refresh keeps the recovered leaf"
+    );
+    assert_eq!(
+        get_info(&restored).await?.recoverable_funds_sats,
+        leaf.value_sats,
+        "another device counts the funds until it has found the recovery"
+    );
+    wait_for_empty_quote(&restored, &destination).await?;
+    assert_eq!(
+        get_info(&restored).await?.recoverable_funds_sats,
+        0,
+        "prepare_recover_funds found a recovery in a block and took the leaf out"
     );
     let mut restored = rebuild_on_empty_storage(&sdk).await?;
     restored.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -4108,22 +4139,6 @@ async fn sync_reports_funds(sdk: &mut LocalSdk) -> Result<bool> {
     Ok(funds_reported(sdk))
 }
 
-/// Syncs, mining a block between tries, until the wallet reports `total`.
-async fn wait_for_recoverable_total(sdk: &LocalSdk, total: u64) -> Result<()> {
-    let mut reported = None;
-    for _ in 0..30 {
-        sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        let recoverable = get_info(sdk).await?.recoverable_funds_sats;
-        if recoverable == total {
-            return Ok(());
-        }
-        reported = Some(recoverable);
-        sdk.fixtures.bitcoind.generate_blocks(1).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    anyhow::bail!("the wallet reports {reported:?} recoverable sats, not {total}")
-}
-
 /// Checks `recovery` until its verdict matches: a chain read that fails leaves
 /// its transactions as they were.
 async fn wait_for_verdict(
@@ -4141,6 +4156,27 @@ async fn wait_for_verdict(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     anyhow::bail!("the verdict stayed {last:?}")
+}
+
+/// Prepares a recovery until its quote has no leaves, quoted or skipped: when
+/// a chain read fails, the SDK still quotes a recovered leaf.
+async fn wait_for_empty_quote(sdk: &LocalSdk, destination: &Address) -> Result<()> {
+    let mut last = None;
+    for _ in 0..10 {
+        let quote = prepare_recovery(
+            sdk,
+            destination,
+            FEE_RATE,
+            ExitLeafSelection::RecoverableOnly,
+        )
+        .await?;
+        if quote.leaves.is_empty() && quote.skipped.is_empty() {
+            return Ok(());
+        }
+        last = Some((quote.leaves, quote.skipped));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    anyhow::bail!("the quote kept its leaves: {last:?}")
 }
 
 /// Waits for the leaf to be reported watchtower-exited: before that, the same

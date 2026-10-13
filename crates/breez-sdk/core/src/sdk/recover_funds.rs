@@ -10,7 +10,7 @@ use bitcoin::{
     hashes::Hash,
 };
 use spark_wallet::{
-    ChainQuery, ChainResult, EXITING_STATUSES, Fee, TreeNode, TreeNodeStatus,
+    ChainQuery, ChainResult, EXITING_STATUSES, Fee, SparkWalletError, TreeNode, TreeNodeStatus,
     WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup, refund_sweep_input_fee,
     watchtower_exit_recovery_payout,
 };
@@ -44,8 +44,7 @@ use super::{
 impl BreezSdk {
     /// Prepares a recovery of the selected leaves: how each is recovered, the
     /// exact fees, and how much to fund. It records a recovery or sweep it finds
-    /// in a block, so the SDK leaves those funds out of the total to recover at
-    /// the next sync.
+    /// in a block, and takes those funds out of the total to recover.
     pub async fn prepare_recover_funds(
         &self,
         request: PrepareRecoverFundsRequest,
@@ -122,6 +121,7 @@ impl BreezSdk {
             total_fee_sats = response.total_fee_sats,
             "prepare_recover_funds: quote ready"
         );
+        self.take_out_finished_leaves(&stored).await;
         Ok(response)
     }
 
@@ -148,8 +148,9 @@ impl BreezSdk {
         // Looked up first, so an unknown leaf fails the call before anything is
         // signed.
         let mut queries = ChainQueries::new(self.chain_service.clone());
+        let stored = self.leaf_recoveries().await?;
         let (exits, failed) = self
-            .quoted_watchtower_exits(&cooperative, &mut queries)
+            .quoted_watchtower_exits(&cooperative, &stored, &mut queries)
             .await?;
 
         let unilateral = if unilateral.is_empty() {
@@ -204,6 +205,7 @@ impl BreezSdk {
             total_fee_sats = response.total_fee_sats,
             "recover_funds: complete"
         );
+        self.take_out_finished_leaves(&stored).await;
         Ok(response)
     }
 
@@ -307,13 +309,7 @@ impl BreezSdk {
     }
 
     pub(super) async fn leaf_recoveries(&self) -> Result<HashMap<String, LeafRecovery>, SdkError> {
-        Ok(self
-            .storage
-            .list_leaf_recoveries()
-            .await?
-            .into_iter()
-            .map(|leaf| (leaf.leaf_id.clone(), leaf))
-            .collect())
+        leaf_recoveries(self.storage.as_ref()).await
     }
 
     pub(super) async fn store_leaf_recovery(&self, update: UpdateLeafRecovery) -> bool {
@@ -329,8 +325,7 @@ impl BreezSdk {
     /// leaf it stored without a check, or whose check it completed with funds
     /// still to recover.
     pub(super) async fn sync_recoverable_funds(&self) {
-        let statuses = [EXITING_STATUSES.as_slice(), &WATCHTOWER_EXITED_STATUSES].concat();
-        let leaves = match self.spark_wallet.list_leaves_with_status(&statuses).await {
+        let leaves = match self.leaves_that_left_the_balance().await {
             Ok(leaves) => leaves,
             Err(e) => {
                 error!("Failed to list the leaves to recover: {e}");
@@ -405,8 +400,7 @@ impl BreezSdk {
     }
 
     /// Stores the spends in `recovered` and the sweeps in a block among
-    /// `transactions`, so the SDK leaves their leaves out of the recoverable
-    /// funds at the next sync.
+    /// `transactions`, and takes their leaves out of the recoverable funds.
     async fn record_finished(
         &self,
         transactions: &[RecoveryTransaction],
@@ -424,6 +418,25 @@ impl BreezSdk {
             }
         };
         store_finished(self.storage.as_ref(), &stored, recovered, swept).await;
+        self.take_out_finished_leaves(&stored).await;
+    }
+
+    /// Takes each leaf whose recovery or sweep the SDK stored after it read
+    /// `before` out of the stored recoverable funds.
+    async fn take_out_finished_leaves(&self, before: &HashMap<String, LeafRecovery>) {
+        let leaves = match self.leaves_that_left_the_balance().await {
+            Ok(leaves) => leaves,
+            Err(e) => {
+                error!("Failed to list the leaves to recover: {e}");
+                return;
+            }
+        };
+        take_out_finished_leaves(&self.storage, &leaves, before).await;
+    }
+
+    async fn leaves_that_left_the_balance(&self) -> Result<Vec<TreeNode>, SparkWalletError> {
+        let statuses = [EXITING_STATUSES.as_slice(), &WATCHTOWER_EXITED_STATUSES].concat();
+        self.spark_wallet.list_leaves_with_status(&statuses).await
     }
 
     async fn cosign_cooperative_recoveries(
@@ -513,12 +526,12 @@ impl BreezSdk {
     async fn quoted_watchtower_exits(
         &self,
         leaves: &[&RecoverFundsLeaf],
+        stored: &HashMap<String, LeafRecovery>,
         queries: &mut ChainQueries,
     ) -> Result<(Vec<WatchtowerExit>, Vec<CooperativeRecoveryFailure>), SdkError> {
         if leaves.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        let stored = self.leaf_recoveries().await?;
         let listed: Vec<TreeNode> = self
             .watchtower_exit_candidates()
             .await?
@@ -539,7 +552,7 @@ impl BreezSdk {
             })
             .collect();
         let mut found = self
-            .lookup_watchtower_exits(&listed, &stored, &from_storage, queries)
+            .lookup_watchtower_exits(&listed, stored, &from_storage, queries)
             .await?;
         let recovered: HashSet<String> = listed
             .iter()
@@ -807,6 +820,15 @@ fn after_finished_checks(
     (stored, moved)
 }
 
+async fn leaf_recoveries(storage: &dyn Storage) -> Result<HashMap<String, LeafRecovery>, SdkError> {
+    Ok(storage
+        .list_leaf_recoveries()
+        .await?
+        .into_iter()
+        .map(|leaf| (leaf.leaf_id.clone(), leaf))
+        .collect())
+}
+
 /// Stores each spend in `recovered` and each sweep in `swept` that is not in
 /// `stored` yet.
 async fn store_finished(
@@ -972,6 +994,53 @@ fn recoverable_funds(
         }
     }
     (funds, found)
+}
+
+/// Takes each of `leaves` whose recovery or sweep the SDK stored after it read
+/// `before` out of the stored recoverable funds.
+async fn take_out_finished_leaves(
+    storage: &Arc<dyn Storage>,
+    leaves: &[TreeNode],
+    before: &HashMap<String, LeafRecovery>,
+) {
+    let stored = match leaf_recoveries(storage.as_ref()).await {
+        Ok(stored) => stored,
+        Err(e) => {
+            error!("Failed to read the stored leaf recoveries: {e}");
+            return;
+        }
+    };
+    let finished = |recoveries: &HashMap<String, LeafRecovery>, leaf: &TreeNode| {
+        recoveries
+            .get(&leaf.id.to_string())
+            .is_some_and(is_finished)
+    };
+    let taken_out = leaves
+        .iter()
+        .filter(|leaf| finished(&stored, leaf) && !finished(before, leaf))
+        .map(|leaf| leaf.value)
+        .fold(0, u64::saturating_add);
+    if taken_out == 0 {
+        return;
+    }
+    let (funds, _) = recoverable_funds(leaves, &stored, &HashSet::new());
+    let repository = ObjectCacheRepository::new(storage.clone());
+    let stored_funds = match repository.fetch_recoverable_funds().await {
+        Ok(stored_funds) => stored_funds.unwrap_or_default(),
+        Err(e) => {
+            error!("Failed to read the recoverable funds: {e}");
+            return;
+        }
+    };
+    // The SDK adds a leaf to the total during a sync, and takes one out only
+    // for a stored recovery or sweep. So here the total does not rise, and it
+    // drops by no more than the leaves just taken out.
+    let lowered = funds.clamp(stored_funds.saturating_sub(taken_out), stored_funds);
+    if lowered != stored_funds
+        && let Err(e) = repository.save_recoverable_funds(lowered).await
+    {
+        error!("Failed to store the recoverable funds: {e}");
+    }
 }
 
 /// The sweep of each leaf that has one in a block among `transactions`. A
@@ -1710,5 +1779,285 @@ mod tests {
             cooperative_recovery_status(&in_block, false, unverified),
             confirmed
         );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    mod stored_funds {
+        use std::sync::atomic::Ordering;
+
+        use crate::{
+            chain::stub::ChainStub, persist::sqlite::SqliteStorage,
+            sdk::watchtower_exit::store_watchtower_exit_lookups,
+        };
+
+        use super::*;
+
+        fn temp_storage() -> Arc<dyn Storage> {
+            let mut dir = std::env::temp_dir();
+            dir.push(format!("breez-recoverable-funds-{}", uuid::Uuid::new_v4()));
+            Arc::new(SqliteStorage::new(&dir).expect("create sqlite storage"))
+        }
+
+        fn leaf(leaf_id: &str, status: TreeNodeStatus) -> TreeNode {
+            create_test_node_with_parent(leaf_id, None, status)
+        }
+
+        /// Stores a recovery for each of `leaves` and their value as the funds
+        /// to recover, as the SDK does in a sync.
+        async fn store_leaves_to_recover(storage: &Arc<dyn Storage>, leaves: &[TreeNode]) {
+            for leaf in leaves {
+                let stored = UpdateLeafRecovery {
+                    leaf_id: leaf.id.to_string(),
+                    ..Default::default()
+                };
+                storage.update_leaf_recovery(stored).await.unwrap();
+            }
+            let (funds, _) = recoverable_funds(leaves, &HashMap::new(), &HashSet::new());
+            ObjectCacheRepository::new(storage.clone())
+                .save_recoverable_funds(funds)
+                .await
+                .unwrap();
+        }
+
+        async fn stored(storage: &Arc<dyn Storage>) -> HashMap<String, LeafRecovery> {
+            leaf_recoveries(storage.as_ref()).await.unwrap()
+        }
+
+        async fn stored_funds(storage: &Arc<dyn Storage>) -> u64 {
+            ObjectCacheRepository::new(storage.clone())
+                .fetch_recoverable_funds()
+                .await
+                .unwrap()
+                .unwrap_or_default()
+        }
+
+        /// Stores a sweep in a block for `leaf` and takes the leaf out of the
+        /// stored funds of a wallet that lists `leaves`.
+        async fn sweep_and_take_out(
+            storage: &Arc<dyn Storage>,
+            leaf: &TreeNode,
+            leaves: &[TreeNode],
+        ) {
+            let before = stored(storage).await;
+            let swept = vec![(leaf.id.to_string(), in_block("sweep"))];
+            store_finished(storage.as_ref(), &before, Vec::new(), swept).await;
+            take_out_finished_leaves(storage, leaves, &before).await;
+        }
+
+        fn kept(
+            kind: RecoveryTxKind,
+            tx: &Transaction,
+            node_id: Option<&str>,
+            depends_on: &[&Transaction],
+        ) -> RecoveryTransaction {
+            RecoveryTransaction {
+                kind,
+                node_id: node_id.map(ToString::to_string),
+                txid: tx.compute_txid().to_string(),
+                tx_hex: serialize_hex(tx),
+                cpfp_tx_hex: None,
+                csv_timelock_blocks: None,
+                depends_on: depends_on
+                    .iter()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .collect(),
+                status: ExitTransactionStatus::Ready,
+            }
+        }
+
+        /// A chain service that shows each of `spends` in a block: the
+        /// outpoint, its spender, and the height of the spender's block.
+        fn chain_with(spends: &[(OutPoint, &Transaction, u32)]) -> Arc<ChainStub> {
+            let outspends = spends
+                .iter()
+                .map(|(outpoint, spender, block_height)| {
+                    let spender = spender.compute_txid().to_string();
+                    (
+                        (outpoint.txid.to_string(), outpoint.vout),
+                        ChainStub::spent(&spender, true, Some(*block_height)),
+                    )
+                })
+                .collect();
+            Arc::new(ChainStub {
+                outspends,
+                ..Default::default()
+            })
+        }
+
+        #[tokio::test]
+        async fn check_takes_a_recovered_leaf_out_of_the_funds_to_recover() {
+            let recovered = leaf(LEAF_ID, TreeNodeStatus::WatchtowerExitRecovered);
+            let open = leaf(OTHER_LEAF_ID, TreeNodeStatus::WatchtowerExited);
+            let leaves = [recovered, open.clone()];
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, &leaves).await;
+            let before = stored(&storage).await;
+            let recovery = tx_paying(watchtower_output(), 9_500);
+            let mut transactions = vec![kept(
+                RecoveryTxKind::Cooperative,
+                &recovery,
+                Some(LEAF_ID),
+                &[],
+            )];
+            let chain = chain_with(&[(watchtower_output(), &recovery, 120)]);
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let spends = check_cooperative_recoveries(&mut queries, &mut transactions)
+                .await
+                .unwrap();
+            store_finished(storage.as_ref(), &before, spends, Vec::new()).await;
+            take_out_finished_leaves(&storage, &leaves, &before).await;
+
+            assert_eq!(stored_funds(&storage).await, open.value);
+            assert_eq!(
+                transactions[0].status,
+                ExitTransactionStatus::Confirmed {
+                    block_height: Some(120)
+                }
+            );
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn check_takes_a_swept_leaf_out_of_the_funds_to_recover() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let open = leaf(OTHER_LEAF_ID, TreeNodeStatus::OnChain);
+            let leaves = [exited, open.clone()];
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, &leaves).await;
+            let before = stored(&storage).await;
+            let node_output = OutPoint {
+                txid: Txid::from_byte_array([5; 32]),
+                vout: 0,
+            };
+            let refund = tx_paying(node_output, 900);
+            let refund_output = OutPoint {
+                txid: refund.compute_txid(),
+                vout: 0,
+            };
+            let sweep = tx_paying(refund_output, 800);
+            let mut transactions = vec![
+                kept(RecoveryTxKind::Refund, &refund, Some(LEAF_ID), &[]),
+                kept(RecoveryTxKind::Sweep, &sweep, None, &[&refund]),
+            ];
+            let chain = chain_with(&[(node_output, &refund, 100), (refund_output, &sweep, 101)]);
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let diverged = check_recovery_transactions(&mut queries, &mut transactions)
+                .await
+                .unwrap();
+            let swept = swept_leaves(&transactions);
+            store_finished(storage.as_ref(), &before, Vec::new(), swept).await;
+            take_out_finished_leaves(&storage, &leaves, &before).await;
+
+            assert!(!diverged);
+            assert_eq!(stored_funds(&storage).await, open.value);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn prepare_takes_a_recovered_leaf_out_of_the_funds_to_recover() {
+            let recovered = leaf(LEAF_ID, TreeNodeStatus::WatchtowerExitRecovered);
+            let open = leaf(OTHER_LEAF_ID, TreeNodeStatus::WatchtowerExited);
+            let leaves = [recovered.clone(), open.clone()];
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, &leaves).await;
+            let output = stored_output();
+            let outpoint = OutPoint {
+                txid: output.txid.parse().unwrap(),
+                vout: output.vout,
+            };
+            let found_output = UpdateLeafRecovery {
+                leaf_id: LEAF_ID.to_string(),
+                chain_checked_at: Some(900),
+                watchtower_exit_output: Some(output),
+                ..Default::default()
+            };
+            storage.update_leaf_recovery(found_output).await.unwrap();
+            let before = stored(&storage).await;
+            let recovery = tx_paying(outpoint, 9_000);
+            let chain = chain_with(&[(outpoint, &recovery, 101)]);
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let found = store_watchtower_exit_lookups(
+                std::slice::from_ref(&recovered),
+                &HashMap::new(),
+                true,
+                &before,
+                &HashSet::from([LEAF_ID.to_string()]),
+                &mut queries,
+                storage.as_ref(),
+            )
+            .await
+            .unwrap();
+            take_out_finished_leaves(&storage, &leaves, &before).await;
+
+            assert!(found.exits[LEAF_ID].recovered);
+            assert_eq!(stored_funds(&storage).await, open.value);
+            assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn the_sdk_adds_no_leaf_to_the_funds_to_recover_outside_a_sync() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let mut new = leaf(OTHER_LEAF_ID, TreeNodeStatus::OnChain);
+            new.value = exited.value.saturating_mul(3);
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, std::slice::from_ref(&exited)).await;
+
+            sweep_and_take_out(&storage, &exited, &[exited.clone(), new]).await;
+
+            assert_eq!(stored_funds(&storage).await, exited.value);
+        }
+
+        #[tokio::test]
+        async fn a_leaf_the_wallet_no_longer_lists_stays_in_the_funds_to_recover() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let unlisted = leaf(OTHER_LEAF_ID, TreeNodeStatus::OnChain);
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, &[exited.clone(), unlisted.clone()]).await;
+
+            sweep_and_take_out(&storage, &exited, std::slice::from_ref(&exited)).await;
+
+            assert_eq!(stored_funds(&storage).await, unlisted.value);
+        }
+
+        #[tokio::test]
+        async fn the_funds_to_recover_stay_when_a_swept_leaf_was_not_among_them() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let open = leaf(OTHER_LEAF_ID, TreeNodeStatus::OnChain);
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, std::slice::from_ref(&open)).await;
+
+            sweep_and_take_out(&storage, &exited, &[exited.clone(), open.clone()]).await;
+
+            assert_eq!(stored_funds(&storage).await, open.value);
+        }
+
+        #[tokio::test]
+        async fn the_funds_to_recover_stay_for_a_leaf_swept_before_the_call() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let unlisted = leaf(OTHER_LEAF_ID, TreeNodeStatus::OnChain);
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, std::slice::from_ref(&unlisted)).await;
+            let swept = vec![(LEAF_ID.to_string(), in_block("sweep"))];
+            store_finished(storage.as_ref(), &HashMap::new(), Vec::new(), swept).await;
+            let before = stored(&storage).await;
+
+            take_out_finished_leaves(&storage, std::slice::from_ref(&exited), &before).await;
+
+            assert_eq!(stored_funds(&storage).await, unlisted.value);
+        }
+
+        #[tokio::test]
+        async fn the_funds_to_recover_stay_while_the_wallet_lists_no_leaf() {
+            let exited = leaf(LEAF_ID, TreeNodeStatus::Exited);
+            let storage = temp_storage();
+            store_leaves_to_recover(&storage, std::slice::from_ref(&exited)).await;
+
+            sweep_and_take_out(&storage, &exited, &[]).await;
+
+            assert_eq!(stored_funds(&storage).await, exited.value);
+        }
     }
 }
