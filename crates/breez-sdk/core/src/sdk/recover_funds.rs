@@ -21,9 +21,9 @@ use crate::{
     CooperativeRecoveryError, CooperativeRecoveryFailure, ExitLeafSelection, ExitTransactionStatus,
     LeafRecovery, Network, PrepareRecoverFundsRequest, PrepareRecoverFundsResponse,
     RecoverFundsLeaf, RecoverFundsRequest, RecoverFundsResponse, RecoveryMethod,
-    RecoveryRedoReason, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkEvent,
-    SkippedLeaf, SkippedLeafReason, Storage, UpdateLeafRecovery, error::SdkError,
-    persist::ObjectCacheRepository, signer::CpfpSigner, utils::time::now_secs,
+    RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkEvent, SkippedLeaf, SkippedLeafReason,
+    Storage, UpdateLeafRecovery, error::SdkError, persist::ObjectCacheRepository,
+    signer::CpfpSigner, utils::time::now_secs,
 };
 
 use super::{
@@ -258,7 +258,7 @@ impl BreezSdk {
                 recovered.push((leaf_id.clone(), spend));
             }
         }
-        let diverged = check_recovery_transactions(&mut queries, &mut unilateral).await?;
+        let redo_reasons = check_recovery_transactions(&mut queries, &mut unilateral).await?;
         recovery.transactions = cooperative.into_iter().chain(unilateral).collect();
         self.record_finished(&recovery.transactions, recovered)
             .await;
@@ -267,9 +267,9 @@ impl BreezSdk {
             .transactions
             .iter()
             .all(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }));
-        let verdict = if diverged {
+        let verdict = if !redo_reasons.is_empty() {
             RecoveryVerdict::Redo {
-                reason: RecoveryRedoReason::OnChainStateDiverged,
+                reasons: redo_reasons,
             }
         } else if all_confirmed && !recovery.transactions.is_empty() {
             RecoveryVerdict::Done

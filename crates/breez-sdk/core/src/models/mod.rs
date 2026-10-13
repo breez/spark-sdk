@@ -3421,18 +3421,31 @@ pub enum RecoveryVerdict {
     /// the recovery.
     Done,
     /// The recovery cannot be finished as it stands. Prepare and recover again.
-    Redo { reason: RecoveryRedoReason },
+    Redo { reasons: Vec<RecoveryRedoReason> },
 }
 
-/// Why a recovery has to be built again.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Why a recovery has to be built again. An outpoint the recovery still needs
+/// was spent by a transaction that is in a block and not part of the recovery.
+/// `txid` is the transaction in `transactions` that needs the outpoint, and
+/// `spender_txid` is the transaction that spent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum RecoveryRedoReason {
-    /// The chain no longer matches the recovery: something that is not one of
-    /// its own transactions took an outpoint it still needs. A different
-    /// refund, a fee bump from elsewhere, or funding spent on something else
-    /// all land here.
-    OnChainStateDiverged,
+    /// The outpoint is funding that this fan-out spends, or that the CPFP child
+    /// of this node transaction or refund spends.
+    FundingSpent { txid: String, spender_txid: String },
+    /// The outpoint is the input of this node transaction, which can no longer
+    /// confirm.
+    NodeTransactionConflicted { txid: String, spender_txid: String },
+    /// The outpoint is the input of this refund, which can no longer confirm.
+    RefundConflicted { txid: String, spender_txid: String },
+    /// The outpoint is an input of the sweep, which can no longer confirm.
+    SweepConflicted { txid: String, spender_txid: String },
+    /// The outpoint is the anchor of this node transaction or refund, the
+    /// output that its CPFP child spends. The transaction itself is in a block.
+    /// Its CPFP child can no longer confirm, and neither can the later
+    /// transactions that spend that child's change.
+    AnchorSpent { txid: String, spender_txid: String },
 }
 
 #[cfg(test)]

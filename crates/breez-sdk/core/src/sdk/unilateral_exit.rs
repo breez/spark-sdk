@@ -10,12 +10,13 @@ use bitcoin::{
 
 use spark_wallet::{
     ConfirmedExitNode as WalletConfirmedExitNode, CpfpInput,
-    ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput,
-    ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
-    ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, RefundSweep,
-    RefundSweepLookup, TreeNode, TreeNodeId, UnilateralExitBuild, UnilateralExitSkipReason,
-    UnilateralExitSkippedLeaf, build_unilateral_exit, check_exit_chain, is_ephemeral_anchor_output,
-    leaf_refund_addresses, scan_exit_chain, scan_funding, scan_refund_sweeps,
+    ExitChainState as WalletExitChainState, ExitCheck, ExitCheckInput, ExitConflict,
+    ExitConflictKind, ExitNodeConfirmation as WalletExitNodeConfirmation,
+    ExitRefund as WalletExitRefund, ExitRefundState as WalletExitRefundState, ExitTxKind,
+    ExitTxStatus, Observation, RefundSweep, RefundSweepLookup, TreeNode, TreeNodeId,
+    UnilateralExitBuild, UnilateralExitSkipReason, UnilateralExitSkippedLeaf,
+    build_unilateral_exit, check_exit_chain, is_ephemeral_anchor_output, leaf_refund_addresses,
+    scan_exit_chain, scan_funding, scan_refund_sweeps,
 };
 
 use tracing::{debug, trace};
@@ -28,7 +29,7 @@ use crate::{
         ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
         ExitChainState as ModelExitChainState, ExitNodeConfirmation, ExitRefund, ExitRefundState,
         ExitTransactionStatus, PerBranchFunding, RecoverFundsLeaf, RecoveryFunding, RecoveryMethod,
-        RecoveryTransaction, RecoveryTxKind, SkippedLeaf, SkippedLeafReason,
+        RecoveryRedoReason, RecoveryTransaction, RecoveryTxKind, SkippedLeaf, SkippedLeafReason,
     },
     signer::CpfpSigner,
     utils::time::now_secs,
@@ -585,12 +586,13 @@ fn skipped_dropped_leaves(
     skipped
 }
 
-/// Updates the statuses of `transactions` from the chain. Returns whether a
-/// transaction outside them spent an outpoint they still need.
+/// Updates the statuses of `transactions` from the chain. Each reason it
+/// returns is about an outpoint they still need, which was spent by a
+/// transaction outside them.
 pub(super) async fn check_recovery_transactions(
     queries: &mut ChainQueries,
     transactions: &mut [RecoveryTransaction],
-) -> Result<bool, SdkError> {
+) -> Result<Vec<RecoveryRedoReason>, SdkError> {
     let inputs = transactions
         .iter()
         .map(exit_check_input)
@@ -604,7 +606,50 @@ pub(super) async fn check_recovery_transactions(
     }
 
     resolve_statuses(queries.chain_service(), transactions).await?;
-    Ok(check.diverged)
+    let mut reasons = Vec::new();
+    for reason in check
+        .conflicts
+        .iter()
+        .filter_map(|conflict| redo_reason(transactions, conflict))
+    {
+        // The same transaction can have spent several inputs of one transaction.
+        if !reasons.contains(&reason) {
+            reasons.push(reason);
+        }
+    }
+    Ok(reasons)
+}
+
+/// `None` when `transactions` has no transaction of a unilateral exit for
+/// `conflict`.
+fn redo_reason(
+    transactions: &[RecoveryTransaction],
+    conflict: &ExitConflict,
+) -> Option<RecoveryRedoReason> {
+    let tx = transactions
+        .iter()
+        .find(|tx| Txid::from_str(&tx.txid).is_ok_and(|txid| txid == conflict.txid))?;
+    let txid = tx.txid.clone();
+    let spender_txid = conflict.spender_txid.to_string();
+    let kind = tx.kind;
+    match conflict.kind {
+        ExitConflictKind::Anchor => {
+            return Some(RecoveryRedoReason::AnchorSpent { txid, spender_txid });
+        }
+        ExitConflictKind::Funding => {
+            return Some(RecoveryRedoReason::FundingSpent { txid, spender_txid });
+        }
+        ExitConflictKind::Input => {}
+    }
+    match kind {
+        RecoveryTxKind::FanOut => Some(RecoveryRedoReason::FundingSpent { txid, spender_txid }),
+        RecoveryTxKind::Node => {
+            Some(RecoveryRedoReason::NodeTransactionConflicted { txid, spender_txid })
+        }
+        RecoveryTxKind::Refund => Some(RecoveryRedoReason::RefundConflicted { txid, spender_txid }),
+        RecoveryTxKind::Sweep => Some(RecoveryRedoReason::SweepConflicted { txid, spender_txid }),
+        RecoveryTxKind::Cooperative => None,
+    }
 }
 
 /// Why a quote leaves out a leaf its context dropped. `None` when the leaf's
@@ -1107,8 +1152,8 @@ fn exit_check_input(tx: &RecoveryTransaction) -> Result<ExitCheckInput, SdkError
     })
 }
 
-/// Which kept transactions are in a block, and whether the on-chain state
-/// diverged from them, as the chain service reports it.
+/// Which kept transactions are in a block and where another transaction spent
+/// an outpoint they need, as the chain service reports it.
 async fn resolve_exit_check(queries: &mut ChainQueries, inputs: &[ExitCheckInput]) -> ExitCheck {
     let check = queries
         .resolve(|observed| {
@@ -1119,7 +1164,7 @@ async fn resolve_exit_check(queries: &mut ChainQueries, inputs: &[ExitCheckInput
         .await;
     debug!(
         confirmed = check.confirmed.len(),
-        diverged = check.diverged,
+        conflicts = check.conflicts.len(),
         "resolve_exit_check: read back"
     );
     check
@@ -1735,7 +1780,7 @@ mod tests {
     ) -> spark_wallet::ExitCheck {
         spark_wallet::ExitCheck {
             confirmed: confirmed.iter().copied().collect(),
-            diverged: false,
+            conflicts: Vec::new(),
             not_confirmed: not_confirmed.iter().copied().collect(),
             pending: Vec::new(),
         }
@@ -1983,10 +2028,179 @@ mod tests {
         );
     }
 
+    #[macros::async_test_all]
+    async fn a_spent_input_gives_the_redo_reason_of_the_transaction_kind() {
+        let outpoint = OutPoint {
+            txid: Txid::from_byte_array([1; 32]),
+            vout: 0,
+        };
+        let tx = tx_paying(outpoint, 1_000);
+        let txid = tx.compute_txid().to_string();
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        let chain = std::sync::Arc::new(ChainStub {
+            outspends: HashMap::from([(
+                (outpoint.txid.to_string(), outpoint.vout),
+                ChainStub::spent(&spender_txid, true, Some(100)),
+            )]),
+            ..Default::default()
+        });
+
+        let expected = [
+            (
+                RecoveryTxKind::FanOut,
+                RecoveryRedoReason::FundingSpent {
+                    txid: txid.clone(),
+                    spender_txid: spender_txid.clone(),
+                },
+            ),
+            (
+                RecoveryTxKind::Node,
+                RecoveryRedoReason::NodeTransactionConflicted {
+                    txid: txid.clone(),
+                    spender_txid: spender_txid.clone(),
+                },
+            ),
+            (
+                RecoveryTxKind::Refund,
+                RecoveryRedoReason::RefundConflicted {
+                    txid: txid.clone(),
+                    spender_txid: spender_txid.clone(),
+                },
+            ),
+            (
+                RecoveryTxKind::Sweep,
+                RecoveryRedoReason::SweepConflicted {
+                    txid: txid.clone(),
+                    spender_txid: spender_txid.clone(),
+                },
+            ),
+        ];
+        for (kind, reason) in expected {
+            let mut transactions = vec![RecoveryTransaction {
+                kind,
+                ..model_tx(&tx, None, vec![], ExitTransactionStatus::Ready)
+            }];
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let reasons = check_recovery_transactions(&mut queries, &mut transactions)
+                .await
+                .unwrap();
+
+            assert_eq!(reasons, vec![reason]);
+            assert_eq!(transactions[0].status, ExitTransactionStatus::Ready);
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn a_redo_reason_has_the_txid_as_the_recovery_spells_it() {
+        let outpoint = OutPoint {
+            txid: Txid::from_byte_array([1; 32]),
+            vout: 0,
+        };
+        let tx = tx_paying(outpoint, 1_000);
+        let txid = tx.compute_txid().to_string().to_uppercase();
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        let chain = std::sync::Arc::new(ChainStub {
+            outspends: HashMap::from([(
+                (outpoint.txid.to_string(), outpoint.vout),
+                ChainStub::spent(&spender_txid, true, Some(100)),
+            )]),
+            ..Default::default()
+        });
+        let mut transactions = vec![RecoveryTransaction {
+            txid: txid.clone(),
+            ..model_tx(&tx, None, vec![], ExitTransactionStatus::Ready)
+        }];
+        let mut queries = ChainQueries::new(chain);
+
+        let reasons = check_recovery_transactions(&mut queries, &mut transactions)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reasons,
+            vec![RecoveryRedoReason::NodeTransactionConflicted { txid, spender_txid }]
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn an_anchor_spent_by_another_child_gives_a_redo_reason() {
+        let outpoint = OutPoint {
+            txid: Txid::from_byte_array([1; 32]),
+            vout: 0,
+        };
+        let tx = tx_paying(outpoint, 1_000);
+        let txid = tx.compute_txid();
+        let anchor = OutPoint { txid, vout: 1 };
+        let cpfp = tx_paying(anchor, 500);
+        // The sweep spends the change of that CPFP child.
+        let mut sweep = tx_paying(OutPoint { txid, vout: 0 }, 900);
+        sweep.input.push(bitcoin::TxIn {
+            previous_output: OutPoint {
+                txid: cpfp.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        });
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        let chain = std::sync::Arc::new(ChainStub {
+            outspends: HashMap::from([
+                (
+                    (outpoint.txid.to_string(), outpoint.vout),
+                    ChainStub::spent(&txid.to_string(), true, Some(100)),
+                ),
+                (
+                    (anchor.txid.to_string(), anchor.vout),
+                    ChainStub::spent(&spender_txid, true, Some(100)),
+                ),
+            ]),
+            ..Default::default()
+        });
+
+        for kind in [RecoveryTxKind::Node, RecoveryTxKind::Refund] {
+            let mut transactions = vec![
+                RecoveryTransaction {
+                    kind,
+                    cpfp_tx_hex: Some(serialize_hex(&cpfp)),
+                    ..model_tx(&tx, None, vec![], ExitTransactionStatus::Ready)
+                },
+                RecoveryTransaction {
+                    kind: RecoveryTxKind::Sweep,
+                    ..model_tx(
+                        &sweep,
+                        None,
+                        vec![txid.to_string()],
+                        ExitTransactionStatus::WaitingForDependencies,
+                    )
+                },
+            ];
+            let mut queries = ChainQueries::new(chain.clone());
+
+            let reasons = check_recovery_transactions(&mut queries, &mut transactions)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                reasons,
+                vec![RecoveryRedoReason::AnchorSpent {
+                    txid: txid.to_string(),
+                    spender_txid: spender_txid.clone(),
+                }]
+            );
+            assert_eq!(
+                transactions[0].status,
+                ExitTransactionStatus::Confirmed {
+                    block_height: Some(100)
+                }
+            );
+        }
+    }
+
     /// A transaction in a block and one below it that waits to confirm. The
     /// CPFP child of the waiting one spends `funding`.
     struct WaitingTransaction {
         transactions: Vec<RecoveryTransaction>,
+        txid: String,
         funding: OutPoint,
         chain: ChainStub,
     }
@@ -2045,37 +2259,42 @@ mod tests {
                     )
                 },
             ],
+            txid: waiting.compute_txid().to_string(),
             funding,
             chain,
         }
     }
 
     impl WaitingTransaction {
-        /// Whether a check finds an outpoint spent by another transaction, and
-        /// how many requests the chain stub received for it.
-        async fn check(mut self) -> (bool, usize) {
+        /// The reasons of a check, and how many requests the chain stub
+        /// received for it.
+        async fn check(mut self) -> (Vec<RecoveryRedoReason>, usize) {
             let chain = std::sync::Arc::new(self.chain);
             let mut queries = ChainQueries::new(chain.clone());
-            let diverged = check_recovery_transactions(&mut queries, &mut self.transactions)
+            let reasons = check_recovery_transactions(&mut queries, &mut self.transactions)
                 .await
                 .unwrap();
             let requests = chain.requests.load(std::sync::atomic::Ordering::SeqCst);
-            (diverged, requests)
+            (reasons, requests)
         }
     }
 
     #[macros::async_test_all]
     async fn a_check_finds_the_spent_funding_of_a_cpfp_child() {
         let mut waiting = waiting_transaction();
+        let txid = waiting.txid.clone();
         let spender_txid = Txid::from_byte_array([2; 32]).to_string();
         waiting.chain.outspends.insert(
             (waiting.funding.txid.to_string(), waiting.funding.vout),
             ChainStub::spent(&spender_txid, true, Some(101)),
         );
 
-        let (diverged, requests) = waiting.check().await;
+        let (reasons, requests) = waiting.check().await;
 
-        assert!(diverged);
+        assert_eq!(
+            reasons,
+            vec![RecoveryRedoReason::FundingSpent { txid, spender_txid }]
+        );
         assert_eq!(
             requests, 3,
             "the transaction in a block, the outpoint the waiting one spends, and the funding"
@@ -2089,6 +2308,7 @@ mod tests {
     async fn a_check_finds_the_spent_funding_of_an_unverified_transaction() {
         let mut waiting = waiting_transaction();
         waiting.transactions[1].status = ExitTransactionStatus::Unverified;
+        let txid = waiting.txid.clone();
         let spender_txid = Txid::from_byte_array([2; 32]).to_string();
         waiting.chain.outspends.insert(
             (waiting.funding.txid.to_string(), waiting.funding.vout),
@@ -2096,11 +2316,14 @@ mod tests {
         );
         let mut queries = ChainQueries::new(std::sync::Arc::new(waiting.chain));
 
-        let diverged = check_recovery_transactions(&mut queries, &mut waiting.transactions)
+        let reasons = check_recovery_transactions(&mut queries, &mut waiting.transactions)
             .await
             .unwrap();
 
-        assert!(diverged);
+        assert_eq!(
+            reasons,
+            vec![RecoveryRedoReason::FundingSpent { txid, spender_txid }]
+        );
         assert_eq!(
             waiting.transactions[1].status,
             ExitTransactionStatus::Unverified
@@ -2109,9 +2332,87 @@ mod tests {
 
     #[macros::async_test_all]
     async fn a_failed_request_finds_nothing() {
-        let (diverged, requests) = waiting_transaction().check().await;
+        let (reasons, requests) = waiting_transaction().check().await;
 
-        assert!(!diverged);
+        assert!(reasons.is_empty());
         assert_eq!(requests, 3);
+    }
+
+    #[macros::async_test_all]
+    async fn a_transaction_that_spent_two_inputs_of_the_sweep_gives_one_redo_reason() {
+        let refunds = [1u8, 2].map(|byte| {
+            tx_paying(
+                OutPoint {
+                    txid: Txid::from_byte_array([byte; 32]),
+                    vout: 0,
+                },
+                1_000,
+            )
+        });
+        let refund_outputs = refunds.clone().map(|refund| OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        });
+        let mut sweep = tx_paying(refund_outputs[0], 1_500);
+        sweep.input.push(bitcoin::TxIn {
+            previous_output: refund_outputs[1],
+            ..Default::default()
+        });
+        let spender_txid = Txid::from_byte_array([9; 32]).to_string();
+        let chain = std::sync::Arc::new(ChainStub {
+            heights: refund_outputs
+                .iter()
+                .map(|output| (output.txid.to_string(), 100))
+                .collect(),
+            outspends: refund_outputs
+                .iter()
+                .map(|output| {
+                    (
+                        (output.txid.to_string(), output.vout),
+                        ChainStub::spent(&spender_txid, true, Some(101)),
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let mut transactions: Vec<RecoveryTransaction> = refunds
+            .iter()
+            .map(|refund| RecoveryTransaction {
+                kind: RecoveryTxKind::Refund,
+                ..model_tx(
+                    refund,
+                    None,
+                    vec![],
+                    ExitTransactionStatus::Confirmed {
+                        block_height: Some(100),
+                    },
+                )
+            })
+            .collect();
+        transactions.push(RecoveryTransaction {
+            kind: RecoveryTxKind::Sweep,
+            ..model_tx(
+                &sweep,
+                None,
+                refund_outputs
+                    .iter()
+                    .map(|output| output.txid.to_string())
+                    .collect(),
+                ExitTransactionStatus::WaitingForDependencies,
+            )
+        });
+        let mut queries = ChainQueries::new(chain.clone());
+
+        let reasons = check_recovery_transactions(&mut queries, &mut transactions)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reasons,
+            vec![RecoveryRedoReason::SweepConflicted {
+                txid: sweep.compute_txid().to_string(),
+                spender_txid,
+            }]
+        );
     }
 }

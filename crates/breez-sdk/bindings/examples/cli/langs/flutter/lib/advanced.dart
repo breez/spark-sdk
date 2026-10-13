@@ -324,8 +324,7 @@ Future<void> _checkRecoverFunds(BreezSdk sdk, String inputFile, String? outputFi
 
   final verdict = checked.verdict;
   if (verdict is RecoveryVerdict_Redo) {
-    final reason = verdict.reason.name;
-    print('Verdict: Redo { reason: ${reason[0].toUpperCase()}${reason.substring(1)} }');
+    print('Verdict: Redo { reasons: ${verdict.reasons} }');
     print('  (this recovery cannot finish: run ${_redoCommand(checked.recovery)})');
   } else if (verdict is RecoveryVerdict_Done) {
     print('Verdict: Done');

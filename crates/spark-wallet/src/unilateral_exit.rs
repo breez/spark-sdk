@@ -438,15 +438,36 @@ pub struct ExitCheck {
     /// The transactions now in a block, against the height of that block where
     /// the chain reported one.
     pub confirmed: HashMap<Txid, Option<u32>>,
-    /// Whether the chain no longer matches: something other than this exit's own
-    /// transaction took an outpoint it still needs.
-    pub diverged: bool,
+    /// Outpoints this exit still needs, each spent by another transaction.
+    pub conflicts: Vec<ExitConflict>,
     /// Transactions this check asked the chain about, where the chain replied
     /// that they are not in a block. A txid in neither this nor `confirmed` was
     /// either not asked about or its lookup failed, and neither of those says
     /// anything about where the transaction is.
     pub not_confirmed: HashSet<Txid>,
     pub pending: Vec<ChainQuery>,
+}
+
+/// An outpoint a kept exit still needs, spent by a transaction that is in a
+/// block and not part of the exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExitConflict {
+    /// The kept transaction that needs the outpoint.
+    pub txid: Txid,
+    pub kind: ExitConflictKind,
+    pub outpoint: OutPoint,
+    pub spender_txid: Txid,
+}
+
+/// What the outpoint of an [`ExitConflict`] is to its transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitConflictKind {
+    /// An outpoint the transaction spends.
+    Input,
+    /// The transaction's anchor, which its CPFP child spends.
+    Anchor,
+    /// An outpoint its CPFP child spends to pay the fee.
+    Funding,
 }
 
 /// A transaction of a kept exit: one the caller kept, or the CPFP child of one.
@@ -504,7 +525,7 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     let mut confirmed: HashMap<Txid, Option<u32>> = HashMap::new();
     let mut settled: HashSet<Txid> = HashSet::new();
     let mut not_confirmed: HashSet<Txid> = HashSet::new();
-    let mut diverged = false;
+    let mut conflicts: Vec<ExitConflict> = Vec::new();
 
     let members = exit_members(txs);
     let by_txid: HashMap<Txid, &ExitMember> = members.iter().map(|m| (m.txid, m)).collect();
@@ -590,7 +611,12 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
                             confirmed.insert(txid, info.block_height);
                         } else {
                             warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
-                            diverged = true;
+                            conflicts.push(ExitConflict {
+                                txid: member.cpfp_parent.unwrap_or(txid),
+                                kind: conflict_kind(member, outpoint),
+                                outpoint,
+                                spender_txid: info.spender_txid,
+                            });
                         }
                     }
                     None => pending.push(query),
@@ -607,7 +633,7 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
 
     ExitCheck {
         confirmed,
-        diverged,
+        conflicts,
         not_confirmed,
         pending,
     }
@@ -653,6 +679,16 @@ fn outpoints_to_check(
     outpoints
         .filter(|outpoint| outpoint.txid != parent.txid && exists(outpoint))
         .collect()
+}
+
+/// What `outpoint`, which `member` spends, is to the transaction the caller
+/// kept.
+fn conflict_kind(member: &ExitMember, outpoint: OutPoint) -> ExitConflictKind {
+    match member.cpfp_parent {
+        None => ExitConflictKind::Input,
+        Some(parent) if outpoint.txid == parent => ExitConflictKind::Anchor,
+        Some(_) => ExitConflictKind::Funding,
+    }
 }
 
 /// For each CPFP child, the transaction of the exit that spends its change.
@@ -2984,7 +3020,7 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
         assert_eq!(check.confirmed.len(), 3, "everything above it too");
     }
 
@@ -3011,7 +3047,7 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
         assert!(
             check.confirmed.contains_key(&second),
             "the one that landed is found"
@@ -3190,7 +3226,15 @@ mod interpret_tests {
         ];
         let check = check_exit_chain(&chain[..2], &observed);
 
-        assert!(check.diverged, "a stranger holds the outpoint it needs");
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: chain[1].tx.compute_txid(),
+                kind: ExitConflictKind::Input,
+                outpoint: frontier_input,
+                spender_txid: stranger,
+            }]
+        );
     }
 
     /// A frontier whose anchor a foreign child already bumped: our own child
@@ -3212,7 +3256,15 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(check.diverged, "somebody else bumped the anchor");
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: frontier,
+                kind: ExitConflictKind::Anchor,
+                outpoint: anchor,
+                spender_txid: stranger,
+            }]
+        );
     }
 
     fn in_block(txid: Txid, confirmed: bool) -> Observation {
@@ -3387,7 +3439,7 @@ mod interpret_tests {
                 ChainQuery::Outspend(change_of(second_child)),
             ]
         );
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
     }
 
     /// The caller stores the statuses a check returns, so the next check starts
@@ -3410,7 +3462,15 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(check.diverged);
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: second.tx.compute_txid(),
+                kind: ExitConflictKind::Anchor,
+                outpoint: anchor_of(&second.tx),
+                spender_txid: stranger,
+            }]
+        );
     }
 
     /// The funding of a CPFP child is spent by another transaction while the
@@ -3430,7 +3490,15 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(check.diverged);
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: chain[1].tx.compute_txid(),
+                kind: ExitConflictKind::Funding,
+                outpoint: funding,
+                spender_txid: stranger,
+            }]
+        );
     }
 
     /// The change a CPFP child spends does not exist while the child that
@@ -3448,7 +3516,7 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
     }
 
     /// A transaction and its CPFP child landed since the caller last looked.
@@ -3476,7 +3544,7 @@ mod interpret_tests {
         let check = check_exit_chain(&chain, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
         assert!(check.confirmed.contains_key(&second));
         assert!(check.confirmed.contains_key(&second_child.compute_txid()));
     }
@@ -3543,7 +3611,7 @@ mod interpret_tests {
                 ChainQuery::Outspend(sweep_input),
             ]
         );
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
     }
 
     /// The same once the caller recorded the node transaction in a block.
@@ -3568,7 +3636,7 @@ mod interpret_tests {
                 ChainQuery::Outspend(sweep_input),
             ]
         );
-        assert!(!check.diverged);
+        assert!(check.conflicts.is_empty());
     }
 
     /// A recorded transaction is queried along with its CPFP child, and keeps
@@ -3690,7 +3758,15 @@ mod interpret_tests {
                 ChainQuery::Outspend(change_of(&child)),
             ]
         );
-        assert!(check.diverged);
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: sweep.compute_txid(),
+                kind: ExitConflictKind::Input,
+                outpoint: change_of(&child),
+                spender_txid: stranger,
+            }]
+        );
     }
 
     /// The sweep spends the refund of every leaf. Another transaction spent one
@@ -3730,7 +3806,15 @@ mod interpret_tests {
         let check = check_exit_chain(&txs, &observed);
 
         assert!(check.pending.is_empty(), "{:?}", check.pending);
-        assert!(check.diverged);
+        assert_eq!(
+            check.conflicts,
+            vec![ExitConflict {
+                txid: sweep.compute_txid(),
+                kind: ExitConflictKind::Input,
+                outpoint: refund_outputs[1],
+                spender_txid: stranger,
+            }]
+        );
     }
 
     /// Below an unconfirmed transaction there is no outpoint yet for anything to

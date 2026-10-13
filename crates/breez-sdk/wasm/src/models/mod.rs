@@ -1120,12 +1120,16 @@ pub struct CheckRecoverFundsResponse {
 pub enum RecoveryVerdict {
     Valid,
     Done,
-    Redo { reason: RecoveryRedoReason },
+    Redo { reasons: Vec<RecoveryRedoReason> },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RecoveryRedoReason)]
 pub enum RecoveryRedoReason {
-    OnChainStateDiverged,
+    FundingSpent { txid: String, spender_txid: String },
+    NodeTransactionConflicted { txid: String, spender_txid: String },
+    RefundConflicted { txid: String, spender_txid: String },
+    SweepConflicted { txid: String, spender_txid: String },
+    AnchorSpent { txid: String, spender_txid: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Credentials)]

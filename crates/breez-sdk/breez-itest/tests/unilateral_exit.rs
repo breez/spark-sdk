@@ -33,8 +33,8 @@ use breez_sdk_spark::{
     CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState, ExitTransactionStatus,
     GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
     PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryFunding,
-    RecoveryMethod, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkError, SdkEvent,
-    SkippedLeaf, SkippedLeafReason, SyncWalletRequest,
+    RecoveryMethod, RecoveryRedoReason, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict,
+    SdkError, SdkEvent, SkippedLeaf, SkippedLeafReason, SyncWalletRequest,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -3712,7 +3712,13 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         "a refresh keeps the leaf, and none of its ancestors as a leaf"
     );
     wait_for_verdict(&sdk, &started, |verdict| {
-        matches!(verdict, RecoveryVerdict::Redo { .. })
+        matches!(
+            verdict,
+            RecoveryVerdict::Redo { reasons } if matches!(
+                reasons.as_slice(),
+                [RecoveryRedoReason::NodeTransactionConflicted { .. }]
+            )
+        )
     })
     .await
     .context("the watchtower spent an output the exit builds on")?;
@@ -3727,7 +3733,13 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
         .recovery;
     let verdict = check(&sdk, stored).await?;
     assert!(
-        matches!(verdict, RecoveryVerdict::Redo { .. }),
+        matches!(
+            &verdict,
+            RecoveryVerdict::Redo { reasons } if matches!(
+                reasons.as_slice(),
+                [RecoveryRedoReason::NodeTransactionConflicted { .. }]
+            )
+        ),
         "{verdict:?}"
     );
     for selection in [

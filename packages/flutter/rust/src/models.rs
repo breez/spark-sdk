@@ -511,12 +511,16 @@ pub struct _CheckRecoverFundsResponse {
 pub enum _RecoveryVerdict {
     Valid,
     Done,
-    Redo { reason: RecoveryRedoReason },
+    Redo { reasons: Vec<RecoveryRedoReason> },
 }
 
 #[frb(mirror(RecoveryRedoReason))]
 pub enum _RecoveryRedoReason {
-    OnChainStateDiverged,
+    FundingSpent { txid: String, spender_txid: String },
+    NodeTransactionConflicted { txid: String, spender_txid: String },
+    RefundConflicted { txid: String, spender_txid: String },
+    SweepConflicted { txid: String, spender_txid: String },
+    AnchorSpent { txid: String, spender_txid: String },
 }
 
 #[frb(mirror(GetInfoRequest))]
