@@ -12,7 +12,7 @@ The balance is split into leaves, and each leaf is recovered in one of two ways,
 
 ## Recoverable funds
 
-Funds that left your balance are not part of {{#name balance_sats}}. {{#name get_info}} reports them separately, as {{#name recoverable_funds_sats}}. A sync adds a leaf's value to that total when it sees the leaf leave your balance. The value leaves the total once the SDK has seen the recovery pay the funds out on-chain: a cooperative recovery in a block, or a unilateral exit's sweep in a block. {{#name prepare_recover_funds}}, {{#name recover_funds}} and {{#name check_recover_funds}} record that when they find it on-chain, and the next sync leaves the leaf out. The total also counts funds too small to be worth recovering at the fee rate you pick.
+Funds that left your balance are not part of {{#name balance_sats}}. {{#name get_info}} reports them separately, as {{#name recoverable_funds_sats}}. A sync adds a leaf's value to that total when it sees the leaf leave your balance. The value leaves the total once the SDK has seen the recovery pay the funds out on-chain: a cooperative recovery in a block, or a unilateral exit's sweep in a block. {{#name prepare_recover_funds}}, {{#name recover_funds}} and {{#name check_recover_funds}} record that when they find it on-chain. The SDK then takes the leaf out of the total before that function returns a response, or during the next sync. The total also counts funds too small to be worth recovering at the fee rate you pick.
 
 A wallet restored on another device has no such record. For each leaf whose recovery may already have finished, the SDK checks the chain during a sync, and takes the leaf out of the total when it finds the recovery in a block. A chain service that fails a request, for example because it limits requests, does not fail the sync: the SDK keeps what it found, and the next sync continues from there. Until that check is complete the leaf stays in the total, so the total can include funds that were already recovered. The SDK does not check a leaf whose funds are too small to send on-chain at the lowest fee rate nodes relay, so such a leaf stays in the total.
 
@@ -229,7 +229,7 @@ Follow {{#name depends_on}} to order the set: a transaction can go out as soon a
 
 ## Follow the recovery
 
-{{#name check_recover_funds}} takes a recovery you kept and returns it with every transaction's status brought up to date. It reads the chain and nothing else: no wallet, no leaves, no signer, no funding. A recovery can be followed on a device that has lost everything but the kept response. When {{#name check_recover_funds}} finds a leaf's recovery in a block, it records that, so the next sync takes the leaf out of {{#name recoverable_funds_sats}}.
+{{#name check_recover_funds}} takes a recovery you kept and returns it with every transaction's status brought up to date. It needs the chain and nothing else: no wallet, no leaves, no signer, no funding. A recovery can be followed on a device that has lost everything but the kept response. When {{#name check_recover_funds}} finds a leaf's recovery in a block, it records that, and the SDK takes the leaf out of {{#name recoverable_funds_sats}} as [Recoverable funds](#recoverable-funds) describes.
 
 Its {{#name verdict}} says what to do next:
 
