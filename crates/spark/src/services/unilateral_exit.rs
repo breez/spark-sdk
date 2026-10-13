@@ -1727,7 +1727,7 @@ mod tests {
         fn leaf_node(id: &str, value: u64) -> TreeNode {
             let mut n = crate::tree::tests::create_test_tree_node(id, value);
             n.node_tx = create_test_transaction_with_anchor();
-            n.refund_tx = Some(create_test_transaction_with_anchor());
+            n.refund_tx = Some(refund_paying(value, 0));
             n
         }
 
@@ -1737,7 +1737,7 @@ mod tests {
         fn leaf_node_n(id: &str, value: u64, nonce: u32) -> TreeNode {
             let mut n = crate::tree::tests::create_test_tree_node(id, value);
             n.node_tx = anchor_tx_n(nonce);
-            n.refund_tx = Some(anchor_tx_n(nonce + 1_000));
+            n.refund_tx = Some(refund_paying(value, nonce + 1_000));
             n
         }
 
@@ -1977,7 +1977,7 @@ mod tests {
             )
             .unwrap()[0]
                 .estimated_cost;
-            assert_eq!(cost, 517);
+            assert_eq!(cost, 526);
 
             let at = leaf_node("leaf", cost);
             let at_id = at.id.clone();
@@ -2199,7 +2199,7 @@ mod tests {
             .unwrap();
             assert_eq!(quote.selected_leaves.len(), 1);
             let est = quote.selected_leaves[0].estimated_cost;
-            assert_eq!(est, 517);
+            assert_eq!(est, 526);
 
             assert_eq!(quote.fanout_fee_sat, 0);
             assert_eq!(quote.per_branch_funding.len(), 1);
@@ -2232,21 +2232,21 @@ mod tests {
             .unwrap();
 
             // a is the first selected, so it carries the initial CPFP input and a
-            // full sweep input (517); b's sweep cost is only the incremental input
-            // (476). The fan-out fee (141) is charged once over both branches.
+            // full sweep input (526); b's sweep cost is only the incremental input
+            // (485). The fan-out fee (141) is charged once over both branches.
             let est: Vec<u64> = quote
                 .selected_leaves
                 .iter()
                 .map(|l| l.estimated_cost)
                 .collect();
-            assert_eq!(est, vec![517, 476]);
+            assert_eq!(est, vec![526, 485]);
             assert_eq!(quote.fanout_fee_sat, 141);
             let funding: Vec<u64> = quote.per_branch_funding.iter().map(|(_, s)| *s).collect();
-            assert_eq!(funding, vec![517 + DUST, 476 + DUST]);
-            assert_eq!(quote.total_fee_sat, 517 + 476 + 141);
+            assert_eq!(funding, vec![526 + DUST, 485 + DUST]);
+            assert_eq!(quote.total_fee_sat, 526 + 485 + 141);
             assert_eq!(
                 quote.single_utxo_funding_sat,
-                (517 + DUST) + (476 + DUST) + 141
+                (526 + DUST) + (485 + DUST) + 141
             );
 
             // The per-leaf sweep shares are marginal, so they telescope to the fee
@@ -2286,7 +2286,7 @@ mod tests {
             )
             .unwrap();
             let funding: Vec<u64> = quote.per_branch_funding.iter().map(|(_, s)| *s).collect();
-            assert_eq!(funding, vec![811, 770]);
+            assert_eq!(funding, vec![820, 779]);
 
             let fund_at = |a_sat: u64, b_sat: u64| {
                 plan_unilateral_exit(
@@ -2301,7 +2301,7 @@ mod tests {
             };
 
             // Funded at exactly the quote: a clean one-UTXO-per-branch plan, no fan-out.
-            let plan = fund_at(811, 770).unwrap();
+            let plan = fund_at(820, 779).unwrap();
             assert!(plan.fan_out_psbt.is_none());
             assert_eq!(plan.per_branch_funding.len(), 2);
             assert!(
@@ -2311,8 +2311,8 @@ mod tests {
             );
 
             // One sat short on either branch and the exit can no longer be funded.
-            assert!(fund_at(810, 770).is_err());
-            assert!(fund_at(811, 769).is_err());
+            assert!(fund_at(819, 779).is_err());
+            assert!(fund_at(820, 778).is_err());
         }
 
         #[test_all]
@@ -2336,8 +2336,8 @@ mod tests {
                 &ExitChainState::default(),
             )
             .unwrap();
-            // Two per-branch amounts (811 + 770) plus one fan-out fee (141).
-            assert_eq!(quote.single_utxo_funding_sat, 1_722);
+            // Two per-branch amounts (820 + 779) plus one fan-out fee (141).
+            assert_eq!(quote.single_utxo_funding_sat, 1_740);
 
             let fund_one = |sat: u64| {
                 plan_unilateral_exit(
@@ -2360,7 +2360,7 @@ mod tests {
                 .iter()
                 .map(|(_, ins)| ins[0].witness_utxo.value.to_sat())
                 .collect();
-            assert_eq!(branch_outputs, vec![811, 770]);
+            assert_eq!(branch_outputs, vec![820, 779]);
 
             // One sat under the quoted single-UTXO amount and the fan-out can't be funded.
             assert!(fund_one(quote.single_utxo_funding_sat - 1).is_err());
@@ -2519,6 +2519,19 @@ mod tests {
                     script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
                 }],
             }
+        }
+
+        /// A leaf's refund: an output that holds `value`, then the anchor.
+        fn refund_paying(value: u64, nonce: u32) -> Transaction {
+            let mut tx = anchor_tx_n(nonce);
+            tx.output.insert(
+                0,
+                TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: ScriptBuf::new(),
+                },
+            );
+            tx
         }
 
         #[test_all]
