@@ -2535,6 +2535,66 @@ mod exit_build_tests {
         assert_eq!(build.branches.len(), 3);
     }
 
+    #[test]
+    fn leaves_under_one_root_build_from_the_quote_amounts_per_branch() {
+        let root = node("root", None, anchor_tx(1), None);
+        let leaf_a = node("leafA", Some("root"), anchor_tx(2), Some(refund_tx(3)));
+        let mut leaf_b = node("leafB", Some("root"), anchor_tx(4), Some(refund_tx(5)));
+        leaf_b.vout = 1;
+        let leaf_ids = [leaf_a.id.clone(), leaf_b.id.clone()];
+        let nodes = to_node_map(vec![root, leaf_a, leaf_b]);
+        let change_len = funding(0).witness_utxo.script_pubkey.len();
+        let dust = funding(0)
+            .witness_utxo
+            .script_pubkey
+            .minimal_non_dust()
+            .to_sat();
+
+        let quote = quote_unilateral_exit(
+            &nodes,
+            &leaf_ids,
+            UnilateralExitLeafFilter::All,
+            272,
+            change_len,
+            dust,
+            FEE_RATE,
+            change_len,
+            &ExitChainState::default(),
+        )
+        .unwrap();
+        let inputs: Vec<CpfpInput> = quote
+            .per_branch_funding
+            .iter()
+            .zip(0u32..)
+            .map(|((_, sats), vout)| {
+                let mut input = funding(*sats);
+                input.outpoint.vout = vout;
+                input
+            })
+            .collect();
+        let plan = plan_unilateral_exit(
+            nodes,
+            &leaf_ids,
+            UnilateralExitLeafFilter::All,
+            inputs,
+            FEE_RATE,
+            change_len,
+            &ExitChainState::default(),
+        )
+        .unwrap();
+        let build = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE).unwrap();
+
+        assert!(build.fan_out.is_none());
+        // The builder builds the root's child in the first branch only.
+        let children: Vec<usize> = build
+            .branches
+            .iter()
+            .map(|branch| branch.txs.iter().filter(|tx| tx.to_sign.is_some()).count())
+            .collect();
+        assert_eq!(children, [3, 2]);
+        assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
+    }
+
     /// The fee of a sweep of the refund outputs and change inputs in `build`, as
     /// `create_refund_sweep_transaction` computes it.
     fn sweep_fee(build: &UnilateralExitBuild, destination_script_len: usize) -> u64 {

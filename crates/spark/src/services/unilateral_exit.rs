@@ -250,6 +250,7 @@ pub fn plan_unilateral_exit(
                 destination_script_len,
                 fee_rate_sat_per_kw,
                 on_chain,
+                &mut HashSet::new(),
             )
             .unwrap_or(to_build[0].cpfp_cost)
         } else {
@@ -516,6 +517,7 @@ pub fn branch_required_funding(leaf: &UnilateralExitSelectedLeaf, change_dust_li
 /// weight, each chained child on the first input. This is the physical floor
 /// `build_cpfp_child` enforces, independent of the sweep (paid from the swept
 /// value, not the funding UTXO). `None` only when the leaf cannot be costed.
+/// `covered_txids` is as in [`evaluate_leaf_costs`].
 fn first_child_cpfp_floor(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_id: &TreeNodeId,
@@ -523,6 +525,7 @@ fn first_child_cpfp_floor(
     destination_script_len: usize,
     fee_rate_sat_per_kw: u64,
     on_chain: &ExitChainState,
+    covered_txids: &mut HashSet<bitcoin::Txid>,
 ) -> Option<u64> {
     let first = branch_inputs.first()?;
     let total_input_weight = branch_inputs
@@ -536,12 +539,13 @@ fn first_child_cpfp_floor(
         destination_script_len,
         fee_rate_sat_per_kw,
     };
-    evaluate_unilateral_exit_leaf_costs(
+    evaluate_leaf_costs(
         tree_nodes,
         std::slice::from_ref(leaf_id),
         &params,
         UnilateralExitLeafFilter::All,
         on_chain,
+        covered_txids,
     )
     .ok()
     .and_then(|leaves| leaves.into_iter().next())
@@ -768,6 +772,27 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     filter: UnilateralExitLeafFilter,
     on_chain: &ExitChainState,
 ) -> Result<Vec<UnilateralExitSelectedLeaf>, ServiceError> {
+    evaluate_leaf_costs(
+        tree_nodes,
+        leaf_ids,
+        params,
+        filter,
+        on_chain,
+        &mut HashSet::new(),
+    )
+}
+
+/// [`evaluate_unilateral_exit_leaf_costs`] for leaves that come after others in
+/// the build. `covered_txids` holds the nodes charged to those others, and this
+/// function adds the nodes of the leaves it keeps.
+fn evaluate_leaf_costs(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    params: &UnilateralExitLeafCostParams,
+    filter: UnilateralExitLeafFilter,
+    on_chain: &ExitChainState,
+    covered_txids: &mut HashSet<bitcoin::Txid>,
+) -> Result<Vec<UnilateralExitSelectedLeaf>, ServiceError> {
     let mut leaves: Vec<(&TreeNodeId, &TreeNode)> = Vec::with_capacity(leaf_ids.len());
     for id in leaf_ids {
         match tree_nodes.get(id) {
@@ -778,7 +803,6 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     leaves.sort_by(|a, b| b.1.value.cmp(&a.1.value).then_with(|| a.0.cmp(b.0)));
 
     let mut selected: Vec<UnilateralExitSelectedLeaf> = Vec::new();
-    let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
     // The sweep of the leaves selected so far.
     let mut sweep_input_weight = Weight::ZERO;
     let mut sweep_fee: u64 = 0;
@@ -937,9 +961,8 @@ pub fn assign_inputs_to_leaves(
 /// output, so one input, per branch). Each branch is costed on its own inputs and
 /// its own change-script dust, so a branch funded by an input heavier than the
 /// reference `inputs[0]` (a mixed or Custom funding kind) is gated correctly, not
-/// just the multi-input branches. Costs each branch's chain in isolation: exact
-/// for independent branches, conservative when they share an ancestor (charged to
-/// every branch here, to only one in the build).
+/// just the multi-input branches. A shared ancestor is charged to the first
+/// branch that reaches it, as `build_exit` charges it.
 fn assignment_covers_first_child(
     assignment: &[(TreeNodeId, Vec<CpfpInput>)],
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
@@ -947,6 +970,7 @@ fn assignment_covers_first_child(
     fee_rate_sat_per_kw: u64,
     on_chain: &ExitChainState,
 ) -> bool {
+    let mut covered_txids = HashSet::new();
     assignment.iter().all(|(leaf_id, branch_inputs)| {
         let Some(first) = branch_inputs.first() else {
             return false;
@@ -963,6 +987,7 @@ fn assignment_covers_first_child(
             destination_script_len,
             fee_rate_sat_per_kw,
             on_chain,
+            &mut covered_txids,
         ) {
             Some(cpfp_cost) => available >= cpfp_cost.saturating_add(dust),
             None => false,
@@ -2506,6 +2531,50 @@ mod tests {
             // One sat short on either branch and the exit can no longer be funded.
             assert!(fund_at(819, 779).is_err());
             assert!(fund_at(820, 778).is_err());
+        }
+
+        #[test_all]
+        fn plan_leaves_under_one_root_funded_at_quote_amounts_needs_no_fan_out() {
+            let (nodes, _, leaf_ids) = root_with_leaves(&[1_000_000, 1_000_000]);
+            let dust = test_script().minimal_non_dust().to_sat();
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &leaf_ids,
+                UnilateralExitLeafFilter::ProfitableOnly,
+                272,
+                22,
+                dust,
+                250,
+                22,
+                &ExitChainState::default(),
+            )
+            .unwrap();
+            // The first amount includes the fee of the root's child.
+            let funding: Vec<u64> = quote.per_branch_funding.iter().map(|(_, s)| *s).collect();
+            assert_eq!(funding, vec![995, 779]);
+
+            let fund_at = |a_sat: u64, b_sat: u64| {
+                plan_unilateral_exit(
+                    nodes.clone(),
+                    &leaf_ids,
+                    UnilateralExitLeafFilter::ProfitableOnly,
+                    vec![cpfp_input(a_sat, 0), cpfp_input(b_sat, 1)],
+                    250,
+                    22,
+                    &ExitChainState::default(),
+                )
+            };
+
+            let plan = fund_at(995, 779).unwrap();
+            assert!(plan.fan_out_psbt.is_none());
+            assert!(
+                plan.per_branch_funding
+                    .iter()
+                    .all(|(_, ins)| ins.len() == 1)
+            );
+
+            assert!(fund_at(994, 779).is_err());
+            assert!(fund_at(995, 778).is_err());
         }
 
         #[test_all]
