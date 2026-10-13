@@ -1119,9 +1119,18 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	fs := flag.NewFlagSet("buy-bitcoin", flag.ContinueOnError)
 	provider := fs.String("provider", "moonpay", "Provider: moonpay or cashapp")
 	amountSat := fs.Uint64("amount-sat", 0, "Amount in satoshis")
+	amountStr := fs.String("amount", "", "Deliver as USDC on Solana (MoonPay only): USD amount in 6-decimal base units")
+	feesIncluded := fs.Bool("fees-included", false, "Deduct the conversion fee from --amount instead of adding it on top")
 	redirectUrl := fs.String("redirect-url", "", "Redirect URL after purchase (MoonPay only)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *amountStr != "" && *amountSat > 0 {
+		return fmt.Errorf("--amount and --amount-sat are mutually exclusive")
+	}
+	if *feesIncluded && *amountStr == "" {
+		return fmt.Errorf("--fees-included requires --amount")
 	}
 
 	var req breez_sdk_spark.BuyBitcoinRequest
@@ -1133,7 +1142,22 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 		req = breez_sdk_spark.BuyBitcoinRequestCashApp{AmountSats: *amountSat}
 	default:
 		moonpayReq := breez_sdk_spark.BuyBitcoinRequestMoonpay{}
-		if *amountSat > 0 {
+		if *amountStr != "" {
+			amount, ok := new(big.Int).SetString(*amountStr, 10)
+			if !ok {
+				return fmt.Errorf("invalid amount: %s", *amountStr)
+			}
+			var feeMode *breez_sdk_spark.CrossChainFeeMode
+			if *feesIncluded {
+				fm := breez_sdk_spark.CrossChainFeeModeFeesIncluded
+				feeMode = &fm
+			}
+			var delivery breez_sdk_spark.MoonpayDelivery = breez_sdk_spark.MoonpayDeliveryCrossChain{
+				Amount:  amount,
+				FeeMode: feeMode,
+			}
+			moonpayReq.Delivery = &delivery
+		} else if *amountSat > 0 {
 			var delivery breez_sdk_spark.MoonpayDelivery = breez_sdk_spark.MoonpayDeliveryBitcoin{AmountSat: amountSat}
 			moonpayReq.Delivery = &delivery
 		}
@@ -1149,6 +1173,10 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	}
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(result.Url)
+	if result.CrossChainInfo != nil {
+		fmt.Println("Delivered as USDC on Solana. Quote:")
+		printValue(result.CrossChainInfo)
+	}
 	return nil
 }
 

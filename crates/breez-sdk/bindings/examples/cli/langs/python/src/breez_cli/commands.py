@@ -806,13 +806,22 @@ def _build_buy_bitcoin_parser():
     p = _parser("buy-bitcoin", "Buy Bitcoin using an external provider")
     p.add_argument("--provider", default="moonpay",
                    help='Provider to use: "moonpay" (default) or "cashapp"')
-    p.add_argument("--amount-sat", type=int, default=None,
-                   help="Amount in satoshis (meaning depends on provider)")
+    amount_group = p.add_mutually_exclusive_group()
+    amount_group.add_argument("--amount-sat", type=int, default=None,
+                              help="Amount in satoshis (meaning depends on provider)")
+    amount_group.add_argument("--amount", type=int, default=None,
+                              help="Deliver as USDC on Solana (MoonPay only): "
+                              "USD amount in 6-decimal base units, so 1000000 = $1")
+    p.add_argument("--fees-included", action="store_true", default=False,
+                   help="Deduct the conversion fee from --amount instead of adding it on top")
     p.add_argument("--redirect-url", default=None,
                    help="Custom redirect URL after purchase completion (MoonPay only)")
     return p
 
 async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
+    if args.fees_included and args.amount is None:
+        print("--fees-included requires --amount")
+        return
     provider = (args.provider or "moonpay").lower()
     if provider in ("cashapp", "cash_app", "cash-app"):
         if args.amount_sat is None:
@@ -820,13 +829,26 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
             return
         request = BuyBitcoinRequest.CASH_APP(amount_sats=args.amount_sat)
     else:
+        if args.amount is not None:
+            fee_mode = CrossChainFeeMode.FEES_INCLUDED if args.fees_included else None
+            delivery = MoonpayDelivery.CROSS_CHAIN(
+                amount=args.amount,
+                fee_mode=fee_mode,
+            )
+        elif args.amount_sat is not None:
+            delivery = MoonpayDelivery.BITCOIN(amount_sat=args.amount_sat)
+        else:
+            delivery = None
         request = BuyBitcoinRequest.MOONPAY(
-            delivery=MoonpayDelivery.BITCOIN(amount_sat=args.amount_sat),
+            delivery=delivery,
             redirect_url=args.redirect_url,
         )
     result = await sdk.buy_bitcoin(request=request)
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
+    if result.cross_chain_info is not None:
+        print("Delivered as USDC on Solana. Quote:")
+        print_value(result.cross_chain_info)
 
 
 # --- prepare-payment-link ---

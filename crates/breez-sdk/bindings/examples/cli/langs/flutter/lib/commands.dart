@@ -935,33 +935,62 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
       _parser('buy-bitcoin')
         ..addOption('provider', defaultsTo: 'moonpay', help: 'Provider: moonpay (default) or cashapp')
         ..addOption('amount-sat', help: 'Amount in satoshis')
+        ..addOption('amount', help: 'USDC amount in 6-decimal base units (MoonPay cross-chain)')
+        ..addFlag(
+          'fees-included',
+          defaultsTo: false,
+          help: 'Deduct fee from --amount instead of adding on top',
+        )
         ..addOption('redirect-url', help: 'Redirect URL after purchase (MoonPay only)');
   final results = _parseArgs(parser, args, 'buy-bitcoin [options]');
   if (results == null) return;
 
   final provider = results.option('provider')!.toLowerCase();
-  final amountStr = results.option('amount-sat');
+  final amountSatStr = results.option('amount-sat');
+  final amountSat = amountSatStr != null ? BigInt.parse(amountSatStr) : null;
+  final amountStr = results.option('amount');
   final amount = amountStr != null ? BigInt.parse(amountStr) : null;
+  final feesIncluded = results.flag('fees-included');
   final redirectUrl = results.option('redirect-url');
+
+  if (amount != null && amountSat != null) {
+    print('--amount and --amount-sat are mutually exclusive');
+    return;
+  }
+  if (feesIncluded && amount == null) {
+    print('--fees-included requires --amount');
+    return;
+  }
 
   BuyBitcoinRequest request;
   switch (provider) {
     case 'cashapp' || 'cash_app' || 'cash-app':
-      if (amount == null) {
+      if (amountSat == null) {
         print('--amount-sat is required when --provider is cashapp');
         return;
       }
-      request = BuyBitcoinRequest_CashApp(amountSats: amount);
+      request = BuyBitcoinRequest_CashApp(amountSats: amountSat);
     default:
-      request = BuyBitcoinRequest_Moonpay(
-        delivery: MoonpayDelivery_Bitcoin(amountSat: amount),
-        redirectUrl: redirectUrl,
-      );
+      MoonpayDelivery? delivery;
+      if (amount != null) {
+        delivery = MoonpayDelivery_CrossChain(
+          amount: amount,
+          feeMode: feesIncluded ? CrossChainFeeMode.feesIncluded : null,
+        );
+      } else if (amountSat != null) {
+        delivery = MoonpayDelivery_Bitcoin(amountSat: amountSat);
+      }
+      request = BuyBitcoinRequest_Moonpay(delivery: delivery, redirectUrl: redirectUrl);
   }
 
   final result = await sdk.buyBitcoin(request: request);
   print('Open this URL in a browser to complete the purchase:');
   print(result.url);
+  final info = result.crossChainInfo;
+  if (info != null) {
+    print('Delivered as USDC on Solana. Quote:');
+    printValue(info);
+  }
 }
 
 // --- prepare-payment-link ---

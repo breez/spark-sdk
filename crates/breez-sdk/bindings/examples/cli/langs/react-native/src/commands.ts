@@ -1108,10 +1108,17 @@ async function handleListUnclaimedDeposits(sdk: BreezSdkInterface, _tokenIssuer:
 
 async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const provider = parseFlag(args, '--provider') ?? 'moonpay'
-  const amountSatStr = parseFlag(args, '--amount-sat')
+  const amountSat = parseBigIntFlag(args, '--amount-sat')
+  const amount = parseBigIntFlag(args, '--amount')
+  const feesIncluded = hasFlag(args, '--fees-included')
   const redirectUrl = parseFlag(args, '--redirect-url')
 
-  const amountSat = amountSatStr !== undefined ? BigInt(amountSatStr) : undefined
+  if (amount !== undefined && amountSat !== undefined) {
+    return 'Error: --amount and --amount-sat are mutually exclusive'
+  }
+  if (feesIncluded && amount === undefined) {
+    return 'Error: --fees-included requires --amount'
+  }
 
   let request: InstanceType<typeof BuyBitcoinRequest.Moonpay> | InstanceType<typeof BuyBitcoinRequest.CashApp>
 
@@ -1119,16 +1126,31 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
     case 'cashapp':
     case 'cash_app':
     case 'cash-app':
+      if (amountSat === undefined) {
+        return 'Error: --amount-sat is required when --provider is cashapp'
+      }
       request = new BuyBitcoinRequest.CashApp({
         amountSats: amountSat,
       })
       break
-    default:
+    default: {
+      let delivery: InstanceType<typeof MoonpayDelivery.CrossChain>
+        | InstanceType<typeof MoonpayDelivery.Bitcoin>
+        | undefined
+      if (amount !== undefined) {
+        delivery = new MoonpayDelivery.CrossChain({
+          amount,
+          feeMode: feesIncluded ? CrossChainFeeMode.FeesIncluded : undefined,
+        })
+      } else if (amountSat !== undefined) {
+        delivery = new MoonpayDelivery.Bitcoin({ amountSat })
+      }
       request = new BuyBitcoinRequest.Moonpay({
-        delivery: new MoonpayDelivery.Bitcoin({ amountSat }),
+        delivery,
         redirectUrl,
       })
       break
+    }
   }
 
   const result = await sdk.buyBitcoin(request)
@@ -1137,6 +1159,10 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
     'Open this URL in a browser to complete the purchase:',
     result.url,
   ]
+  if (result.crossChainInfo) {
+    lines.push('Delivered as USDC on Solana. Quote:')
+    lines.push(formatValue(result.crossChainInfo))
+  }
   return lines.join('\n')
 }
 

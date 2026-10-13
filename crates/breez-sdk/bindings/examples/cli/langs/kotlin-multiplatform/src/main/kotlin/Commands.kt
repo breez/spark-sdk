@@ -942,7 +942,18 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     val fp = FlagParser(args)
     val provider = fp.getString("provider") ?: "moonpay"
     val amountSat = fp.getULong("amount-sat")
+    val amount = fp.getBigInteger("amount")
+    val feesIncluded = fp.hasFlag("fees-included")
     val redirectUrl = fp.getString("redirect-url")
+
+    if (amount != null && amountSat != null) {
+        println("Error: --amount and --amount-sat are mutually exclusive")
+        return
+    }
+    if (feesIncluded && amount == null) {
+        println("Error: --fees-included requires --amount")
+        return
+    }
 
     val request = when (provider.lowercase()) {
         "cashapp", "cash_app", "cash-app" -> {
@@ -952,15 +963,29 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
             }
             BuyBitcoinRequest.CashApp(amountSats = amountSat)
         }
-        else -> BuyBitcoinRequest.Moonpay(
-            delivery = MoonpayDelivery.Bitcoin(amountSat = amountSat),
-            redirectUrl = redirectUrl,
-        )
+        else -> {
+            val delivery = when {
+                amount != null -> MoonpayDelivery.CrossChain(
+                    amount = amount,
+                    feeMode = if (feesIncluded) CrossChainFeeMode.FEES_INCLUDED else null,
+                )
+                amountSat != null -> MoonpayDelivery.Bitcoin(amountSat = amountSat)
+                else -> null
+            }
+            BuyBitcoinRequest.Moonpay(
+                delivery = delivery,
+                redirectUrl = redirectUrl,
+            )
+        }
     }
 
     val result = sdk.buyBitcoin(request)
     println("Open this URL in a browser to complete the purchase:")
     println(result.url)
+    result.crossChainInfo?.let { info ->
+        println("Delivered as USDC on Solana. Quote:")
+        printValue(info)
+    }
 }
 
 // --- prepare-payment-link ---

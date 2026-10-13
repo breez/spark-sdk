@@ -1160,6 +1160,8 @@ public static class Commands
     {
         var provider = GetFlag(args, "--provider") ?? "moonpay";
         var amountSatStr = GetFlag(args, "--amount-sat");
+        var amountStr = GetFlag(args, "--amount");
+        var feesIncluded = HasFlag(args, "--fees-included");
         var redirectUrl = GetFlag(args, "--redirect-url");
 
         BuyBitcoinRequest request;
@@ -1179,8 +1181,26 @@ public static class Commands
                 );
                 break;
             default:
+                MoonpayDelivery? delivery = null;
+                if (amountStr != null)
+                {
+                    var amount = BigInteger.Parse(amountStr);
+                    CrossChainFeeMode? feeMode = feesIncluded
+                        ? CrossChainFeeMode.FeesIncluded
+                        : null;
+                    delivery = new MoonpayDelivery.CrossChain(
+                        amount: amount,
+                        feeMode: feeMode
+                    );
+                }
+                else if (amountSatStr != null)
+                {
+                    delivery = new MoonpayDelivery.Bitcoin(
+                        amountSat: ParseOptionalUlong(amountSatStr)
+                    );
+                }
                 request = new BuyBitcoinRequest.Moonpay(
-                    delivery: new MoonpayDelivery.Bitcoin(amountSat: ParseOptionalUlong(amountSatStr)),
+                    delivery: delivery,
                     redirectUrl: redirectUrl
                 );
                 break;
@@ -1189,6 +1209,11 @@ public static class Commands
         var result = await sdk.BuyBitcoin(request);
         Console.WriteLine("Open this URL in a browser to complete the purchase:");
         Console.WriteLine(result.url);
+        if (result.crossChainInfo is { } info)
+        {
+            Console.WriteLine("Delivered as USDC on Solana. Quote:");
+            Serialization.PrintValue(info);
+        }
     }
 
     // --- prepare-payment-link ---
