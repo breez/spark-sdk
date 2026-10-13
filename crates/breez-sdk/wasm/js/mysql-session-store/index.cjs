@@ -69,13 +69,14 @@ class MysqlSessionStore {
 
   /**
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
-   * @returns {Promise<{token: string, expiration: number} | null>}
+   * @returns {Promise<{token: string, expiration: number, refreshToken?: string, refreshTokenExpiration?: number} | null>}
    */
   async getSession(serviceIdentityKey) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       const [rows] = await this.pool.execute(
-        `SELECT token, expiration FROM brz_sessions
+        `SELECT token, expiration, refresh_token, refresh_token_expiration
+         FROM brz_sessions
          WHERE user_id = ? AND service_identity_key = ?`,
         [this.identity, serviceKey]
       );
@@ -86,6 +87,11 @@ class MysqlSessionStore {
       return {
         token: row.token,
         expiration: Number(row.expiration),
+        refreshToken: row.refresh_token ?? undefined,
+        refreshTokenExpiration:
+          row.refresh_token_expiration == null
+            ? undefined
+            : Number(row.refresh_token_expiration),
       };
     } catch (error) {
       throw new SessionStoreError(
@@ -97,16 +103,27 @@ class MysqlSessionStore {
 
   /**
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
-   * @param {{token: string, expiration: number}} session
+   * @param {{token: string, expiration: number, refreshToken?: string, refreshTokenExpiration?: number}} session
    */
   async setSession(serviceIdentityKey, session) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       await this.pool.execute(
-        `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)`,
-        [this.identity, serviceKey, session.token, session.expiration]
+        `INSERT INTO brz_sessions
+           (user_id, service_identity_key, token, expiration,
+            refresh_token, refresh_token_expiration)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration),
+           refresh_token = VALUES(refresh_token),
+           refresh_token_expiration = VALUES(refresh_token_expiration)`,
+        [
+          this.identity,
+          serviceKey,
+          session.token,
+          session.expiration,
+          session.refreshToken ?? null,
+          session.refreshTokenExpiration ?? null,
+        ]
       );
     } catch (error) {
       throw new SessionStoreError(
