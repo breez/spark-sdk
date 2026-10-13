@@ -365,7 +365,9 @@ impl BreezSdk {
             )
             .await,
         );
-        if !new_leaf_ids.is_empty() {
+        // The SDK stored what the checks above found, and it can have stored a
+        // recovery or sweep in one of the recovery calls meanwhile.
+        if !leaves.is_empty() {
             stored = match self.leaf_recoveries().await {
                 Ok(stored) => stored,
                 Err(e) => {
