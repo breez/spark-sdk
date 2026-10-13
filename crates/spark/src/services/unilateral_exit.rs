@@ -349,7 +349,7 @@ pub struct UnilateralExitSkippedLeaf {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnilateralExitSkipReason {
-    /// Its exit costs at least its value.
+    /// Its exit costs at least the value of its refund.
     Unprofitable,
     /// It cannot be exited, for the reason given.
     Unexitable(String),
@@ -646,9 +646,11 @@ pub fn fan_out_fee(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnilateralExitLeafFilter {
-    /// Keep every requested leaf, even when its exit cost exceeds its value.
+    /// Keep every requested leaf, even when its exit cost exceeds the value of
+    /// its refund.
     All,
-    /// Keep only leaves whose value strictly exceeds their marginal exit cost.
+    /// Keep only leaves whose refund's value strictly exceeds their marginal
+    /// exit cost.
     ProfitableOnly,
 }
 
@@ -733,10 +735,33 @@ fn exit_transactions<'a>(
     Ok((gets_child.then_some(refund_tx), nodes))
 }
 
+/// The value of the refund output that the builder lists for `leaf`. It can
+/// differ from `leaf.value`, which the operators report: the output of a direct
+/// transaction holds what its input holds less its fee.
+fn refund_value(leaf: &TreeNode, on_chain: &ExitChainState) -> u64 {
+    for refund in &on_chain.refunds {
+        if refund.leaf_id == leaf.id
+            && let ExitRefundState::OnChain { value, .. } = &refund.state
+        {
+            return *value;
+        }
+    }
+    let refund_tx = if on_chain.went_direct(&leaf.id) {
+        &leaf.direct_refund_tx
+    } else {
+        &leaf.refund_tx
+    };
+    refund_tx
+        .as_ref()
+        .and_then(|tx| tx.output.first())
+        .map_or(leaf.value, |output| output.value.to_sat())
+}
+
 /// Selects the leaves to exit, highest value first. Greedy: a leaf is kept when
-/// its value exceeds its marginal cost (CPFP fees for its not-yet-covered
-/// ancestors and refund, plus the incremental sweep input). A shared ancestor is
-/// charged only to the first leaf reaching it, so order matters; `All` keeps all.
+/// the value of its refund exceeds its marginal cost (CPFP fees for its
+/// not-yet-covered ancestors and refund, plus the incremental sweep input). A
+/// shared ancestor is charged only to the first leaf reaching it, so order
+/// matters; `All` keeps all.
 pub fn evaluate_unilateral_exit_leaf_costs(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
@@ -823,7 +848,8 @@ pub fn evaluate_unilateral_exit_leaf_costs(
 
         let total_marginal_cost = cpfp_cost.saturating_add(sweep_cost);
 
-        if filter == UnilateralExitLeafFilter::All || leaf.value > total_marginal_cost {
+        let refund_value = refund_value(leaf, on_chain);
+        if filter == UnilateralExitLeafFilter::All || refund_value > total_marginal_cost {
             selected.push(UnilateralExitSelectedLeaf {
                 id: (*leaf_id).clone(),
                 value: leaf.value,
@@ -1957,6 +1983,61 @@ mod tests {
 
             assert_eq!(selected[0].cpfp_cost, 0);
             assert!(!selected[0].needs_funding);
+        }
+
+        #[test_all]
+        fn a_leaf_is_kept_when_its_refund_holds_more_than_its_exit_costs() {
+            #[derive(Clone, Copy)]
+            enum Refund {
+                /// In a block, its fee paid out of the leaf.
+                InABlock,
+                /// The direct refund, still to be broadcast.
+                Direct,
+                /// Still to be broadcast with a CPFP child. It holds less than the
+                /// value the operators report for the leaf.
+                WithChild,
+            }
+            // The second leaf's refund holds `refund`, which is less than the
+            // leaf's value.
+            let evaluate = |refund: u64, kind: Refund, filter| {
+                let value = refund
+                    + match kind {
+                        Refund::InABlock => DIRECT_FEE,
+                        Refund::Direct => 2 * DIRECT_FEE,
+                        Refund::WithChild => 1_000,
+                    };
+                let (mut nodes, root_id, leaf_ids) = root_with_leaves(&[1_000_000, value]);
+                let mut on_chain =
+                    on_chain_state(&[root_id, leaf_ids[0].clone(), leaf_ids[1].clone()], &[]);
+                on_chain.refunds = vec![refund_on_chain(&leaf_ids[0], 1_000_000)];
+                let leaf = nodes.get_mut(&leaf_ids[1]).unwrap();
+                match kind {
+                    Refund::InABlock => {
+                        on_chain.refunds.push(refund_on_chain(&leaf_ids[1], refund));
+                    }
+                    Refund::Direct => {
+                        set_direct_txs(leaf);
+                        on_chain.nodes[2].confirmed_by = ExitNodeConfirmation::Direct;
+                    }
+                    Refund::WithChild => leaf.refund_tx = Some(refund_paying(refund, 50)),
+                }
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    &leaf_ids,
+                    &cost_params(),
+                    filter,
+                    &on_chain,
+                )
+                .unwrap()
+            };
+
+            for kind in [Refund::InABlock, Refund::Direct, Refund::WithChild] {
+                let cost = evaluate(1_000, kind, UnilateralExitLeafFilter::All)[1].estimated_cost;
+                let at = evaluate(cost, kind, UnilateralExitLeafFilter::ProfitableOnly);
+                assert_eq!(at.len(), 1, "a refund worth its exit's cost is left out");
+                let above = evaluate(cost + 1, kind, UnilateralExitLeafFilter::ProfitableOnly);
+                assert_eq!(above.len(), 2);
+            }
         }
 
         #[test_all]
