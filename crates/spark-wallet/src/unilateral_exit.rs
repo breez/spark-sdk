@@ -1715,6 +1715,20 @@ mod exit_build_tests {
         }
     }
 
+    /// The refund of a leaf that `node` makes: an output that holds the leaf's
+    /// value, then the anchor.
+    fn refund_tx(nonce: u32) -> Transaction {
+        let mut tx = anchor_tx(nonce);
+        tx.output.insert(
+            0,
+            TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::new(),
+            },
+        );
+        tx
+    }
+
     fn node(
         id: &str,
         parent: Option<&str>,
@@ -1765,13 +1779,13 @@ mod exit_build_tests {
 
     fn single_leaf_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
-        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
         plan_of(root, leaf)
     }
 
     fn direct_leaf_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
-        let mut leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let mut leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
         leaf.direct_tx = Some(anchor_tx(4));
         leaf.direct_refund_tx = Some(anchor_tx(5));
         plan_of(root, leaf)
@@ -1990,8 +2004,8 @@ mod exit_build_tests {
     fn shared_ancestor_plan() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
         let mid = node("mid", Some("root"), anchor_tx(2), None);
-        let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
-        let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
+        let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(refund_tx(4)));
+        let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(refund_tx(6)));
         UnilateralExitPlan {
             selected_leaves: vec![
                 UnilateralExitSelectedLeaf {
@@ -2055,8 +2069,8 @@ mod exit_build_tests {
     fn shared_ancestor_plan_with_fan_out() -> UnilateralExitPlan {
         let root = node("root", None, anchor_tx(1), None);
         let mid = node("mid", Some("root"), anchor_tx(2), None);
-        let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
-        let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
+        let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(refund_tx(4)));
+        let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(refund_tx(6)));
 
         let mut fund_a = funding(100_000);
         fund_a.outpoint.vout = 0;
@@ -2301,7 +2315,7 @@ mod exit_build_tests {
         // charge that, not the one-input estimate the selection pass uses; otherwise
         // funding in the gap passes the plan then fails build_cpfp_child.
         let root = node("root", None, anchor_tx(1), None);
-        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(anchor_tx(3)));
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx(3)));
         let leaf_id = leaf.id.clone();
         let nodes: HashMap<TreeNodeId, TreeNode> = [(id("root"), root), (leaf_id.clone(), leaf)]
             .into_iter()
@@ -2393,8 +2407,8 @@ mod exit_build_tests {
         // Two independent leaves, each funded with two UTXOs: the assignment lands
         // two inputs per branch and the build funds each branch's first CPFP child
         // with both. Proves the multi-branch arm handles >1 input per branch.
-        let leaf_a = node("leafA", None, anchor_tx(1), Some(anchor_tx(2)));
-        let leaf_b = node("leafB", None, anchor_tx(3), Some(anchor_tx(4)));
+        let leaf_a = node("leafA", None, anchor_tx(1), Some(refund_tx(2)));
+        let leaf_b = node("leafB", None, anchor_tx(3), Some(refund_tx(4)));
         let a_id = leaf_a.id.clone();
         let b_id = leaf_b.id.clone();
         let nodes: HashMap<TreeNodeId, TreeNode> = [(a_id.clone(), leaf_a), (b_id.clone(), leaf_b)]
@@ -2460,9 +2474,9 @@ mod exit_build_tests {
     fn plan_three_leaves_two_utxos_fans_out_and_builds() {
         // Case e: more leaves than funding UTXOs. The plan fans out (2 inputs, 3
         // outputs) and build_exit threads all three branches off that fan-out.
-        let leaf_a = node("leafA", None, anchor_tx(1), Some(anchor_tx(2)));
-        let leaf_b = node("leafB", None, anchor_tx(3), Some(anchor_tx(4)));
-        let leaf_c = node("leafC", None, anchor_tx(5), Some(anchor_tx(6)));
+        let leaf_a = node("leafA", None, anchor_tx(1), Some(refund_tx(2)));
+        let leaf_b = node("leafB", None, anchor_tx(3), Some(refund_tx(4)));
+        let leaf_c = node("leafC", None, anchor_tx(5), Some(refund_tx(6)));
         let (a_id, b_id, c_id) = (leaf_a.id.clone(), leaf_b.id.clone(), leaf_c.id.clone());
         let nodes: HashMap<TreeNodeId, TreeNode> = [
             (a_id.clone(), leaf_a),
