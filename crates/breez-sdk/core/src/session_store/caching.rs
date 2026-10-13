@@ -34,7 +34,7 @@ impl spark_wallet::SessionStore for CachingSessionStore {
         service_identity_key: &PublicKey,
     ) -> Result<spark_wallet::Session, spark_wallet::SessionStoreError> {
         if let Some(cached) = self.cache.lock().await.get(service_identity_key)
-            && cached.is_valid()
+            && cached.has_valid_token()
         {
             return Ok(cached.clone());
         }
@@ -59,6 +59,11 @@ impl spark_wallet::SessionStore for CachingSessionStore {
             .await
             .insert(*service_identity_key, session);
         Ok(())
+    }
+
+    async fn invalidate(&self, service_identity_key: &PublicKey) {
+        self.cache.lock().await.remove(service_identity_key);
+        self.inner.invalidate(service_identity_key).await;
     }
 }
 
@@ -134,6 +139,8 @@ mod tests {
             spark_wallet::Session {
                 token: "t".to_string(),
                 expiration: future_expiration(),
+                refresh_token: None,
+                refresh_token_expiration: None,
             },
         )
         .await
@@ -157,6 +164,8 @@ mod tests {
             spark_wallet::Session {
                 token: "from-db".to_string(),
                 expiration: future_expiration(),
+                refresh_token: None,
+                refresh_token_expiration: None,
             },
         );
         let sm = CachingSessionStore::new(inner.clone());
@@ -185,6 +194,8 @@ mod tests {
             spark_wallet::Session {
                 token: "stale".to_string(),
                 expiration: 0,
+                refresh_token: None,
+                refresh_token_expiration: None,
             },
         )
         .await
@@ -194,6 +205,8 @@ mod tests {
             spark_wallet::Session {
                 token: "fresh".to_string(),
                 expiration: future_expiration(),
+                refresh_token: None,
+                refresh_token_expiration: None,
             },
         );
         let baseline_gets = inner.get_calls.load(Ordering::SeqCst);
@@ -219,5 +232,40 @@ mod tests {
             result,
             Err(spark_wallet::SessionStoreError::NotFound)
         ));
+    }
+
+    #[async_test_all]
+    async fn invalidate_makes_next_get_read_inner() {
+        let inner = Arc::new(CountingInner::default());
+        let sm = CachingSessionStore::new(inner.clone());
+        let pk = test_pubkey(4);
+
+        sm.set_session(
+            &pk,
+            spark_wallet::Session {
+                token: "cached".to_string(),
+                expiration: future_expiration(),
+                refresh_token: Some("refresh-1".to_string()),
+                refresh_token_expiration: Some(future_expiration()),
+            },
+        )
+        .await
+        .unwrap();
+        inner.sessions.lock().unwrap().insert(
+            pk,
+            spark_wallet::Session {
+                token: "from-another-pod".to_string(),
+                expiration: future_expiration(),
+                refresh_token: Some("refresh-2".to_string()),
+                refresh_token_expiration: Some(future_expiration()),
+            },
+        );
+        assert_eq!(sm.get_session(&pk).await.unwrap().token, "cached");
+
+        sm.invalidate(&pk).await;
+
+        let session = sm.get_session(&pk).await.unwrap();
+        assert_eq!(session.token, "from-another-pod");
+        assert_eq!(session.refresh_token.as_deref(), Some("refresh-2"));
     }
 }

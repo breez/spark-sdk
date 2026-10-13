@@ -2026,6 +2026,8 @@ pub struct GetTokensMetadataResponse {
 pub struct Session {
     pub token: String,
     pub expiration: u64,
+    pub refresh_token: Option<String>,
+    pub refresh_token_expiration: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SessionStoreError)]

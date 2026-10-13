@@ -946,7 +946,7 @@ fn finalize_spark_wallet_config(
 ///
 /// A token a server later rejects (a stale cached one, or one a prior SDK
 /// version wrote in a format this version does not recognize) self-heals: the
-/// request layer force-refreshes the session on an auth error and re-authenticates.
+/// request layer renews the session with its refresh token or re-authenticates.
 fn wrap_session_store(session_store: Option<Arc<dyn SessionStore>>) -> Arc<dyn SessionStore> {
     let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
     Arc::new(crate::session_store::CachingSessionStore::new(inner))
@@ -1709,6 +1709,8 @@ mod tests {
                 Session {
                     token: token.clone(),
                     expiration: 1,
+                    refresh_token: None,
+                    refresh_token_expiration: None,
                 },
             )
             .await

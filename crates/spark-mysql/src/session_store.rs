@@ -50,8 +50,8 @@ impl SessionStore for MysqlSessionStore {
         let service_key = service_identity_key.serialize().to_vec();
         let row: Option<Row> = conn
             .exec_first(
-                "SELECT token, expiration FROM brz_sessions \
-                 WHERE user_id = ? AND service_identity_key = ?",
+                "SELECT token, expiration, refresh_token, refresh_token_expiration \
+                 FROM brz_sessions WHERE user_id = ? AND service_identity_key = ?",
                 (self.identity.clone(), service_key),
             )
             .await
@@ -67,7 +67,27 @@ impl SessionStore for MysqlSessionStore {
             .ok_or_else(|| SessionStoreError::Generic("expiration column is NULL".to_string()))?;
         let expiration = u64::try_from(expiration)
             .map_err(|e| SessionStoreError::Generic(format!("invalid expiration: {e}")))?;
-        Ok(Session { token, expiration })
+        let refresh_token: Option<String> = row
+            .get::<Option<String>, _>("refresh_token")
+            .ok_or_else(|| {
+                SessionStoreError::Generic("missing refresh_token column".to_string())
+            })?;
+        let refresh_token_expiration = row
+            .get::<Option<i64>, _>("refresh_token_expiration")
+            .ok_or_else(|| {
+                SessionStoreError::Generic("missing refresh_token_expiration column".to_string())
+            })?
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|e| {
+                SessionStoreError::Generic(format!("invalid refresh token expiration: {e}"))
+            })?;
+        Ok(Session {
+            token,
+            expiration,
+            refresh_token,
+            refresh_token_expiration,
+        })
     }
 
     async fn set_session(
@@ -79,15 +99,28 @@ impl SessionStore for MysqlSessionStore {
         let service_key = service_identity_key.serialize().to_vec();
         let expiration = i64::try_from(session.expiration)
             .map_err(|e| SessionStoreError::Generic(format!("expiration overflow: {e}")))?;
+        let refresh_token_expiration = session
+            .refresh_token_expiration
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|e| {
+                SessionStoreError::Generic(format!("refresh token expiration overflow: {e}"))
+            })?;
         conn.exec_drop(
-            "INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration) \
-             VALUES (?, ?, ?, ?) \
-             ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)",
+            "INSERT INTO brz_sessions \
+             (user_id, service_identity_key, token, expiration, \
+              refresh_token, refresh_token_expiration) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration), \
+             refresh_token = VALUES(refresh_token), \
+             refresh_token_expiration = VALUES(refresh_token_expiration)",
             (
                 self.identity.clone(),
                 service_key,
                 session.token,
                 expiration,
+                session.refresh_token,
+                refresh_token_expiration,
             ),
         )
         .await
@@ -152,6 +185,18 @@ impl MysqlSessionStore {
                 "ALTER TABLE brz_session_schema_migrations MODIFY COLUMN applied_at \
                  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
             )],
+            vec![
+                Migration::AddColumn {
+                    table: "brz_sessions",
+                    column: "refresh_token",
+                    definition: "TEXT NULL",
+                },
+                Migration::AddColumn {
+                    table: "brz_sessions",
+                    column: "refresh_token_expiration",
+                    definition: "BIGINT NULL",
+                },
+            ],
         ]
     }
 }
@@ -261,5 +306,17 @@ mod tests {
     async fn test_get_after_unrelated_set() {
         let fixture = MysqlSessionStoreTestFixture::new().await;
         shared_tests::test_get_after_unrelated_set(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_token_round_trip() {
+        let fixture = MysqlSessionStoreTestFixture::new().await;
+        shared_tests::test_refresh_token_round_trip(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_clears_refresh_token() {
+        let fixture = MysqlSessionStoreTestFixture::new().await;
+        shared_tests::test_overwrite_clears_refresh_token(&fixture.store).await;
     }
 }
