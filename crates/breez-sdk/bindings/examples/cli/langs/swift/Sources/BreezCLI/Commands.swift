@@ -931,6 +931,8 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     let provider = fp.get("provider") ?? "moonpay"
     let amountSat = fp.get("amount-sat").flatMap { UInt64($0) }
+    let amount: BInt? = fp.get("amount").flatMap { BInt($0) }
+    let feesIncluded = fp.has("fees-included")
     let redirectUrl = fp.get("redirect-url")
 
     let request: BuyBitcoinRequest
@@ -942,12 +944,25 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
         }
         request = .cashApp(amountSats: amountSats)
     default:
-        request = .moonpay(delivery: .bitcoin(amountSat: amountSat), redirectUrl: redirectUrl)
+        let delivery: MoonpayDelivery?
+        if let amount {
+            let feeMode: CrossChainFeeMode? = feesIncluded ? .feesIncluded : nil
+            delivery = .crossChain(amount: amount, feeMode: feeMode)
+        } else if let amountSat {
+            delivery = .bitcoin(amountSat: amountSat)
+        } else {
+            delivery = nil
+        }
+        request = .moonpay(delivery: delivery, redirectUrl: redirectUrl)
     }
 
     let result = try await sdk.buyBitcoin(request: request)
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
+    if let info = result.crossChainInfo {
+        print("Delivered as USDC on Solana. Quote:")
+        printValue(info)
+    }
 }
 
 // --- prepare-payment-link ---

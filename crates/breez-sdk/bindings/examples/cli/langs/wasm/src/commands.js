@@ -738,9 +738,17 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .description('Buy Bitcoin using an external provider')
     .option('--provider <provider>', 'Provider to use: "moonpay" (default) or "cashapp"', 'moonpay')
     .option('--amount-sat <amount>', 'Amount in satoshis (meaning depends on provider)', parseInt)
+    .option('--amount <number>', 'Deliver as USDC on Solana (MoonPay only): USD amount in 6-decimal base units, so 1000000 = $1')
+    .option('--fees-included', 'Deduct the conversion fee from --amount instead of adding it on top', false)
     .option('--redirect-url <url>', 'Custom redirect URL after purchase completion (MoonPay only)')
     .action(async (options) => {
       const sdk = getSdk()
+      if (options.amountSat != null && options.amount != null) {
+        throw new Error('--amount-sat and --amount cannot be used together')
+      }
+      if (options.feesIncluded && options.amount == null) {
+        throw new Error('--fees-included requires --amount')
+      }
       const provider = (options.provider || 'moonpay').toLowerCase()
       let request
       if (provider === 'cashapp' || provider === 'cash_app' || provider === 'cash-app') {
@@ -749,15 +757,29 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
         }
         request = { type: 'cashApp', amountSats: options.amountSat }
       } else {
+        let delivery
+        if (options.amount != null) {
+          delivery = {
+            type: 'crossChain',
+            amount: BigInt(options.amount),
+            feeMode: options.feesIncluded ? 'feesIncluded' : undefined
+          }
+        } else if (options.amountSat != null) {
+          delivery = { type: 'bitcoin', amountSat: options.amountSat }
+        }
         request = {
           type: 'moonpay',
-          delivery: { type: 'bitcoin', amountSat: options.amountSat },
+          delivery,
           redirectUrl: options.redirectUrl
         }
       }
       const value = await sdk.buyBitcoin(request)
       console.log('Open this URL in a browser to complete the purchase:')
       console.log(value.url)
+      if (value.crossChainInfo) {
+        console.log('Delivered as USDC on Solana. Quote:')
+        printValue(value.crossChainInfo)
+      }
     })
 
   // --- prepare-payment-link ---
