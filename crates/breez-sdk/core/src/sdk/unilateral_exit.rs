@@ -1789,9 +1789,9 @@ mod tests {
 
     /// `Unverified` says the chain could not be read while the exit was built, so
     /// the SDK cannot tell whether an earlier fee-bumping child already spent the
-    /// funding this transaction would use. A check reads only the kept exit, never
-    /// the funding, so it can promote the status on finding the transaction in a
-    /// block, but must not clear it on failing to.
+    /// funding this transaction would use. Whether the transaction is in a block
+    /// says nothing about that funding, so a check can promote the status on
+    /// finding the transaction in a block, but must not clear it on failing to.
     #[macros::async_test_all]
     async fn a_check_promotes_an_unverified_transaction_but_never_clears_it() {
         let txid = Txid::from_byte_array([6; 32]);
@@ -1981,5 +1981,137 @@ mod tests {
                 spendable_at_height: None
             }
         );
+    }
+
+    /// A transaction in a block and one below it that waits to confirm. The
+    /// CPFP child of the waiting one spends `funding`.
+    struct WaitingTransaction {
+        transactions: Vec<RecoveryTransaction>,
+        funding: OutPoint,
+        chain: ChainStub,
+    }
+
+    fn waiting_transaction() -> WaitingTransaction {
+        let confirmed = tx_paying(
+            OutPoint {
+                txid: Txid::from_byte_array([1; 32]),
+                vout: 0,
+            },
+            1_000,
+        );
+        let confirmed_txid = confirmed.compute_txid();
+        let spent_by_waiting = OutPoint {
+            txid: confirmed_txid,
+            vout: 0,
+        };
+        let waiting = tx_paying(spent_by_waiting, 900);
+        let funding = OutPoint {
+            txid: Txid::from_byte_array([3; 32]),
+            vout: 0,
+        };
+        let mut cpfp = tx_paying(funding, 500);
+        cpfp.input.push(bitcoin::TxIn {
+            previous_output: OutPoint {
+                txid: waiting.compute_txid(),
+                vout: 1,
+            },
+            ..Default::default()
+        });
+        let chain = ChainStub {
+            heights: HashMap::from([(confirmed_txid.to_string(), 100)]),
+            outspends: HashMap::from([(
+                (spent_by_waiting.txid.to_string(), spent_by_waiting.vout),
+                Outspend::Unspent,
+            )]),
+            ..Default::default()
+        };
+        WaitingTransaction {
+            transactions: vec![
+                model_tx(
+                    &confirmed,
+                    None,
+                    vec![],
+                    ExitTransactionStatus::Confirmed {
+                        block_height: Some(100),
+                    },
+                ),
+                RecoveryTransaction {
+                    cpfp_tx_hex: Some(serialize_hex(&cpfp)),
+                    ..model_tx(
+                        &waiting,
+                        None,
+                        vec![confirmed_txid.to_string()],
+                        ExitTransactionStatus::WaitingForDependencies,
+                    )
+                },
+            ],
+            funding,
+            chain,
+        }
+    }
+
+    impl WaitingTransaction {
+        /// Whether a check finds an outpoint spent by another transaction, and
+        /// how many requests the chain stub received for it.
+        async fn check(mut self) -> (bool, usize) {
+            let chain = std::sync::Arc::new(self.chain);
+            let mut queries = ChainQueries::new(chain.clone());
+            let diverged = check_recovery_transactions(&mut queries, &mut self.transactions)
+                .await
+                .unwrap();
+            let requests = chain.requests.load(std::sync::atomic::Ordering::SeqCst);
+            (diverged, requests)
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn a_check_finds_the_spent_funding_of_a_cpfp_child() {
+        let mut waiting = waiting_transaction();
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        waiting.chain.outspends.insert(
+            (waiting.funding.txid.to_string(), waiting.funding.vout),
+            ChainStub::spent(&spender_txid, true, Some(101)),
+        );
+
+        let (diverged, requests) = waiting.check().await;
+
+        assert!(diverged);
+        assert_eq!(
+            requests, 3,
+            "the transaction in a block, the outpoint the waiting one spends, and the funding"
+        );
+    }
+
+    /// The chain could not be read for the waiting transaction while the
+    /// recovery was built. The check finds the spent funding and keeps the
+    /// status.
+    #[macros::async_test_all]
+    async fn a_check_finds_the_spent_funding_of_an_unverified_transaction() {
+        let mut waiting = waiting_transaction();
+        waiting.transactions[1].status = ExitTransactionStatus::Unverified;
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        waiting.chain.outspends.insert(
+            (waiting.funding.txid.to_string(), waiting.funding.vout),
+            ChainStub::spent(&spender_txid, true, Some(101)),
+        );
+        let mut queries = ChainQueries::new(std::sync::Arc::new(waiting.chain));
+
+        let diverged = check_recovery_transactions(&mut queries, &mut waiting.transactions)
+            .await
+            .unwrap();
+
+        assert!(diverged);
+        assert_eq!(
+            waiting.transactions[1].status,
+            ExitTransactionStatus::Unverified
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn a_failed_request_finds_nothing() {
+        let (diverged, requests) = waiting_transaction().check().await;
+
+        assert!(!diverged);
+        assert_eq!(requests, 3);
     }
 }
