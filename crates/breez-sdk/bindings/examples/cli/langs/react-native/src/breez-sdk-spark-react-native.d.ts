@@ -59,6 +59,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const BuyBitcoinRequest: any;
   export type BuyBitcoinRequest = any;
 
+  export const MoonpayDelivery: any;
+  export type MoonpayDelivery = any;
+
   export const WebhookEventType: any;
   export type WebhookEventType = any;
 

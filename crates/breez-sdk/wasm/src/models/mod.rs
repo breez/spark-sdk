@@ -2316,7 +2316,7 @@ pub struct SparkStatus {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
 pub enum BuyBitcoinRequest {
     Moonpay {
-        locked_amount_sat: Option<u64>,
+        delivery: Option<MoonpayDelivery>,
         redirect_url: Option<String>,
     },
     CashApp {
@@ -2324,9 +2324,23 @@ pub enum BuyBitcoinRequest {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MoonpayDelivery)]
+pub enum MoonpayDelivery {
+    Bitcoin {
+        amount_sat: Option<u64>,
+    },
+    CrossChain {
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount: u128,
+        fee_mode: Option<CrossChainFeeMode>,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinResponse)]
 pub struct BuyBitcoinResponse {
     pub url: String,
+    pub cross_chain_info: Option<CrossChainReceiveInfo>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RefundPendingConversionsResponse)]
