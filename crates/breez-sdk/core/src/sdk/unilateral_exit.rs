@@ -154,8 +154,8 @@ impl BreezSdk {
             .collect();
         if funding_kind.is_none() && !per_branch.is_empty() {
             return Err(SdkError::InvalidInput(
-                "A funding kind is needed: the selection holds a unilateral exit with steps \
-                 left to broadcast"
+                "A funding kind is needed: a transaction of a unilateral exit in the selection \
+                 has a CPFP child"
                     .to_string(),
             ));
         }

@@ -78,7 +78,8 @@ pub struct UnilateralExitPlan {
 /// What of an exit's tree is on-chain. Resolved before the exit is funded, and
 /// everything an exit does follows from it: a node already there is not built
 /// again, a refund already there is not built again and its output is what the
-/// sweep pulls from, and what remains is what the funding pays for.
+/// sweep pulls from, and the builder spends the funding on the CPFP children of
+/// the transactions that still get one.
 ///
 /// Ordered by id, so the same chain gives the same state.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -151,6 +152,13 @@ impl ExitChainState {
         self.refunds.iter().any(|refund| refund.leaf_id == *leaf_id)
     }
 
+    /// Whether the scan recorded this leaf's node as confirmed by its direct tx.
+    fn went_direct(&self, leaf_id: &TreeNodeId) -> bool {
+        self.nodes.iter().any(|node| {
+            node.node_id == *leaf_id && node.confirmed_by == ExitNodeConfirmation::Direct
+        })
+    }
+
     /// Whether nothing is left of this leaf's exit: its refund was swept, or its
     /// branch was taken by a spend the exit cannot continue from and no refund
     /// surfaced.
@@ -161,29 +169,6 @@ impl ExitChainState {
             None => self.stopped_leaves.contains(leaf_id),
         }
     }
-}
-
-/// Whether a leaf has nothing left to build: every node of its chain is on-chain
-/// and so is its refund. Such a leaf needs no funding, but keeps its branch, the
-/// build walking the branches to collect the refunds the sweep pulls from.
-///
-/// Asked of the chain rather than of the price: at a zero fee rate a leaf with
-/// its whole exit ahead of it costs nothing too.
-fn is_complete_on_chain(
-    on_chain: &ExitChainState,
-    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
-    leaf_id: &TreeNodeId,
-) -> bool {
-    if !on_chain.has_refund(leaf_id) {
-        return false;
-    }
-    let Some(leaf) = tree_nodes.get(leaf_id) else {
-        return false;
-    };
-    let Ok(chain) = walk_unilateral_exit_chain(tree_nodes, leaf) else {
-        return false;
-    };
-    chain.iter().all(|node| on_chain.has_node(&node.id))
 }
 
 /// Selects which leaves to exit and maps funding inputs to branches. Never
@@ -230,22 +215,22 @@ pub fn plan_unilateral_exit(
         });
     }
 
-    let to_build: Vec<UnilateralExitSelectedLeaf> = selected
+    let to_fund: Vec<UnilateralExitSelectedLeaf> = selected
         .iter()
-        .filter(|leaf| !is_complete_on_chain(on_chain, &tree_nodes, &leaf.id))
+        .filter(|leaf| leaf.needs_funding)
         .cloned()
         .collect();
 
     let change_dust_limit = inputs.first().map_or(0, |i| {
         i.witness_utxo.script_pubkey.minimal_non_dust().to_sat()
     });
-    let (assigned, fan_out_psbt) = if to_build.is_empty() {
+    let (assigned, fan_out_psbt) = if to_fund.is_empty() {
         (Vec::new(), None)
     } else if inputs.is_empty() {
         return Err(ServiceError::InvalidInput(
             "At least one funding input is required".to_string(),
         ));
-    } else if to_build.len() == 1 {
+    } else if let [only] = to_fund.as_slice() {
         // The single-leaf arm hands every input to the one branch, so unlike the
         // multi-branch paths it has no partition step to reject underfunding. Gate
         // it on build_cpfp_child's physical floor (CPFP fees + dust); the sweep is
@@ -280,8 +265,8 @@ pub fn plan_unilateral_exit(
                 required_sat: required,
             });
         }
-        (vec![(to_build[0].id.clone(), inputs)], None)
-    } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &to_build, change_dust_limit)
+        (vec![(only.id.clone(), inputs)], None)
+    } else if let Some(assignment) = assign_inputs_to_leaves(&inputs, &to_fund, change_dust_limit)
         .filter(|a| {
             assignment_covers_first_child(
                 a,
@@ -294,10 +279,8 @@ pub fn plan_unilateral_exit(
     {
         (assignment, None)
     } else {
-        // Fanned out over the branches with something to build: one already
-        // on-chain needs no output.
         let (psbt, per_leaf) =
-            build_fan_out_psbt(&inputs, &to_build, fee_rate_sat_per_kw, change_dust_limit)?;
+            build_fan_out_psbt(&inputs, &to_fund, fee_rate_sat_per_kw, change_dust_limit)?;
         (
             per_leaf
                 .into_iter()
@@ -309,7 +292,7 @@ pub fn plan_unilateral_exit(
 
     // Every selected leaf keeps a branch, in selected order: the build walks the
     // branches to collect refunds, so a leaf without one would have its refund
-    // left out of the sweep. A leaf with nothing to build has an empty one.
+    // left out of the sweep. A leaf that needs no funding has an empty one.
     let mut assigned: HashMap<TreeNodeId, Vec<CpfpInput>> = assigned.into_iter().collect();
     let per_branch_funding: Vec<(TreeNodeId, Vec<CpfpInput>)> = selected
         .iter()
@@ -344,7 +327,7 @@ pub struct UnilateralExitQuote {
     /// The requested leaves the quote leaves out.
     pub skipped_leaves: Vec<UnilateralExitSkippedLeaf>,
     /// Per-branch funding to avoid a fan-out: (leaf id, minimum sats). Only the
-    /// branches with steps left to build need any.
+    /// branches with a transaction that still gets a CPFP child are listed.
     pub per_branch_funding: Vec<(TreeNodeId, u64)>,
     pub single_utxo_funding_sat: u64,
     /// CPFP children's fees, paid by the funding UTXOs.
@@ -427,7 +410,7 @@ pub fn quote_unilateral_exit(
 
     let per_branch_funding: Vec<(TreeNodeId, u64)> = selected
         .iter()
-        .filter(|l| !is_complete_on_chain(on_chain, tree_nodes, &l.id))
+        .filter(|l| l.needs_funding)
         .map(|l| (l.id.clone(), branch_required_funding(l, change_dust_limit)))
         .collect();
     let leaves_total: u64 = per_branch_funding
@@ -504,6 +487,10 @@ pub struct UnilateralExitSelectedLeaf {
     /// floor, since the sweep is paid from the swept value rather than the funding
     /// UTXO. Always `<= estimated_cost`.
     pub cpfp_cost: u64,
+    /// Whether a transaction of the leaf's exit still gets a CPFP child. The
+    /// planner takes it from the scan's state and not from `cpfp_cost`, which is
+    /// zero for every leaf at a zero fee rate.
+    pub needs_funding: bool,
 }
 
 pub struct UnilateralExitLeafCostParams {
@@ -708,37 +695,36 @@ fn report_unexitable(
     Ok(())
 }
 
-/// The refund and the chain of nodes a unilateral exit of `leaf` builds on, or
-/// why the leaf cannot be exited.
+/// The transactions of `leaf`'s exit that the builder still builds a CPFP child
+/// for, or why the leaf cannot be exited. They are the refund, when it gets a
+/// child, and the nodes that the scan did not record as on-chain.
 fn exit_transactions<'a>(
     tree_nodes: &'a HashMap<TreeNodeId, TreeNode>,
     leaf: &'a TreeNode,
     on_chain: &ExitChainState,
-) -> Result<(&'a Transaction, Vec<&'a TreeNode>), String> {
+) -> Result<(Option<&'a Transaction>, Vec<&'a TreeNode>), String> {
     if !is_unilaterally_exitable(leaf.status) {
         return Err(format!("a {} leaf has no unilateral exit", leaf.status));
     }
     let Some(refund_tx) = &leaf.refund_tx else {
         return Err("no refund transaction".to_string());
     };
+    let ancestors = walk_unilateral_exit_chain(tree_nodes, leaf).map_err(|missing| {
+        format!("incomplete ancestor chain (parent {missing} missing from the tree map)")
+    })?;
     // A leaf that went out through its direct tx is refunded by its
     // `direct_refund_tx`, which pays its own fee.
-    let went_direct = on_chain
-        .nodes
-        .iter()
-        .any(|node| node.node_id == leaf.id && node.confirmed_by == ExitNodeConfirmation::Direct);
-    if !on_chain.has_refund(&leaf.id)
-        && !went_direct
-        && !refund_tx.output.iter().any(is_ephemeral_anchor_output)
-    {
+    let gets_child = !on_chain.has_refund(&leaf.id) && !on_chain.went_direct(&leaf.id);
+    if gets_child && !refund_tx.output.iter().any(is_ephemeral_anchor_output) {
         return Err(
             "its refund has no anchor output for a child to pay its fee through".to_string(),
         );
     }
-    let ancestors = walk_unilateral_exit_chain(tree_nodes, leaf).map_err(|missing| {
-        format!("incomplete ancestor chain (parent {missing} missing from the tree map)")
-    })?;
-    Ok((refund_tx, ancestors))
+    let nodes = ancestors
+        .into_iter()
+        .filter(|node| !on_chain.has_node(&node.id))
+        .collect();
+    Ok((gets_child.then_some(refund_tx), nodes))
 }
 
 /// Selects the leaves to exit, highest value first. Greedy: a leaf is kept when
@@ -765,7 +751,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
 
     for (leaf_id, leaf) in &leaves {
-        let (refund_tx, ancestors) = match exit_transactions(tree_nodes, leaf, on_chain) {
+        let (refund_tx, nodes) = match exit_transactions(tree_nodes, leaf, on_chain) {
             Ok(transactions) => transactions,
             Err(reason) => {
                 report_unexitable(filter, leaf_id, &reason)?;
@@ -775,8 +761,8 @@ pub fn evaluate_unilateral_exit_leaf_costs(
 
         let mut cpfp_cost: u64 = 0;
         let mut already_funded_ancestor = false;
-        for ancestor in &ancestors {
-            let txid = ancestor.node_tx.compute_txid();
+        for node in &nodes {
+            let txid = node.node_tx.compute_txid();
             if covered_txids.contains(&txid) {
                 continue;
             }
@@ -784,7 +770,7 @@ pub fn evaluate_unilateral_exit_leaf_costs(
             // all rather than counted and subtracted: the first node that is
             // still to be built is the one the funding pays for directly, and is
             // costed on the weight of that funding.
-            if on_chain.has_node(&ancestor.id) || ancestor.status == TreeNodeStatus::OnChain {
+            if node.status == TreeNodeStatus::OnChain {
                 continue;
             }
             let input_weight = if already_funded_ancestor {
@@ -794,14 +780,13 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 params.initial_cpfp_input_weight
             };
             cpfp_cost = cpfp_cost.saturating_add(compute_cpfp_package_fee(
-                ancestor.node_tx.weight(),
+                node.node_tx.weight(),
                 input_weight,
                 params.change_script_len,
                 params.fee_rate_sat_per_kw,
             ));
         }
-        let refund_on_chain = on_chain.has_refund(leaf_id);
-        if !refund_on_chain {
+        if let Some(refund_tx) = refund_tx {
             let refund_input_weight = if already_funded_ancestor {
                 params.single_cpfp_input_weight
             } else {
@@ -846,9 +831,10 @@ pub fn evaluate_unilateral_exit_leaf_costs(
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
                 cpfp_cost,
+                needs_funding: refund_tx.is_some() || !nodes.is_empty(),
             });
-            for ancestor in &ancestors {
-                covered_txids.insert(ancestor.node_tx.compute_txid());
+            for node in &nodes {
+                covered_txids.insert(node.node_tx.compute_txid());
             }
         }
     }
@@ -1400,6 +1386,7 @@ mod tests {
                 value,
                 estimated_cost: cost,
                 cpfp_cost: cost,
+                needs_funding: true,
             }
         }
 
@@ -1769,6 +1756,35 @@ mod tests {
             }
         }
 
+        /// A root with one leaf per value below it: the nodes, the root's id and
+        /// the leaves' ids.
+        fn root_with_leaves(
+            values: &[u64],
+        ) -> (HashMap<TreeNodeId, TreeNode>, TreeNodeId, Vec<TreeNodeId>) {
+            let root = leaf_node_n("root", values.iter().sum(), 1);
+            let root_id = root.id.clone();
+            let mut leaf_ids = Vec::new();
+            let mut nodes: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+            for (vout, value) in (0u32..).zip(values) {
+                let mut leaf = leaf_node_n(&format!("leaf-{vout}"), *value, 2 + vout);
+                leaf.parent_node_id = Some(root_id.clone());
+                leaf.vout = vout;
+                leaf_ids.push(leaf.id.clone());
+                nodes.insert(leaf.id.clone(), leaf);
+            }
+            nodes.insert(root_id.clone(), root);
+            (nodes, root_id, leaf_ids)
+        }
+
+        /// The fee of a direct transaction, which comes out of its input.
+        const DIRECT_FEE: u64 = 955;
+
+        /// Gives `leaf` its direct tx and its direct refund.
+        fn set_direct_txs(leaf: &mut TreeNode) {
+            leaf.direct_tx = Some(tx_paying(leaf.value - DIRECT_FEE, 100));
+            leaf.direct_refund_tx = Some(tx_paying(leaf.value - 2 * DIRECT_FEE, 101));
+        }
+
         /// A settled step is not counted, rather than counted and taken off
         /// afterwards, so the first step still to be built is the one funded
         /// directly and is costed on the weight of that funding. Subtracting after
@@ -1885,6 +1901,26 @@ mod tests {
                 plan.per_branch_funding[0].1.is_empty(),
                 "and it takes no funding"
             );
+        }
+
+        #[test_all]
+        fn a_leaf_confirmed_by_its_direct_tx_needs_no_funding() {
+            let (mut nodes, root_id, leaf_ids) = root_with_leaves(&[1_000_000]);
+            set_direct_txs(nodes.get_mut(&leaf_ids[0]).unwrap());
+            let mut on_chain = on_chain_state(&[root_id, leaf_ids[0].clone()], &[]);
+            on_chain.nodes[1].confirmed_by = ExitNodeConfirmation::Direct;
+
+            let selected = evaluate_unilateral_exit_leaf_costs(
+                &nodes,
+                &leaf_ids,
+                &cost_params(),
+                UnilateralExitLeafFilter::All,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(selected[0].cpfp_cost, 0);
+            assert!(!selected[0].needs_funding);
         }
 
         #[test_all]
@@ -2527,6 +2563,18 @@ mod tests {
                 },
             );
             tx
+        }
+
+        fn tx_paying(value: u64, nonce: u32) -> Transaction {
+            Transaction {
+                version: Version::non_standard(3),
+                lock_time: LockTime::from_height(nonce).unwrap(),
+                input: Vec::new(),
+                output: vec![TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: ScriptBuf::new(),
+                }],
+            }
         }
 
         #[test_all]
