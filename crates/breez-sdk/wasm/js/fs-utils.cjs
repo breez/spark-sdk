@@ -10,16 +10,7 @@ const fs = require("fs");
  * @returns {Promise<void>}
  */
 function removeDirAll(dirPath) {
-  return new Promise((resolve, reject) => {
-    fs.rm(dirPath, { recursive: true, force: true }, (err) => {
-      if (err) {
-        // Ignore error if directory doesn't exist
-        resolve();
-      } else {
-        resolve();
-      }
-    });
-  });
+  return fs.promises.rm(dirPath, { recursive: true, force: true });
 }
 
 module.exports = {

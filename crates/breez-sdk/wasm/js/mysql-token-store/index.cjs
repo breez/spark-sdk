@@ -50,12 +50,6 @@ function _identityLockName(prefix, identity) {
   return prefix + hash.digest("hex").slice(0, 16);
 }
 
-function parseJson(value) {
-  if (value == null) return null;
-  if (typeof value === "string") return JSON.parse(value);
-  return value;
-}
-
 function toBool(value) {
   if (value == null) return null;
   if (typeof value === "boolean") return value;

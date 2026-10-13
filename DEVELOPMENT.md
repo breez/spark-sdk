@@ -77,11 +77,12 @@ make build-wasm
 
 ### Code formatting and linting
 
-The project enforces code style using rustfmt and clippy. To check your code:
+The project enforces code style using rustfmt and clippy, and using ESLint for the JavaScript files of the wasm crate. To check your code:
 
 ```
 make fmt-check     # Check code formatting
 make clippy-check  # Check for linting issues
+make wasm-js-lint  # Check the wasm crate's JavaScript files with ESLint
 ```
 
 To automatically fix formatting and linting issues:
@@ -94,7 +95,7 @@ make clippy-fix    # Fix linting issues where possible
 You can run all checks at once with:
 
 ```
-make check         # Runs fmt-check, clippy-check, and tests
+make check         # Runs fmt-check, clippy-check, wasm-js-lint, and tests
 ```
 
 ### Testing

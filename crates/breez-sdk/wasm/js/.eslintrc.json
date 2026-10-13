@@ -1,0 +1,69 @@
+{
+  "root": true,
+  "extends": [
+    "eslint:recommended"
+  ],
+  "env": {
+    "es2022": true
+  },
+  "rules": {
+    "no-console": "error",
+    "prefer-const": "error",
+    "no-var": "error"
+  },
+  "overrides": [
+    {
+      "files": [
+        "*.cjs"
+      ],
+      "env": {
+        "node": true
+      }
+    },
+    {
+      "files": [
+        "*.js"
+      ],
+      "parserOptions": {
+        "sourceType": "module"
+      },
+      "globals": {
+        "console": "readonly",
+        "crypto": "readonly",
+        "DOMException": "readonly",
+        "IDBKeyRange": "readonly",
+        "indexedDB": "readonly",
+        "navigator": "readonly",
+        "performance": "readonly",
+        "PublicKeyCredential": "readonly",
+        "self": "readonly",
+        "TextEncoder": "readonly",
+        "window": "readonly"
+      }
+    },
+    {
+      "files": [
+        "mysql-storage/*",
+        "node-storage/*",
+        "node-tree-store/*",
+        "passkey-prf-provider/*",
+        "postgres-session-store/*",
+        "postgres-storage/*",
+        "postgres-token-store/*",
+        "postgres-tree-store/*",
+        "web-storage/*"
+      ],
+      "rules": {
+        "no-console": "warn"
+      }
+    },
+    {
+      "files": [
+        "*/tests/timezone-scenario.cjs"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ]
+}

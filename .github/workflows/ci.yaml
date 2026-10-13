@@ -442,6 +442,23 @@ jobs:
       - name: Run Clippy
         run: make wasm-clippy-check
 
+  wasm-js-lint:
+    name: Wasm JS lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run ESLint
+        run: make wasm-js-lint
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status
+
   wasm-test:
     name: Wasm test
     runs-on: ubuntu-latest

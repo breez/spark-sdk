@@ -54,7 +54,7 @@ it's ok to let some tests fail but please mention it explicitly in the request d
 
 #### Checklist
 You can run all the following commands in the project root directory to comply to the contribution guide:
-- Format and lint the source code: `make fmt-check clippy-check`
+- Format and lint the source code: `make fmt-check clippy-check wasm-js-lint`
 - Test the code: `make test`
 
 You can run all these in one command: `make check`
