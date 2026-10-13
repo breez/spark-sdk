@@ -112,20 +112,14 @@ impl BreezSdk {
         amount: u128,
         fee_mode: CrossChainFeeMode,
     ) -> Result<(CrossChainReceiveInfo, u8), SdkError> {
+        let service = self
+            .cross_chain_context
+            .get(CrossChainProvider::Orchestra)?;
         if amount == 0 {
             return Err(SdkError::InvalidInput(
                 "MoonPay cross-chain delivery requires a non-zero amount".to_string(),
             ));
         }
-        let service = self
-            .cross_chain_context
-            .get(CrossChainProvider::Orchestra)
-            .map_err(|_| {
-                SdkError::InvalidInput(
-                    "MoonPay cross-chain delivery requires cross_chain_config on mainnet"
-                        .to_string(),
-                )
-            })?;
         let route = service
             .get_routes(&CrossChainRouteFilter::Receive {
                 contract_address: None,
