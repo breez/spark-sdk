@@ -9,6 +9,9 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   const optionalExpirySecs = 3600
   // Set this to create an invoice for another Spark identity
   const optionalReceiverIdentityPublicKey = undefined
+  // Set to 'feesIncluded' to deduct a partner fee from the amount
+  // instead of adding it on top for the payer
+  const optionalFeePolicy = undefined
 
   const response = await sdk.receivePayment({
     paymentMethod: {
@@ -17,14 +20,20 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
       amountSats: optionalAmountSats,
       expirySecs: optionalExpirySecs,
       paymentHash: undefined,
-      receiverIdentityPublicKey: optionalReceiverIdentityPublicKey
+      receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+      feePolicy: optionalFeePolicy
     }
   })
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
-  console.log(`Fees: ${receiveFeeSats} sats`)
+  if (response.fee.type === 'fixed') {
+    console.log(`Fees: ${response.fee.amount} sats`)
+  } else if (response.fee.type === 'rate') {
+    // Only on an amountless invoice: a share of what the payer sends
+    const { bps, fixedSats } = response.fee
+    console.log(`Fees: ${bps} bps of the amount sent plus ${fixedSats} sats`)
+  }
   // ANCHOR_END: receive-payment-lightning-bolt11
 }
 
@@ -37,8 +46,9 @@ const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
-  console.log(`Fees: ${receiveFeeSats} sats`)
+  if (response.fee.type === 'fixed') {
+    console.log(`Fees: ${response.fee.amount} sats`)
+  }
   // ANCHOR_END: receive-payment-onchain
 }
 
@@ -50,8 +60,9 @@ const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
-  console.log(`Fees: ${receiveFeeSats} sats`)
+  if (response.fee.type === 'fixed') {
+    console.log(`Fees: ${response.fee.amount} sats`)
+  }
   // ANCHOR_END: receive-payment-spark-address
 }
 
@@ -75,7 +86,8 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
-  console.log(`Fees: ${receiveFeeSats} sats`)
+  if (response.fee.type === 'fixed') {
+    console.log(`Fees: ${response.fee.amount} sats`)
+  }
   // ANCHOR_END: receive-payment-spark-invoice
 }

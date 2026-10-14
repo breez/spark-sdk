@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId};
+use spark_wallet::{IssuedQuote, PayLightningInvoiceResult, SparkWallet, TransferId};
 use tokio::select;
 use tokio::sync::{oneshot, watch};
 use tracing::{error, info, warn};
@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError, events::EventEmitter,
-    persist::ObjectCacheRepository, utils::payments::record_payment_update,
+    LightningFeeQuote, Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError,
+    events::EventEmitter, persist::ObjectCacheRepository, utils::payments::record_payment_update,
 };
 
 /// A Lightning send that has been recorded but not yet handed to the SSP.
@@ -37,6 +37,10 @@ pub(crate) struct PendingLightningSend {
     pub invoice: String,
     pub amount_sats: Option<u64>,
     pub displayed_amount: u128,
+    /// The fee quote a quoted send committed its leaves under. The SSP must be
+    /// asked to pay it under the same quote.
+    #[serde(default)]
+    pub fee_quote: Option<LightningFeeQuote>,
 }
 
 /// Marks a send as running in this process for as long as it is held.
@@ -68,6 +72,17 @@ impl Drop for InFlightSend {
     fn drop(&mut self) {
         lock_in_flight(&self.in_flight).remove(&self.transfer_id);
     }
+}
+
+pub(crate) fn issued_quote(fee_quote: &LightningFeeQuote) -> Result<IssuedQuote, SdkError> {
+    let decode = |field: &str, value: &str| {
+        hex::decode(value)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid fee quote {field}: {e}")))
+    };
+    Ok(IssuedQuote {
+        serialized_manifest: decode("manifest", &fee_quote.serialized_manifest)?,
+        issuer_signature: decode("signature", &fee_quote.issuer_signature)?,
+    })
 }
 
 /// The set is only ever inserted into, removed from and queried, never held
@@ -149,6 +164,7 @@ impl LightningSender {
                 invoice: invoice.to_string(),
                 amount_sats,
                 displayed_amount,
+                fee_quote: None,
             })
             .await;
 
@@ -161,6 +177,42 @@ impl LightningSender {
         ))
         .await?;
         self.forget_pending_send(&transfer_id.to_string()).await;
+        self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
+            .await
+    }
+
+    /// [`pay_and_persist_lightning_invoice`](Self::pay_and_persist_lightning_invoice)
+    /// under a fee quote, which also fixes the send's transfer id. The quote is
+    /// checked again first: it may have expired, or been altered, since prepare.
+    pub(crate) async fn pay_and_persist_quoted_lightning_invoice(
+        &self,
+        invoice: &str,
+        fee_quote: &LightningFeeQuote,
+        amount_sats: Option<u64>,
+        displayed_amount: u128,
+        completion_timeout_secs: u64,
+    ) -> Result<Payment, SdkError> {
+        let quote = self
+            .spark_wallet
+            .verify_lightning_send_quote(invoice, &issued_quote(fee_quote)?, amount_sats)
+            .await?;
+        let _in_flight = self
+            .record_pending_send(&PendingLightningSend {
+                transfer_id: quote.transfer_id.to_string(),
+                invoice: invoice.to_string(),
+                amount_sats: quote.amount_to_send,
+                displayed_amount,
+                fee_quote: Some(fee_quote.clone()),
+            })
+            .await;
+
+        let payment_response = Box::pin(
+            self.spark_wallet
+                .pay_quoted_lightning_invoice(invoice, &quote),
+        )
+        .await?;
+        self.forget_pending_send(&quote.transfer_id.to_string())
+            .await;
         self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
             .await
     }
@@ -197,9 +249,22 @@ impl LightningSender {
                 self.forget_pending_send(&entry.transfer_id).await;
                 continue;
             };
+            let quote = match entry.fee_quote.as_ref().map(issued_quote).transpose() {
+                Ok(quote) => quote,
+                Err(e) => {
+                    error!("Discarding pending lightning send with an unreadable quote: {e:?}");
+                    self.forget_pending_send(&entry.transfer_id).await;
+                    continue;
+                }
+            };
             match self
                 .spark_wallet
-                .resume_lightning_send(&transfer_id, &entry.invoice, entry.amount_sats)
+                .resume_lightning_send(
+                    &transfer_id,
+                    &entry.invoice,
+                    entry.amount_sats,
+                    quote.as_ref(),
+                )
                 .await
             {
                 Ok(Some(payment_response)) => {
@@ -270,6 +335,7 @@ impl LightningSender {
                 let payment = Payment::from_lightning(
                     lightning_payment,
                     displayed_amount,
+                    payment_response.transfer.total_value_sat.into(),
                     payment_response.transfer.id.to_string(),
                     htlc_details,
                 )?;
@@ -346,7 +412,7 @@ impl LightningSender {
                             break 'poll None;
                         },
                         p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
+                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.amount.saturating_add(payment.fees), payment.id.clone(), htlc_details.clone()) {
                                 info!("Polling payment status = {} {:?}", payment.status, p.status);
                                 if payment.status != PaymentStatus::Pending {
                                     info!("Polling payment completed status = {}", payment.status);
@@ -475,7 +541,38 @@ mod storage_tests {
             invoice: invoice.to_string(),
             amount_sats: Some(1_000),
             displayed_amount: 1_000,
+            fee_quote: None,
         }
+    }
+
+    // Records written before quoted sends existed carry no quote field.
+    #[test]
+    fn a_record_from_before_quotes_loads_unquoted() {
+        let entry: PendingLightningSend = serde_json::from_str(
+            r#"{"transfer_id":"t","invoice":"lnbc1","amount_sats":1000,"displayed_amount":1000}"#,
+        )
+        .unwrap();
+        assert!(entry.fee_quote.is_none());
+    }
+
+    #[test]
+    fn a_quote_round_trips_to_the_bytes_the_ssp_issued() {
+        let quote = issued_quote(&LightningFeeQuote {
+            serialized_manifest: "0801".to_string(),
+            issuer_signature: "3044".to_string(),
+            expires_at: 0,
+        })
+        .unwrap();
+        assert_eq!(quote.serialized_manifest, vec![0x08, 0x01]);
+        assert_eq!(quote.issuer_signature, vec![0x30, 0x44]);
+        assert!(
+            issued_quote(&LightningFeeQuote {
+                serialized_manifest: "zz".to_string(),
+                issuer_signature: String::new(),
+                expires_at: 0,
+            })
+            .is_err()
+        );
     }
 
     #[tokio::test]

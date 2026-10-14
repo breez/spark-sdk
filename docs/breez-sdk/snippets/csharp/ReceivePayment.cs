@@ -14,20 +14,33 @@ namespace BreezSdkSnippets
             // Optionally set the expiry duration in seconds
             var optionalExpirySecs = 3600U;
             string? optionalReceiverIdentityPublicKey = null;
+            // Set to FeePolicy.FeesIncluded to deduct a partner fee from the amount
+            // instead of adding it on top for the payer
+            FeePolicy? optionalFeePolicy = null;
             var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
                 description: description,
                 amountSats: optionalAmountSats,
                 expirySecs: optionalExpirySecs,
                 paymentHash: null,
-                receiverIdentityPublicKey: optionalReceiverIdentityPublicKey
+                receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+                feePolicy: optionalFeePolicy
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);
             var response = await sdk.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
-            var receiveFeeSats = response.fee;
-            Console.WriteLine($"Fees: {receiveFeeSats} sats");
+            if (response.fee is ReceiveFee.Fixed fixedFee)
+            {
+                Console.WriteLine($"Fees: {fixedFee.amount} sats");
+            }
+            // Only on an amountless invoice: a share of what the payer sends
+            else if (response.fee is ReceiveFee.Rate rateFee)
+            {
+                Console.WriteLine(
+                    $"Fees: {rateFee.bps} bps of the amount sent plus {rateFee.fixedSats} sats"
+                );
+            }
             // ANCHOR_END: receive-payment-lightning-bolt11
         }
 
@@ -43,8 +56,10 @@ namespace BreezSdkSnippets
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
-            var receiveFeeSats = response.fee;
-            Console.WriteLine($"Fees: {receiveFeeSats} sats");
+            if (response.fee is ReceiveFee.Fixed fixedFee)
+            {
+                Console.WriteLine($"Fees: {fixedFee.amount} sats");
+            }
             // ANCHOR_END: receive-payment-onchain
         }
 
@@ -58,8 +73,10 @@ namespace BreezSdkSnippets
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
-            var receiveFeeSats = response.fee;
-            Console.WriteLine($"Fees: {receiveFeeSats} sats");
+            if (response.fee is ReceiveFee.Fixed fixedFee)
+            {
+                Console.WriteLine($"Fees: {fixedFee.amount} sats");
+            }
             // ANCHOR_END: receive-payment-spark-address
         }
 
@@ -85,8 +102,10 @@ namespace BreezSdkSnippets
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
-            var receiveFeeSats = response.fee;
-            Console.WriteLine($"Fees: {receiveFeeSats} sats");
+            if (response.fee is ReceiveFee.Fixed fixedFee)
+            {
+                Console.WriteLine($"Fees: {fixedFee.amount} sats");
+            }
             // ANCHOR_END: receive-payment-spark-invoice
         }
     }

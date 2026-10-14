@@ -33,11 +33,23 @@ func SignPackage(
 			pkg.FeeSat,
 			destination,
 		)
+		// Set when a partner fee quote prices the send: sign its payment split too
+		var signedQuote *breez_sdk_spark.ExternalSignedQuote
+		if pkg.SignQuote != nil {
+			quote, err := signer.SignQuote(*pkg.SignQuote)
+			if err != nil {
+				return breez_sdk_spark.SignedTransferPackage{}, err
+			}
+			signedQuote = &quote
+		}
 		signed, err := signer.PrepareTransfer(pkg.PrepareTransfer)
 		if err != nil {
 			return breez_sdk_spark.SignedTransferPackage{}, err
 		}
-		signature = breez_sdk_spark.TransferSignatureTransfer{Signed: signed}
+		signature = breez_sdk_spark.TransferSignatureTransfer{
+			Signed:      signed,
+			SignedQuote: signedQuote,
+		}
 	case breez_sdk_spark.UnsignedTransferPackageSwap:
 		log.Printf(
 			"Approve re-shaping funds for a %v sat send (fee %v sats)",
@@ -48,7 +60,10 @@ func SignPackage(
 		if err != nil {
 			return breez_sdk_spark.SignedTransferPackage{}, err
 		}
-		signature = breez_sdk_spark.TransferSignatureTransfer{Signed: signed}
+		signature = breez_sdk_spark.TransferSignatureTransfer{
+			Signed:      signed,
+			SignedQuote: nil,
+		}
 	case breez_sdk_spark.UnsignedTransferPackageToken:
 		if pkg.IsSwap {
 			log.Printf(

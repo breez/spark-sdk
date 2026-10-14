@@ -18,7 +18,7 @@ use breez_sdk_spark::{
     ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MaxOnchainFee,
     MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
     PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
-    PrepareSendPaymentRequest, PullReceiver, ReceivePaymentMethod, ReceivePaymentRequest,
+    PrepareSendPaymentRequest, PullReceiver, ReceiveFee, ReceivePaymentMethod, ReceivePaymentRequest,
     RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod,
     SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
     SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
@@ -241,6 +241,11 @@ pub enum Command {
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
+
+        /// Deduct a partner fee on a bolt11 invoice from the amount instead of
+        /// adding it on top for the payer.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        fees_included: bool,
 
         /// Maximum slippage in basis points for cross-chain receives. Must be in 10..=500.
         /// Falls back to the SDK config default (100 bps) when unset.
@@ -970,6 +975,7 @@ pub(crate) async fn execute_command(
             sender_public_key,
             hodl,
             new_address,
+            fees_included,
             cross_chain_max_slippage_bps,
             cross_chain_fees_included,
             cross_chain_target_overpay_bps,
@@ -1017,6 +1023,7 @@ pub(crate) async fn execute_command(
                         expiry_secs,
                         payment_hash,
                         receiver_identity_public_key: None,
+                        fee_policy: fees_included.then_some(FeePolicy::FeesIncluded),
                     }
                 }
                 ReceivePaymentMethodArg::CrossChain => {
@@ -1055,11 +1062,17 @@ pub(crate) async fn execute_command(
                 .receive_payment(ReceivePaymentRequest { payment_method })
                 .await?;
 
-            if receive_result.fee > 0 {
-                println!(
-                    "Prepared payment requires fee of {} sats/token base units\n ",
-                    receive_result.fee
-                );
+            match receive_result.fee {
+                ReceiveFee::Fixed { amount } if amount > 0 => {
+                    println!("Prepared payment requires fee of {amount} sats/token base units\n ");
+                }
+                ReceiveFee::Rate { bps, fixed_sats } => {
+                    println!(
+                        "Prepared payment requires fee of {bps} bps of the amount sent plus \
+                         {fixed_sats} sats\n "
+                    );
+                }
+                ReceiveFee::Fixed { .. } => {}
             }
 
             print_value(&receive_result)?;

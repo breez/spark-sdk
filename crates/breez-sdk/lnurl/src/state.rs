@@ -37,20 +37,37 @@ pub struct State<DB> {
 }
 
 impl<DB> State<DB> {
-    /// The wallet to create an invoice for `domain` with.
+    /// The wallet to create an invoice for `domain` with, and the basis to
+    /// quote the domain's partner fee on when the invoice should carry it.
     ///
     /// When partner attribution is active, builds a per-request, background-less
     /// wallet whose provider serves `domain`'s own partner JWT, or the default
-    /// when `domain` has no api key of its own. It shares the process signer,
-    /// pre-warmed session, HTTP client, and connection pool, starts no background
-    /// tasks, and is dropped after the request. Falls back to the state wallet
-    /// when attribution is off (non-mainnet) or the per-request build fails.
-    pub async fn invoice_wallet(&self, domain: &str) -> Arc<spark_wallet::SparkWallet> {
+    /// when `domain` has no api key of its own. A wallet that quotes serves only
+    /// the domain's own, so the fee never goes to another partner. It shares the
+    /// process signer, pre-warmed session, HTTP client, and connection pool,
+    /// starts no background tasks, and is dropped after the request. Falls back
+    /// to the state wallet, unquoted, when attribution is off (off mainnet,
+    /// unless a dev partner JWT is set) or the per-request build fails.
+    ///
+    /// The fee is quoted on the gross: LUD-06 has the invoice name exactly the
+    /// amount the payer asked for, so the fee comes out of what the user gets.
+    pub async fn invoice_wallet(
+        &self,
+        domain: &str,
+    ) -> (
+        Arc<spark_wallet::SparkWallet>,
+        Option<spark_wallet::ReceiveAmountBasis>,
+    ) {
         let Some(cache) = &self.jwt_cache else {
-            return Arc::clone(&self.wallet);
+            return (Arc::clone(&self.wallet), None);
         };
-        let domain_jwt_provider = Some(cache.provider_for(domain.to_string())
-            as Arc<dyn spark::header_provider::HeaderProvider>);
+        let quote = cache.quotes_receives(domain).await;
+        let provider = if quote {
+            cache.own_provider_for(domain.to_string())
+        } else {
+            cache.provider_for(domain.to_string())
+        };
+        let domain_jwt_provider = Some(provider as Arc<dyn spark::header_provider::HeaderProvider>);
         let built = spark_wallet::SparkWallet::new(
             self.spark_config.clone(),
             Arc::new(spark_wallet::SparkSignerAdapter::new(self.signer.clone())),
@@ -66,12 +83,15 @@ impl<DB> State<DB> {
         )
         .await;
         match built {
-            Ok(wallet) => Arc::new(wallet),
+            Ok(wallet) => (
+                Arc::new(wallet),
+                quote.then_some(spark_wallet::ReceiveAmountBasis::Gross),
+            ),
             Err(e) => {
                 warn!(
                     "failed to build attributed wallet for '{domain}', using the state wallet: {e}"
                 );
-                Arc::clone(&self.wallet)
+                (Arc::clone(&self.wallet), None)
             }
         }
     }

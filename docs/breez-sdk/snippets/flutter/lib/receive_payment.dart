@@ -10,6 +10,9 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
   int optionalExpirySecs = 3600;
   // Set this to create an invoice for another Spark identity
   String? optionalReceiverIdentityPublicKey;
+  // Set to FeePolicy.feesIncluded to deduct a partner fee from the amount
+  // instead of adding it on top for the payer
+  FeePolicy? optionalFeePolicy;
 
   // Create an invoice and set the amount you wish the payer to send
   ReceivePaymentRequest request = ReceivePaymentRequest(
@@ -18,15 +21,21 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
           amountSats: optionalAmountSats,
           expirySecs: optionalExpirySecs,
           paymentHash: null,
-          receiverIdentityPublicKey: optionalReceiverIdentityPublicKey));
+          receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+          feePolicy: optionalFeePolicy));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );
 
   String paymentRequest = response.paymentRequest;
   print("Payment request: $paymentRequest");
-  BigInt receiveFeeSats = response.fee;
-  print("Fees: $receiveFeeSats sats");
+  switch (response.fee) {
+    case ReceiveFee_Fixed(:final amount):
+      print("Fees: $amount sats");
+    // Only on an amountless invoice: a share of what the payer sends
+    case ReceiveFee_Rate(:final bps, :final fixedSats):
+      print("Fees: $bps bps of the amount sent plus $fixedSats sats");
+  }
   // ANCHOR_END: receive-payment-lightning-bolt11
   return response;
 }
@@ -44,8 +53,10 @@ Future<ReceivePaymentResponse> receivePaymentOnchain(
 
   String paymentRequest = response.paymentRequest;
   print("Payment request: $paymentRequest");
-  BigInt receiveFeeSats = response.fee;
-  print("Fees: $receiveFeeSats sats");
+  final receiveFee = response.fee;
+  if (receiveFee is ReceiveFee_Fixed) {
+    print("Fees: ${receiveFee.amount} sats");
+  }
   // ANCHOR_END: receive-payment-onchain
   return response;
 }
@@ -60,8 +71,10 @@ Future<ReceivePaymentResponse> receivePaymentSparkAddress(BreezSdk sdk) async {
 
   String paymentRequest = response.paymentRequest;
   print("Payment request: $paymentRequest");
-  BigInt receiveFeeSats = response.fee;
-  print("Fees: $receiveFeeSats sats");
+  final receiveFee = response.fee;
+  if (receiveFee is ReceiveFee_Fixed) {
+    print("Fees: ${receiveFee.amount} sats");
+  }
   // ANCHOR_END: receive-payment-spark-address
   return response;
 }
@@ -87,8 +100,10 @@ Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
 
   String paymentRequest = response.paymentRequest;
   print("Payment request: $paymentRequest");
-  BigInt receiveFeeSats = response.fee;
-  print("Fees: $receiveFeeSats sats");
+  final receiveFee = response.fee;
+  if (receiveFee is ReceiveFee_Fixed) {
+    print("Fees: ${receiveFee.amount} sats");
+  }
   // ANCHOR_END: receive-payment-spark-invoice
   return response;
 }

@@ -8,6 +8,7 @@ pub mod core;
 pub mod events;
 pub mod header_provider;
 pub mod operator;
+pub mod quote;
 pub mod services;
 pub mod session_store;
 pub mod signer;

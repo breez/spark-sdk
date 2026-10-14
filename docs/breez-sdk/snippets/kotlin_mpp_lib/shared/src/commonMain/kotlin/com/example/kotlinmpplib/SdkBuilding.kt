@@ -257,6 +257,7 @@ class SdkBuilding {
                     3600.toUInt(),
                     null,
                     null,
+                    null,
                 )
             )
         )

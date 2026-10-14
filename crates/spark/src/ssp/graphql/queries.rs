@@ -1,7 +1,8 @@
+use crate::quote::ReceiveAmountBasis as SparkAmountBasis;
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDepositRequestType, CurrencyUnit, ExitSpeed,
     LightningReceiveRequestStatus, LightningSendRequestStatus, SparkCoopExitRequestStatus,
-    SparkLeavesSwapRequestStatus, SparkWalletWebhookEventType,
+    SparkFeeAttributionStatus, SparkLeavesSwapRequestStatus, SparkWalletWebhookEventType,
 };
 use graphql_client::GraphQLQuery;
 
@@ -97,6 +98,26 @@ pub struct LeavesSwapFeeEstimate;
     extern_enums("CurrencyUnit")
 )]
 pub struct LightningSendFeeEstimate;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/quote_queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize",
+    extern_enums("BitcoinNetwork", "SparkAmountBasis", "SparkFeeAttributionStatus")
+)]
+pub struct LightningReceiveQuote;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/quote_queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize",
+    extern_enums("SparkFeeAttributionStatus")
+)]
+pub struct LightningSendQuote;
 
 #[derive(GraphQLQuery)]
 #[graphql(

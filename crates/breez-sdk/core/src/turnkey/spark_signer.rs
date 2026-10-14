@@ -49,8 +49,9 @@ use crate::signer::{
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice, ExternalSparkSigner,
+    ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedQuote, ExternalSignedSparkInvoice, ExternalSparkSigner,
     ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
     ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
     ExternalTransferLeafInput, ExternalTreeNodeId, IdentifierCommitmentPair,
@@ -472,6 +473,25 @@ impl TurnkeySparkSigner {
         ecdsa_from_rs(&result.r, &result.s).map_err(to_spark_err)
     }
 
+    /// ECDSA-signs a precomputed 32-byte `digest` with the identity key, with
+    /// no further hashing (`HASH_FUNCTION_NO_OP`).
+    async fn sign_identity_ecdsa_digest(
+        &self,
+        digest: &[u8],
+    ) -> Result<ecdsa::Signature, SignerError> {
+        let identity = self.identity_public_key().await?;
+        let result = self
+            .client
+            .sign_raw(
+                hex::encode(identity.serialize()),
+                hex::encode(digest),
+                HASH_FUNCTION_NO_OP,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        ecdsa_from_rs(&result.r, &result.s).map_err(to_spark_err)
+    }
+
     /// Native FROST signing over a batch of jobs: the shared path for the trait
     /// `sign_frost` and the in-process `prepare_static_deposit` call.
     async fn sign_frost_native(
@@ -603,6 +623,11 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         true
     }
 
+    /// Turnkey's prepare-transfer activity names one receiver per transfer.
+    fn supports_split_transfers(&self) -> bool {
+        false
+    }
+
     async fn get_static_deposit_public_key(
         &self,
         index: u32,
@@ -687,7 +712,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 operator_recipients: operator_recipients(&native_recipients(
                     &request.operator_recipients,
                 )?),
-                receiver_public_key: hex::encode(&request.receiver_public_key),
+                receiver_public_key: hex::encode(single_receiver(&request)?.serialize()),
             },
         };
         let result: SparkPrepareTransferResult = self
@@ -956,6 +981,31 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             user_signature: EcdsaSignatureBytes::from_signature(&user_signature),
         })
     }
+
+    async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, SignerError> {
+        if request.digest.len() != 32 {
+            return Err(SignerError::InvalidInput(format!(
+                "quote digest must be 32 bytes, got {}",
+                request.digest.len()
+            )));
+        }
+        let signature = self.sign_identity_ecdsa_digest(&request.digest).await?;
+        Ok(ExternalSignedQuote {
+            signature: EcdsaSignatureBytes::from_signature(&signature),
+        })
+    }
+}
+
+/// The receiver every leaf of `request` goes to. Turnkey's prepare-transfer
+/// activity names one receiver per transfer, so a transfer split across
+/// receivers (a fee-bearing Lightning send) cannot be signed here yet.
+fn single_receiver(
+    request: &ExternalPrepareTransferRequest,
+) -> Result<bitcoin::secp256k1::PublicKey, SignerError> {
+    request.receiver_pubkey().map_err(to_spark_err)
 }
 
 #[cfg(test)]
@@ -1112,6 +1162,7 @@ mod tests {
             signing_key: ExternalLeafSigningKey {
                 derived_from: id("held"),
             },
+            receiver_public_key: vec![2; 33],
         };
 
         let request = serde_json::to_value(super::transfer_leaf(&leaf).unwrap()).unwrap();

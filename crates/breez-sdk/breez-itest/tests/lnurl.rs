@@ -159,6 +159,7 @@ async fn client_sign_lnurl_pay(
                 prepare_transfer, ..
             } => TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+                signed_quote: None,
             },
             UnsignedTransferPackage::Token { .. }
             | UnsignedTransferPackage::TokenBatch { .. }
@@ -1622,6 +1623,7 @@ async fn test_16_client_signing_lnurl_pay_publish_twice() -> Result<()> {
             signed: client_signer
                 .prepare_transfer(prepare_transfer.clone())
                 .await?,
+            signed_quote: None,
         };
         let signed_package = SignedTransferPackage {
             unsigned,

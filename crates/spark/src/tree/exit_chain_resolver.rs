@@ -490,6 +490,14 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
 
+        async fn split_reservation(
+            &self,
+            _reservation: LeavesReservation,
+            _amounts: &[u64],
+        ) -> Result<LeavesReservation, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn cancel_reservation(
             &self,
             _reservation: LeavesReservation,

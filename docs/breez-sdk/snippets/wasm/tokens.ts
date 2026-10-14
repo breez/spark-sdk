@@ -60,8 +60,9 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
-  console.log(`Fees: ${receiveFeeSats} token base units`)
+  if (response.fee.type === 'fixed') {
+    console.log(`Fees: ${response.fee.amount} token base units`)
+  }
   // ANCHOR_END: receive-token-payment-spark-invoice
 }
 

@@ -53,7 +53,8 @@ const exampleReceiveHodlInvoicePayment = async (sdk: BreezSdk) => {
       amountSats: 50_000,
       expirySecs: undefined,
       paymentHash,
-      receiverIdentityPublicKey: undefined
+      receiverIdentityPublicKey: undefined,
+      feePolicy: undefined
     }
   })
 

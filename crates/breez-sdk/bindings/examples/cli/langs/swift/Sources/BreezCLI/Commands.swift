@@ -187,7 +187,7 @@ func readPaymentOptions(_ method: SendPaymentMethod) -> SendPaymentOptions? {
         }
         return .bitcoinAddress(confirmationSpeed: speed)
 
-    case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats):
+    case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats, _):
         if let sparkFee = sparkTransferFeeSats {
             print("Choose payment option:")
             print("1. Spark transfer fee: \(sparkFee) sats")
@@ -424,7 +424,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             amountSats: amountSats,
             expirySecs: expirySecs,
             paymentHash: paymentHash,
-            receiverIdentityPublicKey: nil
+            receiverIdentityPublicKey: nil,
+            feePolicy: nil
         )
 
     case "crosschain":
@@ -463,8 +464,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
         paymentMethod: paymentMethod
     ))
 
-    if result.fee > 0 {
-        print("Prepared payment requires fee of \(result.fee) sats/token base units\n")
+    if case let .fixed(amount) = result.fee, amount > 0 {
+        print("Prepared payment requires fee of \(amount) sats/token base units\n")
     }
     printValue(result)
 }

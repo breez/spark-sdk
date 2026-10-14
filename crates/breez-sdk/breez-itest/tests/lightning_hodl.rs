@@ -19,18 +19,11 @@ async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> R
 
     ensure_funded(&mut bob, 60_000).await?;
 
-    // Bob generates a preimage/hash pair and creates a HODL invoice for Alice.
+    // Alice generates a preimage/hash pair and creates her own HODL invoice.
     let (preimage, payment_hash) = generate_preimage_hash_pair();
     info!("Generated payment_hash: {payment_hash}");
-    let alice_identity_pubkey = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .identity_pubkey;
 
-    let invoice = bob
+    let invoice = alice
         .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
@@ -38,13 +31,14 @@ async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> R
                 amount_sats: Some(10_000),
                 expiry_secs: None,
                 payment_hash: Some(payment_hash.clone()),
-                receiver_identity_public_key: Some(alice_identity_pubkey),
+                receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
         .payment_request;
 
-    info!("HODL invoice for Alice: {invoice}");
+    info!("Alice's HODL invoice: {invoice}");
 
     // Bob prepares and sends. Use a short timeout so it returns while still pending.
     let prepare = bob

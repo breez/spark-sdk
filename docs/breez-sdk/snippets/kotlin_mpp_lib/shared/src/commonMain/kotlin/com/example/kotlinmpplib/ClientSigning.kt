@@ -19,15 +19,19 @@ class ClientSigning {
                 }
                 // Log.v("Breez", "Approve sending ${unsigned.amountSat} sats " +
                 //     "(fee ${unsigned.feeSat} sats) to $destination")
+                // Set when a partner fee quote prices the send: sign its payment split too
+                val signedQuote = unsigned.signQuote?.let { signer.signQuote(it) }
                 TransferSignature.Transfer(
-                    signer.prepareTransfer(unsigned.prepareTransfer)
+                    signer.prepareTransfer(unsigned.prepareTransfer),
+                    signedQuote,
                 )
             }
             is UnsignedTransferPackage.Swap -> {
                 // Log.v("Breez", "Approve re-shaping funds for a ${unsigned.amountSat} " +
                 //     "sat send (fee ${unsigned.feeSat} sats)")
                 TransferSignature.Transfer(
-                    signer.prepareTransfer(unsigned.prepareTransfer)
+                    signer.prepareTransfer(unsigned.prepareTransfer),
+                    null,
                 )
             }
             is UnsignedTransferPackage.Token -> {

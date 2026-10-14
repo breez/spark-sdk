@@ -53,7 +53,8 @@ Future<void> receiveHodlInvoicePayment(BreezSdk sdk) async {
               description: "HODL invoice",
               amountSats: BigInt.from(50000),
               expirySecs: null,
-              paymentHash: paymentHash)));
+              paymentHash: paymentHash,
+              feePolicy: null)));
 
   final invoice = response.paymentRequest;
   print("HODL invoice: $invoice");

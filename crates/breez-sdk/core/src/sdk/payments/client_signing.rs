@@ -5,7 +5,7 @@ use spark_wallet::{
 };
 
 use crate::{
-    BitcoinAddressDetails, FeePolicy, Network, SendOnchainFeeQuote,
+    BitcoinAddressDetails, FeePolicy, LightningFeeQuote, Network, SendOnchainFeeQuote,
     error::SdkError,
     models::{
         BuildTransferPackageOptions, BuildUnsignedPullPackageRequest, PrepareSendBatchResponse,
@@ -13,13 +13,14 @@ use crate::{
         TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
+    sdk::issued_quote,
     sdk::payments::{send, validation},
     sdk::token_allowances::{
         address_of, decode_prepare_response, decode_pull_context, describes_pull, pull_receivers,
     },
     signer::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
-        ExternalTokenTransactionKind,
+        ExternalQuoteSignatureKind, ExternalSignQuoteRequest, ExternalTokenTransactionKind,
     },
 };
 
@@ -29,12 +30,23 @@ fn to_unsigned_package(
     fee_sat: u64,
     target: TransferTarget,
 ) -> Result<UnsignedTransferPackage, SdkError> {
+    to_unsigned_quoted_package(prep, amount_sat, fee_sat, target, None)
+}
+
+fn to_unsigned_quoted_package(
+    prep: SendPackagePreparation,
+    amount_sat: u64,
+    fee_sat: u64,
+    target: TransferTarget,
+    sign_quote: Option<ExternalSignQuoteRequest>,
+) -> Result<UnsignedTransferPackage, SdkError> {
     Ok(match prep {
         SendPackagePreparation::Ready(pt) => UnsignedTransferPackage::Transfer {
             prepare_transfer: ExternalPrepareTransferRequest::from_prepare_transfer_request(&pt)?,
             amount_sat,
             fee_sat,
             target,
+            sign_quote,
         },
         SendPackagePreparation::SwapRequired {
             prepare_transfer,
@@ -99,6 +111,7 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
             invoice_details,
             spark_transfer_fee_sats,
             lightning_fee_sats,
+            fee_quote,
         } => {
             validation::validate_bolt11_invoice_not_expired(invoice_details)?;
             let (prefer_spark, completion_timeout_secs) = match options {
@@ -128,6 +141,20 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                     return build_spark_package(sdk, &adjusted, &receiver, None).await;
                 }
                 return build_spark_package(sdk, prepare_response, &receiver, None).await;
+            }
+            if let Some(fee_quote) = fee_quote {
+                let amount_sats = match invoice_details.amount_msat {
+                    Some(_) => None,
+                    None => Some(prepare_response.amount.try_into()?),
+                };
+                return build_quoted_lightning_package(
+                    sdk,
+                    invoice_details,
+                    fee_quote,
+                    amount_sats,
+                    completion_timeout_secs,
+                )
+                .await;
             }
             build_lightning_package(
                 sdk,
@@ -251,7 +278,52 @@ async fn build_lightning_package(
             lnurl_pay: None,
             fee_policy,
             completion_timeout_secs,
+            fee_quote: None,
         },
+    )
+}
+
+/// A Lightning package priced by `fee_quote`: its leaves fund each of the
+/// quote's receivers exactly, and the signer also signs the quote's split. The
+/// quote is checked first, so an expired or altered one fails here.
+pub(in crate::sdk) async fn build_quoted_lightning_package(
+    sdk: &BreezSdk,
+    invoice_details: &crate::Bolt11InvoiceDetails,
+    fee_quote: &LightningFeeQuote,
+    amount_sats: Option<u64>,
+    completion_timeout_secs: Option<u32>,
+) -> Result<UnsignedTransferPackage, SdkError> {
+    let bolt11 = &invoice_details.invoice.bolt11;
+    let quote = sdk
+        .spark_wallet
+        .verify_lightning_send_quote(bolt11, &issued_quote(fee_quote)?, amount_sats)
+        .await?;
+    let prep = sdk
+        .spark_wallet
+        .prepare_quoted_lightning_send_package(&quote)
+        .await?;
+    let sign_quote = match prep {
+        SendPackagePreparation::Ready(_) => Some(ExternalSignQuoteRequest {
+            kind: ExternalQuoteSignatureKind::TransferManifest,
+            digest: quote
+                .manifest_hash()
+                .map_err(|e| SdkError::Generic(e.to_string()))?
+                .to_vec(),
+        }),
+        SendPackagePreparation::SwapRequired { .. } => None,
+    };
+    to_unsigned_quoted_package(
+        prep,
+        quote.amount_sats,
+        quote.total_sats.saturating_sub(quote.amount_sats),
+        TransferTarget::Lightning {
+            bolt11: bolt11.clone(),
+            lnurl_pay: None,
+            fee_policy: FeePolicy::FeesExcluded,
+            completion_timeout_secs,
+            fee_quote: Some(fee_quote.clone()),
+        },
+        sign_quote,
     )
 }
 
@@ -393,7 +465,7 @@ pub(in crate::sdk::payments) async fn submit_swap(
             target_amounts,
             ..
         },
-        TransferSignature::Transfer { signed },
+        TransferSignature::Transfer { signed, .. },
     ) = (&signed_package.unsigned, &signed_package.signature)
     else {
         return Err(SdkError::InvalidInput(

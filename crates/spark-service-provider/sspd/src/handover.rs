@@ -126,6 +126,7 @@ mod tests {
             updated_time: Some(updated_time),
             transfer_type: TransferType::PreimageSwap,
             spark_invoice: None,
+            receivers: Vec::new(),
         }
     }
 

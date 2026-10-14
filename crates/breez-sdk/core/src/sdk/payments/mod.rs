@@ -309,6 +309,8 @@ impl BreezSdk {
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
     ) -> Result<ReceivePaymentResponse, SdkError> {
+        // Unquoted: callers of this path need an invoice for exactly the
+        // amount they name.
         receive::receive_bolt11_invoice(
             self,
             description,
@@ -316,6 +318,7 @@ impl BreezSdk {
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            None,
         )
         .await
     }
@@ -328,6 +331,8 @@ impl BreezSdk {
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
     ) -> Result<LightningReceivePayment, SdkError> {
+        // Unquoted: callers of this path need an invoice for exactly the
+        // amount they name.
         receive::receive_bolt11_invoice_inner(
             self,
             description,
@@ -335,6 +340,7 @@ impl BreezSdk {
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            None,
         )
         .await
     }

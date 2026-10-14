@@ -4,6 +4,7 @@
 
 pub mod chain_service;
 pub mod concurrent_scenarios;
+pub mod dev;
 pub mod environment;
 pub mod faucet;
 pub mod fixtures;

@@ -1,4 +1,4 @@
-//! An SSP endpoint that can be told to fail a single GraphQL operation.
+//! An SSP endpoint that can be told to fail or rewrite a single GraphQL operation.
 //!
 //! Refusing the SSP wholesale is too blunt for testing an interrupted send:
 //! `validate_payment` asks it for a fee estimate before the operators commit
@@ -6,7 +6,7 @@
 //! resume. This forwards every request to the real SSP except the one operation
 //! the test wants to lose.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -21,6 +21,8 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::info;
 
+type Rewrite = Box<dyn Fn(&mut serde_json::Value) + Send + Sync>;
+
 struct Proxy {
     upstream: String,
     operation: String,
@@ -31,6 +33,10 @@ struct Proxy {
     /// Ids the SSP handed back for `operation`, in order. Two entries with the
     /// same id mean the SSP treated the second request as the first one again.
     request_ids: Mutex<Vec<String>>,
+    /// Applied to the body of every `operation` request before forwarding it.
+    rewrite: Mutex<Option<Rewrite>>,
+    /// How many `operation` requests reached the SSP.
+    forwarded: AtomicUsize,
     client: reqwest::Client,
 }
 
@@ -59,6 +65,8 @@ impl SspFaultProxy {
             failing: AtomicBool::new(false),
             forward_before_failing: AtomicBool::new(false),
             request_ids: Mutex::new(Vec::new()),
+            rewrite: Mutex::new(None),
+            forwarded: AtomicUsize::new(0),
             // The SDK's own client is the thing under test on the other side
             // of this proxy; this is the upstream hop and honours no proxy
             // config by design.
@@ -116,6 +124,32 @@ impl SspFaultProxy {
     pub fn stop_failing(&self) {
         self.proxy.failing.store(false, Ordering::SeqCst);
     }
+
+    /// Let the SSP see the operation, but altered by `rewrite`, which gets the
+    /// request's GraphQL body, so a test can make the SSP refuse it.
+    pub fn rewrite_requests(
+        &self,
+        rewrite: impl Fn(&mut serde_json::Value) + Send + Sync + 'static,
+    ) {
+        *self
+            .proxy
+            .rewrite
+            .lock()
+            .expect("rewrite is never poisoned") = Some(Box::new(rewrite));
+    }
+
+    /// How many requests for the operation reached the SSP so far.
+    pub fn forwarded(&self) -> usize {
+        self.proxy.forwarded.load(Ordering::SeqCst)
+    }
+
+    pub fn stop_rewriting(&self) {
+        *self
+            .proxy
+            .rewrite
+            .lock()
+            .expect("rewrite is never poisoned") = None;
+    }
 }
 
 async fn forward(
@@ -143,6 +177,26 @@ async fn forward(
         return (StatusCode::SERVICE_UNAVAILABLE, "failed by test").into_response();
     }
 
+    let body = match proxy
+        .rewrite
+        .lock()
+        .expect("rewrite is never poisoned")
+        .as_ref()
+        .filter(|_| is_operation)
+    {
+        Some(rewrite) => match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(mut value) => {
+                rewrite(&mut value);
+                info!("SSP fault proxy rewrote a {} request", proxy.operation);
+                Bytes::from(value.to_string())
+            }
+            Err(_) => body,
+        },
+        None => body,
+    };
+    if is_operation {
+        proxy.forwarded.fetch_add(1, Ordering::SeqCst);
+    }
     let url = format!("{}{}", proxy.upstream, uri.path());
     let mut request = proxy.client.post(&url).body(body);
     for (name, value) in &headers {
@@ -157,6 +211,13 @@ async fn forward(
             let status = response.status();
             match response.bytes().await {
                 Ok(body) => {
+                    if is_operation {
+                        info!(
+                            "SSP answered {} with {status}: {}",
+                            proxy.operation,
+                            String::from_utf8_lossy(&body)
+                        );
+                    }
                     if is_operation && let Some(id) = request_id(&body) {
                         proxy
                             .request_ids

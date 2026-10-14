@@ -11,6 +11,9 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     let optional_expiry_secs = Some(3600_u32);
     // Set this to create an invoice for another Spark identity
     let optional_receiver_identity_public_key = None;
+    // Set to FeePolicy::FeesIncluded to deduct a partner fee from the amount
+    // instead of adding it on top for the payer
+    let optional_fee_policy = None;
 
     let response = sdk
         .receive_payment(ReceivePaymentRequest {
@@ -20,14 +23,20 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
                 expiry_secs: optional_expiry_secs,
                 payment_hash: None,
                 receiver_identity_public_key: optional_receiver_identity_public_key,
+                fee_policy: optional_fee_policy,
             },
         })
         .await?;
 
     let payment_request = response.payment_request;
     info!("Payment request: {payment_request}");
-    let receive_fee_sats = response.fee;
-    info!("Fees: {receive_fee_sats} sats");
+    match response.fee {
+        ReceiveFee::Fixed { amount } => info!("Fees: {amount} sats"),
+        // Only on an amountless invoice: a share of what the payer sends
+        ReceiveFee::Rate { bps, fixed_sats } => {
+            info!("Fees: {bps} bps of the amount sent plus {fixed_sats} sats");
+        }
+    }
     // ANCHOR_END: receive-payment-lightning-bolt11
     Ok(())
 }
@@ -43,8 +52,9 @@ async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
 
     let payment_request = response.payment_request;
     info!("Payment request: {payment_request}");
-    let receive_fee_sats = response.fee;
-    info!("Fees: {receive_fee_sats} sats");
+    if let ReceiveFee::Fixed { amount } = response.fee {
+        info!("Fees: {amount} sats");
+    }
     // ANCHOR_END: receive-payment-onchain
     Ok(())
 }
@@ -59,8 +69,9 @@ async fn receive_spark_address(sdk: &BreezSdk) -> Result<()> {
 
     let payment_request = response.payment_request;
     info!("Payment request: {payment_request}");
-    let receive_fee_sats = response.fee;
-    info!("Fees: {receive_fee_sats} sats");
+    if let ReceiveFee::Fixed { amount } = response.fee {
+        info!("Fees: {amount} sats");
+    }
     // ANCHOR_END: receive-payment-spark-address
     Ok(())
 }
@@ -87,8 +98,9 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
 
     let payment_request = response.payment_request;
     info!("Payment request: {payment_request}");
-    let receive_fee_sats = response.fee;
-    info!("Fees: {receive_fee_sats} sats");
+    if let ReceiveFee::Fixed { amount } = response.fee {
+        info!("Fees: {amount} sats");
+    }
     // ANCHOR_END: receive-payment-spark-invoice
     Ok(())
 }

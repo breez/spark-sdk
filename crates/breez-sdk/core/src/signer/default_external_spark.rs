@@ -20,11 +20,12 @@ use crate::signer::external_spark_types::{
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice,
-    ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
-    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
-    ExternalStartedWatchtowerExitRecovery, ExternalTokenTransactionKind, ExternalTransferLeafInput,
+    ExternalQuoteSignatureKind, ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedQuote, ExternalSignedSparkInvoice, ExternalSparkInvoiceKind,
+    ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
+    ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
+    ExternalTokenTransactionKind, ExternalTransferLeafInput,
 };
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
@@ -35,10 +36,11 @@ use crate::{Network, SdkError, Seed};
 use spark_wallet::{
     ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
-    PrepareTransferRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
-    SignWatchtowerExitRecoveryRequest, SigningKeyshare, SparkInvoiceKind, SparkSigner,
-    SparkSignerAdapter, StartStaticDepositRefundRequest, StartWatchtowerExitRecoveryRequest,
-    TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId, TreeNodeStatus,
+    PrepareTransferRequest, QuoteSignatureKind, SignQuoteRequest, SignSparkInvoiceRequest,
+    SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest, SigningKeyshare,
+    SparkInvoiceKind, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
+    StartWatchtowerExitRecoveryRequest, TokenTransactionKind, TransferLeafInput, TreeNode,
+    TreeNodeId, TreeNodeStatus,
 };
 
 /// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
@@ -165,6 +167,7 @@ impl TryFrom<&ExternalTransferLeafInput> for TransferLeafInput {
             node: node_with_id(leaf.node_id.to_tree_node_id().map_err(err)?),
             new_leaf_id: leaf.new_leaf_id.to_tree_node_id().map_err(err)?,
             signing_key: leaf.signing_key.to_leaf_signing_key().map_err(err)?,
+            receiver_public_key: public_key(&leaf.receiver_public_key)?,
         })
     }
 }
@@ -267,7 +270,6 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
     ) -> Result<ExternalPreparedTransfer, SignerError> {
         let native_request = PrepareTransferRequest {
             transfer_id: request.transfer_id.parse().map_err(err)?,
-            receiver_public_key: public_key(&request.receiver_public_key)?,
             leaves: request
                 .leaves
                 .iter()
@@ -546,6 +548,31 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
             user_signature: EcdsaSignatureBytes::from_signature(&prepared.user_signature),
         })
     }
+
+    async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, SignerError> {
+        let digest = hash_32(&request.digest, "quote digest")?;
+        let signed = self
+            .inner
+            .sign_quote(SignQuoteRequest {
+                kind: match request.kind {
+                    ExternalQuoteSignatureKind::TransferManifest => {
+                        QuoteSignatureKind::TransferManifest
+                    }
+                    ExternalQuoteSignatureKind::ReceiveAttestation => {
+                        QuoteSignatureKind::ReceiveAttestation
+                    }
+                },
+                digest,
+            })
+            .await
+            .map_err(err)?;
+        Ok(ExternalSignedQuote {
+            signature: EcdsaSignatureBytes::from_signature(&signed.signature),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -560,13 +587,17 @@ mod tests {
     use frost_secp256k1_tr::keys::{KeyPackage, SigningShare, VerifyingShare};
     use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
     use spark_wallet::{
-        DefaultSigner, LeafSigningKey, SignWatchtowerExitRecoveryRequest, SparkSigner,
-        SparkSignerAdapter, StartWatchtowerExitRecoveryRequest, TransferLeafInput, TreeNodeId,
+        DefaultSigner, LeafSigningKey, QuoteSignatureKind, SignQuoteRequest,
+        SignWatchtowerExitRecoveryRequest, SparkSigner, SparkSignerAdapter,
+        StartWatchtowerExitRecoveryRequest, TransferLeafInput, TreeNodeId,
     };
 
     use super::{DefaultExternalSparkSigner, node_with_id};
     use crate::signer::ExternalSparkSignerAdapter;
-    use crate::signer::external_spark_types::{ExternalLeafSigningKey, ExternalTransferLeafInput};
+    use crate::signer::external_spark_types::{
+        ExternalLeafSigningKey, ExternalSignedQuote, ExternalTransferLeafInput,
+    };
+    use crate::signer::external_types::EcdsaSignatureBytes;
     use crate::{Network, Seed};
 
     const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -715,12 +746,16 @@ mod tests {
     #[test]
     fn a_sent_leaf_keeps_its_key_across_the_ffi() {
         let node_id: TreeNodeId = "leaf".parse().unwrap();
+        let receiver = SecretKey::from_slice(&[3; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new());
         let native = TransferLeafInput {
             node: node_with_id(node_id.clone()),
             new_leaf_id: TreeNodeId::generate(),
             signing_key: LeafSigningKey {
                 derived_from: TreeNodeId::generate(),
             },
+            receiver_public_key: receiver,
         };
 
         let external = ExternalTransferLeafInput::from_transfer_leaf_input(&native).unwrap();
@@ -731,8 +766,64 @@ mod tests {
         );
 
         let back = TransferLeafInput::try_from(&external).unwrap();
+        assert_eq!(back.receiver_public_key, receiver);
         assert_eq!(back.node.id, node_id);
         assert_eq!(back.new_leaf_id, native.new_leaf_id);
         assert_eq!(back.signing_key, native.signing_key);
+    }
+
+    /// The seed signer and the same seed behind the FFI produce the same quote
+    /// signature: ECDSA here is deterministic (RFC 6979), so any difference is
+    /// a digest hashed again or a different key.
+    #[macros::async_test_all]
+    async fn a_quote_signs_identically_through_either_signer() {
+        let seed = Seed::Mnemonic {
+            mnemonic: MNEMONIC.to_string(),
+            passphrase: None,
+        }
+        .to_bytes()
+        .unwrap();
+        let master =
+            spark_wallet::account_master_key(&seed, Network::Regtest.into(), None).unwrap();
+        let seed_signer = SparkSignerAdapter::new(Arc::new(DefaultSigner::from_master(master)));
+        let external_signer = ExternalSparkSignerAdapter::new(Arc::new(
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap(),
+        ));
+        let request = SignQuoteRequest {
+            kind: QuoteSignatureKind::ReceiveAttestation,
+            digest: [0x5a; 32],
+        };
+
+        assert_eq!(
+            seed_signer
+                .sign_quote(request.clone())
+                .await
+                .unwrap()
+                .signature,
+            external_signer.sign_quote(request).await.unwrap().signature
+        );
+    }
+
+    /// A foreign signer may hand back a high-S signature, which the operators
+    /// refuse; the FFI conversion normalizes it.
+    #[test]
+    fn a_high_s_quote_signature_is_normalized_across_the_ffi() {
+        let secp = Secp256k1::new();
+        let digest = Message::from_digest([0x5a; 32]);
+        let secret = SecretKey::from_slice(&[7; 32]).unwrap();
+        let low_s = secp.sign_ecdsa(&digest, &secret);
+        let mut compact = low_s.serialize_compact();
+        let s_bytes = compact.get_mut(32..).unwrap();
+        let negated = SecretKey::from_slice(s_bytes).unwrap().negate();
+        s_bytes.copy_from_slice(&negated.secret_bytes());
+
+        let external = ExternalSignedQuote {
+            signature: EcdsaSignatureBytes {
+                bytes: compact.to_vec(),
+            },
+        };
+        assert_ne!(external.signature.to_signature().unwrap(), low_s);
+        assert_eq!(external.to_signed_quote().unwrap().signature, low_s);
     }
 }

@@ -44,6 +44,14 @@ pub trait Signer: Send + Sync + 'static {
         message: &[u8],
     ) -> Result<Signature, SignerError>;
 
+    /// ECDSA-sign a precomputed 32-byte `digest` with the key at `path`, as
+    /// is, with no further hashing. The signature is low-S.
+    async fn sign_digest_ecdsa(
+        &self,
+        path: &DerivationPath,
+        digest: &[u8; 32],
+    ) -> Result<Signature, SignerError>;
+
     /// Schnorr-sign a 32-byte `hash` with the key at `path`.
     async fn sign_hash_schnorr(
         &self,

@@ -457,13 +457,13 @@ impl CoopExitService {
                 self.spark_signer
                     .prepare_transfer(PrepareTransferRequest {
                         transfer_id: transfer_id.clone(),
-                        receiver_public_key,
                         leaves: leaf_key_tweaks
                             .iter()
                             .map(|l| TransferLeafInput {
                                 node: l.node.clone(),
                                 new_leaf_id: TreeNodeId::generate(),
                                 signing_key: l.signing_key.clone(),
+                                receiver_public_key,
                             })
                             .collect(),
                         operator_recipients: self.operator_recipients(),

@@ -1686,6 +1686,7 @@ dependencies = [
  "macros 0.1.0",
  "mysql_async",
  "nostr",
+ "p256 0.13.2",
  "platform-utils 0.1.0",
  "rand 0.8.6",
  "reqwest",

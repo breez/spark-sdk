@@ -16,7 +16,8 @@ pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
 use platform_utils::tokio::sync::{broadcast, watch};
 pub use select_helper::{
-    select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
+    partition_by_exact_amounts, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    with_reserved_leaves,
 };
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
@@ -1241,6 +1242,17 @@ pub trait TreeService: Send + Sync {
         &self,
         leaf_ids: &[TreeNodeId],
         purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    /// Reshapes the leaves of `reservation` so that a set of them funds each of
+    /// `amounts` exactly, swapping them with the SSP when they cannot already be
+    /// split that way. `amounts` must sum to the reservation's value. The
+    /// returned reservation keeps the same id; on failure the reservation is
+    /// released.
+    async fn split_reservation(
+        &self,
+        reservation: LeavesReservation,
+        amounts: &[u64],
     ) -> Result<LeavesReservation, TreeServiceError>;
 
     /// Selects leaves for a deferred-signing send package without reserving

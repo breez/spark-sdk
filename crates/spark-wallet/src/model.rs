@@ -93,6 +93,9 @@ pub struct WalletTransfer {
     pub spark_invoice: Option<String>,
     pub htlc_preimage_request: Option<PreimageRequest>,
     pub is_ssp_transfer: bool,
+    /// This wallet's part of a transfer with several receivers, such as a
+    /// payment that also pays out fees. `None` when this wallet gets it all.
+    pub own_share: Option<TransferShare>,
     /// The underlying `Transfer` this projection was built from. Held in-memory
     /// so callers can re-claim the transfer via `SparkWallet::process_transfer`
     /// without an extra operator round-trip. Boxed to keep `WalletTransfer`'s
@@ -117,6 +120,16 @@ impl WalletTransfer {
         };
         let is_ssp_transfer = value.receiver_identity_public_key == ssp_public_key
             || value.sender_identity_public_key == ssp_public_key;
+        // The operators show a receiver only its own row and leaves, so a
+        // share is a row for less than the transfer's total.
+        let own_share = value
+            .receivers
+            .iter()
+            .find(|r| r.identity_public_key == our_public_key && r.amount_sats < value.total_value)
+            .map(|r| TransferShare {
+                amount_sat: r.amount_sats,
+                claimed: r.completed,
+            });
         WalletTransfer {
             id: value.id,
             sender_id: value.sender_identity_public_key,
@@ -139,6 +152,7 @@ impl WalletTransfer {
             spark_invoice: value.spark_invoice,
             htlc_preimage_request,
             is_ssp_transfer,
+            own_share,
             raw,
         }
     }
@@ -147,12 +161,25 @@ impl WalletTransfer {
         &self.raw
     }
 
+    /// What `receiver` gets of this transfer, when the operators show it. A
+    /// sender sees every receiver's part; a receiver only its own.
+    pub fn received_by(&self, receiver: &PublicKey) -> Option<u64> {
+        self.raw
+            .receivers
+            .iter()
+            .find(|r| r.identity_public_key == *receiver)
+            .map(|r| r.amount_sats)
+    }
+
     /// The same transfer at the status a successful claim leaves it in. Promotes
     /// the underlying `Transfer` alongside the projection, since that is what a
     /// caller re-claims from.
     pub(crate) fn claimed(mut self) -> Self {
         self.status = TransferStatus::Completed;
         self.raw.status = TransferStatus::Completed;
+        if let Some(share) = &mut self.own_share {
+            share.claimed = true;
+        }
         self
     }
 
@@ -173,6 +200,14 @@ impl WalletTransfer {
 
         Ok(transfer)
     }
+}
+
+/// A receiver's part of a transfer with several receivers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferShare {
+    pub amount_sat: u64,
+    /// Whether this receiver has claimed its part, whatever the others did.
+    pub claimed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -484,4 +519,64 @@ pub(crate) struct WithdrawInnerParams<'a> {
     pub fee_sats: u64,
     pub fee_quote_id: String,
     pub transfer_id: Option<TransferId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use macros::test_all;
+    use spark::services::{Transfer, TransferId, TransferReceiver, TransferStatus, TransferType};
+
+    use super::{TransferShare, WalletTransfer};
+
+    fn pk(seed: u8) -> PublicKey {
+        SecretKey::from_slice(&[seed; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    fn split_transfer(ssp: PublicKey, payee: PublicKey, ours: PublicKey) -> Transfer {
+        let receiver = |identity_public_key, amount_sats| TransferReceiver {
+            identity_public_key,
+            amount_sats,
+            completed: false,
+        };
+        Transfer {
+            id: TransferId::generate(),
+            sender_identity_public_key: ssp,
+            receiver_identity_public_key: payee,
+            status: TransferStatus::SenderKeyTweaked,
+            total_value: 10_200,
+            expiry_time: None,
+            leaves: Vec::new(),
+            created_time: None,
+            updated_time: None,
+            transfer_type: TransferType::PreimageSwap,
+            spark_invoice: None,
+            receivers: vec![
+                receiver(payee, 10_000),
+                receiver(ours, 170),
+                receiver(ssp, 30),
+            ],
+        }
+    }
+
+    #[test_all]
+    fn a_wallet_sees_its_own_share_of_a_split_transfer() {
+        let (ssp, payee, ours) = (pk(2), pk(3), pk(1));
+        let transfer =
+            WalletTransfer::from_transfer(split_transfer(ssp, payee, ours), None, None, ours, ssp);
+
+        assert_eq!(
+            transfer.own_share,
+            Some(TransferShare {
+                amount_sat: 170,
+                claimed: false,
+            })
+        );
+        assert_eq!(
+            transfer.claimed().own_share.map(|share| share.claimed),
+            Some(true)
+        );
+    }
 }

@@ -1,0 +1,19 @@
+mutation LightningReceiveQuote($input: LightningReceiveQuoteInput!) {
+  lightning_receive_quote(input: $input) {
+    issued_quote {
+      serialized_manifest
+      issuer_signature
+    }
+    attribution_status
+  }
+}
+
+mutation LightningSendQuote($input: LightningSendQuoteInput!) {
+  lightning_send_quote(input: $input) {
+    issued_quote {
+      serialized_manifest
+      issuer_signature
+    }
+    attribution_status
+  }
+}

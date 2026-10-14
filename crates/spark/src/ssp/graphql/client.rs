@@ -1,4 +1,4 @@
-use graphql_client::{GraphQLQuery, Response};
+use graphql_client::{GraphQLQuery, QueryBody, Response};
 use rand::Rng;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -11,19 +11,22 @@ use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use tokio::time::sleep;
 
 use crate::header_provider::HeaderProvider;
+use crate::quote::ReceiveAmountBasis;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote,
     create_claim_instant_static_deposit, create_instant_static_deposit_quote,
-    delete_wallet_webhook, leaves_swap_fee_estimate, lightning_send_fee_estimate,
-    register_wallet_webhook, request_coop_exit, request_lightning_receive, request_lightning_send,
-    request_swap, static_deposit_quote, transfers, user_request, wallet_webhooks,
+    delete_wallet_webhook, leaves_swap_fee_estimate, lightning_receive_quote,
+    lightning_send_fee_estimate, lightning_send_quote, register_wallet_webhook, request_coop_exit,
+    request_lightning_receive, request_lightning_send, request_swap, static_deposit_quote,
+    transfers, user_request, wallet_webhooks,
 };
 use crate::ssp::graphql::{
-    BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
-    InstantStaticDepositClaim, InstantStaticDepositQuoteResult, LeavesSwapRequest,
-    LightningReceiveRequest, LightningSendRequest, SparkWalletWebhookEventType, StaticDepositQuote,
-    WebhookEntry,
+    BitcoinNetwork, ClaimStaticDeposit, CommittedReceiveQuote, CommittedSendQuote, CoopExitRequest,
+    CurrencyAmount, GraphQLClientConfig, InstantStaticDepositClaim,
+    InstantStaticDepositQuoteResult, IssuedQuote, LeavesSwapRequest, LightningQuote,
+    LightningReceiveRequest, LightningSendRequest, SparkFeeAttributionStatus,
+    SparkWalletWebhookEventType, StaticDepositQuote, WebhookEntry,
 };
 use crate::ssp::{
     ClaimStaticDepositInput, CoopExitFeeQuote, CreateClaimInstantStaticDepositInput,
@@ -40,9 +43,19 @@ pub(crate) async fn post_graphql_query<Q: GraphQLQuery, T>(
 where
     T: Serialize + Clone + Into<Q::Variables>,
 {
-    let body = Q::build_query(variables.into());
+    post_graphql_body::<Q, _>(client, url, headers, &Q::build_query(variables.into())).await
+}
+
+/// Posts `body` as `Q` and decodes `Q`'s response. Lets a request send
+/// variables the generated `Q::Variables` cannot express.
+async fn post_graphql_body<Q: GraphQLQuery, B: Serialize>(
+    client: &dyn HttpClient,
+    url: &str,
+    headers: &HashMap<String, String>,
+    body: &B,
+) -> GraphQLResult<Q::ResponseData> {
     let body_str =
-        serde_json::to_string(&body).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+        serde_json::to_string(body).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
 
     let mut all_headers = headers.clone();
     add_content_type_header(&mut all_headers, ContentType::Json);
@@ -111,18 +124,6 @@ impl GraphQLClient {
         format!("{}/{}", self.base_url, self.schema_endpoint)
     }
 
-    pub async fn post_query_inner<Q: GraphQLQuery, T>(
-        &self,
-        url: &str,
-        headers: &HashMap<String, String>,
-        variables: T,
-    ) -> GraphQLResult<Q::ResponseData>
-    where
-        T: Serialize + Clone + Into<Q::Variables>,
-    {
-        post_graphql_query::<Q, _>(self.client.as_ref(), url, headers, variables).await
-    }
-
     /// Execute a raw GraphQL query.
     ///
     /// Retries once on a 401 after force-refreshing auth headers (re-minting the
@@ -135,6 +136,15 @@ impl GraphQLClient {
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
+        self.post_body::<Q, _>(&Q::build_query(variables.into()))
+            .await
+    }
+
+    /// [`post_query`](Self::post_query) for a request body built by hand.
+    async fn post_body<Q: GraphQLQuery, B: Serialize>(
+        &self,
+        body: &B,
+    ) -> GraphQLResult<Q::ResponseData> {
         let full_url = self.get_full_url();
         let mut auth_retried = false;
         let mut force_refresh = false;
@@ -149,13 +159,13 @@ impl GraphQLClient {
             .map_err(|e| GraphQLError::Authentication(e.to_string()))?;
             force_refresh = false;
 
-            let err = match self
-                .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(e) => e,
-            };
+            let err =
+                match post_graphql_body::<Q, _>(self.client.as_ref(), &full_url, &headers, body)
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(e) => e,
+                };
 
             tracing::debug!("Received error: {}", err);
 
@@ -307,6 +317,115 @@ impl GraphQLClient {
 
         let response = self
             .post_query::<queries::RequestLightningSend, _>(vars)
+            .await?;
+
+        Ok(response.request_lightning_send.request.into())
+    }
+
+    /// Request a signed fee quote for a lightning receive of `amount_sats`,
+    /// read on `amount_basis`. Zero quotes an amountless invoice.
+    /// `receiver_identity_pubkey` names the payee of a delegated receive.
+    pub async fn lightning_receive_quote(
+        &self,
+        network: BitcoinNetwork,
+        amount_sats: u64,
+        amount_basis: ReceiveAmountBasis,
+        receiver_identity_pubkey: Option<String>,
+    ) -> GraphQLResult<LightningQuote> {
+        let vars = lightning_receive_quote::Variables {
+            input: lightning_receive_quote::LightningReceiveQuoteInput {
+                network,
+                amount_sats,
+                amount_basis,
+                receiver_identity_pubkey,
+            },
+        };
+
+        let quote = self
+            .post_query::<queries::LightningReceiveQuote, _>(vars)
+            .await?
+            .lightning_receive_quote;
+        lightning_quote(
+            &quote.issued_quote.serialized_manifest,
+            &quote.issued_quote.issuer_signature,
+            quote.attribution_status,
+        )
+    }
+
+    /// Request a signed fee quote for paying `encoded_invoice`, for
+    /// `amount_sats` when the invoice carries no amount.
+    pub async fn lightning_send_quote(
+        &self,
+        encoded_invoice: &str,
+        amount_sats: Option<u64>,
+    ) -> GraphQLResult<LightningQuote> {
+        let vars = lightning_send_quote::Variables {
+            input: lightning_send_quote::LightningSendQuoteInput {
+                encoded_invoice: encoded_invoice.to_string(),
+                amount_sats,
+            },
+        };
+
+        let quote = self
+            .post_query::<queries::LightningSendQuote, _>(vars)
+            .await?
+            .lightning_send_quote;
+        lightning_quote(
+            &quote.issued_quote.serialized_manifest,
+            &quote.issued_quote.issuer_signature,
+            quote.attribution_status,
+        )
+    }
+
+    /// [`request_lightning_receive`](Self::request_lightning_receive) committing
+    /// a fee quote.
+    pub async fn request_quoted_lightning_receive(
+        &self,
+        input: RequestLightningReceiveInput,
+        quote: &CommittedReceiveQuote,
+    ) -> GraphQLResult<LightningReceiveRequest> {
+        let body = quoted_body(
+            (
+                request_lightning_receive::QUERY,
+                request_lightning_receive::OPERATION_NAME,
+            ),
+            input,
+            CommittedReceiveQuoteWire {
+                serialized_manifest: hex::encode(&quote.issued_quote.serialized_manifest),
+                issuer_signature: hex::encode(&quote.issued_quote.issuer_signature),
+                attestor_signature: hex::encode(&quote.attestor_signature),
+            },
+        );
+
+        let response = self
+            .post_body::<queries::RequestLightningReceive, _>(&body)
+            .await?;
+
+        Ok(response.request_lightning_receive.request.into())
+    }
+
+    /// [`request_lightning_send`](Self::request_lightning_send) committing a
+    /// fee quote.
+    pub async fn request_quoted_lightning_send(
+        &self,
+        input: RequestLightningSendInput,
+        quote: &CommittedSendQuote,
+    ) -> GraphQLResult<LightningSendRequest> {
+        let body = quoted_body(
+            (
+                request_lightning_send::QUERY,
+                request_lightning_send::OPERATION_NAME,
+            ),
+            input,
+            CommittedSendQuoteWire {
+                serialized_manifest: hex::encode(&quote.issued_quote.serialized_manifest),
+                issuer_signature: hex::encode(&quote.issued_quote.issuer_signature),
+                total_sats: quote.total_sats,
+            },
+        );
+
+        let response = self
+            .post_body::<queries::RequestLightningSend, _>(&body)
             .await?;
 
         Ok(response.request_lightning_send.request.into())
@@ -548,6 +667,69 @@ impl GraphQLClient {
     }
 }
 
+fn lightning_quote(
+    serialized_manifest: &str,
+    issuer_signature: &str,
+    attribution_status: SparkFeeAttributionStatus,
+) -> GraphQLResult<LightningQuote> {
+    let decode = |field: &str, value: &str| {
+        hex::decode(value).map_err(|e| GraphQLError::serialization(format!("{field}: {e}")))
+    };
+    Ok(LightningQuote {
+        issued_quote: IssuedQuote {
+            serialized_manifest: decode("serialized_manifest", serialized_manifest)?,
+            issuer_signature: decode("issuer_signature", issuer_signature)?,
+        },
+        attribution_status,
+    })
+}
+
+#[derive(Serialize)]
+struct CommittedReceiveQuoteWire {
+    serialized_manifest: String,
+    issuer_signature: String,
+    attestor_signature: String,
+}
+
+#[derive(Serialize)]
+struct CommittedSendQuoteWire {
+    serialized_manifest: String,
+    issuer_signature: String,
+    total_sats: u64,
+}
+
+#[derive(Serialize)]
+struct QuotedVariables<I, C> {
+    input: QuotedInput<I, C>,
+}
+
+#[derive(Serialize)]
+struct QuotedInput<I, C> {
+    #[serde(flatten)]
+    input: I,
+    committed_quote: C,
+}
+
+/// A request's own document, with `committed_quote` added to its input. The vendored
+/// schema leaves that field out so unquoted requests never send it (see the
+/// note on `RequestLightningReceiveInput` in `schema/spark.graphql`).
+fn quoted_body<I, C>(
+    (query, operation_name): (&'static str, &'static str),
+    input: I,
+    committed_quote: C,
+) -> QueryBody<QuotedVariables<I, C>> {
+    QueryBody {
+        variables: QuotedVariables {
+            input: QuotedInput {
+                input,
+                committed_quote,
+            },
+        },
+        query,
+        operation_name,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -568,6 +750,7 @@ mod tests {
     struct MockHttpInner {
         responses: Mutex<VecDeque<(u16, String)>>,
         post_calls: AtomicUsize,
+        bodies: Mutex<Vec<String>>,
     }
 
     #[derive(Clone, Default)]
@@ -583,11 +766,23 @@ mod tests {
                         .collect(),
                 ),
                 post_calls: AtomicUsize::new(0),
+                bodies: Mutex::default(),
             }))
         }
 
         fn post_calls(&self) -> usize {
             self.0.post_calls.load(Ordering::SeqCst)
+        }
+
+        /// The JSON body of every request posted, in order.
+        fn bodies(&self) -> Vec<serde_json::Value> {
+            self.0
+                .bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|body| serde_json::from_str(body).unwrap())
+                .collect()
         }
     }
 
@@ -605,9 +800,10 @@ mod tests {
             &self,
             _url: String,
             _headers: Option<HashMap<String, String>>,
-            _body: Option<String>,
+            body: Option<String>,
         ) -> Result<platform_utils::HttpResponse, HttpError> {
             self.0.post_calls.fetch_add(1, Ordering::SeqCst);
+            self.0.bodies.lock().unwrap().push(body.unwrap_or_default());
             let (status, body) = self
                 .0
                 .responses
@@ -831,5 +1027,282 @@ mod tests {
             "expected Network 500 with no retries, got {err:?}"
         );
         assert_eq!(handle.post_calls(), 1);
+    }
+
+    // ─── quoted lightning requests ──────────────────────────────────────────
+
+    const RECEIVE_REQUEST_RESPONSE: &str = r#"{"data":{"request_lightning_receive":{"request":{
+        "__typename":"LightningReceiveRequest","id":"LightningReceiveRequest:1",
+        "created_at":"2026-10-13T00:00:00Z","updated_at":"2026-10-13T00:00:00Z",
+        "network":"REGTEST","lightning_request_status":"INVOICE_CREATED",
+        "invoice":{"__typename":"Invoice","encoded_invoice":"lnbcrt1",
+            "bitcoin_network":"REGTEST","payment_hash":"0101010101010101010101010101010101010101010101010101010101010101",
+            "amount":{"__typename":"CurrencyAmount","original_value":102000,
+                "original_unit":"SATOSHI","preferred_currency_unit":"USD",
+                "preferred_currency_value_rounded":100},
+            "created_at":"2026-10-13T00:00:00Z","invoice_expired_at":"2026-10-14T00:00:00Z",
+            "memo":null},
+        "transfer":null,"lightning_receive_payment_preimage":null,
+        "receiver_identity_public_key":null}}}}"#;
+
+    const SEND_REQUEST_RESPONSE: &str = r#"{"data":{"request_lightning_send":{"request":{
+        "__typename":"LightningSendRequest","id":"LightningSendRequest:1",
+        "created_at":"2026-10-13T00:00:00Z","updated_at":"2026-10-13T00:00:00Z",
+        "network":"REGTEST","status":"CREATED","encoded_invoice":"lnbcrt1",
+        "fee":{"__typename":"CurrencyAmount","original_value":5,"original_unit":"SATOSHI",
+            "preferred_currency_unit":"USD","preferred_currency_value_rounded":0},
+        "idempotency_key":"key","transfer":null,"lightning_send_payment_preimage":null}}}}"#;
+
+    fn receive_input() -> RequestLightningReceiveInput {
+        RequestLightningReceiveInput {
+            receiver_identity_pubkey: None,
+            amount_sats: 102_000,
+            network: BitcoinNetwork::Regtest,
+            payment_hash: "01".repeat(32),
+            description_hash: None,
+            expiry_secs: Some(3600),
+            memo: None,
+            include_spark_address: false,
+            spark_invoice: None,
+        }
+    }
+
+    fn send_input() -> RequestLightningSendInput {
+        RequestLightningSendInput {
+            encoded_invoice: "lnbcrt1".to_string(),
+            idempotency_key: None,
+            amount_sats: None,
+            user_outbound_transfer_external_id: Some(
+                "0197f9a0-0000-7000-8000-000000000001".to_string(),
+            ),
+        }
+    }
+
+    fn issued_quote() -> IssuedQuote {
+        IssuedQuote {
+            serialized_manifest: vec![0x08, 0x01],
+            issuer_signature: vec![0x30, 0x44],
+        }
+    }
+
+    async fn client_answering(response: &str) -> (GraphQLClient, MockHttpClient) {
+        let http = MockHttpClient::with_responses(vec![(200, response)]);
+        let client = build_test_client(http.clone(), fast_retry(0)).await;
+        (client, http)
+    }
+
+    // An unquoted request must not name a committed quote at all: the SSP reads
+    // an explicit null there as a malformed quote.
+    #[async_test_all]
+    async fn an_unquoted_receive_names_no_committed_quote() {
+        let (client, http) = client_answering(RECEIVE_REQUEST_RESPONSE).await;
+
+        client
+            .request_lightning_receive(receive_input())
+            .await
+            .unwrap();
+
+        let body = &http.bodies()[0];
+        assert!(!body.to_string().contains("committed_quote"), "{body}");
+        assert_eq!(body["operationName"], "RequestLightningReceive");
+        // The quote mutations live in their own document, so a server on a
+        // schema without them still validates every unquoted request.
+        let query = body["query"].as_str().unwrap();
+        assert!(!query.contains("lightning_receive_quote"), "{query}");
+        assert!(!query.contains("lightning_send_quote"), "{query}");
+    }
+
+    #[async_test_all]
+    async fn a_quoted_receive_adds_only_the_committed_quote() {
+        let (client, http) = client_answering(RECEIVE_REQUEST_RESPONSE).await;
+        client
+            .request_lightning_receive(receive_input())
+            .await
+            .unwrap();
+        let unquoted = http.bodies().remove(0);
+
+        let (client, http) = client_answering(RECEIVE_REQUEST_RESPONSE).await;
+        let request = client
+            .request_quoted_lightning_receive(
+                receive_input(),
+                &CommittedReceiveQuote {
+                    issued_quote: issued_quote(),
+                    attestor_signature: vec![0x30, 0x45],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(request.id, "LightningReceiveRequest:1");
+
+        let mut quoted = http.bodies().remove(0);
+        assert_eq!(
+            quoted["variables"]["input"]["committed_quote"],
+            serde_json::json!({
+                "serialized_manifest": "0801",
+                "issuer_signature": "3044",
+                "attestor_signature": "3045",
+            })
+        );
+        quoted["variables"]["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("committed_quote");
+        assert_eq!(quoted, unquoted, "the rest of the request is unchanged");
+    }
+
+    #[async_test_all]
+    async fn an_unquoted_send_names_no_committed_quote() {
+        let (client, http) = client_answering(SEND_REQUEST_RESPONSE).await;
+
+        client.request_lightning_send(send_input()).await.unwrap();
+
+        let body = &http.bodies()[0];
+        assert!(!body.to_string().contains("committed_quote"), "{body}");
+    }
+
+    #[async_test_all]
+    async fn a_quoted_send_adds_only_the_committed_quote() {
+        let (client, http) = client_answering(SEND_REQUEST_RESPONSE).await;
+        client.request_lightning_send(send_input()).await.unwrap();
+        let unquoted = http.bodies().remove(0);
+
+        let (client, http) = client_answering(SEND_REQUEST_RESPONSE).await;
+        let request = client
+            .request_quoted_lightning_send(
+                send_input(),
+                &CommittedSendQuote {
+                    issued_quote: issued_quote(),
+                    total_sats: 12_834,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(request.id, "LightningSendRequest:1");
+
+        let mut quoted = http.bodies().remove(0);
+        assert_eq!(
+            quoted["variables"]["input"]["committed_quote"],
+            serde_json::json!({
+                "serialized_manifest": "0801",
+                "issuer_signature": "3044",
+                "total_sats": 12_834,
+            })
+        );
+        quoted["variables"]["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("committed_quote");
+        assert_eq!(quoted, unquoted, "the rest of the request is unchanged");
+    }
+
+    const RECEIVE_QUOTE_RESPONSE: &str = r#"{"data":{"lightning_receive_quote":{
+        "issued_quote":{"serialized_manifest":"0801","issuer_signature":"3044"},
+        "attribution_status":"ATTRIBUTED"}}}"#;
+
+    #[async_test_all]
+    async fn a_receive_quote_is_requested_and_decoded() {
+        let (client, http) = client_answering(RECEIVE_QUOTE_RESPONSE).await;
+        let receiver = "02".repeat(33);
+
+        let quote = client
+            .lightning_receive_quote(
+                BitcoinNetwork::Regtest,
+                100_000,
+                ReceiveAmountBasis::Gross,
+                Some(receiver.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            quote,
+            LightningQuote {
+                issued_quote: issued_quote(),
+                attribution_status: SparkFeeAttributionStatus::Attributed,
+            }
+        );
+        let body = &http.bodies()[0];
+        assert_eq!(body["operationName"], "LightningReceiveQuote");
+        assert_eq!(
+            body["variables"]["input"],
+            serde_json::json!({
+                "network": "REGTEST",
+                "amount_sats": 100_000,
+                "amount_basis": "GROSS",
+                "receiver_identity_pubkey": receiver,
+            })
+        );
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_is_requested_against_the_invoice_and_no_amount() {
+        let (client, http) = client_answering(
+            r#"{"data":{"lightning_send_quote":{
+                "issued_quote":{"serialized_manifest":"0801","issuer_signature":"3044"},
+                "attribution_status":"NOT_PROVIDED"}}}"#,
+        )
+        .await;
+
+        let quote = client.lightning_send_quote("lnbcrt1", None).await.unwrap();
+
+        assert_eq!(quote.issued_quote, issued_quote());
+        assert_eq!(
+            quote.attribution_status,
+            SparkFeeAttributionStatus::NotProvided
+        );
+        let body = &http.bodies()[0];
+        assert_eq!(body["operationName"], "LightningSendQuote");
+        assert_eq!(
+            body["variables"]["input"],
+            serde_json::json!({ "encoded_invoice": "lnbcrt1", "amount_sats": null })
+        );
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_for_an_amountless_invoice_names_the_amount() {
+        let (client, http) = client_answering(
+            r#"{"data":{"lightning_send_quote":{
+                "issued_quote":{"serialized_manifest":"0801","issuer_signature":"3044"},
+                "attribution_status":"ATTRIBUTED"}}}"#,
+        )
+        .await;
+
+        client
+            .lightning_send_quote("lnbcrt1", Some(5_000))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            http.bodies()[0]["variables"]["input"],
+            serde_json::json!({ "encoded_invoice": "lnbcrt1", "amount_sats": 5_000 })
+        );
+    }
+
+    // The status is advisory, so a value the SSP adds later must not fail the
+    // quote.
+    #[async_test_all]
+    async fn an_unknown_attribution_status_still_parses() {
+        let (client, _) =
+            client_answering(&RECEIVE_QUOTE_RESPONSE.replace("ATTRIBUTED", "SOMETHING_NEW")).await;
+
+        let quote = client
+            .lightning_receive_quote(BitcoinNetwork::Regtest, 1, ReceiveAmountBasis::Net, None)
+            .await
+            .unwrap();
+
+        assert_eq!(quote.attribution_status, SparkFeeAttributionStatus::Unknown);
+    }
+
+    #[async_test_all]
+    async fn a_quote_that_is_not_hex_is_refused() {
+        let (client, _) =
+            client_answering(&RECEIVE_QUOTE_RESPONSE.replace("\"0801\"", "\"not hex\"")).await;
+
+        let err = client
+            .lightning_receive_quote(BitcoinNetwork::Regtest, 1, ReceiveAmountBasis::Net, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, GraphQLError::Serialization(_)), "{err:?}");
     }
 }

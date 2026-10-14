@@ -327,6 +327,17 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
+    async fn sign_digest_ecdsa(
+        &self,
+        path: &DerivationPath,
+        digest: &[u8; 32],
+    ) -> Result<Signature, SignerError> {
+        // libsecp256k1 always produces low-S signatures.
+        Ok(self
+            .secp
+            .sign_ecdsa(&Message::from_digest(*digest), &self.derive_at(path)?))
+    }
+
     async fn sign_hash_schnorr(
         &self,
         path: &DerivationPath,

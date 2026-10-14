@@ -4,20 +4,23 @@ use spark_wallet::TransferId;
 use tracing::info;
 
 use crate::{
-    Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, SendPaymentOptions,
+    Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, LightningFeeQuote,
+    SendPaymentOptions,
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
-    sdk::{BreezSdk, PendingLightningSend},
-    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
+    sdk::{BreezSdk, PendingLightningSend, issued_quote},
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer, ExternalSignedQuote},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
 };
 
+#[expect(clippy::too_many_arguments)]
 pub(super) async fn send(
     sdk: &BreezSdk,
     invoice_details: &Bolt11InvoiceDetails,
     spark_transfer_fee_sats: Option<u64>,
     lightning_fee_sats: u64,
+    fee_quote: Option<&LightningFeeQuote>,
     request: &SendPaymentRequest,
     amount_override: Option<u64>,
     amount: u128,
@@ -42,7 +45,15 @@ pub(super) async fn send(
     // Applies to both amountless invoices and fixed-amount invoices with amount_override
     // (send-all-with-conversion via LNURL — overpays the invoice to drain the wallet).
     let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
-    let amount_to_send = if is_fees_included
+
+    // A quote prices the Lightning route for exactly the amount it names, so
+    // it is committed only for a Lightning send of that amount: never under an
+    // override, which overpays the invoice, nor for a fees-included total.
+    let quote =
+        fee_quote.filter(|_| !is_spark_route && amount_override.is_none() && !is_fees_included);
+    let amount_to_send = if quote.is_some() {
+        invoice_details.amount_msat.is_none().then_some(amount)
+    } else if is_fees_included
         && (invoice_details.amount_msat.is_none() || amount_override.is_some())
     {
         let total_sats: u64 = match amount_override {
@@ -95,18 +106,40 @@ pub(super) async fn send(
         amount
     };
 
-    let payment = sdk
-        .lightning_sender
-        .pay_and_persist_lightning_invoice(
-            &invoice_details.invoice.bolt11,
-            amount_to_send_sats,
-            fee_sats,
-            prefer_spark,
-            displayed_amount,
-            transfer_id,
-            completion_timeout_secs.unwrap_or(0).into(),
-        )
-        .await?;
+    let payment = match quote {
+        Some(fee_quote) => {
+            // The quote fixes the transfer id, so it cannot carry the caller's
+            // idempotency key as the id an unquoted send would.
+            if transfer_id.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "An idempotency key is not supported for a send priced by a fee quote"
+                        .to_string(),
+                ));
+            }
+            sdk.lightning_sender
+                .pay_and_persist_quoted_lightning_invoice(
+                    &invoice_details.invoice.bolt11,
+                    fee_quote,
+                    amount_to_send_sats,
+                    displayed_amount,
+                    completion_timeout_secs.unwrap_or(0).into(),
+                )
+                .await?
+        }
+        None => {
+            sdk.lightning_sender
+                .pay_and_persist_lightning_invoice(
+                    &invoice_details.invoice.bolt11,
+                    amount_to_send_sats,
+                    fee_sats,
+                    prefer_spark,
+                    displayed_amount,
+                    transfer_id,
+                    completion_timeout_secs.unwrap_or(0).into(),
+                )
+                .await?
+        }
+    };
 
     Ok(SendPaymentResponse { payment })
 }
@@ -136,6 +169,7 @@ pub(super) async fn send_signed(
             invoice: bolt11.to_string(),
             amount_sats: Some(amount_to_send),
             displayed_amount: u128::from(amount_to_send),
+            fee_quote: None,
         })
         .await;
 
@@ -156,6 +190,71 @@ pub(super) async fn send_signed(
         .payment_from_pay_result(
             result,
             u128::from(amount_to_send),
+            completion_timeout_secs.unwrap_or(0).into(),
+        )
+        .await?;
+    Ok(SendPaymentResponse { payment })
+}
+
+/// Publishes a client-signed Lightning send priced by `fee_quote`. The quote is
+/// checked again, and the package must be the one built for it: the same
+/// transfer, each leaf going to one of the quote's receivers.
+#[expect(clippy::too_many_arguments)]
+pub(super) async fn send_signed_quoted(
+    sdk: &BreezSdk,
+    prepare_transfer: &ExternalPrepareTransferRequest,
+    signed: &ExternalPreparedTransfer,
+    signed_quote: &ExternalSignedQuote,
+    bolt11: &str,
+    fee_quote: &LightningFeeQuote,
+    amount_sat: u64,
+    completion_timeout_secs: Option<u32>,
+) -> Result<SendPaymentResponse, SdkError> {
+    let quote = sdk
+        .spark_wallet
+        .verify_lightning_send_quote(bolt11, &issued_quote(fee_quote)?, Some(amount_sat))
+        .await?;
+    if prepare_transfer.transfer_id()? != quote.transfer_id {
+        return Err(SdkError::InvalidInput(
+            "The package was not built for its fee quote".to_string(),
+        ));
+    }
+    let leaves = prepare_transfer
+        .leaves
+        .iter()
+        .map(|leaf| Ok((leaf.node_id.to_tree_node_id()?, leaf.receiver_pubkey()?)))
+        .collect::<Result<Vec<_>, SdkError>>()?;
+    let manifest_hash_signature = signed_quote.to_signed_quote()?.signature;
+    let displayed_amount = u128::from(quote.amount_sats);
+
+    let _in_flight = sdk
+        .lightning_sender
+        .record_pending_send(&PendingLightningSend {
+            transfer_id: quote.transfer_id.to_string(),
+            invoice: bolt11.to_string(),
+            amount_sats: quote.amount_to_send,
+            displayed_amount,
+            fee_quote: Some(fee_quote.clone()),
+        })
+        .await;
+
+    let result = Box::pin(sdk.spark_wallet.publish_quoted_lightning_send_package(
+        bolt11.to_string(),
+        &quote,
+        leaves,
+        signed.to_prepared_transfer()?,
+        manifest_hash_signature,
+    ))
+    .await?;
+    sdk.lightning_sender
+        .forget_pending_send(&quote.transfer_id.to_string())
+        .await;
+
+    let payment = sdk
+        .lightning_sender
+        .payment_from_pay_result(
+            result,
+            displayed_amount,
             completion_timeout_secs.unwrap_or(0).into(),
         )
         .await?;

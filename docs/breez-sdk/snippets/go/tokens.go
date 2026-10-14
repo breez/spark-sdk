@@ -100,8 +100,9 @@ func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_
 
 	paymentRequest := response.PaymentRequest
 	log.Printf("Payment Request: %v", paymentRequest)
-	receiveFees := response.Fee
-	log.Printf("Fees: %v token base units", receiveFees)
+	if fee, ok := response.Fee.(breez_sdk_spark.ReceiveFeeFixed); ok {
+		log.Printf("Fees: %v token base units", fee.Amount)
+	}
 	// ANCHOR_END: receive-token-payment-spark-invoice
 	return &response, nil
 }

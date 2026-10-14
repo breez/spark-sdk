@@ -80,6 +80,32 @@ pub fn select_leaves_by_exact_amount<L: LeafLike>(
     Ok(None)
 }
 
+/// Splits `leaves` into one group per amount in `amounts`, each summing to it
+/// exactly, in the order of `amounts`. `None` when the leaves cannot be split
+/// that way. Larger amounts are filled first, which is what leaves the small
+/// ones a chance among the leftovers.
+pub fn partition_by_exact_amounts<L: LeafLike>(
+    leaves: &[L],
+    amounts: &[u64],
+) -> Option<Vec<Vec<L>>> {
+    let total: u64 = leaves.iter().map(LeafLike::leaf_value).sum();
+    if amounts.iter().copied().fold(0u64, u64::saturating_add) != total {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..amounts.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(amounts.get(i).copied().unwrap_or_default()));
+
+    let mut remaining = leaves.to_vec();
+    let mut groups: Vec<Option<Vec<L>>> = vec![None; amounts.len()];
+    for i in order {
+        let amount = *amounts.get(i)?;
+        let group = select_leaves_by_exact_amount(&remaining, amount).ok()??;
+        remaining.retain(|leaf| !group.iter().any(|g| g.leaf_id() == leaf.leaf_id()));
+        *groups.get_mut(i)? = Some(group);
+    }
+    groups.into_iter().collect()
+}
+
 pub fn select_leaves_by_exact_denominations<L: LeafLike>(
     leaves: &[L],
     denominations: &[u64],
@@ -221,5 +247,51 @@ where
             }
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod partition_tests {
+    use macros::test_all;
+
+    use super::partition_by_exact_amounts;
+    use crate::tree::TreeNode;
+    use crate::tree::tests::create_test_tree_node;
+
+    fn leaves(values: &[u64]) -> Vec<TreeNode> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| create_test_tree_node(&format!("leaf-{i}"), *value))
+            .collect()
+    }
+
+    fn sums(groups: &[Vec<TreeNode>]) -> Vec<u64> {
+        groups
+            .iter()
+            .map(|group| group.iter().map(|leaf| leaf.value).sum())
+            .collect()
+    }
+
+    #[test_all]
+    fn splits_leaves_into_groups_in_the_order_asked() {
+        let groups =
+            partition_by_exact_amounts(&leaves(&[8_192, 2_048, 256, 64, 16, 4]), &[64, 10_496, 20])
+                .unwrap();
+        assert_eq!(sums(&groups), vec![64, 10_496, 20]);
+        let used: usize = groups.iter().map(Vec::len).sum();
+        assert_eq!(used, 6, "every leaf lands in exactly one group");
+    }
+
+    #[test_all]
+    fn refuses_amounts_that_do_not_add_up_to_the_leaves() {
+        assert!(partition_by_exact_amounts(&leaves(&[1_024, 512]), &[1_024]).is_none());
+        assert!(partition_by_exact_amounts(&leaves(&[1_024]), &[1_024, 1]).is_none());
+    }
+
+    #[test_all]
+    fn refuses_a_split_no_subset_makes() {
+        // 3 + 3 cannot be carved out of a single 6-sat leaf.
+        assert!(partition_by_exact_amounts(&leaves(&[6]), &[3, 3]).is_none());
     }
 }

@@ -599,7 +599,8 @@ public static class Commands
                     amountSats: amountSats,
                     expirySecs: ParseOptionalUint(expirySecsStr),
                     paymentHash: paymentHash,
-                    receiverIdentityPublicKey: null
+                    receiverIdentityPublicKey: null,
+                    feePolicy: null
                 );
                 break;
 
@@ -639,9 +640,9 @@ public static class Commands
 
         var result = await sdk.ReceivePayment(request: new ReceivePaymentRequest(paymentMethod: paymentMethod));
 
-        if (result.fee > 0)
+        if (result.fee is ReceiveFee.Fixed fixedFee && fixedFee.amount > 0)
         {
-            Console.WriteLine($"Prepared payment requires fee of {result.fee} sats/token base units");
+            Console.WriteLine($"Prepared payment requires fee of {fixedFee.amount} sats/token base units");
         }
 
         Serialization.PrintValue(result);

@@ -305,6 +305,7 @@ func ServerModeRequestHandler(sdk *breez_sdk_spark.BreezSdk) (string, error) {
 			AmountSats:  &amountSats,
 			ExpirySecs:  &expirySecs,
 			PaymentHash: nil,
+			FeePolicy:   nil,
 		},
 	})
 	if err != nil {

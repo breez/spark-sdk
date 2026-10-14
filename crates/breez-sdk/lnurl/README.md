@@ -153,6 +153,10 @@ A receive is attributed to the domain's own Breez API key when one is configured
 
 On **mainnet the default API key is required**, and the server will not start without it. This ensures a self-hosted server attributes all of its receives (to its own partner) instead of leaving any unattributed.
 
+A domain with its own API key can also have its invoices carry its partner fee, by setting `quote_receives` on its `domain_attribution` row. It is off by default: the fee comes out of what the user receives, since an LNURL-pay invoice must be for exactly the amount the payer asked for, so only switch it on once the partner's app expects that. An invoice is priced without a fee whenever one can't be quoted, including while the domain's own partner token is not yet fetched and when the invoice carries a Spark address.
+
+Off mainnet there is no endpoint to exchange an API key for a partner token, so attribution and fee quoting are off. A build with the `dev` feature can test them against a deployment that accepts a partner token of its own: set `BREEZ_LNURL_DEV_DONT_USE_PARTNER_JWT` (`--dev-dont-use-partner-jwt`) to that token, and the server serves it as every domain's own and as the default, until it expires. Domains still need `quote_receives` set to quote. The server refuses to start with it on mainnet.
+
 ### Database Support
 
 PostgreSQL is the only supported backend. `--db-url` must start with `postgres://`

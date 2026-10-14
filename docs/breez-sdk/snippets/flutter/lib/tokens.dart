@@ -61,8 +61,10 @@ Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) asy
 
   String paymentRequest = response.paymentRequest;
   print("Payment request: $paymentRequest");
-  BigInt receiveFee = response.fee;
-  print("Fees: $receiveFee token base units");
+  final receiveFee = response.fee;
+  if (receiveFee is ReceiveFee_Fixed) {
+    print("Fees: ${receiveFee.amount} token base units");
+  }
   // ANCHOR_END: receive-token-payment-spark-invoice
   return response;
 }
