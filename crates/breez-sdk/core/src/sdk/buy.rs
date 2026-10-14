@@ -128,9 +128,11 @@ impl BreezSdk {
             .await?
             .into_iter()
             .find(is_usdc_solana)
-            .ok_or_else(|| SdkError::CrossChainRouteUnavailable {
-                reason: "USDC on Solana is not offered".to_string(),
-                temporary: false,
+            .ok_or_else(|| {
+                SdkError::cross_chain_route_unavailable(
+                    "USDC on Solana is not offered".to_string(),
+                    false,
+                )
             })?;
         let decimals = route.decimals;
 
