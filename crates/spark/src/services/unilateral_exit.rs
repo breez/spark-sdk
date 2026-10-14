@@ -335,10 +335,14 @@ pub struct UnilateralExitQuote {
     pub cpfp_fee_sat: u64,
     /// The fan-out's fee, paid by the funding UTXO. Zero for a single branch.
     pub fanout_fee_sat: u64,
+    /// The fees paid out of the leaves' value before the sweep: each selected
+    /// leaf's value less the value of its refund. A direct transaction's output
+    /// is its input less its fee.
+    pub refund_fee_sat: u64,
     /// The sweep's fee, paid out of the value being swept rather than by the
     /// funding.
     pub sweep_fee_sat: u64,
-    /// `cpfp_fee_sat + fanout_fee_sat + sweep_fee_sat`.
+    /// `cpfp_fee_sat + fanout_fee_sat + refund_fee_sat + sweep_fee_sat`.
     pub total_fee_sat: u64,
 }
 
@@ -404,6 +408,7 @@ pub fn quote_unilateral_exit(
             single_utxo_funding_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            refund_fee_sat: 0,
             sweep_fee_sat: 0,
             total_fee_sat: 0,
         });
@@ -421,6 +426,11 @@ pub fn quote_unilateral_exit(
     let cpfp_fee_sat: u64 = selected
         .iter()
         .map(|l| l.cpfp_cost)
+        .fold(0u64, u64::saturating_add);
+    let refund_fee_sat: u64 = selected
+        .iter()
+        .filter_map(|l| tree_nodes.get(&l.id))
+        .map(|leaf| leaf.value.saturating_sub(refund_value(leaf, on_chain)))
         .fold(0u64, u64::saturating_add);
     // Each leaf's sweep share is the marginal cost of adding its input, so the
     // shares telescope to the fee of the one sweep that spends all of them.
@@ -444,12 +454,14 @@ pub fn quote_unilateral_exit(
         single_utxo_funding_sat: leaves_total.saturating_add(fanout_fee_sat),
         total_fee_sat: cpfp_fee_sat
             .saturating_add(fanout_fee_sat)
+            .saturating_add(refund_fee_sat)
             .saturating_add(sweep_fee_sat),
         selected_leaves: selected,
         skipped_leaves,
         per_branch_funding,
         cpfp_fee_sat,
         fanout_fee_sat,
+        refund_fee_sat,
         sweep_fee_sat,
     })
 }
@@ -2106,6 +2118,105 @@ mod tests {
 
             assert_eq!(quote.selected_leaves.len(), 1);
             assert_eq!(quote.sweep_fee_sat, 990);
+        }
+
+        #[test_all]
+        fn a_quote_reports_the_fees_of_direct_transactions() {
+            let quote_of = |node: TreeNode, on_chain: &ExitChainState| {
+                let leaf_id = node.id.clone();
+                let nodes: HashMap<TreeNodeId, TreeNode> =
+                    [(leaf_id.clone(), node)].into_iter().collect();
+                quote_unilateral_exit(
+                    &nodes,
+                    &[leaf_id],
+                    UnilateralExitLeafFilter::All,
+                    272,
+                    22,
+                    DUST,
+                    250,
+                    22,
+                    on_chain,
+                )
+                .unwrap()
+            };
+
+            let nothing_on_chain =
+                quote_of(leaf_node_n("leaf", 100_000, 1), &ExitChainState::default());
+            assert_eq!(nothing_on_chain.refund_fee_sat, 0);
+
+            let node = leaf_node_n("leaf", 100_000, 1);
+            let mut on_chain = on_chain_state(std::slice::from_ref(&node.id), &[]);
+            on_chain.refunds = vec![ExitRefund {
+                leaf_id: node.id.clone(),
+                state: ExitRefundState::OnChain {
+                    tx: tx_paying(99_045, 2),
+                    vout: 0,
+                    value: 99_045,
+                    block_height: None,
+                },
+            }];
+            let direct_refund_on_chain = quote_of(node, &on_chain);
+            assert_eq!(direct_refund_on_chain.refund_fee_sat, 955);
+            assert_eq!(direct_refund_on_chain.cpfp_fee_sat, 0);
+            assert!(direct_refund_on_chain.per_branch_funding.is_empty());
+
+            let mut node = leaf_node_n("leaf", 100_000, 1);
+            node.direct_tx = Some(tx_paying(99_045, 2));
+            node.direct_refund_tx = Some(tx_paying(98_090, 3));
+            let mut on_chain = on_chain_state(std::slice::from_ref(&node.id), &[]);
+            on_chain.nodes[0].confirmed_by = ExitNodeConfirmation::Direct;
+            let direct_tx_on_chain = quote_of(node, &on_chain);
+            assert_eq!(direct_tx_on_chain.refund_fee_sat, 1_910);
+            assert_eq!(direct_tx_on_chain.cpfp_fee_sat, 0);
+            assert!(direct_tx_on_chain.per_branch_funding.is_empty());
+        }
+
+        #[test_all]
+        fn the_total_fee_of_a_quote_includes_the_refund_fee() {
+            let ordinary = leaf_node_n("ordinary", 100_000, 1);
+            let refunded = leaf_node_n("refunded", 100_000, 3);
+            let on_chain = ExitChainState {
+                nodes: vec![ConfirmedExitNode {
+                    node_id: refunded.id.clone(),
+                    confirmed_by: ExitNodeConfirmation::Cpfp,
+                    block_height: None,
+                }],
+                refunds: vec![ExitRefund {
+                    leaf_id: refunded.id.clone(),
+                    state: ExitRefundState::OnChain {
+                        tx: tx_paying(99_045, 5),
+                        vout: 0,
+                        value: 99_045,
+                        block_height: None,
+                    },
+                }],
+                ..Default::default()
+            };
+            let ids = [ordinary.id.clone(), refunded.id.clone()];
+            let nodes: HashMap<TreeNodeId, TreeNode> = [ordinary, refunded]
+                .into_iter()
+                .map(|node| (node.id.clone(), node))
+                .collect();
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                &ids,
+                UnilateralExitLeafFilter::All,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+
+            assert_eq!(quote.refund_fee_sat, 955);
+            assert!(quote.cpfp_fee_sat > 0);
+            assert_eq!(
+                quote.total_fee_sat,
+                quote.cpfp_fee_sat + quote.fanout_fee_sat + 955 + quote.sweep_fee_sat
+            );
         }
 
         #[test_all]

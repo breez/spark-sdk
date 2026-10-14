@@ -48,6 +48,7 @@ pub(super) struct UnilateralQuote {
     pub(super) total_fee_sats: u64,
     pub(super) cpfp_fee_sats: u64,
     pub(super) fanout_fee_sats: u64,
+    pub(super) refund_fee_sats: u64,
     pub(super) sweep_fee_sats: u64,
     pub(super) funding: Option<RecoveryFunding>,
     pub(super) exit_chain_state: ModelExitChainState,
@@ -60,6 +61,7 @@ pub(super) struct UnilateralBuild {
     pub(super) total_fee_sats: u64,
     pub(super) cpfp_fee_sats: u64,
     pub(super) fanout_fee_sats: u64,
+    pub(super) refund_fee_sats: u64,
     pub(super) sweep_fee_sats: u64,
     pub(super) transactions: Vec<RecoveryTransaction>,
 }
@@ -166,6 +168,7 @@ impl BreezSdk {
             total_fee_sat = quote.total_fee_sat,
             cpfp_fee_sat = quote.cpfp_fee_sat,
             fanout_fee_sat = quote.fanout_fee_sat,
+            refund_fee_sat = quote.refund_fee_sat,
             sweep_fee_sat = quote.sweep_fee_sat,
             single_utxo_funding_sat = quote.single_utxo_funding_sat,
             branches = per_branch.len(),
@@ -179,6 +182,7 @@ impl BreezSdk {
             total_fee_sats: quote.total_fee_sat,
             cpfp_fee_sats: quote.cpfp_fee_sat,
             fanout_fee_sats: quote.fanout_fee_sat,
+            refund_fee_sats: quote.refund_fee_sat,
             sweep_fee_sats: quote.sweep_fee_sat,
             funding: (!per_branch.is_empty()).then_some(RecoveryFunding {
                 single_utxo_sats: quote.single_utxo_funding_sat,
@@ -266,7 +270,10 @@ impl BreezSdk {
         let recoverable_value_sats = build.recoverable_value_sat;
         let cpfp_fee_sats = build.cpfp_fee_sat;
         let fanout_fee_sats = build.fanout_fee_sat;
-        let build_fee_sats = cpfp_fee_sats.saturating_add(fanout_fee_sats);
+        let refund_fee_sats = build.refund_fee_sat;
+        let build_fee_sats = cpfp_fee_sats
+            .saturating_add(fanout_fee_sats)
+            .saturating_add(refund_fee_sats);
         // Captured before the loop below consumes `build.branches`.
         let sweep_status = sweep_initial_status(&build);
         debug!(
@@ -277,6 +284,7 @@ impl BreezSdk {
             recoverable_value_sats,
             cpfp_fee_sats,
             fanout_fee_sats,
+            refund_fee_sats,
             "build_unilateral_exit: build assembled, signing"
         );
 
@@ -352,6 +360,7 @@ impl BreezSdk {
                 total_fee_sats: build_fee_sats,
                 cpfp_fee_sats,
                 fanout_fee_sats,
+                refund_fee_sats,
                 sweep_fee_sats: 0,
                 transactions,
             });
@@ -406,6 +415,7 @@ impl BreezSdk {
             total_fee_sats,
             cpfp_fee_sats,
             fanout_fee_sats,
+            refund_fee_sats,
             sweep_fee_sats,
             transactions,
         })
@@ -1287,6 +1297,7 @@ mod tests {
             recoverable_value_sat: 0,
             cpfp_fee_sat: 0,
             fanout_fee_sat: 0,
+            refund_fee_sat: 0,
         }
     }
 
