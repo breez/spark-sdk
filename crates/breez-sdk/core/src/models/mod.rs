@@ -3299,10 +3299,11 @@ pub struct PrepareRecoverFundsResponse {
     /// (`funding.per_branch`) avoids it.
     pub fanout_fee_sats: u64,
     /// Paid from the unilateral leaves' own value before the sweep: each leaf's
-    /// value less the value of its refund. The output of a direct transaction,
-    /// the Spark operators' version of a leaf's transaction, is its input less
-    /// its fee. For a refund that is not on-chain yet, the SDK counts the
-    /// refund it expects: the operators can broadcast one with another fee.
+    /// value less what its refund passes to the sweep. The output of a direct
+    /// transaction, the Spark operators' version of a leaf's transaction, is its
+    /// input less its fee, and a refund received with a watchtower fee ladder
+    /// pays its own fee. For a refund that is not on-chain yet, the SDK counts
+    /// the refund it expects: the operators can broadcast one with another fee.
     pub refund_fee_sats: u64,
     /// Paid by the final sweep, off the value it moves.
     pub sweep_fee_sats: u64,

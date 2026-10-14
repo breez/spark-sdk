@@ -274,6 +274,14 @@ impl BreezSdk {
             .saturating_add(refund_fee_sats);
         // Captured before the loop below consumes `build.branches`.
         let sweep_status = sweep_initial_status(&build);
+        // The child of a refund without an anchor goes out with its refund, so
+        // the sweep of the child's output waits on the refund.
+        let refund_of_child: HashMap<Txid, Txid> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter_map(|tx| Some((tx.refund_child.as_ref()?.compute_txid(), tx.txid)))
+            .collect();
         debug!(
             has_fan_out = build.fan_out.is_some(),
             branches = build.branches.len(),
@@ -330,9 +338,15 @@ impl BreezSdk {
                     depends_on = tx.depends_on.len(),
                     "build_unilateral_exit: exit tx"
                 );
-                let cpfp_tx_hex = match tx.to_sign {
-                    Some(child) => Some(sign_psbt_via(child, signer).await?),
-                    None => None,
+                let cpfp_tx_hex = match (tx.to_sign, tx.refund_child, &tx.node_id) {
+                    (Some(child), _, _) => Some(sign_psbt_via(child, signer).await?),
+                    (None, Some(child), Some(leaf_id)) => Some(serialize_hex(
+                        &self
+                            .spark_wallet
+                            .sign_refund_child(leaf_id, &tx.base_tx, child)
+                            .await?,
+                    )),
+                    _ => None,
                 };
                 transactions.push(RecoveryTransaction {
                     kind,
@@ -367,7 +381,12 @@ impl BreezSdk {
         let refund_txids: Vec<String> = build
             .refund_outputs
             .iter()
-            .map(|r| r.outpoint.txid.to_string())
+            .map(|r| {
+                refund_of_child
+                    .get(&r.outpoint.txid)
+                    .unwrap_or(&r.outpoint.txid)
+                    .to_string()
+            })
             .collect();
         let sweep_psbt = self
             .spark_wallet
@@ -1277,6 +1296,7 @@ mod tests {
                 output: vec![],
             },
             to_sign: None,
+            refund_child: None,
             csv_timelock_blocks: None,
             depends_on: vec![],
             status,
