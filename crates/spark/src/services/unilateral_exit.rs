@@ -245,16 +245,16 @@ pub fn plan_unilateral_exit(
         let cpfp_cost = if inputs.len() > 1 {
             first_child_cpfp_floor(
                 &tree_nodes,
-                &to_build[0].id,
+                &only.id,
                 &inputs,
                 destination_script_len,
                 fee_rate_sat_per_kw,
                 on_chain,
                 &mut HashSet::new(),
             )
-            .unwrap_or(to_build[0].cpfp_cost)
+            .unwrap_or(only.cpfp_cost)
         } else {
-            to_build[0].cpfp_cost
+            only.cpfp_cost
         };
         let required = cpfp_cost.saturating_add(change_dust_limit);
         let available = inputs
