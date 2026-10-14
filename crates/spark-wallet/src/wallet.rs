@@ -45,13 +45,13 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService,
-        ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
-        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
-        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpFundingStrategy, CpfpInput,
+        DepositService, ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService,
+        InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningService,
+        PayLightningResult, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
+        QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap,
+        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
+        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
         WatchtowerRecoveryService,
     },
     session_store::{InMemorySessionStore, SessionStore},
@@ -1916,6 +1916,7 @@ impl SparkWallet {
         funding_input_weight: u64,
         funding_output_script_len: usize,
         change_dust_limit: u64,
+        funding_strategy: CpfpFundingStrategy,
         destination_script_len: usize,
         on_chain: &ExitChainState,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
@@ -1926,6 +1927,7 @@ impl SparkWallet {
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
+            funding_strategy,
             fee_rate_sat_per_kw,
             destination_script_len,
             on_chain,
@@ -1940,6 +1942,7 @@ impl SparkWallet {
         context: &ExitContext,
         fee_rate_sat_per_kw: u64,
         inputs: Vec<CpfpInput>,
+        funding_strategy: CpfpFundingStrategy,
         destination_script_len: usize,
         on_chain: &ExitChainState,
     ) -> Result<spark::services::UnilateralExitPlan, SparkWalletError> {
@@ -1948,6 +1951,7 @@ impl SparkWallet {
             &context.leaf_ids,
             context.filter,
             inputs,
+            funding_strategy,
             fee_rate_sat_per_kw,
             destination_script_len,
             on_chain,
@@ -1957,6 +1961,7 @@ impl SparkWallet {
             selected_leaves = plan.selected_leaves.len(),
             tree_nodes = plan.tree_nodes.len(),
             has_fan_out = plan.fan_out_psbt.is_some(),
+            ?funding_strategy,
             "prepare_unilateral_exit_plan: planned"
         );
 
