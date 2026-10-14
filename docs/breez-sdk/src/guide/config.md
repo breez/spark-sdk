@@ -103,7 +103,7 @@ Whether the SDK pre-signs the transactions that protect your funds on-chain at a
 
 While you are offline, the Spark operators watch the chain for anyone trying to exit an outdated state of your balance, and broadcast your own pre-signed transactions to defend it. With a fee ladder they can pick the fee the network needs at that moment, so the defense holds when on-chain fees are high. Without one, it pays a fixed fee and can fall behind in a fee spike.
 
-The ladder is on unless you set {{#name watchtower_fee_ladder_enabled}} to false. It is not supported with a remote signer such as [Turnkey](./turnkey.md), where it stays off, and setting it to true there fails to connect.
+The ladder is on unless you set {{#name watchtower_fee_ladder_enabled}} to false. It is not supported with a remote signer, one whose {{#name is_remote}} returns true, such as [Turnkey](./turnkey.md). There it stays off, and setting it to true fails to connect. A [custom signer](./external_signer.md#implementing-a-custom-signer) that returns false signs the ladder: up to 24 extra signatures for each leaf it receives, and for each renewal of a leaf's refund timelock.
 
 ## Optimization configuration
 

@@ -39,6 +39,8 @@ If you need full control over the signing process, you can implement the [Extern
 
 The default implementations of the two interfaces, [DefaultExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external.rs) and [DefaultExternalSparkSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/default_external_spark.rs), can be used as a reference for what's expected.
 
+{{#name is_remote}} says whether your Spark signer is backed by a remote service, where each signature is a network call or is billed. Return true for such a signer: the SDK then skips signer calls it can do without and keeps the [watchtower fee ladder](./config.md#watchtower-fee-ladder) off, which would otherwise add many signatures.
+
 <div class="warning">
 <h4>Developer note</h4>
 
