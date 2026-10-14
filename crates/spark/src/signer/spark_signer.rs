@@ -109,12 +109,14 @@ pub struct TransferLeafInput {
     pub new_leaf_id: TreeNodeId,
     /// The key this leaf is currently held under, which is what signs it away.
     pub signing_key: LeafSigningKey,
+    /// The identity key of the wallet this leaf goes to. The new leaf key is
+    /// encrypted for it. One transfer may send leaves to several receivers.
+    pub receiver_public_key: PublicKey,
 }
 
 #[derive(Debug, Clone)]
 pub struct PrepareTransferRequest {
     pub transfer_id: TransferId,
-    pub receiver_public_key: PublicKey,
     pub leaves: Vec<TransferLeafInput>,
     pub operator_recipients: Vec<OperatorRecipient>,
     pub threshold: u32,
@@ -367,6 +369,34 @@ pub struct PreparedTokenTransaction {
     pub signature: schnorr::Signature,
 }
 
+// ─── sign_quote ───────────────────────────────────────────────────────────
+
+/// Which signature over a fee-bearing (quoted) payment is requested. Lets
+/// policy-enforcing signers gate a sender's consent separately from a receive
+/// attestation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteSignatureKind {
+    /// A sender's consent to the transfer manifest it funds: the digest is the
+    /// manifest hash.
+    TransferManifest,
+    /// The attestor's endorsement of a receive quote: the digest is the quote
+    /// envelope bound to the invoice's payment hash.
+    ReceiveAttestation,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignQuoteRequest {
+    pub kind: QuoteSignatureKind,
+    /// 32-byte digest to ECDSA-sign with the identity key, as is.
+    pub digest: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+pub struct SignedQuote {
+    /// Low-S identity-key signature over the digest.
+    pub signature: ecdsa::Signature,
+}
+
 // ─── trait ────────────────────────────────────────────────────────────────
 
 /// High-level signing surface exposed to the Spark protocol layer.
@@ -388,6 +418,13 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// verified in storage. Defaults to false: most signers are local.
     fn is_remote(&self) -> bool {
         false
+    }
+
+    /// Whether [`prepare_transfer`](Self::prepare_transfer) can send the leaves
+    /// of one transfer to different receivers, as a fee-bearing Lightning send
+    /// does. Defaults to true.
+    fn supports_split_transfers(&self) -> bool {
+        true
     }
 
     /// Returns the static-deposit public key at `index`. The wallet hands this
@@ -513,6 +550,11 @@ pub trait SparkSigner: Send + Sync + 'static {
         &self,
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError>;
+
+    /// ECDSA-sign the digest of a quoted payment of any [`QuoteSignatureKind`]
+    /// with the identity key. The digest is signed as is, unlike
+    /// [`sign_message`](Self::sign_message), which hashes its input first.
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError>;
 }
 
 #[cfg(test)]

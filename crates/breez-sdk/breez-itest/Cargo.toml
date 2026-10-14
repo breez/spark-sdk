@@ -64,6 +64,8 @@ uuid.workspace = true
 futures.workspace = true
 axum = "0.7"
 bech32.workspace = true
+# Signs the partner JWTs the dev environment tests attach.
+p256 = { workspace = true, features = ["pkcs8", "pem"] }
 
 # EVM tooling for the mainnet cross-chain itests: derive the deterministic
 # recipient from the test mnemonic (alloy-signer-local `mnemonic` feature),

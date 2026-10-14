@@ -56,7 +56,9 @@ where
 
     if invoice.preimage.is_none() {
         invoice.preimage = Some(preimage.to_string());
-        invoice.amount_received_sat = amount_received_sat;
+        // The HTLC pays the whole invoice, the partner fee included.
+        invoice.amount_received_sat =
+            amount_received_sat.map(|htlc| htlc.saturating_sub(invoice.fee_sat.unwrap_or(0)));
         invoice.updated_at = now;
         db.upsert_invoice(&invoice).await?;
         debug!("Stored preimage for invoice {}", payment_hash);
@@ -93,6 +95,7 @@ pub async fn create_invoice<DB>(
     invoice: &str,
     invoice_expiry: i64,
     domain: &str,
+    fee_sat: Option<i64>,
 ) -> Result<(), LnurlRepositoryError>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
@@ -108,6 +111,7 @@ where
         updated_at: now,
         domain: Some(domain.to_string()),
         amount_received_sat: None,
+        fee_sat,
     };
     db.upsert_invoice(&invoice_record).await?;
     debug!("Created invoice record for payment hash {}", payment_hash);
@@ -187,6 +191,7 @@ mod shared_tests {
             updated_at: 1000,
             domain: None,
             amount_received_sat: None,
+            fee_sat: None,
         })
         .await
         .unwrap();
@@ -207,6 +212,55 @@ mod shared_tests {
             pending.iter().any(|p| p.payment_hash == payment_hash),
             "zap receipt must be enqueued even when the preimage was already stored"
         );
+    }
+
+    /// The HTLC pays the whole invoice, but the user receives it less the
+    /// partner fee it was priced with, and the webhook reports what they got.
+    pub async fn invoice_paid_keeps_the_fee_out_of_the_amount_received<DB>(db: &DB)
+    where
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
+    {
+        let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
+        let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&[8u8; 32]);
+        let domain = "fee.example.com";
+        db.add_domain(domain).await.unwrap();
+
+        create_invoice(
+            db,
+            &payment_hash,
+            "fee_user_pubkey",
+            &invoice_str,
+            i64::MAX,
+            domain,
+            Some(20),
+        )
+        .await
+        .unwrap();
+        handle_invoice_paid(
+            db,
+            &webhook_service,
+            &payment_hash,
+            &preimage_hex,
+            Some(1000),
+            &trigger,
+        )
+        .await
+        .unwrap();
+
+        let invoice = db
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(invoice.amount_received_sat, Some(980));
+        assert_eq!(invoice.fee_sat, Some(20));
+
+        let deliveries = db.take_pending_webhook_deliveries().await.unwrap();
+        assert_eq!(deliveries.len(), 1);
+        let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
+        assert_eq!(payload["data"]["amount_sat"], 980);
+        assert_eq!(payload["data"]["fee_sat"], 20);
     }
 
     pub async fn get_or_create_setting_returns_default_on_first_call<DB>(db: &DB)
@@ -249,6 +303,12 @@ mod postgres_tests {
     async fn invoice_paid_enqueues_zap_when_preimage_already_stored() {
         let (_pg, db) = test_db().await;
         shared_tests::invoice_paid_enqueues_zap_when_preimage_already_stored(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoice_paid_keeps_the_fee_out_of_the_amount_received() {
+        let (_pg, db) = test_db().await;
+        shared_tests::invoice_paid_keeps_the_fee_out_of_the_amount_received(&db).await;
     }
 
     #[tokio::test]

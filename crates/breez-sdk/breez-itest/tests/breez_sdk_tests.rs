@@ -293,6 +293,7 @@ async fn test_03_lightning_invoice_payment(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -571,6 +572,7 @@ async fn test_04_lightning_invoice_for_external_recipient(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: Some(alice_identity_pubkey),
+                fee_policy: None,
             },
         })
         .await?
@@ -638,6 +640,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -745,6 +748,7 @@ async fn test_06_lightning_send_without_completion_wait(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1001,6 +1005,7 @@ async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment
                 expiry_secs: Some(custom_expiry_secs),
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?;
@@ -1159,6 +1164,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1454,6 +1460,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?

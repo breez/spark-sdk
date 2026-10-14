@@ -64,6 +64,9 @@ pub struct Invoice {
     pub domain: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
+    /// The partner fee the invoice was priced with, which the user does not
+    /// receive. NULL for an invoice priced without one.
+    pub fee_sat: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +84,8 @@ pub struct DomainConfig {
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
     pub jwt: Option<String>,
+    /// Whether the domain's invoices carry its partner fee.
+    pub quote_receives: bool,
 }
 
 /// How often expired signed-message claims are pruned.
@@ -334,6 +339,7 @@ pub struct WebhookPayloadData {
     pub invoice: String,
     pub preimage: String,
     pub amount_received_sat: Option<i64>,
+    pub fee_sat: Option<i64>,
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
     pub domain: String,
@@ -841,6 +847,25 @@ pub mod shared_tests {
             .find(|d| d.domain == "b.com")
             .expect("domain with no api key");
         assert_eq!(without_key.api_key, None);
+        assert!(
+            domains.iter().all(|d| !d.quote_receives),
+            "fee quoting is off until switched on"
+        );
+    }
+
+    /// `list_domains` surfaces a domain's fee quoting switch. The caller seeds
+    /// `a.com` with an api key and switches it on first, since both are direct
+    /// row writes with no trait method.
+    pub async fn list_domains_surfaces_fee_quoting<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.add_domain("b.com").await.unwrap();
+
+        let domains = db.list_domains().await.unwrap();
+        let quoting = |name: &str| domains.iter().find(|d| d.domain == name).unwrap();
+        assert!(quoting("a.com").quote_receives);
+        assert!(!quoting("b.com").quote_receives);
     }
 
     /// `set_domain_jwt` updates the cached JWT of a domain with an api key

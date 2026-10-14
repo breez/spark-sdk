@@ -50,6 +50,7 @@ cargo run -- --network mainnet
 | Variable | Description |
 |----------|-------------|
 | `BREEZ_API_KEY` | Breez API key (required for mainnet, get one at [breez.technology](https://breez.technology/request-api-key/)) |
+| `BREEZ_PARTNER_JWT` | Partner token to attach to SSP requests, for testing partner fee attribution off mainnet |
 
 ## Available Commands
 

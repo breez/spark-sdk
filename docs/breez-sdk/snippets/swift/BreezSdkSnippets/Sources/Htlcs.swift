@@ -78,7 +78,8 @@ func receiveHodlInvoicePayment(sdk: BreezSdk) async throws {
                 amountSats: 50_000,
                 expirySecs: nil,
                 paymentHash: paymentHash,
-                receiverIdentityPublicKey: nil
+                receiverIdentityPublicKey: nil,
+                feePolicy: nil
             )
         )
     )

@@ -767,6 +767,7 @@ pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
     pub signing_key: ExternalLeafSigningKey,
+    pub receiver_public_key: Vec<u8>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalNewLeafKey)]
@@ -780,7 +781,6 @@ pub struct ExternalNewLeafKey {
 )]
 pub struct ExternalPrepareTransferRequest {
     pub transfer_id: String,
-    pub receiver_public_key: Vec<u8>,
     pub leaves: Vec<ExternalTransferLeafInput>,
     pub operator_recipients: Vec<ExternalOperatorRecipient>,
     pub threshold: u32,
@@ -964,6 +964,27 @@ pub struct ExternalPreparedTokenTransaction {
 }
 
 #[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalQuoteSignatureKind
+)]
+pub enum ExternalQuoteSignatureKind {
+    TransferManifest,
+    ReceiveAttestation,
+}
+
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSignQuoteRequest
+)]
+pub struct ExternalSignQuoteRequest {
+    pub kind: ExternalQuoteSignatureKind,
+    pub digest: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSignedQuote)]
+pub struct ExternalSignedQuote {
+    pub signature: EcdsaSignatureBytes,
+}
+
+#[macros::extern_wasm_bindgen(
     breez_sdk_spark::signer::external_spark_types::ExternalPrepareStaticDepositClaimRequest
 )]
 pub struct ExternalPrepareStaticDepositClaimRequest {
@@ -1007,6 +1028,26 @@ fn spark_de_err(e: impl std::fmt::Display) -> SignerError {
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
+    /// Optional on the JS side: a signer without `supportsSplitTransfers` is
+    /// taken to support them, like the trait default.
+    fn supports_split_transfers(&self) -> bool {
+        let method = wasm_bindgen_futures::js_sys::Reflect::get(
+            &self.inner,
+            &JsValue::from_str("supportsSplitTransfers"),
+        );
+        match method
+            .ok()
+            .and_then(|m| m.dyn_into::<wasm_bindgen_futures::js_sys::Function>().ok())
+        {
+            Some(method) => method
+                .call0(&self.inner)
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            None => true,
+        }
+    }
+
     async fn get_identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
         let promise = self.inner.get_identity_public_key().map_err(spark_js_err)?;
         let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
@@ -1250,6 +1291,18 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
             serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
         Ok(v.into())
     }
+
+    async fn sign_quote(
+        &self,
+        request: core_spark::ExternalSignQuoteRequest,
+    ) -> Result<core_spark::ExternalSignedQuote, SignerError> {
+        let req: ExternalSignQuoteRequest = request.into();
+        let promise = self.inner.sign_quote(req).map_err(spark_js_err)?;
+        let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
+        let v: ExternalSignedQuote =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        Ok(v.into())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -1272,6 +1325,8 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     signSparkInvoice(request: ExternalSignSparkInvoiceRequest): Promise<ExternalSignedSparkInvoice>;
     prepareTokenTransaction(request: ExternalPrepareTokenTransactionRequest): Promise<ExternalPreparedTokenTransaction>;
     prepareStaticDepositClaim(request: ExternalPrepareStaticDepositClaimRequest): Promise<ExternalPreparedStaticDepositClaim>;
+    signQuote(request: ExternalSignQuoteRequest): Promise<ExternalSignedQuote>;
+    supportsSplitTransfers?(): boolean;
 }"#;
 
 #[wasm_bindgen]
@@ -1378,6 +1433,12 @@ extern "C" {
     pub fn prepare_static_deposit_claim(
         this: &JsExternalSparkSigner,
         request: ExternalPrepareStaticDepositClaimRequest,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signQuote", catch)]
+    pub fn sign_quote(
+        this: &JsExternalSparkSigner,
+        request: ExternalSignQuoteRequest,
     ) -> Result<Promise, JsValue>;
 }
 
@@ -1615,6 +1676,23 @@ impl ExternalSparkSignerHandle {
     ) -> Result<ExternalPreparedStaticDepositClaim, JsValue> {
         self.inner
             .prepare_static_deposit_claim(request.into())
+            .await
+            .map(Into::into)
+            .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "supportsSplitTransfers")]
+    pub fn supports_split_transfers(&self) -> bool {
+        self.inner.supports_split_transfers()
+    }
+
+    #[wasm_bindgen(js_name = "signQuote")]
+    pub async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, JsValue> {
+        self.inner
+            .sign_quote(request.into())
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)

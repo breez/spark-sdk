@@ -122,6 +122,12 @@ struct Args {
     #[arg(long, default_value = "false")]
     pub dev_dont_use_lnurl_include_spark_address: bool,
 
+    /// Partner JWT served as every domain's own, for a test deployment off
+    /// mainnet where no api key can be exchanged for one. Refused on mainnet.
+    #[cfg(feature = "dev")]
+    #[arg(long)]
+    pub dev_dont_use_partner_jwt: Option<String>,
+
     /// JSON file with the Spark operators and SSP to use instead of the
     /// network's, such as a local cluster. Either what a deployment publishes,
     /// the file the SDK's `parse_spark_config` reads, or a serialized wallet
@@ -317,6 +323,24 @@ fn resolve_default_api_key(
     Ok(key.filter(|_| is_mainnet))
 }
 
+/// The static partner JWT to serve off mainnet, if one is set. Mainnet tokens
+/// come from each domain's api key only, so setting one there is an error.
+fn resolve_dev_partner_jwt(
+    arg: Option<&str>,
+    is_mainnet: bool,
+) -> Result<Option<String>, anyhow::Error> {
+    let token = arg
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+    if is_mainnet && token.is_some() {
+        return Err(anyhow!(
+            "dev_dont_use_partner_jwt is not allowed on mainnet: unset BREEZ_LNURL_DEV_DONT_USE_PARTNER_JWT"
+        ));
+    }
+    Ok(token)
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
@@ -373,6 +397,11 @@ where
     // Fallback key for domains without their own, so none are unattributed.
     // Mandatory on mainnet (fails startup if missing), ignored otherwise.
     let default_api_key = resolve_default_api_key(args.default_api_key.as_deref(), is_mainnet)?;
+    #[cfg(feature = "dev")]
+    let dev_partner_jwt =
+        resolve_dev_partner_jwt(args.dev_dont_use_partner_jwt.as_deref(), is_mainnet)?;
+    #[cfg(not(feature = "dev"))]
+    let dev_partner_jwt = resolve_dev_partner_jwt(None, is_mainnet)?;
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
 
@@ -380,19 +409,23 @@ where
     // dropping the legacy candidates.
     routes::spawn_legacy_signature_reporter();
 
-    // Shared partner-JWT cache (mainnet only). Its background task keeps a token
-    // warm for every domain with its own api key (persisted to the DB) and one
-    // for the default key.
+    // Shared partner-JWT cache (mainnet, or a dev token off it). On mainnet its
+    // background task keeps a token warm for every domain with its own api key
+    // (persisted to the DB) and one for the default key.
+    let serves_default = default_api_key.is_some() || dev_partner_jwt.is_some();
     let jwt_cache = if is_mainnet {
         let store: Arc<dyn JwtStore> = Arc::new(RepoJwtStore(repository.clone()));
         Some(JwtCache::start(Arc::clone(&domains), default_api_key.clone(), store).await)
+    } else if let Some(token) = dev_partner_jwt {
+        info!("serving a static dev partner JWT for every domain");
+        Some(JwtCache::fixed(Arc::clone(&domains), token)?)
     } else {
         None
     };
 
     let default_jwt_provider = jwt_cache
         .as_ref()
-        .filter(|_| default_api_key.is_some())
+        .filter(|_| serves_default)
         .map(|c| c.default_provider() as Arc<dyn spark::header_provider::HeaderProvider>);
     let wallet = Arc::new(
         spark_wallet::SparkWallet::new(
@@ -692,7 +725,10 @@ mod tests {
             "expected the body-limit error, got {err:?}"
         );
     }
-    use super::{Args, explicit_cli_overrides, parse_auth_seed, resolve_default_api_key};
+    use super::{
+        Args, explicit_cli_overrides, parse_auth_seed, resolve_default_api_key,
+        resolve_dev_partner_jwt,
+    };
     use clap::{CommandFactory, FromArgMatches};
     use figment::{Figment, providers::Serialized};
 
@@ -779,6 +815,17 @@ mod tests {
         assert!(resolve_default_api_key(None, true).is_err());
         assert!(resolve_default_api_key(Some(""), true).is_err());
         assert!(resolve_default_api_key(Some("   "), true).is_err());
+    }
+
+    #[test]
+    fn dev_partner_jwt_is_refused_on_mainnet() {
+        assert!(resolve_dev_partner_jwt(Some("jwt"), true).is_err());
+        assert_eq!(resolve_dev_partner_jwt(None, true).unwrap(), None);
+        assert_eq!(resolve_dev_partner_jwt(Some("  "), true).unwrap(), None);
+        assert_eq!(
+            resolve_dev_partner_jwt(Some(" jwt "), false).unwrap(),
+            Some("jwt".to_string())
+        );
     }
 
     #[test]

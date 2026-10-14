@@ -685,7 +685,7 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let wallet = state.invoice_wallet(&domain).await;
+        let (wallet, quote_basis) = state.invoice_wallet(&domain).await;
         let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -695,6 +695,7 @@ where
                 Some(pubkey),
                 params.expiry,
                 state.include_spark_address,
+                quote_basis,
             )
             .await
             .map_err(|e| {
@@ -778,6 +779,8 @@ where
             &res.invoice,
             invoice_expiry,
             &domain,
+            res.quote_fee
+                .and_then(|fee| i64::try_from(fee.flat_sats).ok()),
         )
         .await
         {
@@ -2333,6 +2336,7 @@ mod tests {
                 updated_at: 0,
                 domain: None,
                 amount_received_sat: None,
+                fee_sat: None,
             },
         );
         repo
@@ -2695,6 +2699,7 @@ mod tests {
                 updated_at: 0,
                 domain: None,
                 amount_received_sat: None,
+                fee_sat: None,
             },
         );
         let (trigger, _rx) = watch::channel(());

@@ -430,8 +430,8 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 		return err
 	}
 
-	if result.Fee != nil && result.Fee.Sign() > 0 {
-		fmt.Printf("Prepared payment requires fee of %s sats/token base units\n", result.Fee.String())
+	if fixed, ok := result.Fee.(breez_sdk_spark.ReceiveFeeFixed); ok && fixed.Amount != nil && fixed.Amount.Sign() > 0 {
+		fmt.Printf("Prepared payment requires fee of %s sats/token base units\n", fixed.Amount.String())
 	}
 
 	printValue(result)

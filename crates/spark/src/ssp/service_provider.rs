@@ -7,15 +7,17 @@ use tracing::instrument;
 use crate::{
     default_user_agent,
     header_provider::{CombinedHeaderProvider, HeaderProvider},
+    quote::ReceiveAmountBasis,
     session_store::SessionStore,
     signer::SparkSigner,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
-        CreateClaimInstantStaticDepositInput, CurrencyAmount, InstantStaticDepositClaim,
-        InstantStaticDepositQuoteResult, LeavesSwapRequest, RequestCoopExitInput,
-        RequestLightningReceiveInput, RequestLightningSendInput, RequestSwapInput,
-        ServiceProviderConfig, SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer,
-        StaticDepositQuote, WebhookEntry,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CommittedReceiveQuote,
+        CommittedSendQuote, CoopExitFeeQuote, CreateClaimInstantStaticDepositInput, CurrencyAmount,
+        InstantStaticDepositClaim, InstantStaticDepositQuoteResult, LeavesSwapRequest,
+        LightningQuote, RequestCoopExitInput, RequestLightningReceiveInput,
+        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig,
+        SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer, StaticDepositQuote,
+        WebhookEntry,
         error::{ServiceProviderError, ServiceProviderResult},
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -181,6 +183,69 @@ impl ServiceProvider {
         input: RequestLightningSendInput,
     ) -> ServiceProviderResult<LightningSendRequest> {
         Ok(self.gql_client.request_lightning_send(input).await?)
+    }
+
+    /// Request a signed fee quote for a lightning receive of `amount_sats`,
+    /// read on `amount_basis`. Zero quotes an amountless invoice.
+    /// `receiver_identity_public_key` names the payee of a delegated receive;
+    /// unset, the caller is the payee.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn lightning_receive_quote(
+        &self,
+        network: BitcoinNetwork,
+        amount_sats: u64,
+        amount_basis: ReceiveAmountBasis,
+        receiver_identity_public_key: Option<PublicKey>,
+    ) -> ServiceProviderResult<LightningQuote> {
+        Ok(self
+            .gql_client
+            .lightning_receive_quote(
+                network,
+                amount_sats,
+                amount_basis,
+                receiver_identity_public_key.map(|key| key.to_string()),
+            )
+            .await?)
+    }
+
+    /// Request a signed fee quote for paying `encoded_invoice`, for
+    /// `amount_sats` when the invoice carries no amount.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn lightning_send_quote(
+        &self,
+        encoded_invoice: &str,
+        amount_sats: Option<u64>,
+    ) -> ServiceProviderResult<LightningQuote> {
+        Ok(self
+            .gql_client
+            .lightning_send_quote(encoded_invoice, amount_sats)
+            .await?)
+    }
+
+    /// Request a lightning receive that commits a fee quote.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn request_quoted_lightning_receive(
+        &self,
+        input: RequestLightningReceiveInput,
+        quote: &CommittedReceiveQuote,
+    ) -> ServiceProviderResult<LightningReceiveRequest> {
+        Ok(self
+            .gql_client
+            .request_quoted_lightning_receive(input, quote)
+            .await?)
+    }
+
+    /// Request a lightning send that commits a fee quote.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn request_quoted_lightning_send(
+        &self,
+        input: RequestLightningSendInput,
+        quote: &CommittedSendQuote,
+    ) -> ServiceProviderResult<LightningSendRequest> {
+        Ok(self
+            .gql_client
+            .request_quoted_lightning_send(input, quote)
+            .await?)
     }
 
     /// Request swap (v3)

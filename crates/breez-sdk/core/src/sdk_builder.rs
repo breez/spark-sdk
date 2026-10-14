@@ -96,6 +96,9 @@ struct BuildSparkWalletParams {
     tree_store: Option<Arc<dyn spark_wallet::TreeStore>>,
     token_output_store: Option<Arc<dyn spark_wallet::TokenOutputStore>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
+    /// Attaches the partner token that attributes fees to SSP and operator
+    /// requests.
+    partner_header_provider: Option<Arc<dyn spark_wallet::HeaderProvider>>,
     context: Arc<SdkContext>,
 }
 
@@ -114,6 +117,7 @@ pub struct SdkBuilder {
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     context: Option<Arc<SdkContext>>,
+    partner_jwt: Option<String>,
 }
 
 impl SdkBuilder {
@@ -141,6 +145,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             context: None,
+            partner_jwt: None,
         }
     }
 
@@ -204,6 +209,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             context: None,
+            partner_jwt: None,
         }
     }
 
@@ -470,6 +476,18 @@ impl SdkBuilder {
         if let Some(provider) = &context.jwt_header_provider {
             provider.start(creates_context.then(|| Arc::clone(&stores.storage)));
         }
+        let partner_header_provider: Option<Arc<dyn spark_wallet::HeaderProvider>> =
+            match &self.partner_jwt {
+                Some(token) => Some(Arc::new(StaticPartnerJwt(token.clone()))),
+                None => context
+                    .jwt_header_provider
+                    .clone()
+                    .map(|provider| provider as Arc<dyn spark_wallet::HeaderProvider>),
+            };
+        let quote_lightning_payments = partner_header_provider.is_some();
+        // A quoted send splits its leaves across receivers in one transfer.
+        let quote_lightning_sends =
+            quote_lightning_payments && signers.spark.supports_split_transfers();
 
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
@@ -534,6 +552,7 @@ impl SdkBuilder {
             tree_store: stores.tree_store.clone(),
             token_output_store: stores.token_output_store.clone(),
             payment_observer: self.payment_observer,
+            partner_header_provider,
             context: Arc::clone(&context),
         })
         .await?;
@@ -621,6 +640,8 @@ impl SdkBuilder {
             sync_coordinator,
             cross_chain_context,
             lightning_sender,
+            quote_lightning_payments,
+            quote_lightning_sends,
         })
         .await?;
         debug!("Initialized and started breez sdk.");
@@ -952,6 +973,33 @@ fn wrap_session_store(session_store: Option<Arc<dyn SessionStore>>) -> Arc<dyn S
     Arc::new(crate::session_store::CachingSessionStore::new(inner))
 }
 
+impl SdkBuilder {
+    /// Attaches `token` as the partner token on every SSP and operator
+    /// request, in place of the one fetched with the API key on mainnet. For
+    /// testing fee attribution against a partner configured on another
+    /// network.
+    #[must_use]
+    pub fn with_partner_jwt(mut self, token: String) -> Self {
+        self.partner_jwt = Some(token);
+        self
+    }
+}
+
+/// A fixed partner token, set with [`SdkBuilder::with_partner_jwt`].
+struct StaticPartnerJwt(String);
+
+#[macros::async_trait]
+impl spark_wallet::HeaderProvider for StaticPartnerJwt {
+    async fn headers(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, spark_wallet::HeaderProviderError> {
+        Ok(std::collections::HashMap::from([(
+            "x-partner-jwt".to_string(),
+            self.0.clone(),
+        )]))
+    }
+}
+
 /// Builds the [`SparkWallet`] from the assembled config, signers and stores.
 async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkWallet>, SdkError> {
     let mut wallet_builder = spark_wallet::WalletBuilder::new(params.config, params.spark_signer)
@@ -959,14 +1007,10 @@ async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkW
     if let Some(receiver) = params.shutdown_receiver {
         wallet_builder = wallet_builder.with_cancellation_token(receiver);
     }
-    if let Some(provider) = &params.context.jwt_header_provider {
+    if let Some(provider) = params.partner_header_provider {
         wallet_builder = wallet_builder
-            .with_so_extra_header_provider(
-                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
-            )
-            .with_ssp_extra_header_provider(
-                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
-            );
+            .with_so_extra_header_provider(Arc::clone(&provider))
+            .with_ssp_extra_header_provider(provider);
     }
     if let Some(observer) = params.payment_observer {
         let observer: Arc<dyn spark_wallet::TransferObserver> =

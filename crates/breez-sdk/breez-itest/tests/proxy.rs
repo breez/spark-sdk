@@ -42,6 +42,7 @@ async fn request_invoice(sdk: &SdkInstance) -> Result<String> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?

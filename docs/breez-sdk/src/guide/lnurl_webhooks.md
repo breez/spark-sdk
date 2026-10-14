@@ -68,6 +68,7 @@ All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently 
     "invoice": "lnbc50u1p...",
     "preimage": "def456...",
     "amount_sat": 50000,
+    "fee_sat": null,
     "user_pubkey": "02abc123...",
     "lightning_address": "alice@yourdomain.com",
     "sender_comment": "Thanks!",
@@ -83,6 +84,7 @@ All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently 
 | `invoice` | `string` | BOLT11 invoice that was paid |
 | `preimage` | `string` | Hex-encoded payment preimage |
 | `amount_sat` | `number \| null` | Amount received in satoshis. May be `null` in rare cases where the amount is not available. |
+| `fee_sat` | `number \| null` | Partner fee in satoshis taken from the invoice amount, if the invoice carried one. `amount_sat` already excludes it. |
 | `user_pubkey` | `string` | The Spark identity public key of the user who received the payment |
 | `lightning_address` | `string \| null` | The Lightning Address that received the payment (e.g. `alice@yourdomain.com`) |
 | `sender_comment` | `string \| null` | Comment attached by the sender, if any |

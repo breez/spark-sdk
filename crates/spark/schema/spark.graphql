@@ -602,6 +602,16 @@ type GetChallengeOutput {
 """A 32-byte scalar value."""
 scalar Hash32
 
+type IssuedQuote {
+  """
+  The quoted TransferManifest, serialized proto bytes as hex. Return it verbatim when committing the quote.
+  """
+  serialized_manifest: String!
+
+  """The SSP's signature over the quote envelope, hex."""
+  issuer_signature: String!
+}
+
 type Invoice {
   encoded_invoice: String!
   bitcoin_network: BitcoinNetwork!
@@ -671,6 +681,34 @@ type LeavesSwapRequest implements UserRequest & Entity {
   swap_leaves: [SwapLeaf!]
 }
 
+input LightningReceiveQuoteInput {
+  """The bitcoin network the receive would settle on."""
+  network: BitcoinNetwork!
+
+  """
+  The requested amount in satoshis, which amount_basis says how to read. Zero requests an amountless invoice, whose shares are quoted as rates, so it requires a GROSS basis.
+  """
+  amount_sats: Long!
+
+  """Which quantity amount_sats pins."""
+  amount_basis: SparkAmountBasis! = NET
+
+  """
+  The wallet that will receive the net. Defaults to the caller, who otherwise attests to the quote on the receiver's behalf.
+  """
+  receiver_identity_pubkey: PublicKey = null
+}
+
+type LightningReceiveQuoteOutput {
+  """The signed quote: the manifest and the SSP's signature over it."""
+  issued_quote: IssuedQuote!
+
+  """
+  Whether the x-partner-jwt resolved to a fee attribution, and if not, why. Advisory: the applied markup lives in the signed manifest's fees.
+  """
+  attribution_status: SparkFeeAttributionStatus!
+}
+
 type LightningReceiveRequest implements UserRequest & Entity {
   """
   The unique identifier of this entity across all Lightspark systems. Should be treated as an opaque string.
@@ -723,6 +761,28 @@ enum LightningReceiveRequestStatus {
   TRANSFER_COMPLETED
   REFUND_SIGNING_COMMITMENTS_QUERYING_FAILED
   REFUND_SIGNING_FAILED
+}
+
+input LightningSendQuoteInput {
+  """
+  The BOLT11 invoice to be paid. Its payment hash is bound into the quote's signature.
+  """
+  encoded_invoice: String!
+
+  """
+  The amount to pay in sats, bound into the quote's signature. Set it only when the invoice carries no amount, and send the same amount when committing the quote.
+  """
+  amount_sats: Long = null
+}
+
+type LightningSendQuoteOutput {
+  """The signed quote: the manifest and the SSP's signature over it."""
+  issued_quote: IssuedQuote!
+
+  """
+  Whether the x-partner-jwt resolved to a fee attribution, and if not, why. Advisory: the applied markup lives in the signed manifest's fees.
+  """
+  attribution_status: SparkFeeAttributionStatus!
 }
 
 input LightningSendFeeEstimateInput {
@@ -823,6 +883,12 @@ type Mutation {
 
   """Get a new SSP authentication challenge."""
   get_challenge(input: GetChallengeInput!): GetChallengeOutput!
+
+  """A signed, stateless fee quote for a lightning receive."""
+  lightning_receive_quote(input: LightningReceiveQuoteInput!): LightningReceiveQuoteOutput!
+
+  """A signed, stateless fee quote for a lightning send."""
+  lightning_send_quote(input: LightningSendQuoteInput!): LightningSendQuoteOutput!
 
   """Send SMS to receiver they received transfer."""
   notify_receiver_transfer(input: NotifyReceiverTransferInput!): Void
@@ -959,6 +1025,10 @@ type RequestLeavesSwapOutput {
   request: LeavesSwapRequest!
 }
 
+# The SSP also takes a committed_quote here. It is left out of this copy on
+# purpose: the generated input would send it as an explicit null on every
+# unquoted request, which the SSP reads as a malformed quote. Quoted requests
+# add it in ssp/graphql/client.rs.
 input RequestLightningReceiveInput {
   """The bitcoin network the lightning invoice is created on."""
   network: BitcoinNetwork!
@@ -1008,6 +1078,10 @@ type RequestLightningReceiveOutput {
   request: LightningReceiveRequest!
 }
 
+# The SSP also takes a committed_quote here. It is left out of this copy on
+# purpose: the generated input would send it as an explicit null on every
+# unquoted request, which the SSP reads as a malformed quote. Quoted requests
+# add it in ssp/graphql/client.rs.
 input RequestLightningSendInput {
   encoded_invoice: String!
 
@@ -1067,6 +1141,26 @@ enum SparkCoopExitRequestStatus {
   TX_SIGNED @deprecated(reason: "No more needed")
   WAITING_ON_TX_CONFIRMATIONS @deprecated(reason: "No more needed")
   INBOUND_TRANSFER_CLAIMING_SCHEDULED @deprecated(reason: "No more needed")
+}
+
+"""
+Which quantity the requested amount pins. NET means it is the net the receiver keeps and the invoice is issued for amount + markup. GROSS means it IS the invoice amount and the receiver nets amount - markup.
+"""
+enum SparkAmountBasis {
+  NET
+  GROSS
+}
+
+"""
+Whether an x-partner-jwt resolved to a fee attribution, and if not, why. Any value other than ATTRIBUTED means no markup was applied.
+"""
+enum SparkFeeAttributionStatus {
+  NOT_PROVIDED
+  ATTRIBUTED
+  TOKEN_INVALID
+  UNKNOWN_PARTNER
+  UNKNOWN_AFFILIATE
+  AFFILIATE_DISABLED
 }
 
 enum SparkLeavesSwapRequestStatus {

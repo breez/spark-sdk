@@ -320,8 +320,8 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
       const receiveResult = await sdk.receivePayment({ paymentMethod })
 
-      if (receiveResult.fee > 0) {
-        console.log(`Prepared payment requires fee of ${receiveResult.fee} sats/token base units\n`)
+      if (receiveResult.fee.type === 'fixed' && BigInt(receiveResult.fee.amount) > 0n) {
+        console.log(`Prepared payment requires fee of ${receiveResult.fee.amount} sats/token base units\n`)
       }
 
       printValue(receiveResult)

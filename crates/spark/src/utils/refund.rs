@@ -29,7 +29,9 @@ pub struct SignRefundsParams<'a> {
     pub cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     pub direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     pub direct_from_cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
-    pub receiver_pubkey: &'a PublicKey,
+    /// The receiver of each leaf, in the order of `leaves`. One transfer may
+    /// pay several receivers.
+    pub receiver_pubkeys: &'a [PublicKey],
     pub payment_hash: Option<&'a sha256::Hash>,
     pub network: Network,
     /// Optional adaptor public key for creating adaptor signatures (used in swap v3)
@@ -51,7 +53,7 @@ pub async fn sign_refunds(
         cpfp_signing_commitments,
         direct_signing_commitments,
         direct_from_cpfp_signing_commitments,
-        receiver_pubkey,
+        receiver_pubkeys,
         payment_hash,
         network,
         cpfp_adaptor_public_key,
@@ -64,7 +66,15 @@ pub async fn sign_refunds(
     let mut leaf_jobs: Vec<LeafRefundJobs> = Vec::new();
     let secp = Secp256k1::new();
 
-    for (i, leaf) in leaves.iter().enumerate() {
+    if receiver_pubkeys.len() != leaves.len() {
+        return Err(SignerError::Generic(format!(
+            "{} receivers for {} leaves",
+            receiver_pubkeys.len(),
+            leaves.len()
+        )));
+    }
+
+    for (i, (leaf, receiver_pubkey)) in leaves.iter().zip(receiver_pubkeys).enumerate() {
         let node_tx = &leaf.node.node_tx;
         let direct_tx = leaf.node.direct_refund_tx();
 
@@ -269,7 +279,7 @@ mod tests {
             cpfp_signing_commitments: vec![operator_commitments(3).await],
             direct_signing_commitments: vec![operator_commitments(3).await],
             direct_from_cpfp_signing_commitments: vec![operator_commitments(3).await],
-            receiver_pubkey: &receiver,
+            receiver_pubkeys: &[receiver],
             payment_hash: None,
             network: Network::Regtest,
             cpfp_adaptor_public_key: None,

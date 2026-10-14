@@ -23,15 +23,23 @@ namespace BreezSdkSnippets
                     };
                     Console.WriteLine($"Approve sending {transfer.amountSat} sats " +
                         $"(fee {transfer.feeSat} sats) to {destination}");
+                    // Set when a partner fee quote prices the send: sign its payment split too
+                    ExternalSignedQuote? signedQuote = null;
+                    if (transfer.signQuote != null)
+                    {
+                        signedQuote = await signer.SignQuote(transfer.signQuote);
+                    }
                     signature = new TransferSignature.Transfer(
-                        signed: await signer.PrepareTransfer(transfer.prepareTransfer)
+                        signed: await signer.PrepareTransfer(transfer.prepareTransfer),
+                        signedQuote: signedQuote
                     );
                     break;
                 case UnsignedTransferPackage.Swap swap:
                     Console.WriteLine("Approve re-shaping funds for a " +
                         $"{swap.amountSat} sat send (fee {swap.feeSat} sats)");
                     signature = new TransferSignature.Transfer(
-                        signed: await signer.PrepareTransfer(swap.prepareTransfer)
+                        signed: await signer.PrepareTransfer(swap.prepareTransfer),
+                        signedQuote: null
                     );
                     break;
                 case UnsignedTransferPackage.Token token:

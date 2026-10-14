@@ -8,9 +8,11 @@ Once the SDK is initialized, you can directly begin receiving payments. The SDK 
 
 When receiving via Lightning, we can generate a BOLT11 invoice to be paid. Setting the invoice amount fixes the amount the sender should pay.
 
-To create an invoice for another Spark wallet, set {{#name receiver_identity_public_key}} to that wallet's identity public key. Creating the invoice requires only the receiver's public key, not their private keys.
+To create an invoice for another Spark wallet, set {{#name receiver_identity_public_key}} to that wallet's identity public key. Creating the invoice requires only the receiver's public key, not their private keys. This is not available for HODL invoices, which are always for your own wallet.
 
 **Note:** the payment may fallback to a direct Spark payment (if the payer's client supports this).
+
+When a partner fee applies to the invoice, the response's {{#name fee}} reports it. By default the payer covers it: the invoice is issued for the amount plus the fee, and you receive the amount. Set {{#name fee_policy}} to {{#enum FeePolicy::FeesIncluded}} to issue the invoice for exactly the amount and deduct the fee from what you receive. An invoice without an amount always deducts the fee, so its fee is a {{#enum ReceiveFee::Rate}} of what the payer sends. With {{#name prefer_spark_over_lightning}} enabled the invoice carries your Spark address, which a payer could use to skip the fee, so no partner fee applies to it.
 
 {{#tabs receive_payment:receive-payment-lightning-bolt11}}
 

@@ -11,9 +11,9 @@ use spark_wallet::{
     FrostJob, FrostShareResult, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
-    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
+    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer, SignQuoteRequest,
     SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest,
-    SignedSparkInvoice, SignerError, StartStaticDepositRefundRequest,
+    SignedQuote, SignedSparkInvoice, SignerError, StartStaticDepositRefundRequest,
     StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund, StartedWatchtowerExitRecovery,
     TreeNodeId,
 };
@@ -23,7 +23,7 @@ use super::external_spark_types::{
     ExternalFrostJob, ExternalFrostShareResult, ExternalPrepareClaimRequest,
     ExternalPrepareLightningReceiveRequest, ExternalPrepareStaticDepositClaimRequest,
     ExternalPrepareStaticDepositRequest, ExternalPrepareTokenTransactionRequest,
-    ExternalPrepareTransferRequest, ExternalSignSparkInvoiceRequest,
+    ExternalPrepareTransferRequest, ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
     ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
     ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
 };
@@ -71,6 +71,10 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
 
     fn is_remote(&self) -> bool {
         self.inner.is_remote()
+    }
+
+    fn supports_split_transfers(&self) -> bool {
+        self.inner.supports_split_transfers()
     }
 
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
@@ -305,6 +309,15 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
             .await
             .map_err(to_spark_err)?
             .to_prepared_static_deposit_claim()
+            .map_err(to_spark_err)
+    }
+
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError> {
+        self.inner
+            .sign_quote(ExternalSignQuoteRequest::from_sign_quote_request(&request))
+            .await
+            .map_err(to_spark_err)?
+            .to_signed_quote()
             .map_err(to_spark_err)
     }
 }

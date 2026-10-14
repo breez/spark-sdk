@@ -17,7 +17,7 @@ HTLC payments use the standard payment API described in [Sending payments](send_
 
 ## Receiving using HODL invoices
 
-You can receive using HODL invoices — Lightning invoices where the payment is held until you claim it by revealing the preimage. To create one, provide a {{#name payment_hash}} when calling {{#name receive_payment}} with the {{#enum ReceivePaymentMethod::Bolt11Invoice}} payment method.
+You can receive using HODL invoices — Lightning invoices where the payment is held until you claim it by revealing the preimage. To create one, provide a {{#name payment_hash}} when calling {{#name receive_payment}} with the {{#enum ReceivePaymentMethod::Bolt11Invoice}} payment method. A HODL invoice is always for your own wallet: it cannot be combined with a {{#name receiver_identity_public_key}} naming another wallet.
 
 {{#tabs htlcs:receive-hodl-invoice-payment}}
 

@@ -387,6 +387,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         expirySecs: expirySecs,
         paymentHash: paymentHash,
         receiverIdentityPublicKey: null,
+        feePolicy: null,
       );
     case 'crosschain':
       if (amount == null) {
@@ -427,8 +428,9 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
 
   final result = await sdk.receivePayment(request: ReceivePaymentRequest(paymentMethod: paymentMethod));
 
-  if (result.fee > BigInt.zero) {
-    print('Prepared payment requires fee of ${result.fee} sats/token base units\n');
+  final fee = result.fee;
+  if (fee is ReceiveFee_Fixed && fee.amount > BigInt.zero) {
+    print('Prepared payment requires fee of ${fee.amount} sats/token base units\n');
   }
 
   printValue(result);

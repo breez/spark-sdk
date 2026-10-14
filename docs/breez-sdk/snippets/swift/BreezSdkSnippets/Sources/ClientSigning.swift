@@ -7,25 +7,32 @@ func signPackage(signer: ExternalSparkSigner, unsigned: UnsignedTransferPackage)
     // ANCHOR: client-signing-sign-package
     let signature: TransferSignature
     switch unsigned {
-    case let .transfer(prepareTransfer, amountSat, feeSat, target):
+    case let .transfer(prepareTransfer, amountSat, feeSat, target, signQuote):
         // Show the user what they are approving before signing
         let destination: String
         switch target {
         case let .spark(address, _):
             destination = address
-        case let .lightning(bolt11, _, _, _):
+        case let .lightning(bolt11, _, _, _, _):
             destination = bolt11
         case let .coopExit(address, _, _):
             destination = address
         }
         print("Approve sending \(amountSat) sats (fee \(feeSat) sats) to \(destination)")
+        // Set when a partner fee quote prices the send: sign its payment split too
+        var signedQuote: ExternalSignedQuote? = nil
+        if let request = signQuote {
+            signedQuote = try await signer.signQuote(request: request)
+        }
         signature = TransferSignature.transfer(
-            signed: try await signer.prepareTransfer(request: prepareTransfer)
+            signed: try await signer.prepareTransfer(request: prepareTransfer),
+            signedQuote: signedQuote
         )
     case let .swap(prepareTransfer, _, amountSat, feeSat):
         print("Approve re-shaping funds for a \(amountSat) sat send (fee \(feeSat) sats)")
         signature = TransferSignature.transfer(
-            signed: try await signer.prepareTransfer(request: prepareTransfer)
+            signed: try await signer.prepareTransfer(request: prepareTransfer),
+            signedQuote: nil
         )
     case let .token(prepareTokenTransaction, _, tokenIdentifier, amount, fee, isSwap):
         if isSwap {

@@ -359,6 +359,33 @@ impl TreeService for SynchronousTreeService {
             .await
     }
 
+    async fn split_reservation(
+        &self,
+        reservation: LeavesReservation,
+        amounts: &[u64],
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if reservation.sum() != amounts.iter().copied().fold(0u64, u64::saturating_add) {
+            if let Err(e) = self.cancel_reservation(reservation).await {
+                error!("Failed to cancel reservation: {e:?}");
+            }
+            return Err(TreeServiceError::Generic(
+                "amounts do not add up to the reservation".to_string(),
+            ));
+        }
+        if select_helper::partition_by_exact_amounts(&reservation.leaves, amounts).is_some() {
+            return Ok(reservation);
+        }
+        // The swap is asked for exactly the amounts, which add up to everything
+        // reserved, so every leaf it returns stays in the reservation.
+        let targets = TargetAmounts::new_exact_denominations(amounts.to_vec());
+        self.swap_into_reservation(reservation, Some(&targets), |leaves| {
+            select_helper::partition_by_exact_amounts(leaves, amounts)
+                .map(|groups| groups.concat())
+                .ok_or(TreeServiceError::UnselectableAmount)
+        })
+        .await
+    }
+
     async fn select_leaves_for_package(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -709,6 +736,27 @@ impl SynchronousTreeService {
         reservation: LeavesReservation,
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        self.swap_into_reservation(reservation, target_amounts, |leaves| {
+            let target_leaves =
+                select_helper::select_leaves_by_target_amounts(leaves, target_amounts)?;
+            Ok([
+                target_leaves.amount_leaves,
+                target_leaves.fee_leaves.unwrap_or_default(),
+            ]
+            .concat())
+        })
+        .await
+    }
+
+    /// Swaps the leaves of `reservation` for `target_amounts`, keeps the swap
+    /// outputs `select` picks in the reservation and returns the rest to the
+    /// pool as change.
+    async fn swap_into_reservation(
+        &self,
+        reservation: LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+        select: impl FnOnce(&[TreeNode]) -> Result<Vec<TreeNode>, TreeServiceError>,
+    ) -> Result<LeavesReservation, TreeServiceError> {
         trace!("Swapping leaves to match target amount");
 
         let swap_result = self
@@ -744,13 +792,7 @@ impl SynchronousTreeService {
 
         // Select the exact leaves that match the target amounts
         let new_leaf_nodes: Vec<TreeNode> = new_leaves.iter().map(|p| p.leaf.clone()).collect();
-        let target_leaves =
-            select_helper::select_leaves_by_target_amounts(&new_leaf_nodes, target_amounts)?;
-        let reserved_leaves = [
-            target_leaves.amount_leaves,
-            target_leaves.fee_leaves.unwrap_or_default(),
-        ]
-        .concat();
+        let reserved_leaves = select(&new_leaf_nodes)?;
 
         let reserved_ids: HashSet<_> = reserved_leaves.iter().map(|l| l.id.clone()).collect();
         let (reserved_pedigrees, change_pedigrees): (Vec<LeafPedigree>, Vec<LeafPedigree>) =

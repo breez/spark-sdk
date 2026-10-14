@@ -111,6 +111,7 @@ pub(super) async fn prepare(
     let SendPaymentMethod::Bolt11Invoice {
         invoice_details,
         lightning_fee_sats,
+        fee_quote,
         ..
     } = prepare_response.payment_method
     else {
@@ -128,6 +129,7 @@ pub(super) async fn prepare(
         success_action: success_data.success_action.map(From::from),
         conversion_estimate: prepare_response.conversion_estimate,
         fee_policy,
+        fee_quote,
     })
 }
 
@@ -225,6 +227,9 @@ async fn prepare_fees_included(
         success_action: success_data.success_action.map(From::from),
         conversion_estimate,
         fee_policy: FeePolicy::FeesIncluded,
+        // Fees-included sends overpay the invoice to drain the wallet, which
+        // no quote prices.
+        fee_quote: None,
     })
 }
 
@@ -298,6 +303,7 @@ pub(super) async fn send(
                     invoice_details: request.prepare_response.invoice_details,
                     spark_transfer_fee_sats: None,
                     lightning_fee_sats: request.prepare_response.fee_sats,
+                    fee_quote: request.prepare_response.fee_quote.clone(),
                 },
                 // For conversions, use the prepare's total amount (before fee
                 // deduction) so the sats_change logic in complete_conversion_and_send
@@ -434,6 +440,7 @@ pub(super) async fn build_package(
             invoice_details: prepare_response.invoice_details.clone(),
             spark_transfer_fee_sats: None,
             lightning_fee_sats: prepare_response.fee_sats,
+            fee_quote: prepare_response.fee_quote.clone(),
         },
         amount: u128::from(receiver_amount_sats),
         token_identifier: None,

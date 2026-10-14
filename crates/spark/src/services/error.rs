@@ -102,6 +102,8 @@ pub enum ServiceError {
     InsufficientCpfpBudget { required_sat: u64 },
     #[error("signer error: {0}")]
     SignerError(#[from] crate::signer::SignerError),
+    #[error("quote error: {0}")]
+    Quote(#[from] crate::quote::QuoteError),
     #[error("service connection error: {0}")]
     ServiceConnectionError(Box<OperatorRpcError>),
     #[error("transfer observer error: {0}")]

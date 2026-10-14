@@ -40,6 +40,7 @@ from breez_sdk_spark import (
     PreparePaymentLinkRequest,
     PrepareSendBatchRequest,
     PrepareSendPaymentRequest,
+    ReceiveFee,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     RefundDepositRequest,
@@ -322,6 +323,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
             receiver_identity_public_key=None,
+            fee_policy=None,
         )
     elif method == "crosschain":
         if args.amount is None:
@@ -356,8 +358,8 @@ async def _handle_receive(sdk, _token_issuer, session, args):
 
     result = await sdk.receive_payment(request=ReceivePaymentRequest(payment_method=payment_method))
 
-    if result.fee > 0:
-        print(f"Prepared payment requires fee of {result.fee} sats/token base units\n")
+    if isinstance(result.fee, ReceiveFee.FIXED) and result.fee.amount > 0:
+        print(f"Prepared payment requires fee of {result.fee.amount} sats/token base units\n")
 
     print_value(result)
 

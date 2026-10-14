@@ -406,6 +406,17 @@ fn migrations() -> Vec<Vec<String>> {
                  ON address_registrations (created_at)"
                 .to_string(),
         ],
+        vec![
+            // Whether the domain's lightning-address invoices carry its
+            // partner fee. Off until the partner ships a client that expects
+            // to receive less than the invoice amount.
+            "ALTER TABLE domain_attribution
+                 ADD COLUMN quote_receives BOOLEAN NOT NULL DEFAULT FALSE"
+                .to_string(),
+            // The partner fee an invoice was priced with, which the user does
+            // not receive. NULL for an invoice priced without one.
+            "ALTER TABLE invoices ADD COLUMN fee_sat BIGINT".to_string(),
+        ],
     ]
 }
 
@@ -689,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn fully_migrated_database_reruns_nothing() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         // Re-running migration 1 would fail: `users` already exists.
         run(&pool).await.expect("adopt migrated database");
@@ -712,7 +723,7 @@ mod tests {
     #[tokio::test]
     async fn adoption_is_idempotent() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         run(&pool).await.expect("first run");
         run(&pool).await.expect("second run");

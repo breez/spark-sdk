@@ -94,6 +94,7 @@ func ReceiveHodlInvoicePayment(sdk *breez_sdk_spark.BreezSdk) error {
 			AmountSats:  &amountSats,
 			ExpirySecs:  nil,
 			PaymentHash: &paymentHash,
+			FeePolicy:   nil,
 		},
 	})
 

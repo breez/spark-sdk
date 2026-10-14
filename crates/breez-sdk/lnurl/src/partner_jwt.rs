@@ -32,9 +32,8 @@ const MAX_JWT_RESPONSE_BYTES: usize = 64 * 1024;
 /// Cap on the per-target fetch backoff.
 const BACKOFF_MAX_SECS: u64 = 5 * 60;
 
-/// Shared map of allowed domains to their own Breez API key, or `None` when
-/// the domain has none and falls back to the default. Kept in sync with the
-/// DB by the `domains` refresher.
+/// Shared map of allowed domains to their settings, kept in sync with the DB by
+/// the `domains` refresher.
 pub type DomainKeys = Arc<RwLock<crate::domains::DomainMap>>;
 
 /// Persistence for per-domain JWTs, so restarts and sibling instances start
@@ -112,6 +111,8 @@ pub struct JwtCache {
     store: Option<Arc<dyn JwtStore>>,
     http: reqwest::Client,
     jwt_url: String,
+    /// Serve the default token as every domain's own.
+    fixed: bool,
 }
 
 impl JwtCache {
@@ -129,11 +130,33 @@ impl JwtCache {
             store: Some(store),
             http: build_http_client(),
             jwt_url: JWT_URL.to_string(),
+            fixed: false,
         });
         cache.load_persisted().await;
         let hydrator = Arc::clone(&cache);
         tokio::spawn(async move { hydrator.hydrate_loop().await });
         cache
+    }
+
+    /// A cache that serves `token` as every domain's own and as the default, for
+    /// a test deployment where no api key can be exchanged for one. It never
+    /// fetches or persists, and stops serving `token` once it expires.
+    pub fn fixed(domains: DomainKeys, token: String) -> anyhow::Result<Arc<Self>> {
+        let exp = jwt_exp(&token).context("invalid partner JWT")?;
+        Ok(Arc::new(Self {
+            domains,
+            default_key: None,
+            cache: RwLock::new(HashMap::new()),
+            default_token: RwLock::new(Some(CachedToken {
+                api_key: String::new(),
+                token,
+                exp,
+            })),
+            store: None,
+            http: build_http_client(),
+            jwt_url: JWT_URL.to_string(),
+            fixed: true,
+        }))
     }
 
     /// A header provider for `domain`: emits its own partner's `x-partner-jwt`,
@@ -143,6 +166,28 @@ impl JwtCache {
             cache: Arc::clone(self),
             target: Target::Domain(domain),
         })
+    }
+
+    /// A header provider for `domain` that emits only its own partner's
+    /// `x-partner-jwt`, never the default's.
+    pub fn own_provider_for(self: &Arc<Self>, domain: String) -> Arc<JwtHeaderProvider> {
+        Arc::new(JwtHeaderProvider {
+            cache: Arc::clone(self),
+            target: Target::OwnDomain(domain),
+        })
+    }
+
+    /// Whether `domain`'s invoices should carry its partner fee now: it is
+    /// switched on, and its own partner JWT is cached, so the fee can never be
+    /// attributed to another partner.
+    pub async fn quotes_receives(&self, domain: &str) -> bool {
+        let switched_on = self
+            .domains
+            .read()
+            .await
+            .get(domain)
+            .is_some_and(|s| s.quote_receives);
+        switched_on && self.serve_domain(domain).await.is_some()
     }
 
     /// A header provider that always emits the default key's `x-partner-jwt`.
@@ -162,7 +207,7 @@ impl JwtCache {
         let now = now_secs();
         let domains = self.domains.read().await.clone();
         for (domain, token) in store.load_all().await {
-            let Some(Some(api_key)) = domains.get(&domain) else {
+            let Some(api_key) = domains.get(&domain).and_then(|s| s.api_key.as_ref()) else {
                 continue;
             };
             if let Ok(exp) = jwt_exp(&token)
@@ -181,6 +226,9 @@ impl JwtCache {
     }
 
     async fn serve_domain(&self, domain: &str) -> Option<String> {
+        if self.fixed {
+            return self.serve_default().await;
+        }
         let deadline = now_secs().saturating_add(SERVE_SKEW_SECS);
         self.cache
             .read()
@@ -228,13 +276,11 @@ impl JwtCache {
         self.cache
             .write()
             .await
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
-        state
-            .per_domain
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
+            .retain(|d, _| has_api_key(&domains, d));
+        state.per_domain.retain(|d, _| has_api_key(&domains, d));
 
-        for (domain, key) in &domains {
-            let Some(api_key) = key else {
+        for (domain, settings) in &domains {
+            let Some(api_key) = &settings.api_key else {
                 continue;
             };
             let current_exp = self.cache.read().await.get(domain).and_then(|t| {
@@ -309,11 +355,13 @@ impl JwtCache {
 
 enum Target {
     Domain(String),
+    OwnDomain(String),
     Default,
 }
 
 /// Emits `x-partner-jwt` from the shared [`JwtCache`]: for a domain, its own
-/// token or the default when its own is not cached; or always the default.
+/// token or the default when its own is not cached; for a domain, only its
+/// own; or always the default.
 pub struct JwtHeaderProvider {
     cache: Arc<JwtCache>,
     target: Target,
@@ -324,6 +372,7 @@ impl HeaderProvider for JwtHeaderProvider {
     async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
         let token = match &self.target {
             Target::Domain(domain) => self.cache.serve_domain_or_default(domain).await,
+            Target::OwnDomain(domain) => self.cache.serve_domain(domain).await,
             Target::Default => self.cache.serve_default().await,
         };
         Ok(match token {
@@ -331,6 +380,10 @@ impl HeaderProvider for JwtHeaderProvider {
             None => HashMap::new(),
         })
     }
+}
+
+fn has_api_key(domains: &crate::domains::DomainMap, domain: &str) -> bool {
+    domains.get(domain).is_some_and(|s| s.api_key.is_some())
 }
 
 fn build_http_client() -> reqwest::Client {
@@ -394,6 +447,7 @@ fn jwt_exp(token: &str) -> anyhow::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domains::DomainSettings;
     use std::sync::Mutex;
 
     fn make_jwt(exp: u64) -> String {
@@ -415,9 +469,15 @@ mod tests {
         default: Option<&str>,
         store: Option<Arc<dyn JwtStore>>,
     ) -> Arc<JwtCache> {
-        let map: HashMap<String, Option<String>> = domains
+        let map: crate::domains::DomainMap = domains
             .iter()
-            .map(|(d, k)| ((*d).to_string(), k.map(str::to_string)))
+            .map(|(d, k)| {
+                let settings = DomainSettings {
+                    api_key: k.map(str::to_string),
+                    quote_receives: false,
+                };
+                ((*d).to_string(), settings)
+            })
             .collect();
         Arc::new(JwtCache {
             domains: Arc::new(RwLock::new(map)),
@@ -428,6 +488,7 @@ mod tests {
             // Port 1 refuses instantly, so a fetch fails without real network.
             jwt_url: "http://127.0.0.1:1/api/jwt".to_string(),
             http: reqwest::Client::new(),
+            fixed: false,
         })
     }
 
@@ -437,8 +498,7 @@ mod tests {
             .read()
             .await
             .get(domain)
-            .cloned()
-            .flatten()
+            .and_then(|s| s.api_key.clone())
             .unwrap_or_default();
         cache.cache.write().await.insert(
             domain.to_string(),
@@ -594,7 +654,9 @@ mod tests {
             .domains
             .write()
             .await
-            .insert("a.com".to_string(), Some("key-b".to_string()));
+            .get_mut("a.com")
+            .unwrap()
+            .api_key = Some("key-b".to_string());
         cache.hydrate_once(&mut state).await;
         assert!(
             state.per_domain["a.com"].attempt > 0,
@@ -633,7 +695,10 @@ mod tests {
         let cache = Arc::new(JwtCache {
             domains: Arc::new(RwLock::new(HashMap::from([(
                 "a.com".to_string(),
-                Some("key-a".to_string()),
+                DomainSettings {
+                    api_key: Some("key-a".to_string()),
+                    quote_receives: false,
+                },
             )]))),
             default_key: None,
             cache: RwLock::new(HashMap::new()),
@@ -641,6 +706,7 @@ mod tests {
             store: Some(Arc::clone(&store)),
             http: reqwest::Client::new(),
             jwt_url: format!("http://{addr}/api/jwt"),
+            fixed: false,
         });
 
         cache.hydrate_once(&mut HydrateState::default()).await;
@@ -734,6 +800,106 @@ mod tests {
         let own_exp = now_secs() + 7200;
         seed(&cache, "a.com", own_exp).await;
         assert_eq!(served(&cache, "a.com").await, Some(make_jwt(own_exp)));
+    }
+
+    #[tokio::test]
+    async fn own_provider_never_serves_the_default() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], Some("key-default"));
+        let default_exp = now_secs() + 3600;
+        *cache.default_token.write().await = Some(CachedToken {
+            api_key: "key-default".to_string(),
+            token: make_jwt(default_exp),
+            exp: default_exp,
+        });
+        let own = cache.own_provider_for("a.com".to_string());
+        assert!(own.headers().await.unwrap().is_empty());
+
+        let own_exp = now_secs() + 7200;
+        seed(&cache, "a.com", own_exp).await;
+        assert_eq!(
+            own.headers().await.unwrap().get(PARTNER_JWT_HEADER),
+            Some(&make_jwt(own_exp))
+        );
+    }
+
+    #[tokio::test]
+    async fn quotes_receives_only_when_switched_on_with_its_own_token() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], Some("key-default"));
+        let exp = now_secs() + 3600;
+        *cache.default_token.write().await = Some(CachedToken {
+            api_key: "key-default".to_string(),
+            token: make_jwt(exp),
+            exp,
+        });
+        seed(&cache, "a.com", exp).await;
+        assert!(!cache.quotes_receives("a.com").await, "switched off");
+
+        cache
+            .domains
+            .write()
+            .await
+            .get_mut("a.com")
+            .unwrap()
+            .quote_receives = true;
+        assert!(cache.quotes_receives("a.com").await);
+
+        // Without its own token, the default's would carry the fee to another
+        // partner.
+        cache.cache.write().await.clear();
+        assert!(!cache.quotes_receives("a.com").await);
+        assert!(!cache.quotes_receives("unknown.com").await);
+    }
+
+    fn quoting_domains(domains: &[&str]) -> DomainKeys {
+        let map = domains
+            .iter()
+            .map(|d| {
+                let settings = DomainSettings {
+                    api_key: None,
+                    quote_receives: true,
+                };
+                ((*d).to_string(), settings)
+            })
+            .collect();
+        Arc::new(RwLock::new(map))
+    }
+
+    #[tokio::test]
+    async fn fixed_serves_its_token_for_every_domain_and_the_default() {
+        let token = make_jwt(now_secs() + 3600);
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), token.clone()).unwrap();
+        assert_eq!(served(&cache, "a.com").await, Some(token.clone()));
+        assert_eq!(served(&cache, "unknown.com").await, Some(token.clone()));
+        assert_eq!(served_default(&cache).await, Some(token.clone()));
+        assert_eq!(
+            cache
+                .own_provider_for("a.com".to_string())
+                .headers()
+                .await
+                .unwrap()
+                .get(PARTNER_JWT_HEADER),
+            Some(&token)
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_quotes_only_switched_on_domains() {
+        let token = make_jwt(now_secs() + 3600);
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), token).unwrap();
+        assert!(cache.quotes_receives("a.com").await);
+        assert!(!cache.quotes_receives("unknown.com").await);
+    }
+
+    #[tokio::test]
+    async fn fixed_stops_serving_an_expired_token() {
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), make_jwt(1)).unwrap();
+        assert_eq!(served(&cache, "a.com").await, None);
+        assert!(!cache.quotes_receives("a.com").await);
+    }
+
+    #[test]
+    fn fixed_rejects_a_token_that_is_not_a_jwt() {
+        assert!(JwtCache::fixed(quoting_domains(&[]), "not-a-jwt".to_string()).is_err());
     }
 
     struct StubAuth;

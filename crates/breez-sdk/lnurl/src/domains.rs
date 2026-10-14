@@ -7,10 +7,17 @@ use crate::repository::{DomainConfig, LnurlRepository, LnurlRepositoryError};
 
 const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
-/// Allowed domains mapped to their own Breez API key, or `None` when the domain
-/// has none and falls back to the configured default. The api key is exchanged
-/// for the partner JWT that carries Spark attribution.
-pub type DomainMap = HashMap<String, Option<String>>;
+/// Allowed domains mapped to their settings.
+pub type DomainMap = HashMap<String, DomainSettings>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DomainSettings {
+    /// The domain's own Breez API key, exchanged for the partner JWT that
+    /// carries Spark attribution. `None` falls back to the configured default.
+    pub api_key: Option<String>,
+    /// Whether the domain's invoices carry its partner fee.
+    pub quote_receives: bool,
+}
 
 /// Load the allowed domains from the database and start a background task that
 /// periodically refreshes them. Returns the shared handle that should be stored
@@ -59,9 +66,17 @@ where
     Ok((to_map(configs), without_api_key))
 }
 
-/// Build the domain -> own-key map (`None` for a domain with no key of its own).
 fn to_map(configs: Vec<DomainConfig>) -> DomainMap {
-    configs.into_iter().map(|d| (d.domain, d.api_key)).collect()
+    configs
+        .into_iter()
+        .map(|d| {
+            let settings = DomainSettings {
+                api_key: d.api_key,
+                quote_receives: d.quote_receives,
+            };
+            (d.domain, settings)
+        })
+        .collect()
 }
 
 /// Domains that have no Breez API key of their own.
@@ -126,15 +141,27 @@ async fn refresh_once<DB>(
     *domains.write().await = latest;
 }
 
-/// Log added/removed domains and api-key rotations so both are observable.
+/// Log added/removed domains, api-key rotations and fee quoting switches so
+/// all are observable.
 fn log_changes(current: &DomainMap, latest: &DomainMap) {
-    for domain in latest.keys() {
-        match current.get(domain) {
-            None => info!("allowed domain added: {}", domain),
-            Some(old) if old != &latest[domain] => {
-                info!("Breez API key changed for domain: {}", domain);
-            }
-            Some(_) => {}
+    for (domain, new) in latest {
+        let Some(old) = current.get(domain) else {
+            info!("allowed domain added: {}", domain);
+            continue;
+        };
+        if old.api_key != new.api_key {
+            info!("Breez API key changed for domain: {}", domain);
+        }
+        if old.quote_receives != new.quote_receives {
+            info!(
+                "partner fee quoting {} for domain: {}",
+                if new.quote_receives {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                domain
+            );
         }
     }
     for domain in current.keys() {
@@ -153,6 +180,7 @@ mod tests {
             domain: domain.to_string(),
             api_key: api_key.map(str::to_string),
             jwt: None,
+            quote_receives: false,
         }
     }
 
@@ -160,10 +188,10 @@ mod tests {
     fn to_map_keeps_own_key() {
         let configs = vec![cfg("a.com", Some("own")), cfg("b.com", None)];
         let map = to_map(configs);
-        assert_eq!(map.get("a.com"), Some(&Some("own".to_string())));
+        assert_eq!(map["a.com"].api_key, Some("own".to_string()));
         // A domain with no api key maps to None; the default is applied when
         // selecting the wallet, not here.
-        assert_eq!(map.get("b.com"), Some(&None));
+        assert_eq!(map["b.com"].api_key, None);
     }
 
     #[test]

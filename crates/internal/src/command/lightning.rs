@@ -2,7 +2,7 @@ use bitcoin::hashes::{Hash, sha256};
 use clap::Subcommand;
 use qrcode_rs::{EcLevel, QrCode, render::unicode};
 use rand::rngs::OsRng;
-use spark_wallet::{InvoiceDescription, Preimage, SparkWallet};
+use spark_wallet::{InvoiceDescription, Preimage, ReceiveAmountBasis, SparkWallet};
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum LightningCommand {
@@ -11,6 +11,10 @@ pub enum LightningCommand {
         amount_sat: u64,
         description: Option<String>,
         expiry_secs: Option<u32>,
+        /// Price the invoice with an SSP fee quote, reading the amount as the
+        /// net the receiver keeps or as the invoice total (gross).
+        #[arg(long, value_enum)]
+        quote: Option<QuoteBasisArg>,
     },
     /// Create a HODL lightning invoice (no preimage stored with operators).
     /// The preimage is generated locally and printed. Use `htlc claim` to settle later.
@@ -45,6 +49,21 @@ pub enum LightningCommand {
     },
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum QuoteBasisArg {
+    Net,
+    Gross,
+}
+
+impl From<QuoteBasisArg> for ReceiveAmountBasis {
+    fn from(value: QuoteBasisArg) -> Self {
+        match value {
+            QuoteBasisArg::Net => ReceiveAmountBasis::Net,
+            QuoteBasisArg::Gross => ReceiveAmountBasis::Gross,
+        }
+    }
+}
+
 pub async fn handle_command(
     wallet: &SparkWallet,
     command: LightningCommand,
@@ -54,10 +73,18 @@ pub async fn handle_command(
             amount_sat,
             description,
             expiry_secs,
+            quote,
         } => {
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, desc, None, expiry_secs, true)
+                .create_lightning_invoice(
+                    amount_sat,
+                    desc,
+                    None,
+                    expiry_secs,
+                    true,
+                    quote.map(Into::into),
+                )
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()
@@ -82,7 +109,7 @@ pub async fn handle_command(
 
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_hodl_lightning_invoice(amount_sat, desc, payment_hash, None, expiry_secs)
+                .create_hodl_lightning_invoice(amount_sat, desc, payment_hash, expiry_secs, None)
                 .await?;
 
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)

@@ -105,6 +105,7 @@ async fn client_sign_transfer_send(
                 prepare_transfer, ..
             } => TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+                signed_quote: None,
             },
             UnsignedTransferPackage::Token { .. }
             | UnsignedTransferPackage::TokenBatch { .. }
@@ -206,6 +207,7 @@ async fn test_client_signing_send_with_denomination_swap() -> Result<()> {
                 signed: client_signer
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
+                signed_quote: None,
             },
             UnsignedTransferPackage::Token { .. }
             | UnsignedTransferPackage::TokenBatch { .. }
@@ -339,6 +341,7 @@ async fn test_client_signing_publish_twice_is_idempotent() -> Result<()> {
             signed: client_signer
                 .prepare_transfer(prepare_transfer.clone())
                 .await?,
+            signed_quote: None,
         };
         let signed_package = SignedTransferPackage {
             unsigned,
@@ -967,6 +970,7 @@ async fn test_client_signing_coop_exit() -> Result<()> {
                 signed: client_signer
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
+                signed_quote: None,
             },
             UnsignedTransferPackage::Token { .. }
             | UnsignedTransferPackage::TokenBatch { .. }
@@ -1063,6 +1067,7 @@ async fn test_client_signing_lightning_send() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1189,6 +1194,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1244,6 +1250,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                 signed: client_signer
                     .prepare_transfer(prepare_transfer.clone())
                     .await?,
+                signed_quote: None,
             },
             UnsignedTransferPackage::Token { .. }
             | UnsignedTransferPackage::TokenBatch { .. }

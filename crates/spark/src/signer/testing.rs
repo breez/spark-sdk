@@ -12,11 +12,11 @@ use super::{
     PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest,
     PrepareTokenTransactionRequest, PrepareTransferRequest, PreparedClaim,
     PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
-    PreparedTokenTransaction, PreparedTransfer, SignSparkInvoiceRequest,
-    SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest, SignedSparkInvoice, Signer,
-    SignerError, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
-    StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund, StartedWatchtowerExitRecovery,
-    create_test_signer,
+    PreparedTokenTransaction, PreparedTransfer, SignQuoteRequest, SignSparkInvoiceRequest,
+    SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest, SignedQuote,
+    SignedSparkInvoice, Signer, SignerError, SparkSigner, SparkSignerAdapter,
+    StartStaticDepositRefundRequest, StartWatchtowerExitRecoveryRequest,
+    StartedStaticDepositRefund, StartedWatchtowerExitRecovery, create_test_signer,
 };
 use crate::tree::TreeNodeId;
 
@@ -174,5 +174,9 @@ impl SparkSigner for RecordingSparkSigner {
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError> {
         self.inner.prepare_token_transaction(request).await
+    }
+
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError> {
+        self.inner.sign_quote(request).await
     }
 }

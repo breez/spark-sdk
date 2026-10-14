@@ -72,8 +72,10 @@ namespace BreezSdkSnippets
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment request: {paymentRequest}");
-            var receiveFee = response.fee;
-            Console.WriteLine($"Fees: {receiveFee} token base units");
+            if (response.fee is ReceiveFee.Fixed fixedFee)
+            {
+                Console.WriteLine($"Fees: {fixedFee.amount} token base units");
+            }
             // ANCHOR_END: receive-token-payment-spark-invoice
         }
 

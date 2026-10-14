@@ -280,6 +280,21 @@ pub enum LightningSendRequestStatus {
     Unknown,
 }
 
+/// Whether a partner token resolved to a fee attribution, and if not, why.
+/// Advisory: the markup actually applied is in the signed manifest's fees.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SparkFeeAttributionStatus {
+    NotProvided,
+    Attributed,
+    TokenInvalid,
+    UnknownPartner,
+    UnknownAffiliate,
+    AffiliateDisabled,
+    #[serde(other, skip_serializing)]
+    Unknown,
+}
+
 /// Exit speed enum for cooperative exits
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -613,6 +628,42 @@ pub struct LightningSendRequest {
     pub status: LightningSendRequestStatus,
     pub transfer: Option<Transfer>,
     pub lightning_send_payment_preimage: Option<String>,
+}
+
+/// A fee quote as the SSP issued it. The SSP keeps no state for it and
+/// re-verifies its own signature over these exact bytes when the quote is
+/// committed, so both are returned unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedQuote {
+    /// The quoted `TransferManifest`, as serialized proto bytes.
+    pub serialized_manifest: Vec<u8>,
+    /// The SSP's DER signature over the quote envelope.
+    pub issuer_signature: Vec<u8>,
+}
+
+/// The SSP's answer to a lightning receive or send quote request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LightningQuote {
+    pub issued_quote: IssuedQuote,
+    pub attribution_status: SparkFeeAttributionStatus,
+}
+
+/// A receive quote committed into a lightning receive request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedReceiveQuote {
+    pub issued_quote: IssuedQuote,
+    /// The attestor's DER signature over the receive quote envelope. The
+    /// attestor owns the invoice's preimage share and need not be the payee.
+    pub attestor_signature: Vec<u8>,
+}
+
+/// A send quote committed into a lightning send request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedSendQuote {
+    pub issued_quote: IssuedQuote,
+    /// The total the quote prices: the sum of its edges. The SSP refuses any
+    /// other.
+    pub total_sats: u64,
 }
 
 /// SwapLeaf structure

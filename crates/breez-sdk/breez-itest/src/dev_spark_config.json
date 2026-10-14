@@ -1,0 +1,17 @@
+{
+  "coordinator_identifier": "0000000000000000000000000000000000000000000000000000000000000001",
+  "threshold": 2,
+  "signing_operators": [
+    {"id": 0, "identifier": "0000000000000000000000000000000000000000000000000000000000000001", "address": "https://0.spark.dev.dev.sparkinfra.net", "identity_public_key": "03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651", "ca_cert_pem": null},
+    {"id": 1, "identifier": "0000000000000000000000000000000000000000000000000000000000000002", "address": "https://1.spark.dev.dev.sparkinfra.net", "identity_public_key": "02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23", "ca_cert_pem": null},
+    {"id": 2, "identifier": "0000000000000000000000000000000000000000000000000000000000000003", "address": "https://2.spark.dev.dev.sparkinfra.net", "identity_public_key": "0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853", "ca_cert_pem": null}
+  ],
+  "ssp_config": {
+    "base_url": "https://api.dev.dev.sparkinfra.net",
+    "identity_public_key": "028c094a432d46a0ac95349d792c2e3730bd60c29188db716f56a99e39b95338b4",
+    "schema_endpoint": "graphql/spark/rc"
+  },
+  "expected_withdraw_bond_sats": 10000,
+  "expected_withdraw_relative_block_locktime": 1000,
+  "max_token_transaction_inputs": null
+}

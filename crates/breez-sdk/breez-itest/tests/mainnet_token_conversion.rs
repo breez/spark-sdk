@@ -264,6 +264,7 @@ async fn test_token_conversion_success() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                fee_policy: None,
             },
         })
         .await?

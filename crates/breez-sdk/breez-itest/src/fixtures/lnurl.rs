@@ -1,6 +1,7 @@
 use crate::fixtures::docker::{DockerImageConfig, build_docker_image};
 use anyhow::Result;
-use spark_wallet::SparkWalletConfig;
+use spark_wallet::{SparkDeployment, SparkWalletConfig};
+use std::time::Duration;
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{ContainerPort, Host, WaitFor, wait::HttpWaitStrategy},
@@ -23,6 +24,10 @@ pub struct LnurlImageConfig {
     pub auto_migrate: bool,
     /// Whether to include Spark address routing hints in Lightning invoices
     pub include_spark_address: bool,
+    /// Spark deployment to issue invoices through instead of the network's.
+    pub spark_deployment: Option<SparkDeployment>,
+    /// Partner JWT the server serves as every domain's own.
+    pub partner_jwt: Option<String>,
 }
 
 impl Default for LnurlImageConfig {
@@ -39,6 +44,8 @@ impl Default for LnurlImageConfig {
             network: "regtest".to_string(),
             auto_migrate: true,
             include_spark_address: false,
+            spark_deployment: None,
+            partner_jwt: None,
         }
     }
 }
@@ -68,11 +75,27 @@ impl LnurlImageConfig {
         self.include_spark_address = include_spark_address;
         self
     }
+
+    /// Issue invoices through `deployment`, reached from the container like
+    /// any other host, instead of the network's operators and SSP.
+    pub fn with_spark_deployment(mut self, deployment: SparkDeployment) -> Self {
+        self.spark_deployment = Some(deployment);
+        self
+    }
+
+    /// Serve `jwt` as every domain's partner JWT, so the server attributes and
+    /// can quote receives off mainnet.
+    pub fn with_partner_jwt(mut self, jwt: impl Into<String>) -> Self {
+        self.partner_jwt = Some(jwt.into());
+        self
+    }
 }
 
 pub struct LnurlFixture {
     pub container: ContainerAsync<GenericImage>,
     pub http_url: String,
+    /// Connection string to the server's database, from the host.
+    db_url: String,
     /// Keeps the PostgreSQL container the server is pointed at alive for the
     /// lifetime of the fixture.
     #[allow(dead_code)]
@@ -167,11 +190,21 @@ impl LnurlFixture {
             )
             // Allow the container to reach services on the host via host.docker.internal
             .with_host("host.docker.internal", Host::HostGateway);
-        if let Some((docker_network, spark_config)) = local_cluster {
+        let spark_config = match (local_cluster, &config.spark_deployment) {
+            (Some((docker_network, spark_config)), _) => {
+                container = container.with_network(docker_network);
+                Some(serde_json::to_vec(spark_config)?)
+            }
+            (None, Some(deployment)) => Some(serde_json::to_vec(deployment)?),
+            (None, None) => None,
+        };
+        if let Some(spark_config) = spark_config {
             container = container
-                .with_network(docker_network)
-                .with_copy_to(SPARK_CONFIG_PATH, serde_json::to_vec(spark_config)?)
+                .with_copy_to(SPARK_CONFIG_PATH, spark_config)
                 .with_env_var("BREEZ_LNURL_SPARK_CONFIG", SPARK_CONFIG_PATH);
+        }
+        if let Some(jwt) = &config.partner_jwt {
+            container = container.with_env_var("BREEZ_LNURL_DEV_DONT_USE_PARTNER_JWT", jwt);
         }
 
         let container = container.start().await?;
@@ -188,11 +221,71 @@ impl LnurlFixture {
         Ok(Self {
             container,
             http_url,
+            db_url: format!("postgres://postgres:postgres@127.0.0.1:{pg_port}/postgres"),
             pg_container,
         })
     }
 
     pub fn http_url(&self) -> &str {
         &self.http_url
+    }
+
+    /// The domain the server serves this fixture's addresses under: the host
+    /// and port of [`Self::http_url`].
+    pub fn domain(&self) -> &str {
+        self.http_url
+            .strip_prefix("http://")
+            .unwrap_or(&self.http_url)
+    }
+
+    /// A client for the server's database.
+    pub async fn db(&self) -> Result<tokio_postgres::Client> {
+        let (client, connection) =
+            tokio_postgres::connect(&self.db_url, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                tracing::warn!("LNURL database connection closed: {e}");
+            }
+        });
+        Ok(client)
+    }
+
+    /// Allows [`Self::domain`] and switches its partner fee quoting on or off,
+    /// then waits for the server to load the change. The server reads its
+    /// domains once a minute, so this takes up to a minute.
+    pub async fn set_fee_quoting(&self, on: bool) -> Result<()> {
+        let domain = self.domain();
+        let logged_before = self.container.stdout_to_vec().await?.len();
+        let db = self.db().await?;
+        db.execute(
+            "INSERT INTO allowed_domains (domain) VALUES ($1) ON CONFLICT DO NOTHING",
+            &[&domain],
+        )
+        .await?;
+        db.execute(
+            "INSERT INTO domain_attribution (domain, api_key, quote_receives)
+             VALUES ($1, 'unused-api-key', $2)
+             ON CONFLICT (domain) DO UPDATE SET quote_receives = excluded.quote_receives",
+            &[&domain, &on],
+        )
+        .await?;
+
+        // What the server logs when it loads the change: a new domain, or a
+        // known one whose quoting switched.
+        let switched = if on { "enabled" } else { "disabled" };
+        let markers = [
+            format!("allowed domain added: {domain}"),
+            format!("partner fee quoting {switched} for domain: {domain}"),
+        ];
+        for _ in 0..90 {
+            let logs = self.container.stdout_to_vec().await?;
+            let new_logs = String::from_utf8_lossy(&logs[logged_before.min(logs.len())..]);
+            if markers.iter().any(|m| new_logs.contains(m.as_str())) {
+                info!("LNURL server loaded fee quoting {switched} for {domain}");
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        anyhow::bail!("LNURL server did not load fee quoting {switched} for {domain}")
     }
 }

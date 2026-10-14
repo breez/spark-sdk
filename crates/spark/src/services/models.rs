@@ -128,6 +128,13 @@ pub struct PreparedTransferRequest {
     pub cpfp_signed_txs: Vec<SignedTx>,
 }
 
+/// A transfer that sends each leaf to its own receiver under a transfer
+/// manifest, plus the signed refunds needed for later FROST aggregation.
+pub struct PreparedTransferV3Request {
+    pub transfer_request: operator_rpc::spark::StartTransferV3Request,
+    pub cpfp_signed_txs: Vec<SignedTx>,
+}
+
 impl AsRef<SignedTx> for SignedTx {
     fn as_ref(&self) -> &SignedTx {
         self
@@ -490,6 +497,32 @@ pub struct Transfer {
     pub updated_time: Option<u64>,
     pub transfer_type: TransferType,
     pub spark_invoice: Option<String>,
+    /// The receivers with the part each gets. A payment that also pays out
+    /// fees has several, but the operators show a receiver only its own.
+    pub receivers: Vec<TransferReceiver>,
+}
+
+/// One receiver of a transfer and its part of the transfer's value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferReceiver {
+    pub identity_public_key: PublicKey,
+    pub amount_sats: u64,
+    /// Whether this receiver has claimed its part.
+    pub completed: bool,
+}
+
+impl TryFrom<operator_rpc::spark::TransferReceiver> for TransferReceiver {
+    type Error = ServiceError;
+
+    fn try_from(receiver: operator_rpc::spark::TransferReceiver) -> Result<Self, Self::Error> {
+        Ok(TransferReceiver {
+            identity_public_key: PublicKey::from_slice(&receiver.identity_public_key).map_err(
+                |_| ServiceError::Generic("Invalid transfer receiver public key".to_string()),
+            )?,
+            amount_sats: receiver.amount_sats,
+            completed: receiver.status() == operator_rpc::spark::TransferReceiverStatus::Completed,
+        })
+    }
 }
 
 /// Converts a page of operator records, dropping the ones that fail.
@@ -574,6 +607,12 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             Some(transfer.spark_invoice)
         };
 
+        let receivers = transfer
+            .receivers
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Transfer {
             id,
             sender_identity_public_key,
@@ -586,6 +625,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             updated_time,
             transfer_type,
             spark_invoice,
+            receivers,
         })
     }
 }
