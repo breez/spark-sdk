@@ -1,4 +1,5 @@
 mod buying_bitcoin;
+mod cash_app;
 mod client_signing;
 mod config;
 mod contacts;
@@ -18,7 +19,6 @@ mod messages;
 mod optimize;
 mod parsing_inputs;
 mod passkey;
-mod prepare_payment_link;
 mod receive_payment;
 mod recover_funds;
 mod refunding_payments;

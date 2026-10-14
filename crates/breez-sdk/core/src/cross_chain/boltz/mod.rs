@@ -523,13 +523,15 @@ impl CrossChainService for BoltzService {
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
         let address_details = match filter {
-            CrossChainRouteFilter::Send { address_details } => address_details,
-            // Boltz offers no routes for either filter:
-            // - PaymentLink: a Boltz reverse swap needs this SDK online to claim
-            //   before the payer's HTLC settles, so it can't back a
-            //   fire-and-forget link.
-            // - Receive (submarine swaps, USDT -> LN).
-            CrossChainRouteFilter::PaymentLink { .. } | CrossChainRouteFilter::Receive { .. } => {
+            // Boltz only offers wallet-funded sends: a reverse swap needs this
+            // wallet online to claim it.
+            CrossChainRouteFilter::Send {
+                address_details,
+                delivery_method: None | Some(DeliveryMethod::Spark),
+            } => address_details,
+            CrossChainRouteFilter::Send { .. }
+            | CrossChainRouteFilter::PaymentLink { .. }
+            | CrossChainRouteFilter::Receive { .. } => {
                 return Ok(Vec::new());
             }
         };
@@ -633,6 +635,8 @@ impl CrossChainService for BoltzService {
         _destination: &crate::cross_chain::SparkAsset,
         _fee_mode: crate::cross_chain::CrossChainFeeMode,
         _target_overpay_bps: u32,
+        _delivery_method: DeliveryMethod,
+        _refund_address: Option<&str>,
     ) -> Result<crate::cross_chain::CrossChainReceivePrepared, SdkError> {
         Err(SdkError::InvalidInput(
             "Boltz does not support cross-chain receive.".to_string(),
