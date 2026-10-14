@@ -65,8 +65,8 @@ Exiting several leaves at once starts with a **fan-out** transaction that splits
 
 The {{#name selection}} you prepare the recovery with says which leaves to recover:
 
-- {{#enum ExitLeafSelection::RecoverableOnly}} takes the leaves that left your balance, each only when what is left of its funds exceeds its own recovery cost (see [Worth recovering](#worth-recovering)).
-- {{#enum ExitLeafSelection::All}} takes every leaf, including the ones still in your balance, again only when what is left of its funds exceeds its own recovery cost. Its cooperative leaves still need the operators.
+- {{#enum ExitLeafSelection::RecoverableOnly}} takes the leaves that left your balance and are [worth recovering](#worth-recovering).
+- {{#enum ExitLeafSelection::All}} takes every leaf worth recovering, including the ones still in your balance. Its cooperative leaves still need the operators.
 - {{#enum ExitLeafSelection::Specific}} takes the leaves you name, whether or not they are worth it.
 
 Every selection leaves out a leaf whose recovery already finished. The SDK knows that from the recovery or sweep it recorded in a block. While that transaction is fewer than six blocks deep, and whenever you name the leaf, the SDK first checks that the transaction is still in a block, and prepares the leaf again when it is not. Every selection also leaves out a cooperative leaf whose funds cannot pay the fee of their own recovery at your fee rate, and one whose funds the wallet has not found: a lower fee rate, or preparing again later, can bring it back.
