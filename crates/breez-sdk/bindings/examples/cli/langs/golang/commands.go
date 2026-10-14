@@ -1268,7 +1268,7 @@ func handleBridgeFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instanc
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(response.Url)
 	serviceFeeAsset := serviceFeeDenomination(response.ServiceFeeAsset, response.ServiceFeeAssetDecimals)
-	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %s\n",
+	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %v\n",
 		response.AmountSats, response.EstimatedOut, response.Asset,
 		response.ServiceFeeAmount, serviceFeeAsset, response.ExpiresAt)
 	return nil
@@ -1337,7 +1337,7 @@ func handleBridgeToCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance,
 	fmt.Println("Ask the payer to pay:")
 	fmt.Println(response.PaymentRequest)
 	serviceFeeAsset := serviceFeeDenomination(info.ServiceFeeAsset, info.ServiceFeeAssetDecimals)
-	fmt.Printf("Deposit %v %s on %s to %s. Recipient receives ~%v sats, service fee %v %s, expires at %s\n",
+	fmt.Printf("Deposit %v %s on %s to %s. Recipient receives ~%v sats, service fee %v %s, expires at %v\n",
 		info.DepositAmount, route.Asset, route.Chain, info.DepositAddress,
 		info.ExpectedReceivedAmount, info.ServiceFeeAmount, serviceFeeAsset, info.ExpiresAt)
 	return nil
