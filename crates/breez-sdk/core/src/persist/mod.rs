@@ -46,6 +46,7 @@ const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
+const FLASHNET_REWARDS_DELEGATED_KEY: &str = "flashnet_rewards_delegated";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
@@ -983,6 +984,24 @@ impl ObjectCacheRepository {
             Some(value) => Ok(value == "true"),
             None => Ok(false),
         }
+    }
+
+    pub(crate) async fn save_flashnet_rewards_delegated(&self) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                FLASHNET_REWARDS_DELEGATED_KEY.to_string(),
+                "true".to_string(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_flashnet_rewards_delegated(&self) -> Result<bool, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(FLASHNET_REWARDS_DELEGATED_KEY.to_string())
+            .await?;
+        Ok(value.is_some_and(|value| value == "true"))
     }
 
     pub(crate) async fn save_stable_balance_active_label(

@@ -73,6 +73,7 @@ impl RuntimeProfile for ClientRuntime {
             stable_balance.spawn_conversion_worker(sdk.shutdown_sender.subscribe());
         }
         spawn_exit_chain_downloader(sdk);
+        spawn_rewards_delegation(sdk);
     }
 
     async fn run_user_sync(
@@ -126,6 +127,23 @@ impl RuntimeProfile for ClientRuntime {
     ) -> Result<(), SdkError> {
         sdk.ensure_spark_private_mode_initialized_inner().await
     }
+}
+
+/// Runs the token converter's rewards delegation check once, after the first
+/// Full sync.
+fn spawn_rewards_delegation(sdk: &BreezSdk) {
+    let token_converter = Arc::clone(&sdk.token_converter);
+    let mut initial_synced = sdk.initial_synced_watcher.clone();
+    let shutdown = sdk.shutdown_sender.subscribe();
+    platform_utils::spawn(run_with_shutdown(
+        shutdown,
+        "Rewards delegation",
+        async move {
+            if initial_synced.wait_for(|synced| *synced).await.is_ok() {
+                token_converter.ensure_rewards_delegation().await;
+            }
+        },
+    ));
 }
 
 fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {

@@ -103,6 +103,10 @@ pub(crate) trait TokenConverter: Send + Sync {
     fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<RefundRequest>> {
         None
     }
+
+    /// Delegates the share of the wallet's provider rewards that no
+    /// endorsement allocates to the wallet itself, so it stays payable.
+    async fn ensure_rewards_delegation(&self) {}
 }
 
 /// How long the refunder waits before settling a stranded input, so the pool's

@@ -35,7 +35,9 @@ impl RuntimeProfile for ServerRuntime {
         sync_type: SyncType,
         force: bool,
     ) -> Result<(), SdkError> {
-        sdk.sync_wallet_internal(sync_type, force).await
+        sdk.sync_wallet_internal(sync_type, force).await?;
+        sdk.token_converter.ensure_rewards_delegation().await;
+        Ok(())
     }
 
     async fn collect_exit_chains(&self, sdk: &BreezSdk) -> Result<(), SdkError> {
