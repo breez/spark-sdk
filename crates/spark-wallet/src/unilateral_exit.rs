@@ -1701,8 +1701,9 @@ mod exit_build_tests {
     use spark::{
         Identifier,
         services::{
-            ServiceError, UnilateralExitLeafFilter, UnilateralExitSelectedLeaf,
-            compute_cpfp_package_fee, plan_unilateral_exit, quote_unilateral_exit,
+            CpfpFundingStrategy, ServiceError, UnilateralExitLeafFilter,
+            UnilateralExitSelectedLeaf, compute_cpfp_package_fee, plan_unilateral_exit,
+            quote_unilateral_exit,
         },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
@@ -1790,6 +1791,8 @@ mod exit_build_tests {
 
     fn plan_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
         UnilateralExitPlan {
+            funding_strategy: CpfpFundingStrategy::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![UnilateralExitSelectedLeaf {
                 id: leaf.id.clone(),
                 value: 100_000,
@@ -2004,6 +2007,8 @@ mod exit_build_tests {
         let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(anchor_tx(4)));
         let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(anchor_tx(6)));
         UnilateralExitPlan {
+            funding_strategy: CpfpFundingStrategy::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![
                 UnilateralExitSelectedLeaf {
                     id: leaf_a.id.clone(),
@@ -2089,6 +2094,8 @@ mod exit_build_tests {
         let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
 
         UnilateralExitPlan {
+            funding_strategy: CpfpFundingStrategy::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![
                 UnilateralExitSelectedLeaf {
                     id: leaf_a.id.clone(),
@@ -2348,6 +2355,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![a, b],
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 dest_len,
                 &ExitChainState::default(),
@@ -2361,6 +2369,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![only],
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 dest_len,
                 &ExitChainState::default(),
@@ -2428,6 +2437,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2447,6 +2457,7 @@ mod exit_build_tests {
             &[a_id, b_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             inputs,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2498,6 +2509,7 @@ mod exit_build_tests {
             &[a_id, b_id, c_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             two(50_000),
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2524,6 +2536,7 @@ mod interpret_tests {
     };
     use spark::{
         Identifier,
+        services::CpfpFundingStrategy,
         tree::{SigningKeyshare, TreeNodeStatus},
     };
     use std::str::FromStr;
@@ -2588,6 +2601,8 @@ mod interpret_tests {
     fn prepared_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
         let leaf_id = leaf.id.clone();
         UnilateralExitPlan {
+            funding_strategy: CpfpFundingStrategy::PerBranch,
+            per_node_funding: vec![],
             selected_leaves: vec![],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf_id, vec![])],
