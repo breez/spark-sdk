@@ -816,7 +816,7 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard fp.positional.count >= 2,
           let vout = UInt32(fp.positional[1]) else {
-        print("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
+        print("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--proportional-ppm N]")
         return
     }
 
@@ -824,6 +824,12 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let feeSat = fp.get("fee-sat").flatMap { UInt64($0) }
     let satPerVbyte = fp.get("sat-per-vbyte").flatMap { UInt64($0) }
     let recommendedFeeLeeway = fp.get("recommended-fee-leeway").flatMap { UInt64($0) }
+    let proportionalPpm = fp.get("proportional-ppm").flatMap { UInt32($0) }
+
+    if proportionalPpm != nil && satPerVbyte == nil && recommendedFeeLeeway == nil {
+        print("Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
+        return
+    }
 
     let maxFee: MaxFee?
     if let leeway = recommendedFeeLeeway {
@@ -831,14 +837,14 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
             print("Cannot specify fee-sat or sat-per-vbyte when using recommended fee")
             return
         }
-        maxFee = .networkRecommended(leewaySatPerVbyte: leeway, proportionalPpm: nil)
+        maxFee = .networkRecommended(leewaySatPerVbyte: leeway, proportionalPpm: proportionalPpm)
     } else if let feeSat, satPerVbyte != nil {
         print("Cannot specify both fee-sat and sat-per-vbyte")
         return
     } else if let feeSat {
         maxFee = .fixed(amount: feeSat)
     } else if let satPerVbyte {
-        maxFee = .rate(satPerVbyte: satPerVbyte, proportionalPpm: nil)
+        maxFee = .rate(satPerVbyte: satPerVbyte, proportionalPpm: proportionalPpm)
     } else {
         maxFee = nil
     }

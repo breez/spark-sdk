@@ -807,9 +807,10 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
     val feeSat = fp.getULong("fee-sat")
     val satPerVbyte = fp.getULong("sat-per-vbyte")
     val recommendedFeeLeeway = fp.getULong("recommended-fee-leeway")
+    val proportionalPpm = fp.getUInt("proportional-ppm")
 
     if (fp.positional.size < 2) {
-        println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
+        println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--proportional-ppm N]")
         return
     }
 
@@ -820,20 +821,25 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
         return
     }
 
+    if (proportionalPpm != null && satPerVbyte == null && recommendedFeeLeeway == null) {
+        println("Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
+        return
+    }
+
     val maxFee: MaxFee? = when {
         recommendedFeeLeeway != null -> {
             if (feeSat != null || satPerVbyte != null) {
                 println("Cannot specify fee_sat or sat_per_vbyte when using recommended fee")
                 return
             }
-            MaxFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway, proportionalPpm = null)
+            MaxFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway, proportionalPpm = proportionalPpm)
         }
         feeSat != null && satPerVbyte != null -> {
             println("Cannot specify both --fee-sat and --sat-per-vbyte")
             return
         }
         feeSat != null -> MaxFee.Fixed(amount = feeSat)
-        satPerVbyte != null -> MaxFee.Rate(satPerVbyte = satPerVbyte, proportionalPpm = null)
+        satPerVbyte != null -> MaxFee.Rate(satPerVbyte = satPerVbyte, proportionalPpm = proportionalPpm)
         else -> null
     }
 
