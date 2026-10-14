@@ -992,7 +992,7 @@ async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: Toke
 async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = positionalArgs(args)
   if (positional.length < 2) {
-    return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]'
+    return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--proportional-ppm N]'
   }
 
   const txid = positional[0]
@@ -1004,6 +1004,12 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
   const feeSatStr = parseFlag(args, '--fee-sat')
   const satPerVbyteStr = parseFlag(args, '--sat-per-vbyte')
   const recommendedFeeLeewayStr = parseFlag(args, '--recommended-fee-leeway')
+  const proportionalPpmStr = parseFlag(args, '--proportional-ppm')
+  const proportionalPpm = proportionalPpmStr !== undefined ? Number(proportionalPpmStr) : undefined
+
+  if (proportionalPpm !== undefined && satPerVbyteStr === undefined && recommendedFeeLeewayStr === undefined) {
+    return 'Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway'
+  }
 
   let maxFee: MaxFee | undefined
 
@@ -1013,14 +1019,14 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
     }
     maxFee = new MaxFee.NetworkRecommended({
       leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr),
-      proportionalPpm: undefined
+      proportionalPpm
     })
   } else if (feeSatStr !== undefined && satPerVbyteStr !== undefined) {
     return 'Cannot specify both --fee-sat and --sat-per-vbyte'
   } else if (feeSatStr !== undefined) {
     maxFee = new MaxFee.Fixed({ amount: BigInt(feeSatStr) })
   } else if (satPerVbyteStr !== undefined) {
-    maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr), proportionalPpm: undefined })
+    maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr), proportionalPpm })
   }
 
   const result = await sdk.claimDeposit({

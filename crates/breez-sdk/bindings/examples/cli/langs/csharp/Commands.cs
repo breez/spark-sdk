@@ -1020,16 +1020,24 @@ public static class Commands
         var feeSatStr = GetFlag(args, "--fee-sat");
         var satPerVbyteStr = GetFlag(args, "--sat-per-vbyte");
         var recFeeLeewayStr = GetFlag(args, "--recommended-fee-leeway");
+        var proportionalPpmStr = GetFlag(args, "--proportional-ppm");
         var positional = GetPositionalArgs(args);
 
         if (positional.Length < 2)
         {
-            Console.WriteLine("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]");
+            Console.WriteLine("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N] [--proportional-ppm N]");
             return;
         }
 
         var txid = positional[0];
         var vout = uint.Parse(positional[1]);
+        var proportionalPpm = ParseOptionalUint(proportionalPpmStr);
+
+        if (proportionalPpm != null && satPerVbyteStr == null && recFeeLeewayStr == null)
+        {
+            Console.Error.WriteLine("proportional_ppm requires sat_per_vbyte or recommended_fee_leeway");
+            return;
+        }
 
         MaxFee? maxFee = null;
         if (recFeeLeewayStr != null)
@@ -1039,7 +1047,7 @@ public static class Commands
                 Console.WriteLine("Cannot specify fee-sat or sat-per-vbyte when using recommended fee");
                 return;
             }
-            maxFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr), proportionalPpm: null);
+            maxFee = new MaxFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr), proportionalPpm: proportionalPpm);
         }
         else if (feeSatStr != null && satPerVbyteStr != null)
         {
@@ -1052,7 +1060,7 @@ public static class Commands
         }
         else if (satPerVbyteStr != null)
         {
-            maxFee = new MaxFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr), proportionalPpm: null);
+            maxFee = new MaxFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr), proportionalPpm: proportionalPpm);
         }
 
         var result = await sdk.ClaimDeposit(new ClaimDepositRequest(
