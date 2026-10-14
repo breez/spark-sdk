@@ -89,6 +89,7 @@ impl BreezSdk {
                     &destination,
                     fee_rate,
                     request.funding_kind.as_ref(),
+                    request.funding_strategy.unwrap_or_default(),
                     unilateral,
                     &selection.not_unilateral,
                     &stored,
@@ -168,6 +169,11 @@ impl BreezSdk {
                     .funding
                     .as_ref()
                     .map_or(0, |funding| funding.single_utxo_sats),
+                prepared
+                    .funding
+                    .as_ref()
+                    .map(|funding| funding.strategy)
+                    .unwrap_or_default(),
                 &prepared.exit_chain_state,
                 signer.as_deref(),
                 &mut queries,

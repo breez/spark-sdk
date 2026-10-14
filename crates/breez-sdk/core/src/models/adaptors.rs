@@ -593,6 +593,15 @@ impl From<spark_wallet::OptimizationOutcome> for OptimizationOutcome {
     }
 }
 
+impl From<crate::CpfpFundingStrategy> for spark_wallet::CpfpFundingStrategy {
+    fn from(value: crate::CpfpFundingStrategy) -> Self {
+        match value {
+            crate::CpfpFundingStrategy::PerBranch => Self::PerBranch,
+            crate::CpfpFundingStrategy::PerNode => Self::PerNode,
+        }
+    }
+}
+
 impl From<crate::WebhookEventType> for spark_wallet::SparkWalletWebhookEventType {
     fn from(value: crate::WebhookEventType) -> Self {
         match value {
