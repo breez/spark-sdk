@@ -32,7 +32,8 @@ val COMMAND_NAMES = listOf(
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
-    "prepare-payment-link",
+    "bridge-from-cash-app",
+    "bridge-to-cash-app",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -71,7 +72,8 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
         "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via an external provider", ::handleBuyBitcoin),
-        "prepare-payment-link" to CliCommand("prepare-payment-link", "Prepare a payment link for cross-chain stablecoin transfer", ::handlePreparePaymentLink),
+        "bridge-from-cash-app" to CliCommand("bridge-from-cash-app", "Bridge from Cash App to USDC/USDT on an external chain", ::handleBridgeFromCashApp),
+        "bridge-to-cash-app" to CliCommand("bridge-to-cash-app", "Bridge USDC/USDT from an external chain to a Cash App user", ::handleBridgeToCashApp),
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
@@ -994,16 +996,16 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     }
 }
 
-// --- prepare-payment-link ---
+// --- bridge-from-cash-app ---
 
-suspend fun handlePreparePaymentLink(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+suspend fun handleBridgeFromCashApp(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
     val amountStr = fp.getString("amount")
     val feesIncluded = fp.hasFlag("fees-included")
     val maxSlippageBps = fp.getUInt("max-slippage-bps")
 
     if (fp.positional.isEmpty() || amountStr == null) {
-        println("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+        println("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
         return
     }
 
@@ -1025,12 +1027,19 @@ suspend fun handlePreparePaymentLink(sdk: BreezSdk, reader: LineReader, args: Li
     }
 
     val address = addressDetails.address
-    val route = selectCrossChainRoute(sdk, reader, CrossChainRouteFilter.PaymentLink(addressDetails = addressDetails))
+    val route = selectCrossChainRoute(
+        sdk,
+        reader,
+        CrossChainRouteFilter.Send(
+            addressDetails = addressDetails,
+            deliveryMethod = DeliveryMethod.LIGHTNING,
+        ),
+    )
 
     val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
 
-    val response = sdk.preparePaymentLink(
-        PreparePaymentLinkRequest(
+    val response = sdk.bridgeFromCashApp(
+        BridgeFromCashAppRequest(
             address = address,
             route = route,
             amount = amount,
@@ -1044,6 +1053,60 @@ suspend fun handlePreparePaymentLink(sdk: BreezSdk, reader: LineReader, args: Li
         "Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, " +
         "service fee ${response.serviceFeeAmount} ${serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, " +
         "expires ${response.expiresAt}"
+    )
+}
+
+// --- bridge-to-cash-app ---
+
+suspend fun handleBridgeToCashApp(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val amountStr = fp.getString("amount")
+    val refundAddress = fp.getString("refund-address")
+    val feesIncluded = fp.hasFlag("fees-included")
+    val maxSlippageBps = fp.getUInt("max-slippage-bps")
+
+    if (fp.positional.isEmpty() || amountStr == null || refundAddress == null) {
+        println("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]")
+        return
+    }
+
+    val recipient = fp.positional[0]
+    val amount = try {
+        BigInteger.parseString(amountStr)
+    } catch (e: Exception) {
+        println("Invalid amount: $amountStr")
+        return
+    }
+
+    val route = selectCrossChainRoute(
+        sdk,
+        reader,
+        CrossChainRouteFilter.Receive(
+            contractAddress = null,
+            deliveryMethod = DeliveryMethod.LIGHTNING,
+        ),
+    )
+
+    val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
+
+    val response = sdk.bridgeToCashApp(
+        BridgeToCashAppRequest(
+            recipient = recipient,
+            route = route,
+            amount = amount,
+            feePolicy = feePolicy,
+            refundAddress = refundAddress,
+            maxSlippageBps = maxSlippageBps,
+        )
+    )
+    val info = response.info
+    println("Ask the payer to pay:")
+    println(response.paymentRequest)
+    println(
+        "Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. " +
+        "Recipient receives ~${info.expectedReceivedAmount} sats, " +
+        "service fee ${info.serviceFeeAmount} ${serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)}, " +
+        "expires at ${info.expiresAt}"
     )
 }
 

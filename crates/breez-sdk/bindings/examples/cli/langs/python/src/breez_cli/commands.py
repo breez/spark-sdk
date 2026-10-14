@@ -8,6 +8,8 @@ from breez_sdk_spark import (
     AssetFilter,
     AuthorizeTransferRequest,
     BatchRecipient,
+    BridgeFromCashAppRequest,
+    BridgeToCashAppRequest,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
     ClaimDepositRequest,
@@ -17,6 +19,7 @@ from breez_sdk_spark import (
     ConversionType,
     CrossChainFeeMode,
     CrossChainRouteFilter,
+    DeliveryMethod,
     Fee,
     FeePolicy,
     FetchClaimDepositQuoteRequest,
@@ -38,7 +41,6 @@ from breez_sdk_spark import (
     PaymentStatus,
     PaymentType,
     PrepareLnurlPayRequest,
-    PreparePaymentLinkRequest,
     PreparePullPaymentRequest,
     PrepareSendBatchRequest,
     PrepareSendPaymentRequest,
@@ -93,7 +95,8 @@ COMMAND_NAMES = [
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
-    "prepare-payment-link",
+    "bridge-from-cash-app",
+    "bridge-to-cash-app",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -926,11 +929,11 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
         print_value(result.cross_chain_info)
 
 
-# --- prepare-payment-link ---
+# --- bridge-from-cash-app ---
 
-def _build_prepare_payment_link_parser():
-    p = _parser("prepare-payment-link",
-                "Prepare a payment link to send USDC/USDT to an external-chain recipient via a fiat rail")
+def _build_bridge_from_cash_app_parser():
+    p = _parser("bridge-from-cash-app",
+                "Bridge from Cash App to USDC/USDT on an external chain")
     p.add_argument("recipient", help="Recipient address on the destination chain (EVM/Solana/Tron)")
     p.add_argument("--amount", type=int, required=True,
                    help="Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
@@ -940,18 +943,21 @@ def _build_prepare_payment_link_parser():
                    help="Maximum slippage in basis points")
     return p
 
-async def _handle_prepare_payment_link(sdk, _token_issuer, session, args):
+async def _handle_bridge_from_cash_app(sdk, _token_issuer, session, args):
     parsed = await sdk.parse(input=args.recipient)
     if not isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
         print("Recipient must be a cross-chain (EVM/Solana/Tron) address")
         return
     address_details = parsed[0]
     address = address_details.address
-    route_filter = CrossChainRouteFilter.PAYMENT_LINK(address_details=address_details)
+    route_filter = CrossChainRouteFilter.SEND(
+        address_details=address_details,
+        delivery_method=DeliveryMethod.LIGHTNING,
+    )
     route = await _select_cross_chain_route(sdk, session, route_filter)
     fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
-    response = await sdk.prepare_payment_link(
-        request=PreparePaymentLinkRequest(
+    response = await sdk.bridge_from_cash_app(
+        request=BridgeFromCashAppRequest(
             address=address,
             route=route,
             amount=args.amount,
@@ -969,6 +975,55 @@ async def _handle_prepare_payment_link(sdk, _token_issuer, session, args):
         f"recipient receives ~{response.estimated_out} {response.asset}, "
         f"service fee {response.service_fee_amount} {service_fee_denom}, "
         f"expires {response.expires_at}"
+    )
+
+
+# --- bridge-to-cash-app ---
+
+def _build_bridge_to_cash_app_parser():
+    p = _parser("bridge-to-cash-app",
+                "Bridge USDC/USDT from an external chain to a Cash App user")
+    p.add_argument("recipient",
+                   help="Cash App username (alice or $alice) or Cash App Lightning address")
+    p.add_argument("--amount", type=int, required=True,
+                   help="Amount in the source stablecoin's base units (6 decimals for USDC/USDT)")
+    p.add_argument("--refund-address", required=True,
+                   help="The payer's address on the source chain, refunded if delivery fails")
+    p.add_argument("--fees-included", action="store_true", default=False,
+                   help="Deduct fees from the amount instead of adding them on top")
+    p.add_argument("--max-slippage-bps", type=int, default=None,
+                   help="Maximum slippage in basis points")
+    return p
+
+async def _handle_bridge_to_cash_app(sdk, _token_issuer, session, args):
+    route_filter = CrossChainRouteFilter.RECEIVE(
+        contract_address=None,
+        delivery_method=DeliveryMethod.LIGHTNING,
+    )
+    route = await _select_cross_chain_route(sdk, session, route_filter)
+    fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
+    response = await sdk.bridge_to_cash_app(
+        request=BridgeToCashAppRequest(
+            recipient=args.recipient,
+            route=route,
+            amount=args.amount,
+            fee_policy=fee_policy,
+            refund_address=args.refund_address,
+            max_slippage_bps=args.max_slippage_bps,
+        )
+    )
+    info = response.info
+    print("Ask the payer to pay:")
+    print(response.payment_request)
+    service_fee_denom = _service_fee_denomination(
+        info.service_fee_asset, info.service_fee_asset_decimals,
+    )
+    print(
+        f"Deposit {info.deposit_amount} {route.asset} on {route.chain} "
+        f"to {info.deposit_address}. "
+        f"Recipient receives ~{info.expected_received_amount} sats, "
+        f"service fee {info.service_fee_amount} {service_fee_denom}, "
+        f"expires at {info.expires_at}"
     )
 
 
@@ -1344,7 +1399,8 @@ def build_command_registry():
         "refund-deposit": (_build_refund_deposit_parser(), _handle_refund_deposit),
         "list-unclaimed-deposits": (_build_list_unclaimed_deposits_parser(), _handle_list_unclaimed_deposits),
         "buy-bitcoin": (_build_buy_bitcoin_parser(), _handle_buy_bitcoin),
-        "prepare-payment-link": (_build_prepare_payment_link_parser(), _handle_prepare_payment_link),
+        "bridge-from-cash-app": (_build_bridge_from_cash_app_parser(), _handle_bridge_from_cash_app),
+        "bridge-to-cash-app": (_build_bridge_to_cash_app_parser(), _handle_bridge_to_cash_app),
         "check-lightning-address-available": (_build_check_lightning_address_available_parser(), _handle_check_lightning_address_available),
         "get-lightning-address": (_build_get_lightning_address_parser(), _handle_get_lightning_address),
         "register-lightning-address": (_build_register_lightning_address_parser(), _handle_register_lightning_address),

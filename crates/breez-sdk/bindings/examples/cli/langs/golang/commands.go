@@ -41,7 +41,8 @@ var CommandNames = []string{
 	"refund-deposit",
 	"list-unclaimed-deposits",
 	"buy-bitcoin",
-	"prepare-payment-link",
+	"bridge-from-cash-app",
+	"bridge-to-cash-app",
 	"check-lightning-address-available",
 	"get-lightning-address",
 	"register-lightning-address",
@@ -78,7 +79,8 @@ func BuildCommandRegistry() map[string]Command {
 		"refund-deposit":                       {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
 		"list-unclaimed-deposits":              {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
 		"buy-bitcoin":                          {Name: "buy-bitcoin", Description: "Buy Bitcoin using an external provider", Run: handleBuyBitcoin},
-		"prepare-payment-link":                 {Name: "prepare-payment-link", Description: "Prepare a payment link to send stablecoins to an external-chain recipient", Run: handlePreparePaymentLink},
+		"bridge-from-cash-app":                 {Name: "bridge-from-cash-app", Description: "Bridge from Cash App to USDC/USDT on an external chain", Run: handleBridgeFromCashApp},
+		"bridge-to-cash-app":                   {Name: "bridge-to-cash-app", Description: "Bridge USDC/USDT from an external chain to a Cash App user", Run: handleBridgeToCashApp},
 		"check-lightning-address-available":    {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
 		"get-lightning-address":                {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
 		"register-lightning-address":           {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
@@ -1195,10 +1197,10 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	return nil
 }
 
-// --- prepare-payment-link ---
+// --- bridge-from-cash-app ---
 
-func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
-	fs := flag.NewFlagSet("prepare-payment-link", flag.ContinueOnError)
+func handleBridgeFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("bridge-from-cash-app", flag.ContinueOnError)
 	amountStr := fs.String("amount", "", "Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
 	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
 	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
@@ -1208,7 +1210,7 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 
 	positional := fs.Args()
 	if len(positional) < 1 || *amountStr == "" {
-		fmt.Println("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+		fmt.Println("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
 		return nil
 	}
 	recipient := positional[0]
@@ -1224,7 +1226,11 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 	addressDetails := ccAddr.Field0
 	address := addressDetails.Address
 
-	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterPaymentLink{AddressDetails: addressDetails})
+	deliveryMethod := breez_sdk_spark.DeliveryMethodLightning
+	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterSend{
+		AddressDetails: addressDetails,
+		DeliveryMethod: &deliveryMethod,
+	})
 	if err != nil {
 		return err
 	}
@@ -1234,7 +1240,7 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 		return fmt.Errorf("invalid amount: %s", *amountStr)
 	}
 
-	req := breez_sdk_spark.PreparePaymentLinkRequest{
+	req := breez_sdk_spark.BridgeFromCashAppRequest{
 		Address: address,
 		Route:   route,
 		Amount:  amount,
@@ -1254,7 +1260,7 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 		req.MaxSlippageBps = &val32
 	}
 
-	response, err := sdk.PreparePaymentLink(req)
+	response, err := sdk.BridgeFromCashApp(req)
 	if err = liftError(err); err != nil {
 		return err
 	}
@@ -1262,9 +1268,78 @@ func handlePreparePaymentLink(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instan
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(response.Url)
 	serviceFeeAsset := serviceFeeDenomination(response.ServiceFeeAsset, response.ServiceFeeAssetDecimals)
-	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %s\n",
+	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %v\n",
 		response.AmountSats, response.EstimatedOut, response.Asset,
 		response.ServiceFeeAmount, serviceFeeAsset, response.ExpiresAt)
+	return nil
+}
+
+// --- bridge-to-cash-app ---
+
+func handleBridgeToCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("bridge-to-cash-app", flag.ContinueOnError)
+	amountStr := fs.String("amount", "", "Amount in the source stablecoin's base units (6 decimals for USDC/USDT)")
+	refundAddress := fs.String("refund-address", "", "The payer's address on the source chain, refunded if delivery fails")
+	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
+	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 1 || *amountStr == "" || *refundAddress == "" {
+		fmt.Println("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]")
+		return nil
+	}
+	recipient := positional[0]
+
+	deliveryMethod := breez_sdk_spark.DeliveryMethodLightning
+	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterReceive{
+		ContractAddress: nil,
+		DeliveryMethod:  &deliveryMethod,
+	})
+	if err != nil {
+		return err
+	}
+
+	amount, ok := new(big.Int).SetString(*amountStr, 10)
+	if !ok {
+		return fmt.Errorf("invalid amount: %s", *amountStr)
+	}
+
+	req := breez_sdk_spark.BridgeToCashAppRequest{
+		Recipient:     recipient,
+		Route:         route,
+		Amount:        amount,
+		RefundAddress: *refundAddress,
+	}
+
+	if *feesIncluded {
+		fp := breez_sdk_spark.FeePolicyFeesIncluded
+		req.FeePolicy = &fp
+	}
+
+	if *maxSlippageStr != "" {
+		val, err := strconv.ParseUint(*maxSlippageStr, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid max slippage: %s", *maxSlippageStr)
+		}
+		val32 := uint32(val)
+		req.MaxSlippageBps = &val32
+	}
+
+	response, err := sdk.BridgeToCashApp(req)
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	info := response.Info
+	fmt.Println("Ask the payer to pay:")
+	fmt.Println(response.PaymentRequest)
+	serviceFeeAsset := serviceFeeDenomination(info.ServiceFeeAsset, info.ServiceFeeAssetDecimals)
+	fmt.Printf("Deposit %v %s on %s to %s. Recipient receives ~%v sats, service fee %v %s, expires at %v\n",
+		info.DepositAmount, route.Asset, route.Chain, info.DepositAddress,
+		info.ExpectedReceivedAmount, info.ServiceFeeAmount, serviceFeeAsset, info.ExpiresAt)
 	return nil
 }
 
