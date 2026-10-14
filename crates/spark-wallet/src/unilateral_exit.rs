@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, FeeRate, OutPoint, Transaction, Txid};
 use spark::{
     services::{
-        ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
-        ExitRefundState, UnilateralExitPlan, build_anchorless_refund_child, build_cpfp_child,
-        csv_timelock, p2tr_key_path_input_weight, walk_unilateral_exit_chain,
+        ConfirmedExitNode, CpfpFundingStrategy, CpfpInput, ExitChainState, ExitNodeConfirmation,
+        ExitRefund, ExitRefundState, UnilateralExitPlan, build_anchorless_refund_child,
+        build_cpfp_child, csv_timelock, p2tr_key_path_input_weight, walk_unilateral_exit_chain,
     },
     signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
@@ -165,13 +165,14 @@ pub struct ExitBranch {
 /// via [`SparkWallet::create_refund_sweep_transaction`](crate::SparkWallet::create_refund_sweep_transaction).
 #[derive(Clone, Debug)]
 pub struct UnilateralExitBuild {
-    /// Present only when the funding needed splitting across branches.
+    /// Present only when the funding needed splitting across what it funds.
     pub fan_out: Option<ExitTx>,
     pub branches: Vec<ExitBranch>,
     /// Every leaf's refund output to sweep (adopted on-chain or freshly driven).
     pub refund_outputs: Vec<RefundOutput>,
     /// Terminal CPFP-change outputs to fold into the sweep (only branches whose
-    /// refund child was built fresh).
+    /// refund child was built fresh). Empty under per-node funding, whose
+    /// change stays on the funding script.
     pub cpfp_change_inputs: Vec<CpfpChangeInput>,
     pub recoverable_value_sat: u64,
     /// CPFP-package fees of the txs built fresh, paid by the funding UTXOs.
@@ -1370,6 +1371,34 @@ pub(crate) fn build_unilateral_exit(
     Ok(build)
 }
 
+/// The input a per-node plan assigned to the child of `txid`. An error, not a
+/// fallback: spending another transaction's input would make two children
+/// conflict.
+fn per_node_input<'a>(
+    per_node_funding: &HashMap<Txid, &'a CpfpInput>,
+    txid: Txid,
+) -> Result<&'a CpfpInput, SparkWalletError> {
+    per_node_funding.get(&txid).copied().ok_or_else(|| {
+        SparkWalletError::Generic(format!(
+            "No funding input planned for exit transaction {txid}"
+        ))
+    })
+}
+
+/// The fan-out a child has to wait for. Under per-branch funding only a
+/// branch's first child spends a fan-out output, the rest spend change; under
+/// per-node funding every child spends one.
+fn fan_out_dependency(
+    plan: &UnilateralExitPlan,
+    branch_dependency: &mut Option<Txid>,
+    fan_out_txid: Option<Txid>,
+) -> Option<Txid> {
+    match plan.funding_strategy {
+        CpfpFundingStrategy::PerBranch => branch_dependency.take(),
+        CpfpFundingStrategy::PerNode => fan_out_txid,
+    }
+}
+
 /// Upgrades `Unconfirmed` to `Unverified` for txs whose chain lookup failed (the
 /// build is chain-blind, so this is applied afterward).
 fn flag_unverified_txs(build: &mut UnilateralExitBuild, interpretation: &ChainInterpretation) {
@@ -1408,6 +1437,11 @@ pub(crate) fn build_exit(
     });
     let fan_out_txid = fan_out.as_ref().map(|f| f.txid);
     let per_branch_funding = plan.per_branch_funding.clone();
+    let per_node_funding: HashMap<Txid, &CpfpInput> = plan
+        .per_node_funding
+        .iter()
+        .map(|(txid, input)| (*txid, input))
+        .collect();
 
     // A shared ancestor is bumped once, by the first branch that reaches it.
     let mut emitted: HashSet<Txid> = HashSet::new();
@@ -1473,8 +1507,19 @@ pub(crate) fn build_exit(
                         // the branch keeps what it was assigned.
                         Some(_) => None,
                         None => {
-                            let child =
-                                build_cpfp_child(&node.node_tx, &funding, fee_rate_sat_per_kw)?;
+                            let child = match plan.funding_strategy {
+                                CpfpFundingStrategy::PerBranch => {
+                                    build_cpfp_child(&node.node_tx, &funding, fee_rate_sat_per_kw)?
+                                }
+                                CpfpFundingStrategy::PerNode => build_cpfp_child(
+                                    &node.node_tx,
+                                    std::slice::from_ref(per_node_input(
+                                        &per_node_funding,
+                                        node_txid,
+                                    )?),
+                                    fee_rate_sat_per_kw,
+                                )?,
+                            };
                             cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
                             funding = vec![child.change_input];
                             Some(child.psbt)
@@ -1485,7 +1530,7 @@ pub(crate) fn build_exit(
                         depends_on.push(p);
                     }
                     if to_sign.is_some()
-                        && let Some(fo) = fan_out_dep.take()
+                        && let Some(fo) = fan_out_dependency(plan, &mut fan_out_dep, fan_out_txid)
                     {
                         depends_on.push(fo);
                     }
@@ -1614,7 +1659,16 @@ pub(crate) fn build_exit(
                         status: ExitTxStatus::Unconfirmed,
                     });
                 } else {
-                    let child = build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?;
+                    let child = match plan.funding_strategy {
+                        CpfpFundingStrategy::PerBranch => {
+                            build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?
+                        }
+                        CpfpFundingStrategy::PerNode => build_cpfp_child(
+                            &refund_tx,
+                            std::slice::from_ref(per_node_input(&per_node_funding, refund_txid)?),
+                            fee_rate_sat_per_kw,
+                        )?,
+                    };
                     cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
                     refund_outputs.push(RefundOutput {
                         outpoint: OutPoint {
@@ -1628,13 +1682,16 @@ pub(crate) fn build_exit(
                         },
                     });
                     // The refund child's change is the branch's terminal sweep input.
-                    cpfp_change_inputs.push(CpfpChangeInput {
-                        outpoint: child.change_input.outpoint,
-                        witness_utxo: child.change_input.witness_utxo.clone(),
-                        signed_input_weight: child.change_input.signed_input_weight,
-                    });
+                    // Per-node change stays on the funding script instead.
+                    if plan.funding_strategy == CpfpFundingStrategy::PerBranch {
+                        cpfp_change_inputs.push(CpfpChangeInput {
+                            outpoint: child.change_input.outpoint,
+                            witness_utxo: child.change_input.witness_utxo.clone(),
+                            signed_input_weight: child.change_input.signed_input_weight,
+                        });
+                    }
                     let mut depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
-                    if let Some(fo) = fan_out_dep.take() {
+                    if let Some(fo) = fan_out_dependency(plan, &mut fan_out_dep, fan_out_txid) {
                         depends_on.push(fo);
                     }
                     txs.push(ExitTx {
@@ -1755,9 +1812,9 @@ mod exit_build_tests {
     use spark::{
         Identifier,
         services::{
-            CpfpFundingStrategy, ServiceError, UnilateralExitLeafFilter,
-            UnilateralExitSelectedLeaf, compute_cpfp_package_fee, compute_sweep_fee,
-            plan_unilateral_exit, quote_unilateral_exit,
+            ServiceError, UnilateralExitLeafFilter, UnilateralExitSelectedLeaf,
+            compute_cpfp_package_fee, compute_sweep_fee, plan_unilateral_exit,
+            quote_unilateral_exit,
         },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
@@ -3057,7 +3114,6 @@ mod interpret_tests {
     };
     use spark::{
         Identifier,
-        services::CpfpFundingStrategy,
         tree::{SigningKeyshare, TreeNodeStatus},
     };
     use std::str::FromStr;
@@ -4743,6 +4799,389 @@ mod interpret_tests {
         assert!(
             !interp.unverified.contains(&leaf_id),
             "a chain-verified confirmation does not flag the driven child"
+        );
+    }
+}
+
+#[cfg(test)]
+mod per_node_build_tests {
+    use super::*;
+    use bitcoin::{
+        Amount, CompressedPublicKey, ScriptBuf, TxOut, absolute::LockTime, hashes::Hash,
+        key::Secp256k1, secp256k1::PublicKey, secp256k1::SecretKey, transaction::Version,
+    };
+    use spark::{
+        Identifier,
+        services::{UnilateralExitLeafFilter, plan_unilateral_exit},
+        tree::{SigningKeyshare, TreeNodeStatus},
+    };
+    use std::str::FromStr;
+
+    const FEE_RATE: u64 = 250;
+
+    fn id(s: &str) -> TreeNodeId {
+        TreeNodeId::from_str(s).unwrap()
+    }
+
+    fn anchored(nonce: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::from_height(nonce).unwrap(),
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+            }],
+        }
+    }
+
+    fn node(name: &str, parent: Option<&str>, nonce: u32, with_refund: bool) -> TreeNode {
+        let pk = PublicKey::from_str(
+            "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
+        )
+        .unwrap();
+        TreeNode {
+            id: id(name),
+            tree_id: "test".to_string(),
+            value: 100_000,
+            parent_node_id: parent.map(id),
+            node_tx: anchored(nonce),
+            refund_tx: with_refund.then(|| anchored(nonce + 1_000)),
+            direct_tx: None,
+            direct_refund_tx: None,
+            direct_from_cpfp_refund_tx: None,
+            vout: 0,
+            verifying_public_key: pk,
+            owner_identity_public_key: Some(pk),
+            signing_keyshare: SigningKeyshare {
+                public_key: pk,
+                owner_identifiers: vec![Identifier::try_from(1u16).unwrap()],
+                threshold: 2,
+            },
+            status: TreeNodeStatus::Available,
+        }
+    }
+
+    fn funding(value: u64, vout: u32) -> CpfpInput {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let pk = PublicKey::from_secret_key(&secp, &sk);
+        CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: Address::p2wpkh(&CompressedPublicKey(pk), bitcoin::Network::Testnet)
+                    .script_pubkey(),
+            },
+            signed_input_weight: 272,
+        }
+    }
+
+    fn plan(
+        nodes: Vec<TreeNode>,
+        leaves: &[&str],
+        inputs: Vec<CpfpInput>,
+        strategy: CpfpFundingStrategy,
+        state: &ExitChainState,
+    ) -> UnilateralExitPlan {
+        plan_unilateral_exit(
+            to_node_map(nodes),
+            &leaves.iter().map(|leaf| id(leaf)).collect::<Vec<_>>(),
+            UnilateralExitLeafFilter::All,
+            inputs,
+            strategy,
+            FEE_RATE,
+            22,
+            state,
+        )
+        .unwrap()
+    }
+
+    /// The txids the build gives a CPFP child to.
+    fn bumped_by_build(build: &UnilateralExitBuild) -> HashSet<Txid> {
+        build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter(|tx| tx.to_sign.is_some())
+            .map(|tx| tx.txid)
+            .collect()
+    }
+
+    fn confirmed(node: &str, by: ExitNodeConfirmation) -> ConfirmedExitNode {
+        ConfirmedExitNode {
+            node_id: id(node),
+            confirmed_by: by,
+            block_height: Some(100),
+        }
+    }
+
+    /// The plan names a UTXO for exactly the transactions the build bumps, in
+    /// every state the chain can leave an exit in. One named and not built sits
+    /// idle; one built and not named has no input and fails the build.
+    #[test]
+    fn the_plan_funds_exactly_what_the_build_bumps() {
+        let root_and_leaf = || {
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ]
+        };
+        let mut went_direct = node("leaf", Some("root"), 2, true);
+        went_direct.direct_tx = Some(anchored(40));
+        went_direct.direct_refund_tx = Some(anchored(41));
+        let refund_on_chain = ExitRefund {
+            leaf_id: id("leaf"),
+            state: ExitRefundState::OnChain {
+                tx: anchored(1_002),
+                vout: 0,
+                value: 90_000,
+                block_height: Some(120),
+            },
+        };
+        let shared_root = || {
+            vec![
+                node("root", None, 1, false),
+                node("a", Some("root"), 2, true),
+                node("b", Some("root"), 3, true),
+            ]
+        };
+
+        let cases: Vec<(&str, Vec<TreeNode>, Vec<&str>, ExitChainState)> = vec![
+            (
+                "fresh",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState::default(),
+            ),
+            (
+                "root confirmed",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![confirmed("root", ExitNodeConfirmation::Cpfp)],
+                    ..Default::default()
+                },
+            ),
+            (
+                "refund on-chain",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("leaf", ExitNodeConfirmation::Cpfp),
+                    ],
+                    refunds: vec![refund_on_chain],
+                    ..Default::default()
+                },
+            ),
+            (
+                "leaf went direct",
+                vec![node("root", None, 1, false), went_direct],
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("leaf", ExitNodeConfirmation::Direct),
+                    ],
+                    ..Default::default()
+                },
+            ),
+            (
+                "stopped",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    stopped_leaves: vec![id("leaf")],
+                    ..Default::default()
+                },
+            ),
+            (
+                "shared root",
+                shared_root(),
+                vec!["a", "b"],
+                ExitChainState::default(),
+            ),
+            (
+                "shared root, one branch swept",
+                shared_root(),
+                vec!["a", "b"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("a", ExitNodeConfirmation::Cpfp),
+                    ],
+                    refunds: vec![ExitRefund {
+                        leaf_id: id("a"),
+                        state: ExitRefundState::Swept,
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (case, nodes, leaves, state) in cases {
+            // One ample UTXO, so every named transaction is funded by a fan-out.
+            let plan = plan(
+                nodes,
+                &leaves,
+                vec![funding(1_000_000, 0)],
+                CpfpFundingStrategy::PerNode,
+                &state,
+            );
+            let named: HashSet<Txid> = plan
+                .per_node_funding
+                .iter()
+                .map(|(txid, _)| *txid)
+                .collect();
+            let build = build_unilateral_exit(&plan, &state, FEE_RATE)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert_eq!(named, bumped_by_build(&build), "{case}");
+        }
+    }
+
+    #[test]
+    fn each_child_spends_its_own_input_and_nothing_else_of_the_exit() {
+        let plan = plan(
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ],
+            &["leaf"],
+            vec![funding(20_000, 0), funding(21_000, 1), funding(22_000, 2)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        assert!(plan.fan_out_psbt.is_none());
+        let build = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE).unwrap();
+        let planned: HashMap<Txid, OutPoint> = plan
+            .per_node_funding
+            .iter()
+            .map(|(txid, input)| (*txid, input.outpoint))
+            .collect();
+        let children: Vec<(Txid, Transaction)> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter_map(|tx| {
+                tx.to_sign
+                    .as_ref()
+                    .map(|psbt| (tx.txid, psbt.unsigned_tx.clone()))
+            })
+            .collect();
+        let child_txids: HashSet<Txid> = children.iter().map(|(_, c)| c.compute_txid()).collect();
+        assert_eq!(children.len(), 3);
+
+        let mut spent = HashSet::new();
+        for (parent, child) in &children {
+            let funding_inputs: Vec<OutPoint> = child
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .filter(|outpoint| outpoint.txid != *parent)
+                .collect();
+            assert_eq!(
+                funding_inputs,
+                vec![planned[parent]],
+                "one input, the planned one"
+            );
+            assert!(
+                !child_txids.contains(&funding_inputs[0].txid),
+                "no child spends another child's output"
+            );
+            assert!(
+                spent.insert(funding_inputs[0]),
+                "no two children share an input"
+            );
+        }
+    }
+
+    #[test]
+    fn per_node_change_stays_off_the_sweep() {
+        let nodes = || vec![node("leaf", None, 1, true)];
+        let per_node = plan(
+            nodes(),
+            &["leaf"],
+            vec![funding(20_000, 0), funding(20_000, 1)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        let per_branch = plan(
+            nodes(),
+            &["leaf"],
+            vec![funding(40_000, 0)],
+            CpfpFundingStrategy::PerBranch,
+            &ExitChainState::default(),
+        );
+
+        let state = ExitChainState::default();
+        let per_node = build_unilateral_exit(&per_node, &state, FEE_RATE).unwrap();
+        let per_branch = build_unilateral_exit(&per_branch, &state, FEE_RATE).unwrap();
+        assert!(per_node.cpfp_change_inputs.is_empty());
+        assert_eq!(per_branch.cpfp_change_inputs.len(), 1);
+        assert_eq!(
+            per_node.refund_outputs.len(),
+            1,
+            "the refund is still swept"
+        );
+    }
+
+    #[test]
+    fn every_child_waits_on_the_fan_out_it_spends() {
+        let plan = plan(
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ],
+            &["leaf"],
+            vec![funding(100_000, 0)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        let build = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE).unwrap();
+        let fan_out_txid = build
+            .fan_out
+            .as_ref()
+            .expect("one UTXO, three transactions")
+            .txid;
+
+        let bumping: Vec<&ExitTx> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter(|tx| tx.to_sign.is_some())
+            .collect();
+        assert_eq!(bumping.len(), 3);
+        for tx in bumping {
+            assert!(
+                tx.depends_on.contains(&fan_out_txid),
+                "{:?} {} spends a fan-out output, so waits for it",
+                tx.kind,
+                tx.txid
+            );
+        }
+    }
+
+    #[test]
+    fn a_transaction_with_no_planned_input_fails_the_build() {
+        let mut plan = plan(
+            vec![node("leaf", None, 1, true)],
+            &["leaf"],
+            vec![funding(20_000, 0), funding(20_000, 1)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        plan.per_node_funding.pop();
+
+        let err = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE)
+            .expect_err("spending another transaction's input would conflict");
+        assert!(
+            err.to_string().contains("No funding input planned"),
+            "got {err}"
         );
     }
 }
