@@ -23,7 +23,7 @@ use crate::{
     FetchClaimDepositQuoteResponse, InstantClaimStatus, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, MaxFee, Network, RefundDepositRequest, RefundDepositResponse,
     RefundState,
-    chain::Outspend,
+    chain::{FeeMarket, Outspend},
     error::SdkError,
     models::Payment,
     persist::UpdateDepositPayload,
@@ -142,10 +142,11 @@ impl BreezSdk {
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
 
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         let (confirmations, instant, mature) = tokio::join!(
             self.deposit_confirmations(&request.txid),
             self.fetch_instant_claim_quote(&detailed_utxo),
-            self.fetch_mature_claim_quote(&detailed_utxo),
+            self.fetch_mature_claim_quote(&detailed_utxo, &fee_market),
         );
         let confirmations = confirmations?;
         let mature = mature?;
@@ -163,15 +164,15 @@ impl BreezSdk {
             .or(self.config.max_deposit_claim_fee.as_ref())
             .cloned();
         let mature_max_fee = self
-            .mature_claim_ceiling(stored_max_fee, deposit_sats)
+            .mature_claim_ceiling(stored_max_fee, deposit_sats, &fee_market)
             .await;
         let instant_max_fee_sats = self
-            .resolve_max_claim_fee(instant_max_fee)
+            .resolve_max_claim_fee(instant_max_fee, &fee_market)
             .await?
             .map(|max_fee| max_fee.ceiling_sats(deposit_sats));
         let mature = ClaimDepositQuote {
             max_fee_sats: self
-                .resolve_max_claim_fee(mature_max_fee)
+                .resolve_max_claim_fee(mature_max_fee, &fee_market)
                 .await?
                 .map(|max_fee| max_fee.ceiling_sats(deposit_sats)),
             ..mature
@@ -319,7 +320,8 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         max_fee: Option<MaxFee>,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        match self.claim_utxo(detailed_utxo, max_fee).await {
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        match self.claim_utxo(detailed_utxo, max_fee, &fee_market).await {
             Ok(transfer_id) => {
                 let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
                 let payment: Payment = transfer.try_into()?;
@@ -633,6 +635,7 @@ impl BreezSdk {
     async fn fetch_mature_claim_quote(
         &self,
         detailed_utxo: &DetailedUtxo,
+        fee_market: &FeeMarket<'_>,
     ) -> Result<ClaimDepositQuote, SdkError> {
         match self
             .spark_wallet
@@ -657,8 +660,7 @@ impl BreezSdk {
                     "No mature quote for {}:{}, estimating: {e}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
-                let fee_sats = self
-                    .chain_service
+                let fee_sats = fee_market
                     .recommended_fees()
                     .await?
                     .fastest_fee
@@ -731,7 +733,8 @@ impl BreezSdk {
         confirmations: u32,
         row_exists: bool,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        let resolved_max_fee = self.resolve_max_claim_fee(max_fee, &fee_market).await?;
         let outcome = match self
             .instant_claim_utxo(detailed_utxo, resolved_max_fee, confirmations)
             .await
