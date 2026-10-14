@@ -3327,6 +3327,21 @@ pub enum CpfpFundingKind {
     },
 }
 
+/// How funding UTXOs pay a unilateral exit's CPFP children.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CpfpFundingStrategy {
+    /// One UTXO per branch. Each child after the first spends the change of the
+    /// one before it, so a child's inputs depend on the fee rate of every child
+    /// above it.
+    #[default]
+    PerBranch,
+    /// One UTXO per fee-bumped transaction. No child spends another's output,
+    /// so each can be signed at any fee rate without knowing the others. Each
+    /// child's change stays on the funding script rather than being swept.
+    PerNode,
+}
+
 /// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when
 /// what is left of its funds exceeds what recovering it costs. That cost leaves
 /// out the shared fan-out fee, so funding several unilateral exits from one UTXO
@@ -3379,13 +3394,14 @@ pub enum ExitTransactionStatus {
     Unverified,
 }
 
-/// How much to fund one branch of the exit to avoid a fan-out.
+/// How much one funding UTXO must hold to avoid a fan-out: for a branch of the
+/// exit, or under `CpfpFundingStrategy::PerNode` for one transaction of it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PerBranchFunding {
     /// The leaf whose branch this funds.
     pub leaf_id: String,
-    /// Fund a UTXO of at least this many satoshis for this branch.
+    /// Fund a UTXO of at least this many satoshis.
     pub funding_sats: u64,
 }
 
@@ -3512,6 +3528,10 @@ pub struct PrepareRecoverFundsRequest {
     /// transaction of a unilateral exit in the quote has a CPFP child.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub funding_kind: Option<CpfpFundingKind>,
+    /// How the funding UTXOs pay a unilateral exit's CPFP children. Unset funds
+    /// one UTXO per branch.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub funding_strategy: Option<CpfpFundingStrategy>,
     /// The Bitcoin address the recovered funds are sent to.
     pub destination: String,
     pub selection: ExitLeafSelection,
@@ -3537,8 +3557,8 @@ pub struct PrepareRecoverFundsResponse {
     pub cooperative_fee_sats: u64,
     /// Paid by the CPFP children, from your funding UTXOs.
     pub cpfp_fee_sats: u64,
-    /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per branch
-    /// (`funding.per_branch`) avoids it.
+    /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per
+    /// `funding.per_branch` entry avoids it.
     pub fanout_fee_sats: u64,
     /// Paid from the unilateral leaves' own value before the sweep: each leaf's
     /// value less what its refund passes to the sweep. The output of a direct
@@ -3564,11 +3584,16 @@ pub struct PrepareRecoverFundsResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecoveryFunding {
     /// Fund a single UTXO of at least this many satoshis, which a fan-out
-    /// splits over the branches.
+    /// splits over the `per_branch` entries.
     pub single_utxo_sats: u64,
-    /// To skip the fan-out, fund one UTXO per branch of at least the given
-    /// amount.
+    /// To skip the fan-out, fund one UTXO per entry of at least its amount, in
+    /// any order. An entry is a branch, or under `CpfpFundingStrategy::PerNode`
+    /// one transaction of a branch, so a leaf can have several.
     pub per_branch: Vec<PerBranchFunding>,
+    /// The strategy the amounts were computed for, which `recover_funds` builds
+    /// with.
+    #[serde(default)]
+    pub strategy: CpfpFundingStrategy,
 }
 
 /// A leaf the selection covers that `prepare_recover_funds` leaves out of the
@@ -3631,7 +3656,7 @@ pub enum RecoveryMethod {
 pub struct RecoverFundsRequest {
     pub prepared: PrepareRecoverFundsResponse,
     /// UTXOs that meet the quote's `funding`: one of at least `single_utxo_sats`,
-    /// or one per branch. Not needed when the quote has no `funding`.
+    /// or one per `per_branch` entry. Not needed when the quote has no `funding`.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub funding_inputs: Vec<CpfpInput>,
 }
@@ -3950,5 +3975,23 @@ mod tests {
             serde_json::to_string(&without_ppm).unwrap(),
             r#"{"Rate":{"sat_per_vbyte":2}}"#
         );
+    }
+
+    #[test_all]
+    fn recovery_funding_without_a_strategy_reads_as_per_branch() {
+        // A quote is held while its funding is gathered, so one stored before the
+        // field existed still has to read back, as the funding it always was.
+        let stored =
+            r#"{"single_utxo_sats":5000,"per_branch":[{"leaf_id":"a","funding_sats":5000}]}"#;
+        let funding: RecoveryFunding = serde_json::from_str(stored).unwrap();
+        assert_eq!(funding.strategy, CpfpFundingStrategy::PerBranch);
+
+        let per_node = RecoveryFunding {
+            strategy: CpfpFundingStrategy::PerNode,
+            ..funding
+        };
+        let round_trip: RecoveryFunding =
+            serde_json::from_str(&serde_json::to_string(&per_node).unwrap()).unwrap();
+        assert_eq!(round_trip.strategy, CpfpFundingStrategy::PerNode);
     }
 }

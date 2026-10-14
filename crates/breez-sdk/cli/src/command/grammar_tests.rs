@@ -10,7 +10,7 @@ use breez_sdk_spark::{
 };
 use clap::Parser;
 
-use super::advanced::{AdvancedCommand, FundingKindArg};
+use super::advanced::{AdvancedCommand, FundingKindArg, FundingStrategyArg};
 use super::contacts::ContactCommand;
 use super::issuer::IssuerCommand;
 use super::stable_balance::StableBalanceCommand;
@@ -931,6 +931,7 @@ fn advanced_recover_funds() {
     let Command::Advanced(AdvancedCommand::RecoverFunds {
         fee_rate,
         funding_kind,
+        funding_strategy,
         destination,
         all,
         leaf_ids,
@@ -941,6 +942,7 @@ fn advanced_recover_funds() {
     };
     assert_eq!(fee_rate, 5);
     assert!(matches!(funding_kind, FundingKindArg::P2tr));
+    assert!(matches!(funding_strategy, FundingStrategyArg::PerBranch));
     assert_eq!(destination, "bcrt1qdest");
     assert!(!all);
     assert!(leaf_ids.is_empty());
@@ -969,8 +971,22 @@ fn advanced_recover_funds() {
     assert_eq!(leaf_ids, ["leaf-1", "leaf-2"]);
     assert_eq!(output_file.as_deref(), Some(Path::new("recovery.json")));
 
+    let Command::Advanced(AdvancedCommand::RecoverFunds {
+        funding_strategy, ..
+    }) = parse_ok(
+        "advanced recover-funds --fee-rate 5 --destination bcrt1qdest \
+         --funding-strategy per-node",
+    )
+    else {
+        panic!("expected Advanced RecoverFunds");
+    };
+    assert!(matches!(funding_strategy, FundingStrategyArg::PerNode));
+
     parse_err("advanced recover-funds --destination bcrt1qdest");
     parse_err("advanced recover-funds --fee-rate 5");
+    parse_err(
+        "advanced recover-funds --fee-rate 5 --destination bcrt1qdest --funding-strategy per-leaf",
+    );
     parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --funding-kind p2sh");
     parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --all --leaf leaf-1");
 }

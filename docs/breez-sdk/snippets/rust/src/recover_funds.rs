@@ -26,6 +26,7 @@ async fn prepare_recovery(sdk: &BreezSdk) -> Result<PrepareRecoverFundsResponse>
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: 2,
             funding_kind: Some(CpfpFundingKind::P2wpkh),
+            funding_strategy: None,
             destination: "bc1q...your-destination-address".to_string(),
             selection: ExitLeafSelection::RecoverableOnly,
         })
@@ -73,6 +74,7 @@ async fn recover_cooperatively(sdk: &BreezSdk, quote: PrepareRecoverFundsRespons
         sdk.prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: quote.fee_rate_sat_per_vbyte,
             funding_kind: None,
+            funding_strategy: None,
             destination: quote.destination,
             selection: ExitLeafSelection::Specific { leaf_ids },
         })

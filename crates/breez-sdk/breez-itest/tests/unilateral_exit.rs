@@ -546,6 +546,7 @@ async fn quote_then_build_single(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -580,6 +581,7 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -593,6 +595,7 @@ async fn test_nothing_confirmed(#[case] backend: SignerBackend) -> Result<()> {
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: None,
+            funding_strategy: None,
             destination: destination.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -664,6 +667,7 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -754,6 +758,7 @@ async fn test_exit_of_a_leaf_received_with_a_fee_ladder() -> Result<()> {
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -855,6 +860,7 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -881,6 +887,7 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -902,6 +909,7 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: exited_leaf_ids.clone(),
@@ -980,6 +988,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1009,6 +1018,7 @@ async fn test_first_package_confirmed_resumes(#[case] backend: SignerBackend) ->
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1064,6 +1074,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1146,6 +1157,7 @@ async fn test_sweep_is_rbf_replaceable(#[case] backend: SignerBackend) -> Result
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: higher_rate,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
@@ -1229,6 +1241,7 @@ async fn test_multi_leaf_fan_out_and_sweep(#[case] backend: SignerBackend) -> Re
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1345,6 +1358,7 @@ async fn test_multi_leaf_offline_exit(#[case] backend: SignerBackend) -> Result<
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1494,6 +1508,7 @@ async fn test_importing_another_wallets_state_takes_nothing(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1542,6 +1557,7 @@ async fn test_settled_single_branch_needs_no_further_funding(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1580,6 +1596,7 @@ async fn test_settled_single_branch_needs_no_further_funding(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: None,
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
@@ -1654,6 +1671,7 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1689,6 +1707,7 @@ async fn test_partly_exited_branch_gated_on_what_it_still_builds(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
@@ -1741,6 +1760,7 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -1772,6 +1792,7 @@ async fn test_partly_exited_leaf_is_rebuilt_for_what_is_left(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids },
         })
@@ -1840,6 +1861,7 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -1882,6 +1904,7 @@ async fn test_one_settled_branch_leaves_the_other_on_its_own_output(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -1983,6 +2006,7 @@ async fn test_a_confirmed_fan_outs_outputs_fund_the_resume(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2006,6 +2030,7 @@ async fn test_a_confirmed_fan_outs_outputs_fund_the_resume(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2058,6 +2083,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2079,6 +2105,7 @@ async fn test_confirmed_fan_out_insufficient_at_higher_fee(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 40,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest,
             selection: ExitLeafSelection::All,
         })
@@ -2147,6 +2174,7 @@ async fn test_fees_p2wpkh_never_below_rate(#[case] backend: SignerBackend) -> Re
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2wpkh),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2190,6 +2218,7 @@ async fn test_single_leaf_multiple_utxos(#[case] backend: SignerBackend) -> Resu
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2246,6 +2275,7 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: u1.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2297,6 +2327,7 @@ async fn test_two_leaves_undersized_utxo_fans_out(#[case] backend: SignerBackend
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2343,6 +2374,7 @@ async fn test_two_leaves_subset_assignment_no_fanout(#[case] backend: SignerBack
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: big.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2392,6 +2424,7 @@ async fn test_higher_rate_is_funded_from_the_fan_out_within_headroom(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2414,6 +2447,7 @@ async fn test_higher_rate_is_funded_from_the_fan_out_within_headroom(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 2,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest,
             selection: ExitLeafSelection::All,
         })
@@ -2464,6 +2498,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2486,6 +2521,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: high_rate,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest.clone(),
             selection: ExitLeafSelection::All,
         })
@@ -2525,6 +2561,7 @@ async fn test_higher_rate_recovers_by_refunding(#[case] backend: SignerBackend) 
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: high_rate,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: dest,
             selection: ExitLeafSelection::All,
         })
@@ -2565,6 +2602,7 @@ async fn test_no_profitable_leaves_all(#[case] backend: SignerBackend) -> Result
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE * 500,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2622,6 +2660,7 @@ async fn test_specific_ignores_other_leaves(#[case] backend: SignerBackend) -> R
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: vec![first_id.clone()],
@@ -2661,6 +2700,7 @@ async fn test_prepare_is_idempotent(#[case] backend: SignerBackend) -> Result<()
     let request = || PrepareRecoverFundsRequest {
         fee_rate_sat_per_vbyte: FEE_RATE,
         funding_kind: Some(CpfpFundingKind::P2tr),
+        funding_strategy: None,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::All,
     };
@@ -2723,6 +2763,7 @@ async fn test_higher_rate_changes_sweep_txid(#[case] backend: SignerBackend) -> 
     let request = |rate| PrepareRecoverFundsRequest {
         fee_rate_sat_per_vbyte: rate,
         funding_kind: Some(CpfpFundingKind::P2tr),
+        funding_strategy: None,
         destination: cpfp.address.to_string(),
         selection: ExitLeafSelection::All,
     };
@@ -2782,6 +2823,7 @@ async fn test_empty_funding_rejected(#[case] backend: SignerBackend) -> Result<(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2814,6 +2856,7 @@ async fn test_explicit_empty_list_rejected(#[case] backend: SignerBackend) -> Re
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::Specific { leaf_ids: vec![] },
         })
@@ -2837,6 +2880,7 @@ async fn test_zero_fee_rate_succeeds(#[case] backend: SignerBackend) -> Result<(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: 0,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2880,6 +2924,7 @@ async fn test_mixed_p2tr_p2wpkh_funding(#[case] backend: SignerBackend) -> Resul
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: taproot.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -2948,6 +2993,7 @@ async fn test_single_leaf_funding_boundary(#[case] backend: SignerBackend) -> Re
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3012,6 +3058,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: floor.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3049,6 +3096,7 @@ async fn test_two_leaf_fanout_funding_boundary(#[case] backend: SignerBackend) -
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: short.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3089,6 +3137,7 @@ async fn test_custom_funding_input(#[case] backend: SignerBackend) -> Result<()>
                 script_pubkey_hex: script_pubkey_hex.clone(),
                 signed_input_weight: 230,
             }),
+            funding_strategy: None,
             destination: utxo.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3136,6 +3185,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3171,6 +3221,7 @@ async fn test_all_nodes_confirmed_resumes_at_refund(#[case] backend: SignerBacke
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3228,6 +3279,7 @@ async fn test_unconfirmed_funding_accepted(#[case] backend: SignerBackend) -> Re
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3454,6 +3506,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3493,6 +3546,7 @@ async fn test_node_confirmed_by_foreign_cpfp_resumes(#[case] backend: SignerBack
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -3571,6 +3625,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: cpfp.address.to_string(),
             selection: ExitLeafSelection::All,
         })
@@ -3618,6 +3673,7 @@ async fn test_refund_confirmed_by_foreign_cpfp_is_adopted(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: leaf_ids.clone(),
@@ -3706,6 +3762,7 @@ async fn test_refund_broadcast_by_the_operators_is_swept(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte: FEE_RATE,
             funding_kind: None,
+            funding_strategy: None,
             destination: destination.to_string(),
             selection: ExitLeafSelection::Specific {
                 leaf_ids: vec![leaf.leaf_id.clone()],
@@ -4341,6 +4398,7 @@ async fn prepare_recovery(
         .prepare_recover_funds(PrepareRecoverFundsRequest {
             fee_rate_sat_per_vbyte,
             funding_kind: Some(CpfpFundingKind::P2tr),
+            funding_strategy: None,
             destination: destination.to_string(),
             selection,
         })
