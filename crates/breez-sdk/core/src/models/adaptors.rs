@@ -74,6 +74,35 @@ fn reconcile_htlc_preimage(details: &mut SparkHtlcDetails, preimage: Option<&str
     }
 }
 
+/// Builds HTLC details from the operator's preimage request, taking a missing preimage from
+/// `fallback_preimage`. A known preimage means [`SparkHtlcStatus::PreimageShared`], so an
+/// unrecognized status is only an error when no preimage is known.
+fn htlc_details_from_preimage_request(
+    request: &PreimageRequest,
+    fallback_preimage: Option<&str>,
+) -> Result<SparkHtlcDetails, SdkError> {
+    let preimage = request
+        .preimage
+        .as_ref()
+        .map(spark_wallet::Preimage::encode_hex)
+        .or_else(|| fallback_preimage.map(ToString::to_string));
+    let status = if preimage.is_some() {
+        SparkHtlcStatus::PreimageShared
+    } else {
+        request.status.try_into()?
+    };
+    Ok(SparkHtlcDetails {
+        payment_hash: request.payment_hash.to_string(),
+        preimage,
+        expiry_time: request
+            .expiry_time
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| SdkError::Generic(format!("Invalid expiry time: {e}")))?
+            .as_secs(),
+        status,
+    })
+}
+
 impl PaymentMethod {
     fn from_transfer(transfer: &WalletTransfer) -> Self {
         match transfer.transfer_type {
@@ -115,7 +144,10 @@ impl PaymentDetails {
             if let Some(htlc_preimage_request) = &transfer.htlc_preimage_request {
                 return Ok(Some(PaymentDetails::Spark {
                     invoice_details: None,
-                    htlc_details: Some(htlc_preimage_request.clone().try_into()?),
+                    htlc_details: Some(htlc_details_from_preimage_request(
+                        htlc_preimage_request,
+                        None,
+                    )?),
                     conversion_info: None,
                 }));
             }
@@ -138,12 +170,10 @@ impl PaymentDetails {
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
                 let htlc_details = if let Some(req) = &transfer.htlc_preimage_request {
-                    let mut details: SparkHtlcDetails = req.clone().try_into()?;
-                    reconcile_htlc_preimage(
-                        &mut details,
+                    htlc_details_from_preimage_request(
+                        req,
                         request.lightning_receive_payment_preimage.as_deref(),
-                    );
-                    details
+                    )?
                 } else {
                     derive_htlc_details_from_ssp(
                         transfer,
@@ -168,12 +198,10 @@ impl PaymentDetails {
                         "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
                     ))?;
                 let htlc_details = if let Some(req) = &transfer.htlc_preimage_request {
-                    let mut details: SparkHtlcDetails = req.clone().try_into()?;
-                    reconcile_htlc_preimage(
-                        &mut details,
+                    htlc_details_from_preimage_request(
+                        req,
                         request.lightning_send_payment_preimage.as_deref(),
-                    );
-                    details
+                    )?
                 } else {
                     derive_htlc_details_from_ssp(
                         transfer,
@@ -538,16 +566,7 @@ impl PaymentStatus {
 impl TryFrom<PreimageRequest> for SparkHtlcDetails {
     type Error = SdkError;
     fn try_from(value: PreimageRequest) -> Result<Self, Self::Error> {
-        Ok(Self {
-            payment_hash: value.payment_hash.to_string(),
-            preimage: value.preimage.map(|p| p.encode_hex()),
-            expiry_time: value
-                .expiry_time
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| SdkError::Generic(format!("Invalid expiry time: {e}")))?
-                .as_secs(),
-            status: value.status.try_into()?,
-        })
+        htlc_details_from_preimage_request(&value, None)
     }
 }
 
@@ -794,5 +813,25 @@ mod tests {
         assert!(payment.details.is_none());
         assert_eq!(payment.method, PaymentMethod::Spark);
         assert_eq!(payment.status, PaymentStatus::Pending);
+    }
+
+    #[test_all]
+    fn an_unknown_preimage_status_with_a_known_preimage_is_preimage_shared() {
+        use bitcoin::hashes::{Hash, sha256};
+
+        let preimage_request = PreimageRequest {
+            payment_hash: sha256::Hash::hash(b"preimage"),
+            status: PreimageRequestStatus::Unknown,
+            created_time: SystemTime::now(),
+            expiry_time: SystemTime::now(),
+            preimage: None,
+        };
+        let preimage = "00".repeat(32);
+
+        let details =
+            htlc_details_from_preimage_request(&preimage_request, Some(&preimage)).unwrap();
+
+        assert_eq!(details.status, SparkHtlcStatus::PreimageShared);
+        assert_eq!(details.preimage, Some(preimage));
     }
 }
