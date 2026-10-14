@@ -38,7 +38,8 @@ public static class CommandNames
         "refund-deposit",
         "list-unclaimed-deposits",
         "buy-bitcoin",
-        "prepare-payment-link",
+        "bridge-from-cash-app",
+        "bridge-to-cash-app",
         "check-lightning-address-available",
         "get-lightning-address",
         "register-lightning-address",
@@ -170,11 +171,17 @@ public static class Commands
                 Description = "Buy Bitcoin using an external provider",
                 Run = HandleBuyBitcoin
             },
-            ["prepare-payment-link"] = new()
+            ["bridge-from-cash-app"] = new()
             {
-                Name = "prepare-payment-link",
-                Description = "Prepare a payment link to send stablecoins to an external-chain recipient",
-                Run = HandlePreparePaymentLink
+                Name = "bridge-from-cash-app",
+                Description = "Bridge from Cash App to USDC/USDT on an external chain",
+                Run = HandleBridgeFromCashApp
+            },
+            ["bridge-to-cash-app"] = new()
+            {
+                Name = "bridge-to-cash-app",
+                Description = "Bridge USDC/USDT from an external chain to a Cash App user",
+                Run = HandleBridgeToCashApp
             },
             ["check-lightning-address-available"] = new()
             {
@@ -1224,9 +1231,9 @@ public static class Commands
         }
     }
 
-    // --- prepare-payment-link ---
+    // --- bridge-from-cash-app ---
 
-    private static async Task HandlePreparePaymentLink(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    private static async Task HandleBridgeFromCashApp(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
         var positional = GetPositionalArgs(args);
         var amountStr = GetFlag(args, "-a", "--amount");
@@ -1235,7 +1242,7 @@ public static class Commands
 
         if (positional.Length < 1 || amountStr == null)
         {
-            Console.WriteLine("Usage: prepare-payment-link <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]");
+            Console.WriteLine("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]");
             return;
         }
 
@@ -1250,13 +1257,16 @@ public static class Commands
 
         var addressDetails = crossChainAddr.v1;
         var address = addressDetails.address;
-        var filter = new CrossChainRouteFilter.PaymentLink(addressDetails: addressDetails);
+        var filter = new CrossChainRouteFilter.Send(
+            addressDetails: addressDetails,
+            deliveryMethod: DeliveryMethod.Lightning
+        );
         var route = await SelectCrossChainRoute(sdk, readline, filter);
         if (route == null) return;
 
         FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
 
-        var response = await sdk.PreparePaymentLink(request: new PreparePaymentLinkRequest(
+        var response = await sdk.BridgeFromCashApp(request: new BridgeFromCashAppRequest(
             address: address,
             route: route,
             amount: BigInteger.Parse(amountStr),
@@ -1270,6 +1280,52 @@ public static class Commands
         Console.WriteLine(
             $"Deposit ~{response.amountSats} sats; recipient receives ~{response.estimatedOut} {response.asset}, " +
             $"service fee {response.serviceFeeAmount} {serviceFeeDenom}, expires {response.expiresAt}");
+    }
+
+    // --- bridge-to-cash-app ---
+
+    private static async Task HandleBridgeToCashApp(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var positional = GetPositionalArgs(args);
+        var amountStr = GetFlag(args, "-a", "--amount");
+        var refundAddress = GetFlag(args, "--refund-address");
+        var feesIncluded = HasFlag(args, "--fees-included");
+        var maxSlippageStr = GetFlag(args, "--max-slippage-bps");
+
+        if (positional.Length < 1 || amountStr == null || refundAddress == null)
+        {
+            Console.WriteLine("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]");
+            return;
+        }
+
+        var recipient = positional[0];
+
+        var filter = new CrossChainRouteFilter.Receive(
+            contractAddress: null,
+            deliveryMethod: DeliveryMethod.Lightning
+        );
+        var route = await SelectCrossChainRoute(sdk, readline, filter);
+        if (route == null) return;
+
+        FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
+
+        var response = await sdk.BridgeToCashApp(request: new BridgeToCashAppRequest(
+            recipient: recipient,
+            route: route,
+            amount: BigInteger.Parse(amountStr),
+            feePolicy: feePolicy,
+            refundAddress: refundAddress,
+            maxSlippageBps: ParseOptionalUint(maxSlippageStr)
+        ));
+
+        var info = response.info;
+        Console.WriteLine("Ask the payer to pay:");
+        Console.WriteLine(response.paymentRequest);
+        var serviceFeeDenom = ServiceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals);
+        Console.WriteLine(
+            $"Deposit {info.depositAmount} {route.asset} on {route.chain} to {info.depositAddress}. " +
+            $"Recipient receives ~{info.expectedReceivedAmount} sats, " +
+            $"service fee {info.serviceFeeAmount} {serviceFeeDenom}, expires at {info.expiresAt}");
     }
 
     // --- check-lightning-address-available ---
