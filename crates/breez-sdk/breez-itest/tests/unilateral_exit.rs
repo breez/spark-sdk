@@ -31,11 +31,11 @@ use breez_sdk_itest::{
 use breez_sdk_spark::signer::{CpfpSigner, single_key_cpfp_signer};
 use breez_sdk_spark::{
     CheckRecoverFundsRequest, CooperativeRecoveryError, CooperativeRecoveryFailure,
-    CpfpFundingKind, CpfpInput, ExitLeafSelection, ExitRefundState, ExitTransactionStatus,
-    GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
-    PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryFunding,
-    RecoveryMethod, RecoveryTransaction, RecoveryTxKind, RecoveryVerdict, SdkError, SdkEvent,
-    SkippedLeaf, SkippedLeafReason, SyncWalletRequest,
+    CpfpFundingKind, CpfpFundingStrategy, CpfpInput, ExitLeafSelection, ExitRefundState,
+    ExitTransactionStatus, GetInfoRequest, GetInfoResponse, ImportUnilateralExitStateRequest,
+    PrepareRecoverFundsRequest, PrepareRecoverFundsResponse, RecoverFundsRequest,
+    RecoverFundsResponse, RecoveryFunding, RecoveryMethod, RecoveryTransaction, RecoveryTxKind,
+    RecoveryVerdict, SdkError, SdkEvent, SkippedLeaf, SkippedLeafReason, SyncWalletRequest,
 };
 use rstest::*;
 use rstest_reuse::{apply, template};
@@ -205,7 +205,10 @@ fn is_package(entry: &RecoveryTransaction) -> bool {
 /// Grounded in `spark::services::quote_unilateral_exit`: `per_branch[i] = estimated_cost +
 /// dust`, `single_utxo_funding = sum(per_branch) + fanout_fee`, `total_fee =
 /// sum(estimated_cost) + fanout_fee`, so `single_utxo_funding - total_fee ==
-/// n*dust` and `fanout_fee == 0` iff a single branch.
+/// n*dust` and `fanout_fee == 0` iff a single branch. Per node, an entry is one
+/// transaction's CPFP fee plus dust and carries no sweep share, so the dust
+/// identity counts entries and adds the sweep back, and the fan-out appears as
+/// soon as there is more than one entry.
 fn assert_quote_consistent(
     quote: &PrepareRecoverFundsResponse,
     fee_rate_sat_per_vbyte: u64,
@@ -230,13 +233,22 @@ fn assert_quote_consistent(
         "recoverable_value_sats must equal the sum of selected leaf values"
     );
 
-    // One funding recommendation per branch, each naming a selected leaf.
+    // One funding recommendation per branch, or per transaction, each naming a
+    // selected leaf.
     let funding = quoted_funding(quote);
-    assert_eq!(
-        funding.per_branch.len(),
-        quote.leaves.len(),
-        "one per-branch funding entry per selected leaf"
-    );
+    let per_node = funding.strategy == CpfpFundingStrategy::PerNode;
+    if per_node {
+        assert!(
+            funding.per_branch.len() >= quote.leaves.len(),
+            "every selected leaf has at least one transaction to fund"
+        );
+    } else {
+        assert_eq!(
+            funding.per_branch.len(),
+            quote.leaves.len(),
+            "one per-branch funding entry per selected leaf"
+        );
+    }
     let leaf_ids: HashSet<&String> = quote.leaves.iter().map(|l| &l.leaf_id).collect();
     for b in &funding.per_branch {
         assert!(
@@ -247,16 +259,17 @@ fn assert_quote_consistent(
         assert!(b.funding_sats > 0, "a per-branch funding amount is zero");
     }
 
-    // A single branch never fans out; multiple branches do at a positive rate.
-    if n == 1 {
+    // A single entry never fans out; several do at a positive rate.
+    let entries = funding.per_branch.len() as u64;
+    if entries == 1 {
         assert_eq!(
             quote.fanout_fee_sats, 0,
-            "a single branch has no fan-out fee"
+            "a single entry has no fan-out fee"
         );
     } else if fee_rate_sat_per_vbyte > 0 {
         assert!(
             quote.fanout_fee_sats > 0,
-            "multiple branches carry a positive fan-out fee at a positive rate"
+            "several entries carry a positive fan-out fee at a positive rate"
         );
     }
     assert!(
@@ -275,11 +288,19 @@ fn assert_quote_consistent(
             + quote.fanout_fee_sats,
         "single_utxo_sats = sum(per_branch) + fanout_fee"
     );
-    assert_eq!(
-        funding.single_utxo_sats - quote.total_fee_sats,
-        n * dust,
-        "single_utxo_sats reserves exactly one dust output per branch above fees"
-    );
+    if per_node {
+        assert_eq!(
+            funding.single_utxo_sats + quote.sweep_fee_sats - quote.total_fee_sats,
+            entries * dust,
+            "per node, single_utxo_sats reserves one dust output per transaction and no sweep"
+        );
+    } else {
+        assert_eq!(
+            funding.single_utxo_sats - quote.total_fee_sats,
+            n * dust,
+            "single_utxo_sats reserves exactly one dust output per branch above fees"
+        );
+    }
 
     // The quote echoes the request verbatim.
     assert_eq!(
@@ -2178,6 +2199,284 @@ async fn test_two_leaves_two_utxos_no_fanout(#[case] backend: SignerBackend) -> 
             .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
         "two sufficient UTXOs fund the two branches 1:1, no fan-out"
     );
+    Ok(())
+}
+
+fn per_node_request(
+    fee_rate_sat_per_vbyte: u64,
+    destination: &Address,
+    selection: ExitLeafSelection,
+) -> PrepareRecoverFundsRequest {
+    PrepareRecoverFundsRequest {
+        fee_rate_sat_per_vbyte,
+        funding_kind: Some(CpfpFundingKind::P2tr),
+        funding_strategy: Some(CpfpFundingStrategy::PerNode),
+        destination: destination.to_string(),
+        selection,
+    }
+}
+
+/// Each fee-bumped transaction's txid with the funding outpoints its CPFP child
+/// spends: every input but the parent's anchor.
+fn child_funding(resp: &RecoverFundsResponse) -> Result<HashMap<String, Vec<OutPoint>>> {
+    let mut by_parent = HashMap::new();
+    for entry in &resp.transactions {
+        let Some(child_hex) = &entry.cpfp_tx_hex else {
+            continue;
+        };
+        let parent = Txid::from_str(&entry.txid)?;
+        let funding = decode_tx(child_hex)?
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .filter(|outpoint| outpoint.txid != parent)
+            .collect();
+        by_parent.insert(entry.txid.clone(), funding);
+    }
+    Ok(by_parent)
+}
+
+/// One UTXO per transaction, each at the amount quoted for it: no fan-out, and no
+/// child spends anything but its own UTXO. A claimed deposit is a single node
+/// that is both root and leaf, so the exit bumps two transactions, its node and
+/// its refund, both funded under the one leaf.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_funding_no_fanout(#[case] backend: SignerBackend) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x31);
+    // A key of its own, so the sweep's payment is told apart from the change every
+    // child leaves on the funding script.
+    let destination = p2tr_address(&fixed_key(0x32));
+
+    let quote = sdk
+        .sdk
+        .prepare_recover_funds(per_node_request(
+            FEE_RATE,
+            &destination,
+            ExitLeafSelection::All,
+        ))
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    let funding = quoted_funding(&quote);
+    assert_eq!(funding.strategy, CpfpFundingStrategy::PerNode);
+    assert_eq!(funding.per_branch.len(), 2, "the node and the refund");
+    assert!(
+        funding
+            .per_branch
+            .iter()
+            .all(|entry| entry.leaf_id == quote.leaves[0].leaf_id)
+    );
+
+    let mut utxos = Vec::new();
+    for entry in &funding.per_branch {
+        utxos.push(
+            fund_p2tr_utxo_with_key(
+                &sdk.fixtures.bitcoind,
+                Amount::from_sat(entry.funding_sats),
+                &key,
+            )
+            .await?,
+        );
+    }
+    let resp = sdk
+        .sdk
+        .recover_funds(
+            RecoverFundsRequest {
+                prepared: quote.clone(),
+                funding_inputs: utxos.iter().map(cpfp_input_for).collect(),
+            },
+            Some(signer_for(&key.secret_bytes())?),
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &resp);
+    assert!(
+        !resp
+            .transactions
+            .iter()
+            .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
+        "one UTXO per transaction needs no fan-out"
+    );
+
+    let supplied: HashSet<OutPoint> = utxos.iter().map(|u| u.outpoint).collect();
+    let mut used = HashSet::new();
+    let spent = child_funding(&resp)?;
+    assert_eq!(spent.len(), 2);
+    for outpoints in spent.values() {
+        assert_eq!(outpoints.len(), 1, "a child spends one funding UTXO");
+        assert!(
+            supplied.contains(&outpoints[0]),
+            "and it is one of the supplied ones"
+        );
+        assert!(used.insert(outpoints[0]), "and no other child spends it");
+    }
+    // Funded at exactly the quoted amounts, every package pays exactly the rate.
+    assert_fee_rate(&resp, &utxos.iter().collect::<Vec<_>>(), FEE_RATE_KW, true)?;
+    assert_all_mined(&sdk, &resp, &destination).await?;
+    Ok(())
+}
+
+/// One UTXO for a per-node exit is fanned out into an output per transaction, and
+/// every child waits for the fan-out, since every child spends one of its outputs.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_single_utxo_fans_out_per_transaction(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x33);
+    let destination = p2tr_address(&fixed_key(0x34));
+
+    let quote = sdk
+        .sdk
+        .prepare_recover_funds(per_node_request(
+            FEE_RATE,
+            &destination,
+            ExitLeafSelection::All,
+        ))
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    let funding = quoted_funding(&quote);
+    let single = fund_p2tr_utxo_with_key(
+        &sdk.fixtures.bitcoind,
+        Amount::from_sat(funding.single_utxo_sats),
+        &key,
+    )
+    .await?;
+
+    let resp = sdk
+        .sdk
+        .recover_funds(
+            RecoverFundsRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input_for(&single)],
+            },
+            Some(signer_for(&key.secret_bytes())?),
+        )
+        .await?;
+    let fan_out = resp
+        .transactions
+        .iter()
+        .find(|t| matches!(t.kind, RecoveryTxKind::FanOut))
+        .expect("one UTXO for two transactions is fanned out");
+    assert_eq!(
+        decode_tx(&fan_out.tx_hex)?.output.len(),
+        funding.per_branch.len(),
+        "one output per transaction"
+    );
+
+    let spent = child_funding(&resp)?;
+    let mut used = HashSet::new();
+    for outpoints in spent.values() {
+        assert_eq!(outpoints.len(), 1);
+        assert_eq!(outpoints[0].txid.to_string(), fan_out.txid);
+        assert!(used.insert(outpoints[0].vout), "each child its own output");
+    }
+    for entry in resp.transactions.iter().filter(|t| t.cpfp_tx_hex.is_some()) {
+        assert!(
+            entry.depends_on.contains(&fan_out.txid),
+            "{:?} spends a fan-out output, so waits for the fan-out",
+            entry.kind
+        );
+    }
+    assert_all_mined(&sdk, &resp, &destination).await?;
+    Ok(())
+}
+
+/// What per-node funding is for: fund each transaction once, at the highest fee
+/// rate you will use, then build the exit once per fee rate. Every build has to
+/// spend the same UTXO for the same transaction, or the children signed at
+/// different rates would not replace one another. The UTXOs come from separate
+/// transactions and are handed over in a different order each time, and the SDK
+/// reorders funding itself before it plans, so nothing here relies on order.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn test_per_node_children_keep_their_utxos_at_every_fee_rate(
+    #[case] backend: SignerBackend,
+) -> Result<()> {
+    const TOP_RATE: u64 = 20;
+    let sdk = new_local_sdk(backend).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let key = fixed_key(0x35);
+    let destination = p2tr_address(&fixed_key(0x36));
+
+    let discovered = sdk
+        .sdk
+        .prepare_recover_funds(per_node_request(
+            FEE_RATE,
+            &destination,
+            ExitLeafSelection::All,
+        ))
+        .await?;
+    let leaf_ids: Vec<String> = discovered
+        .leaves
+        .iter()
+        .map(|l| l.leaf_id.clone())
+        .collect();
+    let selection = || ExitLeafSelection::Specific {
+        leaf_ids: leaf_ids.clone(),
+    };
+
+    let top = sdk
+        .sdk
+        .prepare_recover_funds(per_node_request(TOP_RATE, &destination, selection()))
+        .await?;
+    let mut utxos = Vec::new();
+    for entry in &quoted_funding(&top).per_branch {
+        utxos.push(
+            fund_p2tr_utxo_with_key(
+                &sdk.fixtures.bitcoind,
+                Amount::from_sat(entry.funding_sats),
+                &key,
+            )
+            .await?,
+        );
+    }
+    let inputs: Vec<CpfpInput> = utxos.iter().map(cpfp_input_for).collect();
+
+    let mut pinned: Option<HashMap<String, Vec<OutPoint>>> = None;
+    let mut cheapest = None;
+    for (round, rate) in [FEE_RATE, 5, TOP_RATE].into_iter().enumerate() {
+        let quote = sdk
+            .sdk
+            .prepare_recover_funds(per_node_request(rate, &destination, selection()))
+            .await?;
+        let mut supplied = inputs.clone();
+        if round % 2 == 1 {
+            supplied.reverse();
+        }
+        let resp = sdk
+            .sdk
+            .recover_funds(
+                RecoverFundsRequest {
+                    prepared: quote,
+                    funding_inputs: supplied,
+                },
+                Some(signer_for(&key.secret_bytes())?),
+            )
+            .await?;
+        assert!(
+            !resp
+                .transactions
+                .iter()
+                .any(|t| matches!(t.kind, RecoveryTxKind::FanOut)),
+            "funded for {TOP_RATE} sat/vB, {rate} sat/vB needs no fan-out"
+        );
+        let spent = child_funding(&resp)?;
+        match &pinned {
+            None => pinned = Some(spent),
+            Some(first) => assert_eq!(
+                &spent, first,
+                "at {rate} sat/vB every transaction keeps the UTXO it had at {FEE_RATE}"
+            ),
+        }
+        cheapest.get_or_insert(resp);
+    }
+
+    // And the children signed at the lowest rate go through on their own.
+    assert_all_mined(&sdk, &cheapest.expect("built at least once"), &destination).await?;
     Ok(())
 }
 
