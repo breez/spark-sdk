@@ -409,7 +409,7 @@ public static class AdvancedCommands
             $"Recoverable {response.recoverableValueSats} sats, " +
             $"total fee {response.totalFeeSats} sats " +
             $"(cooperative {response.cooperativeFeeSats}, cpfp {response.cpfpFeeSats}, " +
-            $"fanout {response.fanoutFeeSats}, sweep {response.sweepFeeSats}), " +
+            $"fanout {response.fanoutFeeSats}, refund {response.refundFeeSats}, sweep {response.sweepFeeSats}), " +
             $"{response.transactions.Length} transaction(s):");
 
         for (int i = 0; i < response.transactions.Length; i++)

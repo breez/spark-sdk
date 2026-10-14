@@ -39,8 +39,10 @@ from breez_sdk_spark import (
     PaymentType,
     PrepareLnurlPayRequest,
     PreparePaymentLinkRequest,
+    PreparePullPaymentRequest,
     PrepareSendBatchRequest,
     PrepareSendPaymentRequest,
+    PullReceiver,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     RefundDepositRequest,
@@ -61,6 +63,7 @@ from breez_sdk_spark import (
 )
 
 from breez_cli.serialization import print_value
+from breez_cli.token_allowances import pull_until_settled
 
 
 def _service_fee_denomination(asset, decimals):
@@ -79,6 +82,7 @@ COMMAND_NAMES = [
     "receive",
     "pay",
     "pay-batch",
+    "pull-payment",
     "lnurl-pay",
     "lnurl-withdraw",
     "lnurl-auth",
@@ -534,6 +538,63 @@ async def _handle_pay_batch(sdk, _token_issuer, session, args):
         request=SendBatchRequest(prepare_response=prepare_response)
     )
     print_value(response.payments)
+
+
+# --- pull-payment ---
+
+def _parse_pull_receiver(s):
+    parts = s.split(":", 1)
+    if len(parts) == 2:
+        receiver_address = parts[0]
+        amount_str = parts[1]
+    else:
+        receiver_address = None
+        amount_str = s
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid amount in receiver '{s}'")
+    return PullReceiver(amount=amount, receiver_address=receiver_address)
+
+
+def _build_pull_payment_parser():
+    p = _parser("pull-payment",
+                "Pull a payment from a wallet that granted this wallet an allowance")
+    p.add_argument("payer_address", help="Spark address of the payer")
+    p.add_argument("token_identifier", help="Identifier of the token")
+    p.add_argument(
+        "-r", "--receiver",
+        type=_parse_pull_receiver,
+        action="append",
+        required=True,
+        dest="receivers",
+        help="A receiver as 'amount' (this wallet) or 'address:amount' (repeat for each receiver)",
+    )
+    return p
+
+
+async def _handle_pull_payment(sdk, _token_issuer, session, args):
+    prepare_response = await sdk.prepare_pull_payment(
+        request=PreparePullPaymentRequest(
+            payer_address=args.payer_address,
+            token_identifier=args.token_identifier,
+            receivers=args.receivers,
+        )
+    )
+    print(
+        f"Pulling {prepare_response.amount} base units of "
+        f"{prepare_response.token_identifier} from {prepare_response.payer_address}"
+    )
+    for receiver in prepare_response.receivers:
+        print(f"  {receiver.amount} to {receiver.receiver_address or ''}")
+
+    line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
+    if line.strip().lower() != "y":
+        print("Pull cancelled")
+        return
+
+    response = await pull_until_settled(sdk, prepare_response)
+    print_value(response)
 
 
 # --- lnurl-pay ---
@@ -1272,6 +1333,7 @@ def build_command_registry():
         "receive": (_build_receive_parser(), _handle_receive),
         "pay": (_build_pay_parser(), _handle_pay),
         "pay-batch": (_build_pay_batch_parser(), _handle_pay_batch),
+        "pull-payment": (_build_pull_payment_parser(), _handle_pull_payment),
         "lnurl-pay": (_build_lnurl_pay_parser(), _handle_lnurl_pay),
         "lnurl-withdraw": (_build_lnurl_withdraw_parser(), _handle_lnurl_withdraw),
         "lnurl-auth": (_build_lnurl_auth_parser(), _handle_lnurl_auth),

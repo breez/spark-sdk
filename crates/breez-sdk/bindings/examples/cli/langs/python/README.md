@@ -62,6 +62,7 @@ make clean            Remove venv and build artifacts
 | `--store-label` | false | Requires `--passkey`. Publish label to NOSTR |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--real-time-sync-server-url` | network default | Real-time sync server URL (e.g. a local data-sync service); overrides the network default |
 | `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` (e.g. `127.0.0.1:9050` for a local Tor daemon) |
 | `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
 | `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
@@ -78,13 +79,13 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`
 
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 

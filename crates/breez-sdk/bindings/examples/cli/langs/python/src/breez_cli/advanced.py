@@ -190,7 +190,8 @@ def _print_recovery(response):
         f"Recoverable {response.recoverable_value_sats} sats, "
         f"total fee {response.total_fee_sats} sats "
         f"(cooperative {response.cooperative_fee_sats}, cpfp {response.cpfp_fee_sats}, "
-        f"fanout {response.fanout_fee_sats}, sweep {response.sweep_fee_sats}), "
+        f"fanout {response.fanout_fee_sats}, refund {response.refund_fee_sats}, "
+        f"sweep {response.sweep_fee_sats}), "
         f"{len(response.transactions)} transaction(s):"
     )
     for i, tx in enumerate(response.transactions):

@@ -38,6 +38,7 @@ from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
 from breez_cli.stable_balance import STABLE_BALANCE_COMMAND_NAMES, dispatch_stable_balance_command
+from breez_cli.token_allowances import TOKEN_ALLOWANCES_COMMAND_NAMES, dispatch_token_allowances_command
 from breez_cli.webhooks import WEBHOOKS_COMMAND_NAMES, dispatch_webhooks_command
 from breez_cli.passkey import create_provider, resolve_passkey_seed
 from breez_cli.persistence import CliPersistence
@@ -141,6 +142,8 @@ def load_spark_config(path):
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 @click.option("--lnurl-domain", default=None,
               help="LNURL server domain for lightning address registration; accepts a plain domain or an http://host:port test server URL")
+@click.option("--real-time-sync-server-url", default=None, metavar="URL",
+              help="Real-time sync server URL (e.g. a local data-sync service); overrides the network default")
 @click.option("--proxy", default=None, metavar="HOST:PORT",
               help="Route every connection through a SOCKS5 proxy (e.g. 127.0.0.1:9050 for a local Tor daemon)")
 @click.option("--proxy-user", default=None,
@@ -154,7 +157,7 @@ async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_ty
                stable_balance_threshold,
                server_mode,
                passkey_provider, label, list_labels, store_label, rpid,
-               lnurl_domain,
+               lnurl_domain, real_time_sync_server_url,
                proxy, proxy_user, proxy_password):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
@@ -219,6 +222,8 @@ async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_ty
     config.proxy = proxy_config
     if lnurl_domain is not None:
         config.lnurl_domain = lnurl_domain
+    if real_time_sync_server_url is not None:
+        config.real_time_sync_server_url = real_time_sync_server_url
     if network_enum == Network.MAINNET:
         config.cross_chain_config = CrossChainConfig()
 
@@ -283,7 +288,7 @@ async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_ty
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + TOKEN_ALLOWANCES_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -330,6 +335,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
                 await dispatch_issuer_command(cmd_args, token_issuer)
             elif cmd_name == "stable-balance":
                 await dispatch_stable_balance_command(cmd_args, sdk)
+            elif cmd_name == "token-allowances":
+                await dispatch_token_allowances_command(cmd_args, sdk)
             elif cmd_name == "webhooks":
                 await dispatch_webhooks_command(cmd_args, sdk)
             elif cmd_name in registry:
@@ -370,6 +377,7 @@ def print_help(registry):
     print(f"  {'contacts <subcommand>':40s} Contacts commands (use 'contacts help' for details)")
     print(f"  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
     print(f"  {'stable-balance <subcommand>':40s} Stable balance commands (use 'stable-balance help' for details)")
+    print(f"  {'token-allowances <subcommand>':40s} Token allowance commands (use 'token-allowances help' for details)")
     print(f"  {'webhooks <subcommand>':40s} Webhook commands (use 'webhooks help' for details)")
     print(f"  {'exit / quit':40s} Exit the CLI")
     print(f"  {'help':40s} Show this help message")
