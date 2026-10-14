@@ -195,6 +195,22 @@ When changing the SDK's public interface, update these files:
 4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
 5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
 
+## Adding SdkError Variants
+
+Every `SdkError` variant (`crates/breez-sdk/core/src/error.rs`) has a section on the guide's errors page, `docs/breez-sdk/src/guide/errors.md`, whose id is the variant name in kebab-case (`<h3 id="deposit-too-small">`). A test fails when a variant has no section.
+
+When adding a variant:
+
+1. Add it to the enum and to the Flutter mirror in `packages/flutter/rust/src/errors.rs`.
+2. Add its section to `errors.md`: what it means, when it happens and what to do, linking to the feature's guide page when there is one.
+3. If the section tells developers how to resolve the error, give the variant a `docs_url: String` field that links to the section:
+   - declare the link in the `docs_url` module with `errors_page!("<kebab-id>")`
+   - add a `pub(crate)` constructor in `impl SdkError` that sets it, and build the error only through that constructor
+   - add the variant to `SdkError::docs_url()` and to `linked_errors()` in `docs_url_tests`, which checks that each link points at the variant's own section
+4. Keep the URL out of the `#[error(...)]` message. Apps show messages to end users. Bindings read the field, and JavaScript receives it as the `docsUrl` property of the thrown `Error`.
+
+Section ids are permanent once released, because older SDKs keep linking to them. Adding a field to a released variant breaks callers that match every field (Swift, Dart, Rust patterns without `..`), so give the PR the "Breaking change" label. Don't add `docs_url` to unit variants (that turns Kotlin objects into classes) or to `DepositClaimError` (it is persisted with each deposit).
+
 ## Documentation Inline Syntax
 
 In mdbook docs under `docs/breez-sdk/src/`, reference every Rust identifier — functions, methods, types, struct fields, parameters, enum variants — via the preprocessor macros below. They render the identifier in the case convention of the reader's selected language tab.

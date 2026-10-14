@@ -74,7 +74,7 @@ A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, ca
 
 A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} indicates that a route is currently unavailable and the same request may succeed later, rather than requiring another route.
 
-When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. See [USDC/USDT configuration](./config.md#usdc-usdt).
+When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. Enable it as described in [USDC/USDT configuration](./config.md#usdc-usdt).
 
 ## Slippage
 

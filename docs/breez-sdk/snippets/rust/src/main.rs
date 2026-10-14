@@ -3,6 +3,7 @@ mod client_signing;
 mod config;
 mod contacts;
 mod cross_chain;
+mod errors;
 mod external_signer;
 mod fiat_currencies;
 mod getting_started;

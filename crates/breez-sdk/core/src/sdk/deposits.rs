@@ -76,10 +76,10 @@ impl BreezSdk {
             txid: txid.clone(),
             vout: detailed_utxo.vout,
         }) else {
-            return Err(SdkError::DepositClaimInProgress {
-                tx: txid,
-                vout: detailed_utxo.vout,
-            });
+            return Err(SdkError::deposit_claim_in_progress(
+                txid,
+                detailed_utxo.vout,
+            ));
         };
 
         let max_fee = ceiling.effective;
@@ -107,10 +107,10 @@ impl BreezSdk {
                     .and_then(|d| d.instant_claim_status.as_ref()),
             )
         {
-            return Err(SdkError::DepositClaimInProgress {
-                tx: txid,
-                vout: detailed_utxo.vout,
-            });
+            return Err(SdkError::deposit_claim_in_progress(
+                txid,
+                detailed_utxo.vout,
+            ));
         }
         let row_exists = self
             .store_max_claim_fee(&detailed_utxo, ceiling.stored, is_mature, stored.is_some())
@@ -881,12 +881,12 @@ impl BreezSdk {
                 })
             }
             InstantClaimPlan::FeeExceeded { quoted_sats } => Ok(InstantClaimOutcome::Declined {
-                error: SdkError::MaxDepositClaimFeeExceeded {
-                    tx: detailed_utxo.txid.to_string(),
-                    vout: detailed_utxo.vout,
-                    max_fee_sats: resolved_max_fee.as_ref().map(|_| max_fee_sats),
-                    required_fee_sats: quoted_sats,
-                },
+                error: SdkError::max_deposit_claim_fee_exceeded(
+                    detailed_utxo.txid.to_string(),
+                    detailed_utxo.vout,
+                    resolved_max_fee.as_ref().map(|_| max_fee_sats),
+                    quoted_sats,
+                ),
                 max_fee_sats: Some(max_fee_sats),
                 reason: ClaimDeferredReason::MaxFeeExceeded {
                     required_fee_sats: quoted_sats,
@@ -1012,10 +1012,7 @@ pub(super) fn instant_claim_response(outcome: &InstantClaimOutcome) -> ClaimDepo
 /// The error for a failed quote to claim `detailed_utxo` at maturity.
 pub(super) fn mature_quote_error(e: SparkWalletError, detailed_utxo: &DetailedUtxo) -> SdkError {
     if e.is_deposit_below_dust_limit() {
-        return SdkError::DepositTooSmall {
-            tx: detailed_utxo.txid.to_string(),
-            vout: detailed_utxo.vout,
-        };
+        return SdkError::deposit_too_small(detailed_utxo.txid.to_string(), detailed_utxo.vout);
     }
     e.into()
 }
@@ -1167,10 +1164,10 @@ fn check_replacement_fee(
         SdkError::Generic("refund pays out more than the deposit holds".to_string())
     })?;
     if fee_sats < required_fee_sats {
-        return Err(SdkError::RefundReplacementFeeTooLow {
+        return Err(SdkError::refund_replacement_fee_too_low(
             pending_fee_sats,
             required_fee_sats,
-        });
+        ));
     }
     Ok(())
 }
@@ -1799,6 +1796,7 @@ mod tests {
             Err(SdkError::RefundReplacementFeeTooLow {
                 pending_fee_sats,
                 required_fee_sats,
+                ..
             }) if pending_fee_sats == pending && required_fee_sats == required
         ));
 

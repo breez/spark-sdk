@@ -228,9 +228,7 @@ impl BreezSdk {
         // Followed to nothing: a previous run spent all of it. That is a
         // shortfall, not a malformed request.
         if supplied_any && funding_inputs.is_empty() {
-            return Err(SdkError::InsufficientCpfpFunds {
-                required_sats: single_utxo_funding_sats,
-            });
+            return Err(SdkError::insufficient_cpfp_funds(single_utxo_funding_sats));
         }
         let fee_rate_sat_per_kw = sat_per_kw_from_vbyte(fee_rate_sat_per_vbyte);
         let chain_state = exit_chain_state_from_model(exit_chain_state)?;
