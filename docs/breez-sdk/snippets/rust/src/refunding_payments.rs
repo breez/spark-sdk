@@ -14,14 +14,14 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
         if let Some(claim_error) = &deposit.claim_error {
             match claim_error {
                 DepositClaimError::MaxDepositClaimFeeExceeded {
-                    max_fee,
+                    max_fee_sats,
                     required_fee_sats,
-                    required_fee_rate_sat_per_vbyte,
                     ..
                 } => {
+                    let max_fee =
+                        max_fee_sats.map_or("none".to_string(), |sats| format!("{sats} sats"));
                     info!(
-                        "Max claim fee exceeded. Max: {:?}, Required: {} sats or {} sats/vByte",
-                        max_fee, required_fee_sats, required_fee_rate_sat_per_vbyte
+                        "Max claim fee exceeded. Max: {max_fee}, Required: {required_fee_sats} sats"
                     );
                 }
                 DepositClaimError::MissingUtxo { .. } => {
@@ -150,9 +150,10 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Set the maximum fee to the fastest network recommended fee at the time of claim
-    // with a leeway of 1 sats/vbyte
+    // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
     config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
         leeway_sat_per_vbyte: 1,
+        proportional_ppm: Some(1_000),
     });
     // ANCHOR_END: set-max-fee-to-recommended-fees
     info!("Config: {:?}", config);
@@ -162,18 +163,16 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
 async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
     // ANCHOR: custom-claim-logic
     if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
-        required_fee_rate_sat_per_vbyte,
-        ..
+        required_fee_sats, ..
     }) = &deposit.claim_error
     {
-        let recommended_fees = sdk.recommended_fees().await?;
-
-        if *required_fee_rate_sat_per_vbyte <= recommended_fees.fastest_fee {
+        // Claim only if the fee is at most 1% of the deposit amount
+        if *required_fee_sats * 100 <= deposit.amount_sats {
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
-                max_fee: Some(MaxFee::Rate {
-                    sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
+                max_fee: Some(MaxFee::Fixed {
+                    amount: *required_fee_sats,
                 }),
             };
             sdk.claim_deposit(request).await?;

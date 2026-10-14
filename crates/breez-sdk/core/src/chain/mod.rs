@@ -3,6 +3,7 @@ use std::sync::Arc;
 use platform_utils::HttpClient;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::OnceCell;
 
 use crate::{
     Credentials, Network,
@@ -93,6 +94,28 @@ pub struct RecommendedFees {
     pub hour_fee: u64,
     pub economy_fee: u64,
     pub minimum_fee: u64,
+}
+
+/// The recommended fees as of the first time they are asked for, so pricing
+/// several fee ceilings in one operation reads the fee market once.
+pub(crate) struct FeeMarket<'a> {
+    chain_service: &'a dyn BitcoinChainService,
+    fees: OnceCell<RecommendedFees>,
+}
+
+impl<'a> FeeMarket<'a> {
+    pub(crate) fn new(chain_service: &'a dyn BitcoinChainService) -> Self {
+        Self {
+            chain_service,
+            fees: OnceCell::new(),
+        }
+    }
+
+    pub(crate) async fn recommended_fees(&self) -> Result<&RecommendedFees, ChainServiceError> {
+        self.fees
+            .get_or_try_init(|| self.chain_service.recommended_fees())
+            .await
+    }
 }
 
 /// The spend status of a transaction output.
@@ -205,7 +228,10 @@ pub async fn new_rest_chain_service(
 
 #[cfg(test)]
 mod tests {
-    use super::ChainServiceError;
+    use std::sync::atomic::Ordering;
+
+    use super::{ChainServiceError, FeeMarket, RecommendedFees, stub::ChainStub};
+    use crate::{Fee, MaxFee};
     use platform_utils::HttpError;
 
     fn status(status: u16) -> ChainServiceError {
@@ -237,5 +263,40 @@ mod tests {
         // variants have to keep carrying it.
         assert!(status(404).to_string().contains("body"));
         assert!(status(400).to_string().contains("body"));
+    }
+
+    #[macros::async_test_all]
+    async fn fee_market_reads_the_recommended_fees_once() {
+        let chain = ChainStub {
+            recommended_fees: Some(RecommendedFees {
+                fastest_fee: 10,
+                half_hour_fee: 5,
+                hour_fee: 3,
+                economy_fee: 2,
+                minimum_fee: 1,
+            }),
+            ..Default::default()
+        };
+        let fee_market = FeeMarket::new(&chain);
+        for (leeway_sat_per_vbyte, sat_per_vbyte) in [(1, 11), (2, 12)] {
+            let max_fee = MaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+                proportional_ppm: None,
+            };
+            assert_eq!(
+                max_fee.to_fee(&fee_market).await.unwrap(),
+                Fee::Rate { sat_per_vbyte }
+            );
+        }
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn fee_market_retries_a_failed_read() {
+        let chain = ChainStub::default();
+        let fee_market = FeeMarket::new(&chain);
+        assert!(fee_market.recommended_fees().await.is_err());
+        assert!(fee_market.recommended_fees().await.is_err());
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 2);
     }
 }

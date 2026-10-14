@@ -306,7 +306,10 @@ fn base_local_config(
     config.sync_interval_secs = 5;
     // The SSP quotes its spend cost plus a margin, which the SDK's default ceiling
     // (1 sat/vByte over a 99-vByte claim tx) refuses.
-    config.max_deposit_claim_fee = Some(MaxFee::Rate { sat_per_vbyte: 4 });
+    config.max_deposit_claim_fee = Some(MaxFee::Rate {
+        sat_per_vbyte: 4,
+        proportional_ppm: None,
+    });
     config.spark_config = Some(SparkConfig {
         coordinator_identifier,
         threshold: wallet_config.split_secret_threshold,

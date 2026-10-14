@@ -23,7 +23,7 @@ use crate::{
     FetchClaimDepositQuoteResponse, InstantClaimStatus, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, MaxFee, Network, RefundDepositRequest, RefundDepositResponse,
     RefundState,
-    chain::Outspend,
+    chain::{FeeMarket, Outspend},
     error::SdkError,
     models::Payment,
     persist::UpdateDepositPayload,
@@ -143,10 +143,11 @@ impl BreezSdk {
                 .fetch_detailed_utxo(&request.txid, request.vout)
                 .await?;
 
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
         let (confirmations, instant, mature) = tokio::join!(
             self.deposit_confirmations(&request.txid),
             self.fetch_instant_claim_quote(&detailed_utxo),
-            self.fetch_mature_claim_quote(&detailed_utxo),
+            self.fetch_mature_claim_quote(&detailed_utxo, &fee_market),
         );
         let confirmations = confirmations?;
         let mature = mature?;
@@ -154,6 +155,34 @@ impl BreezSdk {
             .stored_deposit(&detailed_utxo.txid.to_string(), detailed_utxo.vout)
             .await?;
         let is_mature = self.is_deposit_mature_at(&detailed_utxo, confirmations, stored.as_ref());
+
+        // Each claim runs under its own ceiling: the early one under the deposit's
+        // own max fee when it has one, the one at maturity under the larger of that
+        // and the configured one.
+        let deposit_sats = detailed_utxo.value;
+        let stored_max_fee = stored.as_ref().and_then(|d| d.max_claim_fee.as_ref());
+        let instant_max_fee = stored_max_fee
+            .or(self.config.max_deposit_claim_fee.as_ref())
+            .cloned();
+        let mature_max_fee = self
+            .mature_claim_ceiling(stored_max_fee, deposit_sats, &fee_market)
+            .await;
+        let instant_max_fee_sats = self
+            .resolve_max_claim_fee(instant_max_fee, &fee_market)
+            .await?
+            .map(|max_fee| max_fee.ceiling_sats(deposit_sats));
+        let mature = ClaimDepositQuote {
+            max_fee_sats: self
+                .resolve_max_claim_fee(mature_max_fee, &fee_market)
+                .await?
+                .map(|max_fee| max_fee.ceiling_sats(deposit_sats)),
+            ..mature
+        };
+        let instant = instant.map(|quote| ClaimDepositQuote {
+            max_fee_sats: instant_max_fee_sats,
+            ..quote
+        });
+
         // Withhold the early claim unless it credits sooner than maturity. The
         // depth it becomes claimable at is reported, not filtered on.
         let instant = instant.filter(|quote| {
@@ -292,7 +321,8 @@ impl BreezSdk {
         detailed_utxo: &DetailedUtxo,
         max_fee: Option<MaxFee>,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        match self.claim_utxo(detailed_utxo, max_fee).await {
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        match self.claim_utxo(detailed_utxo, max_fee, &fee_market).await {
             Ok(transfer_id) => {
                 let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
                 let payment: Payment = transfer.try_into()?;
@@ -606,6 +636,7 @@ impl BreezSdk {
     async fn fetch_mature_claim_quote(
         &self,
         detailed_utxo: &DetailedUtxo,
+        fee_market: &FeeMarket<'_>,
     ) -> Result<ClaimDepositQuote, SdkError> {
         match self
             .spark_wallet
@@ -630,8 +661,7 @@ impl BreezSdk {
                     "No mature quote for {}:{}, estimating: {e}",
                     detailed_utxo.txid, detailed_utxo.vout
                 );
-                let fee_sats = self
-                    .chain_service
+                let fee_sats = fee_market
                     .recommended_fees()
                     .await?
                     .fastest_fee
@@ -704,7 +734,8 @@ impl BreezSdk {
         confirmations: u32,
         row_exists: bool,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        let resolved_max_fee = self.resolve_max_claim_fee(max_fee).await?;
+        let fee_market = FeeMarket::new(self.chain_service.as_ref());
+        let resolved_max_fee = self.resolve_max_claim_fee(max_fee, &fee_market).await?;
         let outcome = match self
             .instant_claim_utxo(detailed_utxo, resolved_max_fee, confirmations)
             .await
@@ -764,12 +795,14 @@ impl BreezSdk {
     pub(super) async fn instant_claim_utxo(
         &self,
         detailed_utxo: &DetailedUtxo,
-        resolved_max_fee: Option<(Fee, u64)>,
+        resolved_max_fee: Option<ResolvedMaxFee>,
         confirmations: u32,
     ) -> Result<InstantClaimOutcome, SdkError> {
         // An unresolved max fee is recorded as a zero ceiling: it admits nothing,
         // and unlike none it stays retryable once one is configured.
-        let max_fee_sats = resolved_max_fee.as_ref().map_or(0, |(_, sats)| *sats);
+        let max_fee_sats = resolved_max_fee
+            .as_ref()
+            .map_or(0, |max_fee| max_fee.ceiling_sats(detailed_utxo.value));
 
         let quote_result = match self
             .spark_wallet
@@ -847,16 +880,12 @@ impl BreezSdk {
                     reason: ClaimDeferredReason::ProviderDeclined { message },
                 })
             }
-            InstantClaimPlan::FeeExceeded {
-                quoted_sats,
-                quoted_rate,
-            } => Ok(InstantClaimOutcome::Declined {
+            InstantClaimPlan::FeeExceeded { quoted_sats } => Ok(InstantClaimOutcome::Declined {
                 error: SdkError::MaxDepositClaimFeeExceeded {
                     tx: detailed_utxo.txid.to_string(),
                     vout: detailed_utxo.vout,
-                    max_fee: resolved_max_fee.map(|(fee, _)| fee),
+                    max_fee_sats: resolved_max_fee.as_ref().map(|_| max_fee_sats),
                     required_fee_sats: quoted_sats,
-                    required_fee_rate_sat_per_vbyte: quoted_rate,
                 },
                 max_fee_sats: Some(max_fee_sats),
                 reason: ClaimDeferredReason::MaxFeeExceeded {
@@ -1011,6 +1040,34 @@ pub(super) fn needs_own_ceiling_resolution(
     stored.is_some() && stored != config_default
 }
 
+/// A max claim fee with its on-chain part priced at the current fee market. The
+/// ceiling it comes to in sats still depends on the deposit, through its
+/// proportional part.
+#[derive(Debug, Clone)]
+pub(super) struct ResolvedMaxFee {
+    onchain: Fee,
+    proportional_ppm: u32,
+}
+
+impl ResolvedMaxFee {
+    pub(super) fn new(onchain: Fee, proportional_ppm: u32) -> Self {
+        Self {
+            onchain,
+            proportional_ppm,
+        }
+    }
+
+    /// The most claiming a deposit worth `deposit_sats` may cost. The on-chain part
+    /// is priced over the claim tx size.
+    pub(super) fn ceiling_sats(&self, deposit_sats: u64) -> u64 {
+        let proportional =
+            u128::from(deposit_sats).saturating_mul(u128::from(self.proportional_ppm)) / 1_000_000;
+        self.onchain
+            .to_sats(CLAIM_TX_SIZE_VBYTES)
+            .saturating_add(u64::try_from(proportional).unwrap_or(u64::MAX))
+    }
+}
+
 /// Prices one way of claiming a deposit, from the credit it would leave.
 fn claim_deposit_quote(
     confirmations_required: u32,
@@ -1023,7 +1080,7 @@ fn claim_deposit_quote(
         confirmations_required,
         credit_amount_sats,
         fee_sats,
-        fee_rate_sat_per_vbyte: fee_sats.div_ceil(CLAIM_TX_SIZE_VBYTES),
+        max_fee_sats: None,
         is_estimate,
     }
 }
@@ -1034,9 +1091,9 @@ enum InstantClaimPlan {
     Claimable(InstantStaticDepositPlan),
     /// The quote carried no fulfillment plans at all.
     NoPlan,
-    /// The SSP spread (`deposit - credit`) exceeds the ceiling, in sats and as the
-    /// on-chain rate it implies over the claim tx (both for the decline message).
-    FeeExceeded { quoted_sats: u64, quoted_rate: u64 },
+    /// The SSP spread (`deposit - credit`) exceeds the ceiling. Carries the spread
+    /// in sats for the decline message.
+    FeeExceeded { quoted_sats: u64 },
     /// The quote credits more than the deposit is worth, so there is no spread to
     /// price. Carries the credit for the decline message.
     CreditAboveDeposit { credit_sats: u64 },
@@ -1087,10 +1144,7 @@ fn select_instant_claim_plan(
     if quoted_sats <= max_fee_sats {
         InstantClaimPlan::Claimable(plan.clone())
     } else {
-        InstantClaimPlan::FeeExceeded {
-            quoted_sats,
-            quoted_rate: quoted_sats.div_ceil(CLAIM_TX_SIZE_VBYTES),
-        }
+        InstantClaimPlan::FeeExceeded { quoted_sats }
     }
 }
 
@@ -1181,11 +1235,12 @@ mod tests {
     };
 
     use super::{
-        ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, InstantClaimOutcome,
-        InstantClaimPlan, MaxFee, Replaced, SdkError, TxOutput, check_replacement_fee,
-        claim_deposit_quote, fee_paid_sats, instant_claim_response, is_already_claimed_error,
-        is_pending_confirmation_error, larger_ceiling, needs_own_ceiling_resolution,
-        resolve_claim_ceiling, select_instant_claim_plan,
+        CLAIM_TX_SIZE_VBYTES, ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, Fee,
+        InstantClaimOutcome, InstantClaimPlan, MaxFee, Replaced, ResolvedMaxFee, SdkError,
+        TxOutput, check_replacement_fee, claim_deposit_quote, fee_paid_sats,
+        instant_claim_response, is_already_claimed_error, is_pending_confirmation_error,
+        larger_ceiling, needs_own_ceiling_resolution, resolve_claim_ceiling,
+        select_instant_claim_plan,
     };
 
     // ---- resolve_claim_ceiling / larger_ceiling ----
@@ -1247,7 +1302,10 @@ mod tests {
     fn ceilings_are_compared_as_sats_not_by_shape() {
         // A rate and a fixed amount are only comparable once resolved, and the rate
         // here admits more despite the smaller number on its face.
-        let rate = MaxFee::Rate { sat_per_vbyte: 5 };
+        let rate = MaxFee::Rate {
+            sat_per_vbyte: 5,
+            proportional_ppm: None,
+        };
         assert_eq!(larger_ceiling(&rate, 495, &fixed(99), 99), rate);
         assert_eq!(larger_ceiling(&fixed(99), 99, &rate, 495), rate);
     }
@@ -1351,9 +1409,53 @@ mod tests {
         assert!(!needs_own_ceiling_resolution(None, None));
         // Equal values of a different variant are still equal.
         assert!(!needs_own_ceiling_resolution(
-            Some(&MaxFee::Rate { sat_per_vbyte: 4 }),
-            Some(&MaxFee::Rate { sat_per_vbyte: 4 })
+            Some(&MaxFee::Rate {
+                sat_per_vbyte: 4,
+                proportional_ppm: None,
+            }),
+            Some(&MaxFee::Rate {
+                sat_per_vbyte: 4,
+                proportional_ppm: None,
+            })
         ));
+        // A different proportional part is a different ceiling.
+        assert!(needs_own_ceiling_resolution(
+            Some(&MaxFee::Rate {
+                sat_per_vbyte: 4,
+                proportional_ppm: Some(750),
+            }),
+            Some(&MaxFee::Rate {
+                sat_per_vbyte: 4,
+                proportional_ppm: None,
+            })
+        ));
+    }
+
+    // ---- ResolvedMaxFee ----
+
+    #[test]
+    fn a_proportional_part_scales_the_ceiling_with_the_deposit() {
+        // 2 sat/vbyte over the claim tx, plus 750 ppm of the deposit.
+        let max_fee = ResolvedMaxFee::new(Fee::Rate { sat_per_vbyte: 2 }, 750);
+        let onchain = 2 * CLAIM_TX_SIZE_VBYTES;
+        assert_eq!(max_fee.ceiling_sats(0), onchain);
+        assert_eq!(max_fee.ceiling_sats(1_000_000), onchain + 750);
+        assert_eq!(max_fee.ceiling_sats(100_000_000), onchain + 75_000);
+        // Rounded down: 999 sats at 750 ppm is 0.749 sats.
+        assert_eq!(max_fee.ceiling_sats(999), onchain);
+    }
+
+    #[test]
+    fn a_ceiling_without_a_proportional_part_ignores_the_deposit() {
+        let max_fee = ResolvedMaxFee::new(Fee::Fixed { amount: 500 }, 0);
+        assert_eq!(max_fee.ceiling_sats(1_000), 500);
+        assert_eq!(max_fee.ceiling_sats(100_000_000), 500);
+    }
+
+    #[test]
+    fn a_huge_proportional_part_saturates() {
+        let max_fee = ResolvedMaxFee::new(Fee::Fixed { amount: 1 }, u32::MAX);
+        assert_eq!(max_fee.ceiling_sats(u64::MAX), u64::MAX);
     }
 
     fn sats(value: u64) -> CurrencyAmount {
@@ -1392,21 +1494,18 @@ mod tests {
 
     #[test]
     fn quotes_the_fee_as_the_credit_shortfall() {
-        // 20_000 deposit crediting 18_810 costs 1_190, which over the 99 vbyte
-        // claim tx rounds up to 13 sat/vbyte.
+        // 20_000 deposit crediting 18_810 costs 1_190.
         let quote = claim_deposit_quote(1, 20_000, 18_810, false);
         assert_eq!(quote.confirmations_required, 1);
         assert_eq!(quote.credit_amount_sats, 18_810);
         assert_eq!(quote.fee_sats, 1_190);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 13);
         assert!(!quote.is_estimate);
     }
 
     #[test]
-    fn quotes_a_free_claim_at_a_zero_rate() {
+    fn quotes_a_free_claim_at_a_zero_fee() {
         let quote = claim_deposit_quote(3, 20_000, 20_000, true);
         assert_eq!(quote.fee_sats, 0);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 0);
         assert!(quote.is_estimate);
     }
 
@@ -1416,7 +1515,6 @@ mod tests {
         // wrap into an enormous fee if it ever does.
         let quote = claim_deposit_quote(0, 20_000, 25_000, false);
         assert_eq!(quote.fee_sats, 0);
-        assert_eq!(quote.fee_rate_sat_per_vbyte, 0);
     }
 
     #[test]
@@ -1550,15 +1648,11 @@ mod tests {
 
     #[test]
     fn skips_when_spread_over_ceiling() {
-        // Spread 5_000 against a 1_000 ceiling -> skip. The reported rate is the
-        // spread over the claim tx, so it is comparable with `MaxFee::Rate`.
+        // Spread 5_000 against a 1_000 ceiling -> skip.
         let q = quote_result(100_000, &[(0, 95_000)]);
         assert!(matches!(
             select_instant_claim_plan(&q, 100_000, 1_000, 0, 3),
-            InstantClaimPlan::FeeExceeded {
-                quoted_sats: 5_000,
-                quoted_rate: 51
-            }
+            InstantClaimPlan::FeeExceeded { quoted_sats: 5_000 }
         ));
     }
 

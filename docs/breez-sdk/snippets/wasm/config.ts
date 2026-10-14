@@ -9,8 +9,8 @@ const exampleConfigureSdk = async () => {
   // Disable automatic claiming
   config.maxDepositClaimFee = undefined
 
-  // Set a maximum feerate of 10 sat/vB
-  config.maxDepositClaimFee = { type: 'rate', satPerVbyte: 10 }
+  // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
+  config.maxDepositClaimFee = { type: 'rate', satPerVbyte: 10, proportionalPpm: 1000 }
 
   // Set a maximum fee of 1000 sat
   config.maxDepositClaimFee = { type: 'fixed', amount: 1000 }

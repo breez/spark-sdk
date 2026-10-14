@@ -214,7 +214,7 @@ pub struct _ClaimDepositQuote {
     pub confirmations_required: u32,
     pub credit_amount_sats: u64,
     pub fee_sats: u64,
-    pub fee_rate_sat_per_vbyte: u64,
+    pub max_fee_sats: Option<u64>,
     pub is_estimate: bool,
 }
 
@@ -264,9 +264,17 @@ pub struct _DepositInfo {
 
 #[frb(mirror(MaxFee))]
 pub enum _MaxFee {
-    Fixed { amount: u64 },
-    Rate { sat_per_vbyte: u64 },
-    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+    Fixed {
+        amount: u64,
+    },
+    Rate {
+        sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
+    NetworkRecommended {
+        leeway_sat_per_vbyte: u64,
+        proportional_ppm: Option<u32>,
+    },
 }
 
 #[frb(mirror(Fee))]
