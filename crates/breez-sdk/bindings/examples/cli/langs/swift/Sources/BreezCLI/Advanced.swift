@@ -547,7 +547,8 @@ private func printRecovery(_ response: RecoverFundsResponse) {
         "Recoverable \(response.recoverableValueSats) sats, " +
         "total fee \(response.totalFeeSats) sats " +
         "(cooperative \(response.cooperativeFeeSats), cpfp \(response.cpfpFeeSats), " +
-        "fanout \(response.fanoutFeeSats), sweep \(response.sweepFeeSats)), " +
+        "fanout \(response.fanoutFeeSats), refund \(response.refundFeeSats), " +
+        "sweep \(response.sweepFeeSats)), " +
         "\(response.transactions.count) transaction(s):"
     )
     for (i, tx) in response.transactions.enumerated() {

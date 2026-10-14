@@ -662,9 +662,9 @@ func cooperativeRecoveryErrorFromMap(v interface{}) breez_sdk_spark.CooperativeR
 }
 
 func printRecovery(response breez_sdk_spark.RecoverFundsResponse) {
-	fmt.Printf("Recoverable %d sats, total fee %d sats (cooperative %d, cpfp %d, fanout %d, sweep %d), %d transaction(s):\n",
+	fmt.Printf("Recoverable %d sats, total fee %d sats (cooperative %d, cpfp %d, fanout %d, refund %d, sweep %d), %d transaction(s):\n",
 		response.RecoverableValueSats, response.TotalFeeSats, response.CooperativeFeeSats,
-		response.CpfpFeeSats, response.FanoutFeeSats, response.SweepFeeSats,
+		response.CpfpFeeSats, response.FanoutFeeSats, response.RefundFeeSats, response.SweepFeeSats,
 		len(response.Transactions))
 	for i, tx := range response.Transactions {
 		after := ""
