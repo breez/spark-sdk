@@ -121,10 +121,10 @@ pub struct ExitTx {
     /// The unsigned PSBT the caller signs; `None` when nothing needs signing (an
     /// adopted fan-out, an already-confirmed step, or a self-fee `direct` tx).
     pub to_sign: Option<bitcoin::Psbt>,
-    /// For a refund without a P2A anchor, the unsigned child that pays its fee
-    /// out of the refund itself. Signed with the leaf's key rather than by the
-    /// caller.
-    pub refund_child: Option<Transaction>,
+    /// For a refund without a P2A anchor, the CPFP child that pays its fee out
+    /// of the refund's own output. The wallet signs it with the leaf's key, so
+    /// the caller signs nothing for it.
+    pub cpfp_tx: Option<Transaction>,
     /// Relative CSV timelock (blocks) that must mature before `base_tx` confirms.
     pub csv_timelock_blocks: Option<u32>,
     /// Txids this tx spends from, so it must be broadcast after them.
@@ -1355,8 +1355,11 @@ fn interpret_refund(
 /// resolved into the plan by [`scan_funding`]. Each not-yet-confirmed tx gets an
 /// unsigned CPFP child that pays its fee; confirmed nodes and adopted refunds
 /// are emitted without one. Each refund output is swept under the key derived
-/// from its leaf's node id, the key a wallet's leaves are held under.
-pub fn build_unilateral_exit(
+/// from its leaf's node id, the key a wallet's leaves are held under. The child
+/// of a refund without an anchor is left unsigned for
+/// [`SparkWallet::build_unilateral_exit`](crate::SparkWallet::build_unilateral_exit)
+/// to sign.
+pub(crate) fn build_unilateral_exit(
     plan: &UnilateralExitPlan,
     state: &ExitChainState,
     fee_rate_sat_per_kw: u64,
@@ -1398,7 +1401,7 @@ pub(crate) fn build_exit(
         txid: psbt.unsigned_tx.compute_txid(),
         base_tx: psbt.unsigned_tx.clone(),
         to_sign: Some(psbt.clone()),
-        refund_child: None,
+        cpfp_tx: None,
         csv_timelock_blocks: None,
         depends_on: vec![],
         status: ExitTxStatus::Unconfirmed,
@@ -1502,7 +1505,7 @@ pub(crate) fn build_exit(
                         csv_timelock_blocks: csv_timelock(&base_tx),
                         base_tx,
                         to_sign,
-                        refund_child: None,
+                        cpfp_tx: None,
                         depends_on,
                         status,
                     });
@@ -1529,7 +1532,7 @@ pub(crate) fn build_exit(
                     csv_timelock_blocks: csv_timelock(&adopted.tx),
                     base_tx: adopted.tx.clone(),
                     to_sign: None,
-                    refund_child: None,
+                    cpfp_tx: None,
                     depends_on: vec![],
                     status: ExitTxStatus::Confirmed {
                         block_height: adopted.block_height,
@@ -1562,7 +1565,7 @@ pub(crate) fn build_exit(
                     txid: refund_txid,
                     base_tx: direct_refund,
                     to_sign: None,
-                    refund_child: None,
+                    cpfp_tx: None,
                     csv_timelock_blocks: refund_csv,
                     depends_on: leaf_node_txid.into_iter().collect(),
                     status: ExitTxStatus::Unconfirmed,
@@ -1605,7 +1608,7 @@ pub(crate) fn build_exit(
                         txid: refund_txid,
                         base_tx: refund_tx,
                         to_sign: None,
-                        refund_child: Some(child.tx),
+                        cpfp_tx: Some(child.tx),
                         csv_timelock_blocks: refund_csv,
                         depends_on: leaf_node_txid.into_iter().collect(),
                         status: ExitTxStatus::Unconfirmed,
@@ -1640,7 +1643,7 @@ pub(crate) fn build_exit(
                         txid: refund_txid,
                         base_tx: refund_tx,
                         to_sign: Some(child.psbt),
-                        refund_child: None,
+                        cpfp_tx: None,
                         csv_timelock_blocks: refund_csv,
                         depends_on,
                         status: ExitTxStatus::Unconfirmed,
@@ -1940,7 +1943,7 @@ mod exit_build_tests {
         assert_eq!(refund.kind, ExitTxKind::Refund);
         assert_eq!(refund.txid, refund_tx.compute_txid());
         assert!(refund.to_sign.is_none(), "the funding pays nothing for it");
-        let child = refund.refund_child.as_ref().expect("a child pays its fee");
+        let child = refund.cpfp_tx.as_ref().expect("a child pays its fee");
         assert_eq!(
             child.input[0].previous_output,
             OutPoint {
@@ -2361,7 +2364,7 @@ mod exit_build_tests {
             txid: anchor_tx(nonce).compute_txid(),
             base_tx: anchor_tx(nonce),
             to_sign: None,
-            refund_child: None,
+            cpfp_tx: None,
             csv_timelock_blocks: None,
             depends_on: vec![],
             status: if nonce == 1 {

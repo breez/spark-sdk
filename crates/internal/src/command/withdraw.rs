@@ -13,8 +13,7 @@ use bitcoin::{
 use clap::Subcommand;
 use spark_wallet::{
     CpfpInput, ExitChainState, ExitLeafSelection, ExitTxKind, Network, SparkWallet,
-    SparkWalletError, TreeNodeId, build_unilateral_exit, is_ephemeral_anchor_output,
-    p2wpkh_input_weight,
+    SparkWalletError, TreeNodeId, is_ephemeral_anchor_output, p2wpkh_input_weight,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -160,8 +159,9 @@ pub async fn handle_command(
                 34,
                 &ExitChainState::default(),
             )?;
-            let exit =
-                build_unilateral_exit(&prepared, &ExitChainState::default(), fee_rate_sat_per_kw)?;
+            let exit = wallet
+                .build_unilateral_exit(&prepared, &ExitChainState::default(), fee_rate_sat_per_kw)
+                .await?;
 
             if let Some(fan_out) = &exit.fan_out
                 && let Some(psbt) = &fan_out.to_sign
@@ -221,6 +221,12 @@ pub async fn handle_command(
                                 serialize_hex(&signed_tx)
                             );
                         }
+                    }
+
+                    // The child of a refund without an anchor, signed by the wallet.
+                    if let Some(cpfp_tx) = &tx.cpfp_tx {
+                        println!("{index_spaces}CPFP TX ID: {}", cpfp_tx.compute_txid());
+                        println!("{index_spaces}CPFP TX: {}", serialize_hex(cpfp_tx));
                     }
 
                     // Display the CSV timelock for the refund transaction.

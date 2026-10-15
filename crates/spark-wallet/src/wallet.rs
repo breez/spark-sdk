@@ -90,7 +90,7 @@ use crate::{
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{
         CpfpChangeInput, EXITING_STATUSES, ExitLeafSelection, ExitStateExport, ExitStateImport,
-        RefundOutput,
+        RefundOutput, UnilateralExitBuild,
     },
 };
 
@@ -1983,10 +1983,38 @@ impl SparkWallet {
         Ok(plan)
     }
 
-    /// Signs the child that pays an anchorless refund's fee (an exit's
-    /// [`ExitTx::refund_child`](crate::ExitTx::refund_child)) with the key of the
-    /// leaf the refund pays.
-    pub async fn sign_refund_child(
+    /// Builds a complete unilateral exit from `plan` and the `state` a scan
+    /// resolved, and signs the CPFP children the wallet pays for: those of
+    /// refunds without an anchor, which spend the refund's own output under the
+    /// leaf's key. The caller signs the funding's children in `to_sign`.
+    pub async fn build_unilateral_exit(
+        &self,
+        plan: &spark::services::UnilateralExitPlan,
+        state: &ExitChainState,
+        fee_rate_sat_per_kw: u64,
+    ) -> Result<UnilateralExitBuild, SparkWalletError> {
+        let mut build =
+            crate::unilateral_exit::build_unilateral_exit(plan, state, fee_rate_sat_per_kw)?;
+        for tx in build
+            .branches
+            .iter_mut()
+            .flat_map(|branch| branch.txs.iter_mut())
+        {
+            if let Some(leaf_id) = tx.node_id.as_ref()
+                && let Some(child) = tx.cpfp_tx.take()
+            {
+                tx.cpfp_tx = Some(
+                    self.sign_refund_cpfp_tx(leaf_id, &tx.base_tx, child)
+                        .await?,
+                );
+            }
+        }
+        Ok(build)
+    }
+
+    /// Signs the CPFP child of a refund without an anchor in a unilateral exit,
+    /// with the key of the leaf the refund pays.
+    async fn sign_refund_cpfp_tx(
         &self,
         leaf_id: &TreeNodeId,
         refund_tx: &Transaction,

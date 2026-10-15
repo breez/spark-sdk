@@ -14,8 +14,8 @@ use spark_wallet::{
     ExitNodeConfirmation as WalletExitNodeConfirmation, ExitRefund as WalletExitRefund,
     ExitRefundState as WalletExitRefundState, ExitTxKind, ExitTxStatus, Observation, RefundSweep,
     RefundSweepLookup, TreeNode, TreeNodeId, UnilateralExitBuild, UnilateralExitSkipReason,
-    UnilateralExitSkippedLeaf, build_unilateral_exit, check_exit_chain, is_ephemeral_anchor_output,
-    leaf_refund_addresses, scan_exit_chain, scan_funding, scan_refund_sweeps,
+    UnilateralExitSkippedLeaf, check_exit_chain, is_ephemeral_anchor_output, leaf_refund_addresses,
+    scan_exit_chain, scan_funding, scan_refund_sweeps,
 };
 
 use tracing::{debug, trace};
@@ -264,7 +264,10 @@ impl BreezSdk {
             })
             .collect();
 
-        let build = build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)?;
+        let build = self
+            .spark_wallet
+            .build_unilateral_exit(&prepared_exit, &chain_state, fee_rate_sat_per_kw)
+            .await?;
         let recoverable_value_sats = build.recoverable_value_sat;
         let cpfp_fee_sats = build.cpfp_fee_sat;
         let fanout_fee_sats = build.fanout_fee_sat;
@@ -280,7 +283,7 @@ impl BreezSdk {
             .branches
             .iter()
             .flat_map(|branch| &branch.txs)
-            .filter_map(|tx| Some((tx.refund_child.as_ref()?.compute_txid(), tx.txid)))
+            .filter_map(|tx| Some((tx.cpfp_tx.as_ref()?.compute_txid(), tx.txid)))
             .collect();
         debug!(
             has_fan_out = build.fan_out.is_some(),
@@ -338,15 +341,10 @@ impl BreezSdk {
                     depends_on = tx.depends_on.len(),
                     "build_unilateral_exit: exit tx"
                 );
-                let cpfp_tx_hex = match (tx.to_sign, tx.refund_child, &tx.node_id) {
-                    (Some(child), _, _) => Some(sign_psbt_via(child, signer).await?),
-                    (None, Some(child), Some(leaf_id)) => Some(serialize_hex(
-                        &self
-                            .spark_wallet
-                            .sign_refund_child(leaf_id, &tx.base_tx, child)
-                            .await?,
-                    )),
-                    _ => None,
+                let cpfp_tx_hex = match (tx.to_sign, tx.cpfp_tx) {
+                    (Some(child), _) => Some(sign_psbt_via(child, signer).await?),
+                    (None, Some(cpfp_tx)) => Some(serialize_hex(&cpfp_tx)),
+                    (None, None) => None,
                 };
                 transactions.push(RecoveryTransaction {
                     kind,
@@ -1296,7 +1294,7 @@ mod tests {
                 output: vec![],
             },
             to_sign: None,
-            refund_child: None,
+            cpfp_tx: None,
             csv_timelock_blocks: None,
             depends_on: vec![],
             status,
