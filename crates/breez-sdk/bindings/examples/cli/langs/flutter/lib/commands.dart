@@ -859,7 +859,10 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   } else if (feeSatStr != null) {
     maxFee = MaxFee(onchain: MaxOnchainFee.fixed(amount: BigInt.parse(feeSatStr)), proportionalPpm: null);
   } else if (satPerVbyteStr != null) {
-    maxFee = MaxFee(onchain: MaxOnchainFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr)), proportionalPpm: proportionalPpm);
+    maxFee = MaxFee(
+      onchain: MaxOnchainFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr)),
+      proportionalPpm: proportionalPpm,
+    );
   }
 
   final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));
