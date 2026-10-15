@@ -69,8 +69,11 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
-                max_fee: Some(MaxFee::Fixed {
-                    amount: *required_fee_sats,
+                max_fee: Some(MaxFee {
+                    onchain: MaxOnchainFee::Fixed {
+                        amount: *required_fee_sats,
+                    },
+                    proportional_ppm: None,
                 }),
             };
             sdk.claim_deposit(request).await?;
@@ -151,8 +154,10 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
 
     // Set the maximum fee to the fastest network recommended fee at the time of claim
     // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
-    config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
-        leeway_sat_per_vbyte: 1,
+    config.max_deposit_claim_fee = Some(MaxFee {
+        onchain: MaxOnchainFee::NetworkRecommended {
+            leeway_sat_per_vbyte: 1,
+        },
         proportional_ppm: Some(1_000),
     });
     // ANCHOR_END: set-max-fee-to-recommended-fees
@@ -171,8 +176,11 @@ async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()>
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
-                max_fee: Some(MaxFee::Fixed {
-                    amount: *required_fee_sats,
+                max_fee: Some(MaxFee {
+                    onchain: MaxOnchainFee::Fixed {
+                        amount: *required_fee_sats,
+                    },
+                    proportional_ppm: None,
                 }),
             };
             sdk.claim_deposit(request).await?;

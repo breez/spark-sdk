@@ -182,6 +182,7 @@ pub struct DepositInfo {
     pub claim_error: Option<DepositClaimError>,
     pub instant_claim_status: Option<InstantClaimStatus>,
     pub refund_state: Option<RefundState>,
+    #[serde(default, deserialize_with = "deserialize_stored_max_fee")]
     pub max_claim_fee: Option<MaxFee>,
 }
 
@@ -875,18 +876,78 @@ pub struct StableBalanceConfig {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
-pub enum MaxFee {
-    Fixed {
-        amount: u64,
-    },
-    Rate {
-        sat_per_vbyte: u64,
-        proportional_ppm: Option<u32>,
-    },
-    NetworkRecommended {
-        leeway_sat_per_vbyte: u64,
-        proportional_ppm: Option<u32>,
-    },
+pub struct MaxFee {
+    pub onchain: MaxOnchainFee,
+    pub proportional_ppm: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MaxOnchainFee)]
+pub enum MaxOnchainFee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+}
+
+/// Reads a deposit's stored max fee. JS storages keep the object they were
+/// given, so ceilings stored before `MaxFee` split out its on-chain part are
+/// still `{ type, ...fields, proportionalPpm }`.
+fn deserialize_stored_max_fee<'de, D>(deserializer: D) -> Result<Option<MaxFee>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+    enum Flat {
+        Fixed {
+            amount: u64,
+            proportional_ppm: Option<u32>,
+        },
+        Rate {
+            sat_per_vbyte: u64,
+            proportional_ppm: Option<u32>,
+        },
+        NetworkRecommended {
+            leeway_sat_per_vbyte: u64,
+            proportional_ppm: Option<u32>,
+        },
+    }
+
+    let value: wasm_bindgen::JsValue = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let is_flat =
+        js_sys::Reflect::has(&value, &wasm_bindgen::JsValue::from_str("type")).unwrap_or(false);
+    if !is_flat {
+        return serde_wasm_bindgen::from_value(value)
+            .map(Some)
+            .map_err(|e| serde::de::Error::custom(e.to_string()));
+    }
+    let flat: Flat = deserialize_tagged(serde_wasm_bindgen::Deserializer::from(value))
+        .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+    let (onchain, proportional_ppm) = match flat {
+        Flat::Fixed {
+            amount,
+            proportional_ppm,
+        } => (MaxOnchainFee::Fixed { amount }, proportional_ppm),
+        Flat::Rate {
+            sat_per_vbyte,
+            proportional_ppm,
+        } => (MaxOnchainFee::Rate { sat_per_vbyte }, proportional_ppm),
+        Flat::NetworkRecommended {
+            leeway_sat_per_vbyte,
+            proportional_ppm,
+        } => (
+            MaxOnchainFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+            },
+            proportional_ppm,
+        ),
+    };
+    Ok(Some(MaxFee {
+        onchain,
+        proportional_ppm,
+    }))
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Fee)]

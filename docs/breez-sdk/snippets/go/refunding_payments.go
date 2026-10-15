@@ -84,7 +84,9 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 			userApproved := true // Replace with actual user approval logic
 
 			if userApproved {
-				maxFee := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeFixed{Amount: requiredFee})
+				maxFee := breez_sdk_spark.MaxFee{
+					Onchain: breez_sdk_spark.MaxOnchainFeeFixed{Amount: requiredFee},
+				}
 				claimRequest := breez_sdk_spark.ClaimDepositRequest{
 					Txid:   deposit.Txid,
 					Vout:   deposit.Vout,
@@ -185,13 +187,11 @@ func SetMaxFeeToRecommendedFees() error {
 	// Set the maximum fee to the fastest network recommended fee at the time of claim
 	// with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
 	proportionalPpm := uint32(1000)
-	networkRecommendedInterface := breez_sdk_spark.MaxFee(
-		breez_sdk_spark.MaxFeeNetworkRecommended{
-			LeewaySatPerVbyte: 1,
-			ProportionalPpm:   &proportionalPpm,
-		},
-	)
-	config.MaxDepositClaimFee = &networkRecommendedInterface
+	networkRecommended := breez_sdk_spark.MaxFee{
+		Onchain:         breez_sdk_spark.MaxOnchainFeeNetworkRecommended{LeewaySatPerVbyte: 1},
+		ProportionalPpm: &proportionalPpm,
+	}
+	config.MaxDepositClaimFee = &networkRecommended
 	// ANCHOR_END: set-max-fee-to-recommended-fees
 	log.Printf("Config: %v", config)
 	return nil
@@ -205,7 +205,9 @@ func CustomClaimLogic(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.Dep
 
 			// Claim only if the fee is at most 1% of the deposit amount
 			if requiredFee*100 <= deposit.AmountSats {
-				maxFee := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeFixed{Amount: requiredFee})
+				maxFee := breez_sdk_spark.MaxFee{
+					Onchain: breez_sdk_spark.MaxOnchainFeeFixed{Amount: requiredFee},
+				}
 				claimRequest := breez_sdk_spark.ClaimDepositRequest{
 					Txid:   deposit.Txid,
 					Vout:   deposit.Vout,

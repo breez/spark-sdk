@@ -10,8 +10,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use bitcoin::{Transaction, Txid};
 use breez_sdk_spark::{
-    BitcoinChainService, Config, LeafOptimizationConfig, MaxFee, Network, default_config,
-    default_server_config,
+    BitcoinChainService, Config, LeafOptimizationConfig, MaxFee, MaxOnchainFee, Network,
+    default_config, default_server_config,
 };
 use rstest::fixture;
 use spark_itest::mempool::MempoolClient;
@@ -234,8 +234,13 @@ impl Environment {
 
     /// A wallet that refuses any deposit claim fee, so nothing claims for it.
     pub async fn create_wallet_refusing_claim_fees(&self) -> Result<SdkInstance> {
-        self.create_wallet_with(|cfg| cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 0 }))
-            .await
+        self.create_wallet_with(|cfg| {
+            cfg.max_deposit_claim_fee = Some(MaxFee {
+                onchain: MaxOnchainFee::Fixed { amount: 0 },
+                proportional_ppm: None,
+            })
+        })
+        .await
     }
 
     /// A wallet whose leaf optimization only runs when the test asks for it, with a

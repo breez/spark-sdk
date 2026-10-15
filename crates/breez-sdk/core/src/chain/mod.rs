@@ -231,7 +231,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::{ChainServiceError, FeeMarket, RecommendedFees, stub::ChainStub};
-    use crate::{Fee, MaxFee};
+    use crate::{Fee, MaxFee, MaxOnchainFee};
     use platform_utils::HttpError;
 
     fn status(status: u16) -> ChainServiceError {
@@ -279,8 +279,10 @@ mod tests {
         };
         let fee_market = FeeMarket::new(&chain);
         for (leeway_sat_per_vbyte, sat_per_vbyte) in [(1, 11), (2, 12)] {
-            let max_fee = MaxFee::NetworkRecommended {
-                leeway_sat_per_vbyte,
+            let max_fee = MaxFee {
+                onchain: MaxOnchainFee::NetworkRecommended {
+                    leeway_sat_per_vbyte,
+                },
                 proportional_ppm: None,
             };
             assert_eq!(
@@ -289,6 +291,22 @@ mod tests {
             );
         }
         assert_eq!(chain.requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn a_fixed_max_fee_keeps_its_proportional_part_without_reading_fees() {
+        let chain = ChainStub::default();
+        let fee_market = FeeMarket::new(&chain);
+        let max_fee = MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount: 500 },
+            proportional_ppm: Some(1_000),
+        };
+        assert_eq!(
+            max_fee.to_fee(&fee_market).await.unwrap(),
+            Fee::Fixed { amount: 500 }
+        );
+        assert_eq!(max_fee.proportional_ppm(), 1_000);
+        assert_eq!(chain.requests.load(Ordering::SeqCst), 0);
     }
 
     #[macros::async_test_all]

@@ -4,13 +4,13 @@ The SDK supports various configuration options to customize its behavior. During
 
 ## Max deposit claim fee
 
-Receiving Bitcoin payments through on-chain deposits may involve fees. This option controls automatic claiming of incoming funds: the SDK claims a deposit when the required fees fit the configured threshold. The available options are:
+Receiving Bitcoin payments through on-chain deposits may involve fees. This option controls automatic claiming of incoming funds: the SDK claims a deposit when the required fees fit the configured threshold. Its on-chain part, {{#name onchain}}, is one of:
 
 - Absolute fee amount in sats
 - Feerate in sats/vbyte
 - Fastest network recommended fee at the time of claim, with a leeway in sats/vbyte
 
-The feerate and the network recommended fee can also allow a share of the deposit amount on top, set as {{#name proportional_ppm}} in parts per million (1000 ppm is 0.1%). This covers a provider fee that grows with the deposit, which a feerate alone cannot: without it, a large deposit can exceed the ceiling even when on-chain fees are low. The absolute amount is a cap on the total and takes no share.
+On top of it, {{#name proportional_ppm}} can allow a share of the deposit amount, in parts per million (1000 ppm is 0.1%). This covers a provider fee that grows with the deposit, which the on-chain part alone cannot: without it, a large deposit can exceed the ceiling even when on-chain fees are low. Leave it unset to cap the fee whatever the deposit amount.
 
 You can also disable automatic claiming entirely. Deposits that are not automatically claimed require manual intervention.
 

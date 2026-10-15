@@ -53,7 +53,10 @@ func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,
-                maxFee: MaxFee.fixed(amount: requiredFeeSats)
+                maxFee: MaxFee(
+                    onchain: MaxOnchainFee.fixed(amount: requiredFeeSats),
+                    proportionalPpm: nil
+                )
             )
             try await sdk.claimDeposit(request: claimRequest)
         }
@@ -119,8 +122,10 @@ func setMaxFeeToRecommendedFees() async throws {
 
     // Set the maximum fee to the fastest network recommended fee at the time of claim
     // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
-    config.maxDepositClaimFee = MaxFee.networkRecommended(
-        leewaySatPerVbyte: 1, proportionalPpm: 1000)
+    config.maxDepositClaimFee = MaxFee(
+        onchain: MaxOnchainFee.networkRecommended(leewaySatPerVbyte: 1),
+        proportionalPpm: 1000
+    )
     // ANCHOR_END: set-max-fee-to-recommended-fees
     print("Config: \(config)")
 }
@@ -133,7 +138,10 @@ func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,
-                maxFee: MaxFee.fixed(amount: requiredFeeSats)
+                maxFee: MaxFee(
+                    onchain: MaxOnchainFee.fixed(amount: requiredFeeSats),
+                    proportionalPpm: nil
+                )
             )
             try await sdk.claimDeposit(request: claimRequest)
         }

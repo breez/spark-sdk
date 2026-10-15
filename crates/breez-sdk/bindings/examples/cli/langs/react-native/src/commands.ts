@@ -29,6 +29,7 @@ import {
   AssetFilter,
   PaymentDetailsFilter,
   MaxFee,
+  MaxOnchainFee,
   Fee,
   SparkHtlcStatus,
   SparkMasterIdentityPublicKey,
@@ -1020,16 +1021,24 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
     if (feeSatStr !== undefined || satPerVbyteStr !== undefined) {
       return 'Cannot specify fee_sat or sat_per_vbyte when using recommended fee'
     }
-    maxFee = new MaxFee.NetworkRecommended({
-      leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr),
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.NetworkRecommended({
+        leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr)
+      }),
       proportionalPpm
     })
   } else if (feeSatStr !== undefined && satPerVbyteStr !== undefined) {
     return 'Cannot specify both --fee-sat and --sat-per-vbyte'
   } else if (feeSatStr !== undefined) {
-    maxFee = new MaxFee.Fixed({ amount: BigInt(feeSatStr) })
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.Fixed({ amount: BigInt(feeSatStr) }),
+      proportionalPpm: undefined
+    })
   } else if (satPerVbyteStr !== undefined) {
-    maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr), proportionalPpm })
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) }),
+      proportionalPpm
+    })
   }
 
   const result = await sdk.claimDeposit({
