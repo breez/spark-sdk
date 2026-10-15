@@ -9,7 +9,11 @@ Before moving to production, we strongly recommend verifying that these use case
 
 - **Display pending payments**: Payments always contain a status field that can be used to determine whether the payment was completed or not. Make sure you handle the case where the payment is still pending by showing the correct status to the user.
 
-- **Claiming on-chain deposits**: Make sure you handle the case where an on-chain deposit is unclaimed. For more information see [Claiming on-chain deposits](onchain_claims.md).
+- **Handling unclaimed on-chain deposits**: The SDK claims a deposit on its own only while the claim costs no more than the [max claim fee](onchain_claims.md#the-max-claim-fee). When on-chain fees rise above it, the deposit stays unclaimed and the SDK emits {{#enum SdkEvent::UnclaimedDeposits}}. Without handling this, the user's funds look stuck. Build one of these on top of the automatic claims:
+  - **Manual claiming**: show the user the claim fee, ask for approval, then claim with a max fee that covers it. See [Claiming deposits manually](onchain_manual_claims.md).
+  - **Custom claim logic**: claim by your own rules without asking the user, such as accepting a fee up to a share of the deposit amount. See [Writing your own claim logic](onchain_manual_claims.md#writing-your-own-claim-logic).
+
+  Also let users [refund](onchain_refunds.md) a deposit they don't want to claim, and show deposit states as described in [Tracking deposits](onchain_deposits.md#deposit-states).
 
 - **Check Spark status**: Use the Spark status check to monitor the operational status of the Spark network and display a warning to users when services are degraded or experiencing issues. For more information see [Spark status](spark_status.md).
 
