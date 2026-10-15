@@ -9,7 +9,7 @@ Before moving to production, we strongly recommend verifying that these use case
 
 - **Display pending payments**: Payments always contain a status field that can be used to determine whether the payment was completed or not. Make sure you handle the case where the payment is still pending by showing the correct status to the user.
 
-- **Handling unclaimed on-chain deposits**: The SDK claims a deposit on its own only while the claim costs no more than the [max claim fee](onchain_claims.md#the-max-claim-fee). When on-chain fees rise above it, the deposit stays unclaimed and the SDK emits {{#enum SdkEvent::UnclaimedDeposits}}. Without handling this, the user's funds look stuck. Build one of these on top of the automatic claims:
+- **Handling unclaimed on-chain deposits**: The SDK claims a deposit on its own only while the claim costs no more than the [max claim fee](onchain_claims.md#the-max-claim-fee). When rising on-chain fees push the claim fee above it, the deposit stays unclaimed and the SDK emits {{#enum SdkEvent::UnclaimedDeposits}}. Without handling this, the user's funds look stuck. Build one of these on top of the automatic claims:
   - **Manual claiming**: show the user the claim fee, ask for approval, then claim with a max fee that covers it. See [Claiming deposits manually](onchain_manual_claims.md).
   - **Custom claim logic**: claim by your own rules without asking the user, such as claiming only above an amount or under a fee limit capped in sats. See [Writing your own claim logic](onchain_manual_claims.md#writing-your-own-claim-logic).
 

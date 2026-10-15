@@ -70,7 +70,7 @@ The standard claim runs under the larger of the deposit's own max fee and the co
 
 ## Writing your own claim logic
 
-For rules the [max claim fee](config.md#max-deposit-claim-fee) cannot express, such as claiming only above an amount, at certain times, or under a fee limit capped in sats, claim with {{#name claim_deposit}} yourself. Keep automatic claiming on to handle only the deposits it leaves unclaimed, or unset the max claim fee to decide every claim.
+For rules the [max claim fee](config.md#max-deposit-claim-fee) cannot express, such as claiming only above an amount, at certain times, or under a fee limit capped in sats, claim with {{#name claim_deposit}} yourself. Keep automatic claiming on and handle only the deposits it leaves unclaimed, or unset the max claim fee to decide every claim.
 
 A deposit whose claim exceeded its max fee carries the total the claim would cost, {{#name required_fee_sats}}, in its {{#name claim_error}}. This example accepts up to 1% of the deposit, but never more than 5,000 sats:
 
