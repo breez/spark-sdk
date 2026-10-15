@@ -13,10 +13,8 @@ use crate::{
     services::ServiceError,
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::{
-        fee_ladder::{
-            LADDER_DUST_LIMIT_SATS, is_anchorless_refund, refund_rung_tx, signed_key_path_vsize,
-        },
-        transactions::is_ephemeral_anchor_output,
+        fee_ladder::{refund_rung_tx, signed_key_path_vsize},
+        transactions::{has_anchor, is_ephemeral_anchor_output},
     },
 };
 
@@ -656,15 +654,15 @@ pub fn build_anchorless_refund_child(
     refund_tx: &Transaction,
     fee_rate_sat_per_kw: u64,
 ) -> Result<AnchorlessRefundChild, ServiceError> {
-    let value = refund_tx
+    let output = refund_tx
         .output
         .first()
-        .map(|out| out.value.to_sat())
         .ok_or_else(|| ServiceError::ValidationError("Refund has no outputs".to_string()))?;
+    let value = output.value.to_sat();
     let fee_sat = anchorless_refund_package_fee(refund_tx, fee_rate_sat_per_kw);
     let output_value = value
         .checked_sub(fee_sat)
-        .filter(|v| *v >= LADDER_DUST_LIMIT_SATS)
+        .filter(|v| *v >= output.script_pubkey.minimal_non_dust().to_sat())
         .ok_or_else(|| {
             ServiceError::ValidationError(format!(
                 "Refund of {value} sats cannot pay its own fee of {fee_sat} sats"
@@ -803,7 +801,7 @@ fn exit_transactions<'a>(
     // `direct_refund_tx`, which pays its own fee.
     let refund_fee = if on_chain.has_refund(&leaf.id) || on_chain.went_direct(&leaf.id) {
         RefundFee::None
-    } else if is_anchorless_refund(refund_tx) {
+    } else if !has_anchor(refund_tx) {
         RefundFee::Anchorless(refund_tx)
     } else {
         RefundFee::Cpfp(refund_tx)
@@ -950,23 +948,22 @@ fn evaluate_leaf_costs(
         // The sweep takes the child's output of a refund without an anchor.
         let refund_value = refund_value(leaf, on_chain);
         let child_fee = match refund_fee {
-            RefundFee::Anchorless(refund_tx) => Some(anchorless_refund_package_fee(
-                refund_tx,
-                params.fee_rate_sat_per_kw,
-            )),
-            RefundFee::None | RefundFee::Cpfp(_) => None,
+            RefundFee::Anchorless(refund_tx) => {
+                match build_anchorless_refund_child(refund_tx, params.fee_rate_sat_per_kw) {
+                    Ok(child) => child.fee_sat,
+                    Err(_) => {
+                        report_unexitable(
+                            filter,
+                            leaf_id,
+                            "its refund cannot pay its own fee at this fee rate",
+                        )?;
+                        continue;
+                    }
+                }
+            }
+            RefundFee::None | RefundFee::Cpfp(_) => 0,
         };
-        if let Some(child_fee) = child_fee
-            && refund_value < child_fee.saturating_add(LADDER_DUST_LIMIT_SATS)
-        {
-            report_unexitable(
-                filter,
-                leaf_id,
-                "its refund cannot pay its own fee at this fee rate",
-            )?;
-            continue;
-        }
-        let swept_value = refund_value.saturating_sub(child_fee.unwrap_or(0));
+        let swept_value = refund_value.saturating_sub(child_fee);
         if filter == UnilateralExitLeafFilter::All || swept_value > total_marginal_cost {
             selected.push(UnilateralExitSelectedLeaf {
                 id: (*leaf_id).clone(),
@@ -2512,13 +2509,18 @@ mod tests {
             }
         }
 
+        fn without_anchor(tx: &Transaction) -> Transaction {
+            let mut tx = tx.clone();
+            tx.output.retain(|out| !is_ephemeral_anchor_output(out));
+            tx
+        }
+
         /// A leaf whose nodes are on-chain and whose refund pays its own fee has
         /// nothing left for the funding: it is planned and quoted without any.
         #[test_all]
         fn a_leaf_left_with_an_anchorless_refund_needs_no_funding() {
             let mut node = leaf_node_n("leaf", 1_000_000, 1);
-            let refund =
-                crate::utils::fee_ladder::anchorless_refund_tx(node.refund_tx.as_ref().unwrap());
+            let refund = without_anchor(node.refund_tx.as_ref().unwrap());
             node.refund_tx = Some(refund.clone());
             let leaf_id = node.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> =
@@ -2563,9 +2565,7 @@ mod tests {
         fn an_anchorless_refund_costs_the_leaf_not_the_funding() {
             let anchored = leaf_node("leaf", 1_000_000);
             let mut anchorless = anchored.clone();
-            let refund = crate::utils::fee_ladder::anchorless_refund_tx(
-                anchored.refund_tx.as_ref().unwrap(),
-            );
+            let refund = without_anchor(anchored.refund_tx.as_ref().unwrap());
             anchorless.refund_tx = Some(refund.clone());
             let id = anchored.id.clone();
             let cost_of = |node: TreeNode| {
@@ -2608,9 +2608,7 @@ mod tests {
         #[test_all]
         fn a_leaf_that_cannot_pay_its_anchorless_refund_is_unexitable() {
             let mut node = leaf_node("leaf", 400);
-            node.refund_tx = Some(crate::utils::fee_ladder::anchorless_refund_tx(
-                node.refund_tx.as_ref().unwrap(),
-            ));
+            node.refund_tx = Some(without_anchor(node.refund_tx.as_ref().unwrap()));
             let id = node.id.clone();
             let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
             assert!(

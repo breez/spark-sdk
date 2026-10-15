@@ -246,19 +246,12 @@ pub(crate) fn create_refund_txs(
     receiving_pubkey: &PublicKey,
     network: Network,
 ) -> Result<RefundTransactions, ServiceError> {
-    // TODO: Isolate secp256k1 initialization to avoid multiple initializations
-    let secp = Secp256k1::new();
     let node_value = first_output(node_tx)?.value;
     let cpfp_outpoint = OutPoint {
         txid: node_tx.compute_txid(),
         vout: 0,
     };
-    let addr = Address::p2tr(
-        &secp,
-        receiving_pubkey.x_only_public_key().0,
-        None,
-        Into::<bitcoin::Network>::into(network),
-    );
+    let addr = refund_address(receiving_pubkey, network);
 
     let cpfp_tx = create_spark_tx(
         cpfp_outpoint,
@@ -301,6 +294,39 @@ pub(crate) fn create_refund_txs(
         direct_tx,
         direct_from_cpfp_tx,
     })
+}
+
+/// The cpfp refund of [`create_refund_txs`] without its P2A anchor. It pays no
+/// fee, so a child spending its output carries one. The operators take it only
+/// together with a refund ladder.
+pub(crate) fn create_anchorless_refund_tx(
+    node_tx: &Transaction,
+    cpfp_sequence: Sequence,
+    receiving_pubkey: &PublicKey,
+    network: Network,
+) -> Result<Transaction, ServiceError> {
+    Ok(create_spark_tx(
+        OutPoint {
+            txid: node_tx.compute_txid(),
+            vout: 0,
+        },
+        cpfp_sequence,
+        first_output(node_tx)?.value,
+        refund_address(receiving_pubkey, network).script_pubkey(),
+        false,
+        false,
+    ))
+}
+
+fn refund_address(receiving_pubkey: &PublicKey, network: Network) -> Address {
+    // TODO: Isolate secp256k1 initialization to avoid multiple initializations
+    let secp = Secp256k1::new();
+    Address::p2tr(
+        &secp,
+        receiving_pubkey.x_only_public_key().0,
+        None,
+        Into::<bitcoin::Network>::into(network),
+    )
 }
 
 pub fn create_initial_timelock_refund_txs(
@@ -461,6 +487,12 @@ pub fn is_ephemeral_anchor_output(tx_out: &TxOut) -> bool {
     tx_out.value.to_sat() == 0 && tx_out.script_pubkey.as_bytes() == [0x51, 0x02, 0x4e, 0x73]
 }
 
+/// Whether `tx` has a P2A anchor output for a CPFP child to spend.
+#[must_use]
+pub fn has_anchor(tx: &Transaction) -> bool {
+    tx.output.iter().any(is_ephemeral_anchor_output)
+}
+
 fn maybe_apply_fee(amount_sats: u64) -> u64 {
     if amount_sats > DEFAULT_FEE_SATS {
         amount_sats.saturating_sub(DEFAULT_FEE_SATS)
@@ -516,5 +548,50 @@ mod tests {
             refunds.cpfp_tx.output[0].script_pubkey,
             expected.script_pubkey()
         );
+    }
+
+    /// The operators rebuild the anchorless refund and compare it byte for byte:
+    /// it is the anchored cpfp refund with only the anchor left out.
+    #[test]
+    fn the_anchorless_refund_is_the_cpfp_refund_without_its_anchor() {
+        let secp = Secp256k1::new();
+        let receiving_pubkey = PublicKey::from_secret_key(
+            &secp,
+            &bitcoin::secp256k1::SecretKey::from_slice(&[7u8; 32]).unwrap(),
+        );
+        let node_tx = create_spark_tx(
+            OutPoint {
+                txid: bitcoin::Txid::from_byte_array([1u8; 32]),
+                vout: 0,
+            },
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            Amount::from_sat(100_000),
+            ScriptBuf::new(),
+            false,
+            true,
+        );
+        let sequence = Sequence::from_height(1900);
+
+        let anchored = create_refund_txs(
+            &node_tx,
+            None,
+            sequence,
+            sequence,
+            &receiving_pubkey,
+            Network::Regtest,
+        )
+        .unwrap()
+        .cpfp_tx;
+        let anchorless =
+            create_anchorless_refund_tx(&node_tx, sequence, &receiving_pubkey, Network::Regtest)
+                .unwrap();
+
+        assert!(has_anchor(&anchored));
+        assert!(!has_anchor(&anchorless));
+        let mut stripped = anchored.clone();
+        stripped
+            .output
+            .retain(|out| !is_ephemeral_anchor_output(out));
+        assert_eq!(anchorless, stripped);
     }
 }

@@ -9,7 +9,7 @@ use spark::{
     },
     signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
-    utils::fee_ladder::is_anchorless_refund,
+    utils::transactions::has_anchor,
 };
 use tracing::{debug, trace, warn};
 
@@ -1579,7 +1579,7 @@ pub(crate) fn build_exit(
                 let refund_txid = refund_tx.compute_txid();
                 let refund_value = refund_output_value(&refund_tx, leaf_id)?;
                 let refund_csv = csv_timelock(&refund_tx);
-                if is_anchorless_refund(&refund_tx) {
+                if !has_anchor(&refund_tx) {
                     let child = build_anchorless_refund_child(&refund_tx, fee_rate_sat_per_kw)?;
                     refund_outputs.push(RefundOutput {
                         outpoint: OutPoint {
@@ -1967,7 +1967,7 @@ mod exit_build_tests {
             }
         );
         assert_eq!(build.refund_outputs[0].value, 100_000 - fee);
-        // What the node children left of the funding goes to the sweep too.
+        // What the node's cpfp children left of the funding goes to the sweep too.
         assert_eq!(build.cpfp_change_inputs.len(), 1);
         let anchored =
             build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();

@@ -38,11 +38,9 @@ use crate::{
     },
     tree::{TreeNode, TreeNodeId},
     utils::{
-        fee_ladder::{
-            LADDER_RUNG_TABLE_VERSION, anchorless_refund_tx, refund_ladder_fees, refund_rung_tx,
-        },
+        fee_ladder::{LADDER_RUNG_TABLE_VERSION, refund_ladder_fees, refund_rung_tx},
         refund::commitments_at,
-        transactions::{RefundTransactions, create_refund_txs},
+        transactions::{RefundTransactions, create_anchorless_refund_tx, create_refund_txs},
     },
 };
 
@@ -1039,10 +1037,15 @@ impl TransferService {
                 &signing_public_key,
                 self.network,
             )?;
-            // The operators take an anchorless refund only together with its
+            // The operators accept an anchorless refund only together with its
             // ladder, so a leaf without one keeps the anchored refund.
             let (cpfp_refund_tx, refund_ladder) = if self.fee_ladder_enabled {
-                let anchorless = anchorless_refund_tx(&cpfp_refund_tx);
+                let anchorless = create_anchorless_refund_tx(
+                    node_tx,
+                    cpfp_sequence,
+                    &signing_public_key,
+                    self.network,
+                )?;
                 match self.sign_refund_ladder(&leaf.node.id, &anchorless).await {
                     Some(ladder) => (anchorless, Some(ladder)),
                     None => (cpfp_refund_tx, None),
@@ -1638,7 +1641,7 @@ mod tests {
     /// ladder of rungs spending it, each signed by the leaf key the refund pays.
     #[async_test_all]
     async fn a_claim_signs_a_refund_fee_ladder() {
-        use crate::utils::fee_ladder::{LADDER_RUNG_TABLE_VERSION, is_anchorless_refund};
+        use crate::utils::{fee_ladder::LADDER_RUNG_TABLE_VERSION, transactions::has_anchor};
         use bitcoin::consensus::deserialize;
         use bitcoin::hashes::Hash;
         use bitcoin::secp256k1::{Message, Secp256k1, XOnlyPublicKey};
@@ -1672,7 +1675,7 @@ mod tests {
             .unwrap();
 
         let refund: bitcoin::Transaction = deserialize(&cpfp[0].raw_tx).unwrap();
-        assert!(is_anchorless_refund(&refund));
+        assert!(!has_anchor(&refund));
         let ladder = cpfp[0].refund_ladder.as_ref().expect("a ladder");
         assert_eq!(ladder.rung_table_version, LADDER_RUNG_TABLE_VERSION);
         assert!(!ladder.rungs.is_empty());
