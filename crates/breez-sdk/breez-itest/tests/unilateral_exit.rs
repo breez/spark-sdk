@@ -4499,7 +4499,6 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
         }
     }
 
-    // A renewed leaf's new ancestor is fetched in the background.
     if renewed(sdk, before).await? {
         return Ok(());
     }
@@ -4509,20 +4508,33 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
     )
 }
 
+/// Waits for the renewed leaf's new ancestor to reach the wallet, which fetches
+/// it in the background. A fetch made just after the renewal can come back
+/// incomplete, and the wallet then holds the leaf off for 30 seconds before
+/// fetching again. Each try syncs, since no transfer triggers a fetch any more.
 async fn renewed(sdk: &LocalSdk, before: usize) -> Result<bool> {
-    for _ in 0..20 {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while Instant::now() < deadline {
         if chain_len(sdk).await? > before {
             return Ok(true);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
     Ok(false)
 }
 
-async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u64>> {
+async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u32>> {
     let exported = sdk.sdk.export_unilateral_exit_state().await?;
     let envelope: serde_json::Value = serde_json::from_str(&exported.exit_state)?;
-    Ok(envelope["pedigrees"][0]["leaf"]["refund_tx"]["input"][0]["sequence"].as_u64())
+    // The export writes transactions as consensus hex.
+    let Some(refund_hex) = envelope["pedigrees"][0]["leaf"]["refund_tx"].as_str() else {
+        return Ok(None);
+    };
+    Ok(decode_tx(refund_hex)?
+        .input
+        .first()
+        .map(|input| input.sequence.to_consensus_u32()))
 }
 
 async fn chain_len(sdk: &LocalSdk) -> Result<usize> {
