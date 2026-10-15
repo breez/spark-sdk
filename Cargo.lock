@@ -7494,6 +7494,7 @@ dependencies = [
  "k256",
  "lightning-invoice 0.33.2",
  "macros 0.1.0",
+ "mockall",
  "platform-utils 0.1.0",
  "prost",
  "prost-types",

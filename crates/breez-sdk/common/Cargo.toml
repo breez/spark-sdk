@@ -71,7 +71,7 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 rand.workspace = true
-mockall = "0.12.1"
+mockall.workspace = true
 
 # The DoH tests serve an oversized body from a local socket.
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]

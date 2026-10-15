@@ -994,6 +994,7 @@ pub enum LeafSelection {
     SwapNeeded(Vec<TreeNode>),
 }
 
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
     /// Notifies each time leaves reach the pool, for the work that has to follow
@@ -1230,6 +1231,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -1248,6 +1250,7 @@ pub trait TreeService: Send + Sync {
     /// needs it so the package is signed over up-to-date leaves. Renewal
     /// briefly reserves the leaves and persists the renewed data; when no
     /// renewal is needed the selection is read-only.
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn select_leaves_for_package(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -1324,6 +1327,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn finalize_reservation(
         &self,
         id: LeavesReservationId,

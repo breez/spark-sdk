@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 browser-tests = []              # Enable browser wasm-pack tests
-test-utils = []                 # Expose shared test helpers for downstream crates
+test-utils = ["dep:mockall"]    # Expose shared test helpers for downstream crates
 test-arbitrary-precision = ["serde_json/arbitrary_precision"] # Regression tests for serde-rs/json#505
 
 [dependencies]
@@ -26,6 +26,7 @@ http-body-util.workspace = true
 k256 = { workspace = true, features = ["arithmetic", "schnorr", "ecdsa"] }
 lightning-invoice.workspace = true
 macros.workspace = true
+mockall = { workspace = true, optional = true }
 platform-utils.workspace = true
 prost.workspace = true
 prost-types.workspace = true
