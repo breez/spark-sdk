@@ -297,7 +297,7 @@ pub(crate) fn create_refund_txs(
 }
 
 /// The cpfp refund of [`create_refund_txs`] without its P2A anchor. It pays no
-/// fee, so a child spending its output carries one. The operators take it only
+/// fee, so a child spending its output carries one. The operators accept it only
 /// together with a refund ladder.
 pub(crate) fn create_anchorless_refund_tx(
     node_tx: &Transaction,
