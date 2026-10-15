@@ -34,7 +34,7 @@ const KEY_PATH_SIGNATURE_SIZE: usize = 64;
 
 /// The fees of a ladder spending `value` sats, cheapest first. `vsize` is what
 /// each rung pays for: the refund plus the rung for a refund ladder, the rung
-/// alone for a node-hop ladder.
+/// alone for a direct node ladder.
 ///
 /// The lowest fee is the minimum relay fee. The highest spends the output down
 /// to dust, so outbidding the ladder costs more than the output is worth. The
@@ -128,12 +128,12 @@ pub fn refund_rung_tx(refund_tx: &Transaction, output_value: u64) -> Transaction
     }
 }
 
-/// A node-hop ladder rung: the direct node tx's input and sequence, paying
+/// A direct node ladder rung: the direct node tx's input and sequence, paying
 /// `output_value` to `script_pubkey` (the leaf's verifying key). Operators
 /// rebuild it from the direct node tx and compare it byte for byte, so only the
 /// value may differ between rungs.
 #[must_use]
-pub fn node_hop_rung_tx(
+pub fn direct_node_ladder_rung_tx(
     direct_node_tx: &Transaction,
     script_pubkey: ScriptBuf,
     output_value: u64,
@@ -180,19 +180,21 @@ pub fn refund_ladder_fees(refund_tx: &Transaction) -> Vec<u64> {
     ladder_fees(value, rung_vsize.saturating_mul(2))
 }
 
-/// The rungs of a node-hop ladder for `direct_node_tx`, cheapest first, spending
+/// The rungs of a direct node ladder for `direct_node_tx`, cheapest first, spending
 /// a parent output of `parent_value` sats. Empty when the output is too small
 /// to fund one.
 #[must_use]
-pub fn node_hop_ladder_txs(
+pub fn direct_node_ladder_txs(
     direct_node_tx: &Transaction,
     script_pubkey: &ScriptBuf,
     parent_value: u64,
 ) -> Vec<Transaction> {
-    let probe = node_hop_rung_tx(direct_node_tx, script_pubkey.clone(), parent_value);
+    let probe = direct_node_ladder_rung_tx(direct_node_tx, script_pubkey.clone(), parent_value);
     ladder_fees(parent_value, signed_key_path_vsize(&probe))
         .into_iter()
-        .map(|fee| node_hop_rung_tx(direct_node_tx, script_pubkey.clone(), parent_value - fee))
+        .map(|fee| {
+            direct_node_ladder_rung_tx(direct_node_tx, script_pubkey.clone(), parent_value - fee)
+        })
         .collect()
 }
 
@@ -317,10 +319,10 @@ mod tests {
     }
 
     #[test]
-    fn node_hop_rungs_copy_the_direct_tx_and_vary_only_the_value() {
+    fn direct_node_ladder_rungs_copy_the_direct_tx_and_vary_only_the_value() {
         let direct = anchorless_refund_tx(&anchored_refund(50_000));
         let script = p2tr_script();
-        let rungs = node_hop_ladder_txs(&direct, &script, 50_000);
+        let rungs = direct_node_ladder_txs(&direct, &script, 50_000);
         assert!(!rungs.is_empty());
         for rung in &rungs {
             assert_eq!(rung.version, direct.version);

@@ -965,7 +965,7 @@ fn finalize_spark_wallet_config(
     spark_wallet_config.max_concurrent_claims = config.max_concurrent_claims;
     // A remote signer may bill each of a ladder's signatures, up to 24 per leaf
     // claimed, and Turnkey cannot take part in the cooperative recovery a leaf
-    // needs after the watchtower exits it through a node-hop rung.
+    // needs after the watchtower exits it through a direct node ladder rung.
     spark_wallet_config.fee_ladder_enabled =
         match (config.watchtower_fee_ladder_enabled, remote_signer) {
             (Some(true), true) => {

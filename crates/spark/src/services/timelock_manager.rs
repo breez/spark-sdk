@@ -21,7 +21,7 @@ use crate::{
     signer::{LeafSigningKey, SparkSigner},
     tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains},
     utils::{
-        fee_ladder::{LADDER_RUNG_TABLE_VERSION, node_hop_ladder_txs},
+        fee_ladder::{LADDER_RUNG_TABLE_VERSION, direct_node_ladder_txs},
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
         transactions::{
             NodeTransactions, RefundTransactions, create_decremented_timelock_node_txs,
@@ -78,7 +78,7 @@ pub struct TimelockManager {
     operator_pool: Arc<OperatorPool>,
     /// Whether a refund-timelock renewal signs a fee ladder for the leaf's
     /// direct node tx, so the watchtower can pay the fee the mempool needs when
-    /// it defends the leaf's node hop.
+    /// it broadcasts that tx to defend the leaf.
     fee_ladder_enabled: bool,
 }
 
@@ -580,7 +580,7 @@ impl TimelockManager {
             let parent_tx_out = first_output(parent_node_tx)?;
             let script_pubkey = &first_output(&direct_node_tx)?.script_pubkey;
             for rung in
-                node_hop_ladder_txs(&direct_node_tx, script_pubkey, parent_tx_out.value.to_sat())
+                direct_node_ladder_txs(&direct_node_tx, script_pubkey, parent_tx_out.value.to_sat())
             {
                 signing_jobs.push(SigningJob {
                     job_type: SigningJobType::DirectNodeLadderRung,
