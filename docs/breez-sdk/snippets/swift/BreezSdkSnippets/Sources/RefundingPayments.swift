@@ -128,8 +128,9 @@ func setMaxFeeToRecommendedFees() async throws {
 func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: custom-claim-logic
     if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats) = deposit.claimError {
-        // Claim only if the fee is at most 1% of the deposit amount
-        if requiredFeeSats * 100 <= deposit.amountSats {
+        // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+        let maxFeeSats = min(deposit.amountSats / 100, 5_000)
+        if requiredFeeSats <= maxFeeSats {
             let claimRequest = ClaimDepositRequest(
                 txid: deposit.txid,
                 vout: deposit.vout,

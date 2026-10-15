@@ -11,7 +11,7 @@ Before moving to production, we strongly recommend verifying that these use case
 
 - **Handling unclaimed on-chain deposits**: The SDK claims a deposit on its own only while the claim costs no more than the [max claim fee](onchain_claims.md#the-max-claim-fee). When on-chain fees rise above it, the deposit stays unclaimed and the SDK emits {{#enum SdkEvent::UnclaimedDeposits}}. Without handling this, the user's funds look stuck. Build one of these on top of the automatic claims:
   - **Manual claiming**: show the user the claim fee, ask for approval, then claim with a max fee that covers it. See [Claiming deposits manually](onchain_manual_claims.md).
-  - **Custom claim logic**: claim by your own rules without asking the user, such as accepting a fee up to a share of the deposit amount. See [Writing your own claim logic](onchain_manual_claims.md#writing-your-own-claim-logic).
+  - **Custom claim logic**: claim by your own rules without asking the user, such as claiming only above an amount or under a fee limit capped in sats. See [Writing your own claim logic](onchain_manual_claims.md#writing-your-own-claim-logic).
 
   Also let users [refund](onchain_refunds.md) a deposit they don't want to claim, and show deposit states as described in [Tracking deposits](onchain_deposits.md#deposit-states).
 

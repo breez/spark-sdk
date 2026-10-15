@@ -70,8 +70,10 @@ The standard claim runs under the larger of the deposit's own max fee and the co
 
 ## Writing your own claim logic
 
-To decide every claim yourself, unset the [max claim fee](config.md#max-deposit-claim-fee) to turn off automatic claiming, then claim with {{#name claim_deposit}} by your own rules, such as claiming only above an amount, at certain times, or within a fee budget.
+A fee limit relative to the deposit amount needs no code of your own. Set the [max claim fee](config.md#max-deposit-claim-fee) to {{#enum MaxFee::Rate}} with a {{#name sat_per_vbyte}} of 0 and a {{#name proportional_ppm}} of 10,000, and the SDK claims any deposit whose fee is at most 1% of its amount, early claims included.
 
-A deposit whose claim exceeded its max fee carries the total the claim would cost, {{#name required_fee_sats}}, in its {{#name claim_error}}. This example claims only when that fee is at most 1% of the deposit:
+For rules the max claim fee cannot express, such as claiming only above an amount, at certain times, or under a fee limit capped in sats, claim with {{#name claim_deposit}} yourself. Keep automatic claiming on to handle only the deposits it leaves unclaimed, or unset the max claim fee to decide every claim.
+
+A deposit whose claim exceeded its max fee carries the total the claim would cost, {{#name required_fee_sats}}, in its {{#name claim_error}}. This example accepts up to 1% of the deposit, but never more than 5,000 sats:
 
 {{#tabs refunding_payments:custom-claim-logic}}

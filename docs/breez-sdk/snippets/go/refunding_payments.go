@@ -203,8 +203,12 @@ func CustomClaimLogic(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.Dep
 		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
 			requiredFee := exceeded.RequiredFeeSats
 
-			// Claim only if the fee is at most 1% of the deposit amount
-			if requiredFee*100 <= deposit.AmountSats {
+			// Accept up to 1% of the deposit amount, but never more than 5,000 sats
+			maxFeeSats := deposit.AmountSats / 100
+			if maxFeeSats > 5_000 {
+				maxFeeSats = 5_000
+			}
+			if requiredFee <= maxFeeSats {
 				maxFee := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeFixed{Amount: requiredFee})
 				claimRequest := breez_sdk_spark.ClaimDepositRequest{
 					Txid:   deposit.Txid,
