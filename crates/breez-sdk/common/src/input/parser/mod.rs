@@ -5,7 +5,7 @@ use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use platform_utils::HttpClient;
 use platform_utils::time::UNIX_EPOCH;
 use regex_lite::Regex;
-use spark_wallet::{SparkAddress, SparkAddressPaymentType};
+use spark_wallet::{Network, SilentPaymentAddress, SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -24,8 +24,7 @@ use super::percent_encode;
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
     Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
-    Bolt12OfferDetails, InputType, LightningAddressDetails, SilentPaymentAddressDetails,
-    error::Bip21Error,
+    Bolt12OfferDetails, InputType, LightningAddressDetails, error::Bip21Error,
 };
 
 const BIP_21_PREFIX: &str = "bitcoin:";
@@ -753,21 +752,12 @@ pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option
 }
 
 fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
-    if let Ok((hrp, _)) = bech32::decode(input)
-        && hrp.to_lowercase().as_str() == "sp"
-    {
-        match parse_silent_payment_address(input, source) {
-            Some(silent_payment) => {
-                return Some(InputType::SilentPaymentAddress(silent_payment));
-            }
-            None => {
-                return None;
-            }
-        }
-    }
-
     if let Some(address) = parse_bitcoin_address(input, source) {
         return Some(InputType::BitcoinAddress(address));
+    }
+
+    if let Some(silent_payment) = parse_silent_payment_address(input, source) {
+        return Some(InputType::SilentPaymentAddress(silent_payment));
     }
 
     None
@@ -933,11 +923,25 @@ fn parse_lightning_payment_method(input: &str, source: &PaymentRequestSource) ->
 }
 
 fn parse_silent_payment_address(
-    _input: &str,
-    _source: &PaymentRequestSource,
-) -> Option<SilentPaymentAddressDetails> {
-    // TODO: Support silent payment addresses
-    None
+    input: &str,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
+    let address: SilentPaymentAddress = input.parse().ok()?;
+    // Testnet and signet share a prefix. Like parse_bitcoin_address, the
+    // parser reports the first network in this order.
+    let network = [
+        Network::Mainnet,
+        Network::Regtest,
+        Network::Signet,
+        Network::Testnet,
+    ]
+    .into_iter()
+    .find(|network| address.is_valid_for_network(*network))?;
+    Some(BitcoinAddressDetails {
+        address: address.to_string(),
+        network: network.into(),
+        source: source.clone(),
+    })
 }
 
 #[cfg(test)]

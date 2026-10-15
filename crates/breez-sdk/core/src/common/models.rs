@@ -268,7 +268,7 @@ pub enum InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -470,15 +470,6 @@ pub struct LightningAddressDetails {
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,
     pub bip_353_address: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[macros::derive_from(breez_sdk_common::input::SilentPaymentAddressDetails)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
 }
 
 /// Configuration for an external input parser

@@ -50,6 +50,7 @@ pub use spark::{
         VerifiableSecretShare, account_master_key, default_account_number, identity_master_key,
         identity_public_key,
     },
+    silent_payment::{SilentPaymentAddress, SilentPaymentAddressError},
     ssp::*,
     token::{
         BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore, MAX_TOKEN_TX_OUTPUTS,
