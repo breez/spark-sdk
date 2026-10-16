@@ -136,8 +136,11 @@ Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
   if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
     final requiredFee = claimError.requiredFeeSats;
 
-    // Claim only if the fee is at most 1% of the deposit amount
-    if (requiredFee * BigInt.from(100) <= deposit.amountSats) {
+    // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+    final onePercent = deposit.amountSats ~/ BigInt.from(100);
+    final cap = BigInt.from(5000);
+    final maxFeeSats = onePercent < cap ? onePercent : cap;
+    if (requiredFee <= maxFeeSats) {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,

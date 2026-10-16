@@ -164,8 +164,9 @@ class RefundingPayments {
             if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
                 val requiredFee = claimError.requiredFeeSats
 
-                // Claim only if the fee is at most 1% of the deposit amount
-                if (requiredFee * 100uL <= deposit.amountSats) {
+                // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+                val maxFeeSats = minOf(deposit.amountSats / 100uL, 5_000uL)
+                if (requiredFee <= maxFeeSats) {
                     val claimRequest = ClaimDepositRequest(
                         txid = deposit.txid,
                         vout = deposit.vout,
