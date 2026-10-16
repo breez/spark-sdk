@@ -166,8 +166,9 @@ namespace BreezSdkSnippets
             {
                 var requiredFee = exceeded.requiredFeeSats;
 
-                // Claim only if the fee is at most 1% of the deposit amount
-                if (requiredFee * 100 <= deposit.amountSats)
+                // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+                var maxFeeSats = Math.Min(deposit.amountSats / 100, 5_000UL);
+                if (requiredFee <= maxFeeSats)
                 {
                     var claimRequest = new ClaimDepositRequest(
                         txid: deposit.txid,

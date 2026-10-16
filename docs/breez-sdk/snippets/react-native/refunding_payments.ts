@@ -148,8 +148,10 @@ const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
   if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
     const requiredFee = deposit.claimError.inner.requiredFeeSats
 
-    // Claim only if the fee is at most 1% of the deposit amount
-    if (requiredFee * BigInt(100) <= deposit.amountSats) {
+    // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+    const onePercent = deposit.amountSats / BigInt(100)
+    const maxFeeSats = onePercent < BigInt(5000) ? onePercent : BigInt(5000)
+    if (requiredFee <= maxFeeSats) {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,

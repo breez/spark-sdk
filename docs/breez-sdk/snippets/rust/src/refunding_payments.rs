@@ -171,8 +171,9 @@ async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()>
         required_fee_sats, ..
     }) = &deposit.claim_error
     {
-        // Claim only if the fee is at most 1% of the deposit amount
-        if *required_fee_sats * 100 <= deposit.amount_sats {
+        // Accept up to 1% of the deposit amount, but never more than 5,000 sats
+        let max_fee_sats = (deposit.amount_sats / 100).min(5_000);
+        if *required_fee_sats <= max_fee_sats {
             let request = ClaimDepositRequest {
                 txid: deposit.txid.clone(),
                 vout: deposit.vout,
