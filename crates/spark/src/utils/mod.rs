@@ -1,4 +1,5 @@
 pub mod byte_padding;
+pub mod fee_ladder;
 pub mod frost;
 pub mod htlc_transactions;
 pub mod leaf_key_tweak;

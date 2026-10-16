@@ -4,11 +4,12 @@ use bitcoin::{Address, Amount, FeeRate, OutPoint, Transaction, Txid};
 use spark::{
     services::{
         ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
-        ExitRefundState, UnilateralExitPlan, build_cpfp_child, csv_timelock,
-        p2tr_key_path_input_weight, walk_unilateral_exit_chain,
+        ExitRefundState, UnilateralExitPlan, build_anchorless_refund_child, build_cpfp_child,
+        csv_timelock, p2tr_key_path_input_weight, walk_unilateral_exit_chain,
     },
     signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
+    utils::transactions::has_anchor,
 };
 use tracing::{debug, trace, warn};
 
@@ -120,6 +121,10 @@ pub struct ExitTx {
     /// The unsigned PSBT the caller signs; `None` when nothing needs signing (an
     /// adopted fan-out, an already-confirmed step, or a self-fee `direct` tx).
     pub to_sign: Option<bitcoin::Psbt>,
+    /// For a refund without a P2A anchor, the CPFP child that pays its fee out
+    /// of the refund's own output. The wallet signs it with the leaf's key, so
+    /// the caller signs nothing for it.
+    pub cpfp_tx: Option<Transaction>,
     /// Relative CSV timelock (blocks) that must mature before `base_tx` confirms.
     pub csv_timelock_blocks: Option<u32>,
     /// Txids this tx spends from, so it must be broadcast after them.
@@ -1350,8 +1355,11 @@ fn interpret_refund(
 /// resolved into the plan by [`scan_funding`]. Each not-yet-confirmed tx gets an
 /// unsigned CPFP child that pays its fee; confirmed nodes and adopted refunds
 /// are emitted without one. Each refund output is swept under the key derived
-/// from its leaf's node id, the key a wallet's leaves are held under.
-pub fn build_unilateral_exit(
+/// from its leaf's node id, the key a wallet's leaves are held under. The child
+/// of a refund without an anchor is left unsigned for
+/// [`SparkWallet::build_unilateral_exit`](crate::SparkWallet::build_unilateral_exit)
+/// to sign.
+pub(crate) fn build_unilateral_exit(
     plan: &UnilateralExitPlan,
     state: &ExitChainState,
     fee_rate_sat_per_kw: u64,
@@ -1393,6 +1401,7 @@ pub(crate) fn build_exit(
         txid: psbt.unsigned_tx.compute_txid(),
         base_tx: psbt.unsigned_tx.clone(),
         to_sign: Some(psbt.clone()),
+        cpfp_tx: None,
         csv_timelock_blocks: None,
         depends_on: vec![],
         status: ExitTxStatus::Unconfirmed,
@@ -1496,6 +1505,7 @@ pub(crate) fn build_exit(
                         csv_timelock_blocks: csv_timelock(&base_tx),
                         base_tx,
                         to_sign,
+                        cpfp_tx: None,
                         depends_on,
                         status,
                     });
@@ -1522,6 +1532,7 @@ pub(crate) fn build_exit(
                     csv_timelock_blocks: csv_timelock(&adopted.tx),
                     base_tx: adopted.tx.clone(),
                     to_sign: None,
+                    cpfp_tx: None,
                     depends_on: vec![],
                     status: ExitTxStatus::Confirmed {
                         block_height: adopted.block_height,
@@ -1554,6 +1565,7 @@ pub(crate) fn build_exit(
                     txid: refund_txid,
                     base_tx: direct_refund,
                     to_sign: None,
+                    cpfp_tx: None,
                     csv_timelock_blocks: refund_csv,
                     depends_on: leaf_node_txid.into_iter().collect(),
                     status: ExitTxStatus::Unconfirmed,
@@ -1570,39 +1582,73 @@ pub(crate) fn build_exit(
                 let refund_txid = refund_tx.compute_txid();
                 let refund_value = refund_output_value(&refund_tx, leaf_id)?;
                 let refund_csv = csv_timelock(&refund_tx);
-                let child = build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?;
-                cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
-                refund_outputs.push(RefundOutput {
-                    outpoint: OutPoint {
+                if !has_anchor(&refund_tx) {
+                    let child = build_anchorless_refund_child(&refund_tx, fee_rate_sat_per_kw)?;
+                    refund_outputs.push(RefundOutput {
+                        outpoint: OutPoint {
+                            txid: child.tx.compute_txid(),
+                            vout: 0,
+                        },
+                        leaf_id: leaf_id.clone(),
+                        value: refund_value.saturating_sub(child.fee_sat),
+                        signing_key: LeafSigningKey {
+                            derived_from: leaf_id.clone(),
+                        },
+                    });
+                    // Nothing spent what is left of the branch's funding, so the
+                    // sweep takes it back.
+                    cpfp_change_inputs.extend(funding.drain(..).map(|input| CpfpChangeInput {
+                        outpoint: input.outpoint,
+                        witness_utxo: input.witness_utxo,
+                        signed_input_weight: input.signed_input_weight,
+                    }));
+                    txs.push(ExitTx {
+                        kind: ExitTxKind::Refund,
+                        node_id: Some(leaf_id.clone()),
                         txid: refund_txid,
-                        vout: 0,
-                    },
-                    leaf_id: leaf_id.clone(),
-                    value: refund_value,
-                    signing_key: LeafSigningKey {
-                        derived_from: leaf_id.clone(),
-                    },
-                });
-                // The refund child's change is the branch's terminal sweep input.
-                cpfp_change_inputs.push(CpfpChangeInput {
-                    outpoint: child.change_input.outpoint,
-                    witness_utxo: child.change_input.witness_utxo.clone(),
-                    signed_input_weight: child.change_input.signed_input_weight,
-                });
-                let mut depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
-                if let Some(fo) = fan_out_dep.take() {
-                    depends_on.push(fo);
+                        base_tx: refund_tx,
+                        to_sign: None,
+                        cpfp_tx: Some(child.tx),
+                        csv_timelock_blocks: refund_csv,
+                        depends_on: leaf_node_txid.into_iter().collect(),
+                        status: ExitTxStatus::Unconfirmed,
+                    });
+                } else {
+                    let child = build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?;
+                    cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
+                    refund_outputs.push(RefundOutput {
+                        outpoint: OutPoint {
+                            txid: refund_txid,
+                            vout: 0,
+                        },
+                        leaf_id: leaf_id.clone(),
+                        value: refund_value,
+                        signing_key: LeafSigningKey {
+                            derived_from: leaf_id.clone(),
+                        },
+                    });
+                    // The refund child's change is the branch's terminal sweep input.
+                    cpfp_change_inputs.push(CpfpChangeInput {
+                        outpoint: child.change_input.outpoint,
+                        witness_utxo: child.change_input.witness_utxo.clone(),
+                        signed_input_weight: child.change_input.signed_input_weight,
+                    });
+                    let mut depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
+                    if let Some(fo) = fan_out_dep.take() {
+                        depends_on.push(fo);
+                    }
+                    txs.push(ExitTx {
+                        kind: ExitTxKind::Refund,
+                        node_id: Some(leaf_id.clone()),
+                        txid: refund_txid,
+                        base_tx: refund_tx,
+                        to_sign: Some(child.psbt),
+                        cpfp_tx: None,
+                        csv_timelock_blocks: refund_csv,
+                        depends_on,
+                        status: ExitTxStatus::Unconfirmed,
+                    });
                 }
-                txs.push(ExitTx {
-                    kind: ExitTxKind::Refund,
-                    node_id: Some(leaf_id.clone()),
-                    txid: refund_txid,
-                    base_tx: refund_tx,
-                    to_sign: Some(child.psbt),
-                    csv_timelock_blocks: refund_csv,
-                    depends_on,
-                    status: ExitTxStatus::Unconfirmed,
-                });
             }
             None => {}
         }
@@ -1831,6 +1877,7 @@ mod exit_build_tests {
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
                 needs_funding: true,
+                refund_fee: 0,
             }],
             fan_out_psbt: None,
             per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
@@ -1865,6 +1912,69 @@ mod exit_build_tests {
         assert_eq!(build.refund_outputs[0].outpoint.txid, refund.txid);
         assert_eq!(build.refund_outputs[0].outpoint.vout, 0);
         assert_eq!(build.cpfp_change_inputs.len(), 1);
+    }
+
+    fn anchorless_refund(value: u64) -> Transaction {
+        let mut script = vec![0x51, 0x20];
+        script.extend_from_slice(&[7u8; 32]);
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: ScriptBuf::from_bytes(script),
+            }],
+        }
+    }
+
+    #[test]
+    fn build_pays_an_anchorless_refund_from_the_leaf() {
+        let root = node("root", None, anchor_tx(1), None);
+        let refund_tx = anchorless_refund(100_000);
+        let leaf = node("leaf", Some("root"), anchor_tx(2), Some(refund_tx.clone()));
+        let plan = plan_of(root, leaf);
+
+        let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
+
+        let txs = &build.branches[0].txs;
+        assert_eq!(txs.len(), 3);
+        let refund = txs.last().unwrap();
+        assert_eq!(refund.kind, ExitTxKind::Refund);
+        assert_eq!(refund.txid, refund_tx.compute_txid());
+        assert!(refund.to_sign.is_none(), "the funding pays nothing for it");
+        let child = refund.cpfp_tx.as_ref().expect("a child pays its fee");
+        assert_eq!(
+            child.input[0].previous_output,
+            OutPoint {
+                txid: refund.txid,
+                vout: 0
+            }
+        );
+        assert_eq!(
+            child.output[0].script_pubkey,
+            refund_tx.output[0].script_pubkey
+        );
+
+        let fee = spark::services::anchorless_refund_package_fee(&refund_tx, FEE_RATE);
+        assert_eq!(build.refund_fee_sat, fee);
+        assert_eq!(child.output[0].value.to_sat(), 100_000 - fee);
+
+        // The sweep takes the child's output, not the refund's.
+        assert_eq!(build.refund_outputs.len(), 1);
+        assert_eq!(
+            build.refund_outputs[0].outpoint,
+            OutPoint {
+                txid: child.compute_txid(),
+                vout: 0
+            }
+        );
+        assert_eq!(build.refund_outputs[0].value, 100_000 - fee);
+        // What the node's cpfp children left of the funding goes to the sweep too.
+        assert_eq!(build.cpfp_change_inputs.len(), 1);
+        let anchored =
+            build_exit(&single_leaf_plan(), &ResolvedExitState::default(), FEE_RATE).unwrap();
+        assert!(build.cpfp_fee_sat < anchored.cpfp_fee_sat);
     }
 
     #[test]
@@ -2047,6 +2157,7 @@ mod exit_build_tests {
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
                     needs_funding: true,
+                    refund_fee: 0,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
@@ -2054,6 +2165,7 @@ mod exit_build_tests {
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
                     needs_funding: true,
+                    refund_fee: 0,
                 },
             ],
             fan_out_psbt: None,
@@ -2134,6 +2246,7 @@ mod exit_build_tests {
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
                     needs_funding: true,
+                    refund_fee: 0,
                 },
                 UnilateralExitSelectedLeaf {
                     id: leaf_b.id.clone(),
@@ -2141,6 +2254,7 @@ mod exit_build_tests {
                     estimated_cost: 2_000,
                     cpfp_cost: 2_000,
                     needs_funding: true,
+                    refund_fee: 0,
                 },
             ],
             fan_out_psbt: Some(fan_out_psbt),
@@ -2250,6 +2364,7 @@ mod exit_build_tests {
             txid: anchor_tx(nonce).compute_txid(),
             base_tx: anchor_tx(nonce),
             to_sign: None,
+            cpfp_tx: None,
             csv_timelock_blocks: None,
             depends_on: vec![],
             status: if nonce == 1 {

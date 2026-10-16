@@ -204,9 +204,9 @@ fn is_package(entry: &RecoveryTransaction) -> bool {
 ///
 /// Grounded in `spark::services::quote_unilateral_exit`: `per_branch[i] = estimated_cost +
 /// dust`, `single_utxo_funding = sum(per_branch) + fanout_fee`, `total_fee =
-/// sum(estimated_cost) + fanout_fee + refund_fee`, so without a refund fee
-/// `single_utxo_funding - total_fee == n*dust`, and `fanout_fee == 0` iff a
-/// single branch.
+/// sum(estimated_cost) + fanout_fee + refund_fee`, so `single_utxo_funding -
+/// (total_fee - refund_fee) == n*dust`, and `fanout_fee == 0` iff a single
+/// branch.
 fn assert_quote_consistent(
     quote: &PrepareRecoverFundsResponse,
     fee_rate_sat_per_vbyte: u64,
@@ -277,9 +277,9 @@ fn assert_quote_consistent(
         "single_utxo_sats = sum(per_branch) + fanout_fee"
     );
     assert_eq!(
-        funding.single_utxo_sats - quote.total_fee_sats,
+        funding.single_utxo_sats - (quote.total_fee_sats - quote.refund_fee_sats),
         n * dust,
-        "single_utxo_sats reserves exactly one dust output per branch above fees"
+        "single_utxo_sats reserves exactly one dust output per branch above the funded fees"
     );
 
     // The quote echoes the request verbatim.
@@ -712,6 +712,128 @@ async fn test_full_exit_and_sweep(#[case] backend: SignerBackend) -> Result<()> 
         "swept {swept} must equal funding ({CPFP_SATS}) + recoverable \
          ({}) - total fee ({})",
         built.recoverable_value_sats, built.total_fee_sats
+    );
+    Ok(())
+}
+
+/// A leaf received in a transfer is claimed with a fee ladder, so its refund has
+/// no anchor. Its exit pays the refund's fee out of the leaf, with a child the
+/// SDK signs with the leaf's key, and the sweep takes that child's output. Mined
+/// end to end, so the child's signature and the package's relay are proven.
+#[test_log::test(tokio::test)]
+async fn test_exit_of_a_leaf_received_with_a_fee_ladder() -> Result<()> {
+    let sender = new_local_sdk(SignerBackend::Seed).await?;
+    let sdk = build_local_sdk(Arc::clone(&sender.fixtures), SignerBackend::Seed, None).await?;
+    deposit_and_claim(&sender, Amount::from_sat(LEAF_SATS)).await?;
+    let address = sdk.spark_wallet.get_spark_address()?;
+    let mut events = sdk.spark_wallet.subscribe_events();
+    sender
+        .spark_wallet
+        .transfer(LEAF_SATS, &address, None)
+        .await?;
+    wait_for_event(&mut events, 30, "TransferClaimed", |event| match &event {
+        spark_wallet::WalletEvent::TransferClaimed(_) => Ok(Some(event)),
+        _ => Ok(None),
+    })
+    .await?;
+
+    let leaves = sdk.spark_wallet.list_leaves().await?;
+    let [leaf] = leaves.available.as_slice() else {
+        anyhow::bail!("expected one received leaf, got {}", leaves.available.len());
+    };
+    let refund_tx = leaf.refund_tx.as_ref().context("the leaf has no refund")?;
+    assert!(
+        !refund_tx.output.iter().any(is_ephemeral_anchor_output),
+        "the claim signed a fee ladder, so the refund has no anchor"
+    );
+
+    let cpfp = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let destination = cpfp.address.clone();
+    let quote = sdk
+        .sdk
+        .prepare_recover_funds(PrepareRecoverFundsRequest {
+            fee_rate_sat_per_vbyte: FEE_RATE,
+            funding_kind: Some(CpfpFundingKind::P2tr),
+            destination: destination.to_string(),
+            selection: ExitLeafSelection::All,
+        })
+        .await?;
+    assert_quote_consistent(&quote, FEE_RATE, &destination.to_string(), p2tr_dust());
+    assert!(
+        quote.refund_fee_sats > 0,
+        "the refund pays its own fee out of the leaf"
+    );
+
+    let signer = signer_for(&cpfp.secret_key.secret_bytes())?;
+    let built = sdk
+        .sdk
+        .recover_funds(
+            RecoverFundsRequest {
+                prepared: quote.clone(),
+                funding_inputs: vec![cpfp_input(&cpfp)],
+            },
+            Some(signer),
+        )
+        .await?;
+    assert_build_matches_quote(&quote, &built);
+    assert_eq!(
+        built.total_fee_sats, quote.total_fee_sats,
+        "a fresh single-UTXO build reproduces the quote's total fee exactly"
+    );
+
+    let refund_entry = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Refund)
+        .expect("the exit drives the refund");
+    let refund = decode_tx(&refund_entry.tx_hex)?;
+    let child = decode_tx(
+        refund_entry
+            .cpfp_tx_hex
+            .as_ref()
+            .context("the refund carries the child that pays its fee")?,
+    )?;
+    assert_eq!(
+        child.input[0].previous_output,
+        OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0
+        },
+        "the child spends the refund's own output"
+    );
+    assert_eq!(child.input.len(), 1, "the funding pays nothing for it");
+    assert_eq!(
+        built.refund_fee_sats,
+        refund.output[0].value.to_sat() - child.output[0].value.to_sat(),
+        "the refund fee is what the child takes out of the leaf"
+    );
+
+    assert_all_mined(&sdk, &built, &destination).await?;
+
+    let sweep_txid = built
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Sweep)
+        .map(|t| Txid::from_str(&t.txid))
+        .expect("the built set terminates in a sweep")?;
+    let sweep = sdk.fixtures.bitcoind.get_transaction(&sweep_txid).await?;
+    assert!(
+        sweep
+            .input
+            .iter()
+            .any(|i| i.previous_output.txid == child.compute_txid()),
+        "the sweep takes the child's output"
+    );
+    let swept = sweep
+        .output
+        .iter()
+        .find(|o| o.script_pubkey == destination.script_pubkey())
+        .map(|o| o.value.to_sat())
+        .expect("the sweep pays the destination");
+    assert_eq!(
+        swept,
+        CPFP_SATS + built.recoverable_value_sats - built.total_fee_sats,
+        "the destination gets the funding and the leaf, less every fee"
     );
     Ok(())
 }
@@ -4377,7 +4499,6 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
         }
     }
 
-    // A renewed leaf's new ancestor is fetched in the background.
     if renewed(sdk, before).await? {
         return Ok(());
     }
@@ -4387,20 +4508,33 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
     )
 }
 
+/// Waits for the renewed leaf's new ancestor to reach the wallet, which fetches
+/// it in the background. A fetch made just after the renewal can come back
+/// incomplete, and the wallet then holds the leaf off for 30 seconds before
+/// fetching again. Each try syncs, since no transfer triggers a fetch any more.
 async fn renewed(sdk: &LocalSdk, before: usize) -> Result<bool> {
-    for _ in 0..20 {
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while Instant::now() < deadline {
         if chain_len(sdk).await? > before {
             return Ok(true);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
     Ok(false)
 }
 
-async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u64>> {
+async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u32>> {
     let exported = sdk.sdk.export_unilateral_exit_state().await?;
     let envelope: serde_json::Value = serde_json::from_str(&exported.exit_state)?;
-    Ok(envelope["pedigrees"][0]["leaf"]["refund_tx"]["input"][0]["sequence"].as_u64())
+    // The export writes transactions as consensus hex.
+    let Some(refund_hex) = envelope["pedigrees"][0]["leaf"]["refund_tx"].as_str() else {
+        return Ok(None);
+    };
+    Ok(decode_tx(refund_hex)?
+        .input
+        .first()
+        .map(|input| input.sequence.to_consensus_u32()))
 }
 
 async fn chain_len(sdk: &LocalSdk) -> Result<usize> {

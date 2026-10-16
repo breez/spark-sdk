@@ -66,6 +66,7 @@ async fn client_swap_leaves(
         config.split_secret_threshold,
         operator_pool.clone(),
         None,
+        true,
     ));
 
     let service_provider = Arc::new(ServiceProvider::new(
@@ -87,6 +88,7 @@ async fn client_swap_leaves(
         spark_signer.clone(),
         network,
         operator_pool.clone(),
+        true,
     ));
     let tree_store: Arc<dyn TreeStore> = Arc::new(InMemoryTreeStore::default());
     let tree_service = SynchronousTreeService::new(

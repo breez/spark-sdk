@@ -538,8 +538,12 @@ impl SdkBuilder {
             .lnurl_client
             .unwrap_or_else(|| Arc::clone(&lnurl_http_client));
 
-        let spark_wallet_config =
-            finalize_spark_wallet_config(&self.config, &user_agent, background_services_enabled)?;
+        let spark_wallet_config = finalize_spark_wallet_config(
+            &self.config,
+            &user_agent,
+            background_services_enabled,
+            signers.spark.is_remote(),
+        )?;
         let shutdown_sender = watch::channel::<()>(()).0;
         // An explicit `with_session_store` override (adapted to the wallet's
         // session-store trait) wins; otherwise use the store the backend
@@ -939,6 +943,7 @@ fn finalize_spark_wallet_config(
     config: &Config,
     user_agent: &str,
     background_services_enabled: bool,
+    remote_signer: bool,
 ) -> Result<SparkWalletConfig, SdkError> {
     let mut spark_wallet_config = if let Some(env_config) = &config.spark_config {
         SdkBuilder::build_spark_wallet_config(config.network.into(), env_config)?
@@ -963,6 +968,20 @@ fn finalize_spark_wallet_config(
         token_options.auto_optimize_interval = None;
     }
     spark_wallet_config.max_concurrent_claims = config.max_concurrent_claims;
+    // A remote signer may bill each of a ladder's signatures, up to 24 per leaf
+    // claimed, and Turnkey cannot take part in the cooperative recovery a leaf
+    // needs after the watchtower exits it through a direct node ladder rung.
+    spark_wallet_config.fee_ladder_enabled =
+        match (config.watchtower_fee_ladder_enabled, remote_signer) {
+            (Some(true), true) => {
+                return Err(SdkError::InvalidInput(
+                    "watchtower_fee_ladder_enabled is not supported with a remote signer"
+                        .to_string(),
+                ));
+            }
+            (_, true) => false,
+            (enabled, false) => enabled.unwrap_or(true),
+        };
     Ok(spark_wallet_config)
 }
 
@@ -2429,7 +2448,8 @@ mod tests {
     fn finalize_spark_wallet_config_disabled_background_forces_leaf_auto_off() {
         let mut config = default_config(Network::Regtest);
         config.leaf_optimization_config.auto_enabled = true;
-        let result = super::finalize_spark_wallet_config(&config, "test-agent", false).unwrap();
+        let result =
+            super::finalize_spark_wallet_config(&config, "test-agent", false, false).unwrap();
         assert!(!result.leaf_auto_optimize_enabled);
     }
 
@@ -2437,7 +2457,8 @@ mod tests {
     fn finalize_spark_wallet_config_disabled_background_clears_token_auto_interval() {
         let mut config = default_config(Network::Regtest);
         config.token_optimization_config.auto_enabled = true;
-        let result = super::finalize_spark_wallet_config(&config, "test-agent", false).unwrap();
+        let result =
+            super::finalize_spark_wallet_config(&config, "test-agent", false, false).unwrap();
         assert!(
             result
                 .token_outputs_optimization_options
@@ -2450,18 +2471,42 @@ mod tests {
     fn finalize_spark_wallet_config_enabled_background_respects_leaf_auto_optimize() {
         let mut config = default_config(Network::Regtest);
         config.leaf_optimization_config.auto_enabled = true;
-        let result = super::finalize_spark_wallet_config(&config, "test-agent", true).unwrap();
+        let result =
+            super::finalize_spark_wallet_config(&config, "test-agent", true, false).unwrap();
         assert!(result.leaf_auto_optimize_enabled);
     }
 
     #[test]
     fn finalize_spark_wallet_config_applies_user_agent() {
         let config = default_config(Network::Regtest);
-        let result = super::finalize_spark_wallet_config(&config, "my-app/1.0", true).unwrap();
+        let result =
+            super::finalize_spark_wallet_config(&config, "my-app/1.0", true, false).unwrap();
         assert_eq!(
             result.service_provider_config.user_agent.as_deref(),
             Some("my-app/1.0")
         );
+    }
+
+    #[test]
+    fn finalize_spark_wallet_config_keeps_the_fee_ladder_off_for_a_remote_signer() {
+        let mut config = default_config(Network::Regtest);
+        let ladder = |config: &crate::Config, remote_signer| {
+            super::finalize_spark_wallet_config(config, "test-agent", true, remote_signer)
+                .map(|wallet_config| wallet_config.fee_ladder_enabled)
+        };
+        assert!(ladder(&config, false).unwrap());
+        assert!(!ladder(&config, true).unwrap());
+
+        config.watchtower_fee_ladder_enabled = Some(false);
+        assert!(!ladder(&config, false).unwrap());
+        assert!(!ladder(&config, true).unwrap());
+
+        config.watchtower_fee_ladder_enabled = Some(true);
+        assert!(ladder(&config, false).unwrap());
+        assert!(matches!(
+            ladder(&config, true),
+            Err(SdkError::InvalidInput(_))
+        ));
     }
 
     // ---- resolve_context ----

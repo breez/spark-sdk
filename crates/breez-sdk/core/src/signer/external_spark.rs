@@ -43,8 +43,9 @@ pub trait ExternalSparkSigner: Send + Sync {
 
     /// Whether this signer is backed by a remote service, so its operations are
     /// network round-trips rather than local computation. Local signers return
-    /// false; a hosted signer like Turnkey returns true so the SDK can avoid
-    /// redundant calls, e.g. re-deriving keys for leaves it has already verified.
+    /// false; a hosted signer like Turnkey returns true. With a remote signer the
+    /// SDK skips redundant calls, e.g. re-deriving keys for leaves it has already
+    /// verified, and does not support the watchtower fee ladder.
     fn is_remote(&self) -> bool {
         false
     }

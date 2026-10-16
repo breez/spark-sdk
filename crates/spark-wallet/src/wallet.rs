@@ -90,7 +90,7 @@ use crate::{
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
     unilateral_exit::{
         CpfpChangeInput, EXITING_STATUSES, ExitLeafSelection, ExitStateExport, ExitStateImport,
-        RefundOutput,
+        RefundOutput, UnilateralExitBuild,
     },
 };
 
@@ -486,6 +486,7 @@ impl SparkWallet {
             config.split_secret_threshold,
             operator_pool.clone(),
             transfer_observer.clone(),
+            config.fee_ladder_enabled,
         ));
 
         let watchtower_recovery_service = Arc::new(WatchtowerRecoveryService::new(
@@ -508,6 +509,7 @@ impl SparkWallet {
             Arc::clone(&spark_signer),
             config.network,
             operator_pool.clone(),
+            config.fee_ladder_enabled,
         ));
 
         let deposit_service = Arc::new(DepositService::new(
@@ -1979,6 +1981,59 @@ impl SparkWallet {
         }
 
         Ok(plan)
+    }
+
+    /// Builds a complete unilateral exit from `plan` and the `state` a scan
+    /// resolved, and signs the CPFP children the wallet pays for: those of
+    /// refunds without an anchor, which spend the refund's own output under the
+    /// leaf's key. The caller signs the funding's children in `to_sign`.
+    pub async fn build_unilateral_exit(
+        &self,
+        plan: &spark::services::UnilateralExitPlan,
+        state: &ExitChainState,
+        fee_rate_sat_per_kw: u64,
+    ) -> Result<UnilateralExitBuild, SparkWalletError> {
+        let mut build =
+            crate::unilateral_exit::build_unilateral_exit(plan, state, fee_rate_sat_per_kw)?;
+        for tx in build
+            .branches
+            .iter_mut()
+            .flat_map(|branch| branch.txs.iter_mut())
+        {
+            if let Some(leaf_id) = tx.node_id.as_ref()
+                && let Some(child) = tx.cpfp_tx.take()
+            {
+                tx.cpfp_tx = Some(
+                    self.sign_refund_cpfp_tx(leaf_id, &tx.base_tx, child)
+                        .await?,
+                );
+            }
+        }
+        Ok(build)
+    }
+
+    /// Signs the CPFP child of a refund without an anchor in a unilateral exit,
+    /// with the key of the leaf the refund pays.
+    async fn sign_refund_cpfp_tx(
+        &self,
+        leaf_id: &TreeNodeId,
+        refund_tx: &Transaction,
+        mut child: Transaction,
+    ) -> Result<Transaction, SparkWalletError> {
+        let prevout = refund_tx.output.first().ok_or_else(|| {
+            SparkWalletError::Generic(format!("refund tx for leaf {leaf_id} has no outputs"))
+        })?;
+        let sighash = sighash_from_multi_input_tx(&child, 0, std::slice::from_ref(prevout))
+            .map_err(|e| SparkWalletError::Generic(format!("Failed to compute sighash: {e}")))?;
+        let sig = self
+            .spark_signer
+            .sign_leaf_refund_spend(leaf_id, &sighash.to_byte_array())
+            .await?;
+        let input = child.input.first_mut().ok_or_else(|| {
+            SparkWalletError::Generic(format!("refund child for leaf {leaf_id} has no inputs"))
+        })?;
+        input.witness = Witness::from_slice(&[sig.serialize()]);
+        Ok(child)
     }
 
     /// Builds a sweep PSBT that pulls every leaf's refund output and every

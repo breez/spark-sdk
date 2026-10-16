@@ -12,7 +12,10 @@ use tracing::{debug, trace, warn};
 use crate::{
     services::ServiceError,
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
-    utils::transactions::is_ephemeral_anchor_output,
+    utils::{
+        fee_ladder::{refund_rung_tx, signed_key_path_vsize},
+        transactions::{has_anchor, is_ephemeral_anchor_output},
+    },
 };
 
 /// Returns a leaf's ancestor chain, root → leaf. The walk is purely structural:
@@ -335,9 +338,8 @@ pub struct UnilateralExitQuote {
     pub cpfp_fee_sat: u64,
     /// The fan-out's fee, paid by the funding UTXO. Zero for a single branch.
     pub fanout_fee_sat: u64,
-    /// The fees paid out of the leaves' value before the sweep: each selected
-    /// leaf's value less the value of its refund. A direct transaction's output
-    /// is its input less its fee.
+    /// The fees paid out of the leaves' value before the sweep: the sum of each
+    /// selected leaf's `refund_fee`.
     pub refund_fee_sat: u64,
     /// The sweep's fee, paid out of the value being swept rather than by the
     /// funding.
@@ -429,8 +431,7 @@ pub fn quote_unilateral_exit(
         .fold(0u64, u64::saturating_add);
     let refund_fee_sat: u64 = selected
         .iter()
-        .filter_map(|l| tree_nodes.get(&l.id))
-        .map(|leaf| leaf.value.saturating_sub(refund_value(leaf, on_chain)))
+        .map(|l| l.refund_fee)
         .fold(0u64, u64::saturating_add);
     // Each leaf's sweep share is the marginal cost of adding its input, so the
     // shares telescope to the fee of the one sweep that spends all of them.
@@ -504,6 +505,10 @@ pub struct UnilateralExitSelectedLeaf {
     /// planner takes it from the scan's state and not from `cpfp_cost`, which is
     /// zero for every leaf at a zero fee rate.
     pub needs_funding: bool,
+    /// The fees paid out of the leaf's value before the sweep: its value less
+    /// the value of its refund, where a direct transaction's output is its input
+    /// less its fee, plus the fee of the child of a refund without an anchor.
+    pub refund_fee: u64,
 }
 
 pub struct UnilateralExitLeafCostParams {
@@ -625,6 +630,50 @@ pub fn compute_cpfp_package_fee(
     fee_sat(fee_rate_sat_per_kw, parent_weight + child_weight)
 }
 
+/// The child that pays a refund's fee when the refund has no P2A anchor: it
+/// spends the refund's output back to the same key, so the fee comes out of the
+/// leaf rather than out of the funding. Unsigned: only the leaf key can sign it.
+#[derive(Clone, Debug)]
+pub struct AnchorlessRefundChild {
+    pub tx: Transaction,
+    pub fee_sat: u64,
+}
+
+/// Fee for an anchorless refund plus the child that pays for it.
+#[must_use]
+pub fn anchorless_refund_package_fee(refund_tx: &Transaction, fee_rate_sat_per_kw: u64) -> u64 {
+    let value = refund_tx.output.first().map_or(0, |out| out.value.to_sat());
+    let child = refund_rung_tx(refund_tx, value);
+    let child_weight = Weight::from_vb_unchecked(signed_key_path_vsize(&child));
+    fee_sat(fee_rate_sat_per_kw, refund_tx.weight() + child_weight)
+}
+
+/// Builds the child that pays `refund_tx`'s fee out of its own output. Errors
+/// when what is left after the fee would be dust.
+pub fn build_anchorless_refund_child(
+    refund_tx: &Transaction,
+    fee_rate_sat_per_kw: u64,
+) -> Result<AnchorlessRefundChild, ServiceError> {
+    let output = refund_tx
+        .output
+        .first()
+        .ok_or_else(|| ServiceError::ValidationError("Refund has no outputs".to_string()))?;
+    let value = output.value.to_sat();
+    let fee_sat = anchorless_refund_package_fee(refund_tx, fee_rate_sat_per_kw);
+    let output_value = value
+        .checked_sub(fee_sat)
+        .filter(|v| *v >= output.script_pubkey.minimal_non_dust().to_sat())
+        .ok_or_else(|| {
+            ServiceError::ValidationError(format!(
+                "Refund of {value} sats cannot pay its own fee of {fee_sat} sats"
+            ))
+        })?;
+    Ok(AnchorlessRefundChild {
+        tx: refund_rung_tx(refund_tx, output_value),
+        fee_sat,
+    })
+}
+
 /// Fee for the sweep. The caller passes the total input weight directly because
 /// the sweep mixes P2TR refund inputs and external CPFP-change inputs.
 pub fn compute_sweep_fee(
@@ -714,14 +763,26 @@ fn report_unexitable(
     Ok(())
 }
 
-/// The transactions of `leaf`'s exit that the builder still builds a CPFP child
-/// for, or why the leaf cannot be exited. They are the refund, when it gets a
-/// child, and the nodes that the scan did not record as on-chain.
+/// How the builder pays the fee of a leaf's refund.
+enum RefundFee<'a> {
+    /// It builds nothing for the refund: the refund is on-chain, is the direct
+    /// refund, which pays its own fee, or the branch is stopped.
+    None,
+    /// A CPFP child spends the refund's anchor, paid by the funding.
+    Cpfp(&'a Transaction),
+    /// The refund has no anchor: a child spending its output pays the fee out of
+    /// the leaf.
+    Anchorless(&'a Transaction),
+}
+
+/// The transactions of `leaf`'s exit that the builder still builds a child for,
+/// or why the leaf cannot be exited. They are the refund, when it gets a child,
+/// and the nodes that the scan did not record as on-chain, which get a CPFP one.
 fn exit_transactions<'a>(
     tree_nodes: &'a HashMap<TreeNodeId, TreeNode>,
     leaf: &'a TreeNode,
     on_chain: &ExitChainState,
-) -> Result<(Option<&'a Transaction>, Vec<&'a TreeNode>), String> {
+) -> Result<(RefundFee<'a>, Vec<&'a TreeNode>), String> {
     if !is_unilaterally_exitable(leaf.status) {
         return Err(format!("a {} leaf has no unilateral exit", leaf.status));
     }
@@ -734,21 +795,22 @@ fn exit_transactions<'a>(
     // The builder builds nothing in a stopped branch. It still lists a refund
     // that is on-chain at the leaf's address for the sweep.
     if on_chain.stopped_leaves.contains(&leaf.id) {
-        return Ok((None, Vec::new()));
+        return Ok((RefundFee::None, Vec::new()));
     }
     // A leaf that went out through its direct tx is refunded by its
     // `direct_refund_tx`, which pays its own fee.
-    let gets_child = !on_chain.has_refund(&leaf.id) && !on_chain.went_direct(&leaf.id);
-    if gets_child && !refund_tx.output.iter().any(is_ephemeral_anchor_output) {
-        return Err(
-            "its refund has no anchor output for a child to pay its fee through".to_string(),
-        );
-    }
+    let refund_fee = if on_chain.has_refund(&leaf.id) || on_chain.went_direct(&leaf.id) {
+        RefundFee::None
+    } else if !has_anchor(refund_tx) {
+        RefundFee::Anchorless(refund_tx)
+    } else {
+        RefundFee::Cpfp(refund_tx)
+    };
     let nodes = ancestors
         .into_iter()
         .filter(|node| !on_chain.has_node(&node.id))
         .collect();
-    Ok((gets_child.then_some(refund_tx), nodes))
+    Ok((refund_fee, nodes))
 }
 
 /// The value of the refund output that the builder lists for `leaf`. It can
@@ -821,7 +883,7 @@ fn evaluate_leaf_costs(
     let mut sweep_fee: u64 = 0;
 
     for (leaf_id, leaf) in &leaves {
-        let (refund_tx, nodes) = match exit_transactions(tree_nodes, leaf, on_chain) {
+        let (refund_fee, nodes) = match exit_transactions(tree_nodes, leaf, on_chain) {
             Ok(transactions) => transactions,
             Err(reason) => {
                 report_unexitable(filter, leaf_id, &reason)?;
@@ -849,7 +911,11 @@ fn evaluate_leaf_costs(
                 params.fee_rate_sat_per_kw,
             ));
         }
-        if let Some(refund_tx) = refund_tx {
+        let cpfp_refund = match refund_fee {
+            RefundFee::Cpfp(refund_tx) => Some(refund_tx),
+            RefundFee::None | RefundFee::Anchorless(_) => None,
+        };
+        if let Some(refund_tx) = cpfp_refund {
             let refund_input_weight = if already_funded_ancestor {
                 params.single_cpfp_input_weight
             } else {
@@ -863,9 +929,11 @@ fn evaluate_leaf_costs(
             ));
         }
 
+        let needs_funding = cpfp_refund.is_some() || !nodes.is_empty();
         let mut leaf_input_weight = p2tr_key_path_input_weight();
-        if refund_tx.is_some() {
-            // The change of the refund's child is an input of the sweep too.
+        if needs_funding {
+            // What the branch's funding has left after its last CPFP child is an
+            // input of the sweep too.
             leaf_input_weight += params.single_cpfp_input_weight;
         }
         let sweep_cost = compute_sweep_fee(
@@ -877,14 +945,33 @@ fn evaluate_leaf_costs(
 
         let total_marginal_cost = cpfp_cost.saturating_add(sweep_cost);
 
+        // The sweep takes the child's output of a refund without an anchor.
         let refund_value = refund_value(leaf, on_chain);
-        if filter == UnilateralExitLeafFilter::All || refund_value > total_marginal_cost {
+        let child_fee = match refund_fee {
+            RefundFee::Anchorless(refund_tx) => {
+                match build_anchorless_refund_child(refund_tx, params.fee_rate_sat_per_kw) {
+                    Ok(child) => child.fee_sat,
+                    Err(_) => {
+                        report_unexitable(
+                            filter,
+                            leaf_id,
+                            "its refund cannot pay its own fee at this fee rate",
+                        )?;
+                        continue;
+                    }
+                }
+            }
+            RefundFee::None | RefundFee::Cpfp(_) => 0,
+        };
+        let swept_value = refund_value.saturating_sub(child_fee);
+        if filter == UnilateralExitLeafFilter::All || swept_value > total_marginal_cost {
             selected.push(UnilateralExitSelectedLeaf {
                 id: (*leaf_id).clone(),
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
                 cpfp_cost,
-                needs_funding: refund_tx.is_some() || !nodes.is_empty(),
+                needs_funding,
+                refund_fee: leaf.value.saturating_sub(swept_value),
             });
             for node in &nodes {
                 covered_txids.insert(node.node_tx.compute_txid());
@@ -1447,6 +1534,7 @@ mod tests {
                 estimated_cost: cost,
                 cpfp_cost: cost,
                 needs_funding: true,
+                refund_fee: 0,
             }
         }
 
@@ -2421,38 +2509,118 @@ mod tests {
             }
         }
 
+        fn without_anchor(tx: &Transaction) -> Transaction {
+            let mut tx = tx.clone();
+            tx.output.retain(|out| !is_ephemeral_anchor_output(out));
+            tx
+        }
+
+        /// A leaf whose nodes are on-chain and whose refund pays its own fee has
+        /// nothing left for the funding: it is planned and quoted without any.
         #[test_all]
-        fn evaluate_takes_a_refund_without_an_anchor_only_once_it_is_on_chain() {
-            let mut node = leaf_node("leaf", 1_000_000);
-            node.refund_tx = Some(Transaction {
-                version: Version::non_standard(3),
-                lock_time: LockTime::ZERO,
-                input: Vec::new(),
-                output: vec![TxOut {
-                    value: Amount::from_sat(1_000_000),
-                    script_pubkey: ScriptBuf::new(),
-                }],
-            });
-            let id = node.id.clone();
-            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
-            let evaluate = |filter, on_chain: &ExitChainState| {
+        fn a_leaf_left_with_an_anchorless_refund_needs_no_funding() {
+            let mut node = leaf_node_n("leaf", 1_000_000, 1);
+            let refund = without_anchor(node.refund_tx.as_ref().unwrap());
+            node.refund_tx = Some(refund.clone());
+            let leaf_id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> =
+                [(leaf_id.clone(), node)].into_iter().collect();
+            let on_chain = on_chain_state(std::slice::from_ref(&leaf_id), &[]);
+
+            let quote = quote_unilateral_exit(
+                &nodes,
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::All,
+                272,
+                22,
+                DUST,
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert!(quote.per_branch_funding.is_empty());
+            assert_eq!(quote.single_utxo_funding_sat, 0);
+            assert_eq!(
+                quote.refund_fee_sat,
+                anchorless_refund_package_fee(&refund, 250),
+                "the leaf still pays its refund's fee"
+            );
+
+            let plan = plan_unilateral_exit(
+                nodes,
+                std::slice::from_ref(&leaf_id),
+                UnilateralExitLeafFilter::All,
+                Vec::new(),
+                250,
+                22,
+                &on_chain,
+            )
+            .unwrap();
+            assert_eq!(plan.per_branch_funding.len(), 1);
+            assert!(plan.per_branch_funding[0].1.is_empty());
+        }
+
+        #[test_all]
+        fn an_anchorless_refund_costs_the_leaf_not_the_funding() {
+            let anchored = leaf_node("leaf", 1_000_000);
+            let mut anchorless = anchored.clone();
+            let refund = without_anchor(anchored.refund_tx.as_ref().unwrap());
+            anchorless.refund_tx = Some(refund.clone());
+            let id = anchored.id.clone();
+            let cost_of = |node: TreeNode| {
+                let nodes: HashMap<TreeNodeId, TreeNode> =
+                    [(id.clone(), node)].into_iter().collect();
                 evaluate_unilateral_exit_leaf_costs(
                     &nodes,
                     std::slice::from_ref(&id),
                     &cost_params(),
-                    filter,
-                    on_chain,
+                    UnilateralExitLeafFilter::All,
+                    &ExitChainState::default(),
                 )
+                .unwrap()
+                .remove(0)
             };
+            let with_anchor = cost_of(anchored.clone());
+            let without = cost_of(anchorless);
 
-            let nothing = ExitChainState::default();
-            assert!(evaluate(UnilateralExitLeafFilter::All, &nothing).is_err());
-            let skipped = evaluate(UnilateralExitLeafFilter::ProfitableOnly, &nothing).unwrap();
-            assert!(skipped.is_empty());
+            let refund_cpfp = compute_cpfp_package_fee(
+                anchored.refund_tx.as_ref().unwrap().weight(),
+                Weight::from_wu(272),
+                22,
+                250,
+            );
+            assert_eq!(without.cpfp_cost, with_anchor.cpfp_cost - refund_cpfp);
+            assert_eq!(with_anchor.refund_fee, 0);
+            assert_eq!(
+                without.refund_fee,
+                anchorless_refund_package_fee(&refund, 250)
+            );
+            // The sweep still takes back what the funding of the node's child
+            // has left.
+            assert!(without.needs_funding);
+            assert_eq!(
+                without.estimated_cost - without.cpfp_cost,
+                with_anchor.estimated_cost - with_anchor.cpfp_cost
+            );
+        }
 
-            let refunded = on_chain_state(std::slice::from_ref(&id), std::slice::from_ref(&id));
-            let selected = evaluate(UnilateralExitLeafFilter::All, &refunded).unwrap();
-            assert_eq!(selected.len(), 1);
+        #[test_all]
+        fn a_leaf_that_cannot_pay_its_anchorless_refund_is_unexitable() {
+            let mut node = leaf_node("leaf", 400);
+            node.refund_tx = Some(without_anchor(node.refund_tx.as_ref().unwrap()));
+            let id = node.id.clone();
+            let nodes: HashMap<TreeNodeId, TreeNode> = [(id.clone(), node)].into_iter().collect();
+            assert!(
+                evaluate_unilateral_exit_leaf_costs(
+                    &nodes,
+                    std::slice::from_ref(&id),
+                    &cost_params(),
+                    UnilateralExitLeafFilter::All,
+                    &ExitChainState::default(),
+                )
+                .is_err()
+            );
         }
 
         const DUST: u64 = 330;

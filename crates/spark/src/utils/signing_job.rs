@@ -24,6 +24,9 @@ pub(crate) enum SigningJobType {
     DirectSplitNode,
     DirectRefund,
     DirectFromCpfpRefund,
+    /// One fee variant of the direct node tx. Rungs keep the order they were
+    /// pushed in, cheapest first, which is how the operators pair them.
+    DirectNodeLadderRung,
 }
 
 #[derive(Clone)]

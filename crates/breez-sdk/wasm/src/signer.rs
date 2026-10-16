@@ -1041,6 +1041,16 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         Ok(v.into())
     }
 
+    // `isRemote` is optional in the JS interface, so a signer without it is local.
+    fn is_remote(&self) -> bool {
+        js_sys::Reflect::get(&self.inner, &JsValue::from_str("isRemote"))
+            .ok()
+            .and_then(|method| method.dyn_into::<js_sys::Function>().ok())
+            .and_then(|method| method.call0(&self.inner).ok())
+            .and_then(|remote| remote.as_bool())
+            .unwrap_or(false)
+    }
+
     async fn sign_authentication_challenge(
         &self,
         challenge: Vec<u8>,
@@ -1257,6 +1267,7 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     getIdentityPublicKey(): Promise<PublicKeyBytes>;
     getPublicKeyForLeaf(leafId: ExternalTreeNodeId): Promise<PublicKeyBytes>;
     getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
+    isRemote?(): boolean;
     signAuthenticationChallenge(challenge: Uint8Array): Promise<EcdsaSignatureBytes>;
     signMessage(message: Uint8Array): Promise<EcdsaSignatureBytes>;
     signLeafRefundSpend(leafId: ExternalTreeNodeId, sighash: Uint8Array): Promise<SchnorrSignatureBytes>;
@@ -1439,6 +1450,11 @@ impl ExternalSparkSignerHandle {
             .await
             .map(Into::into)
             .map_err(spark_handle_js_err)
+    }
+
+    #[wasm_bindgen(js_name = "isRemote")]
+    pub fn is_remote(&self) -> bool {
+        self.inner.is_remote()
     }
 
     #[wasm_bindgen(js_name = "signAuthenticationChallenge")]
