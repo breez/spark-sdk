@@ -5,6 +5,7 @@ use platform_utils::{ContentType, HttpClient, HttpResponse, add_content_type_hea
 use spark_wallet::{PublicKey, SparkWallet};
 use tracing::debug;
 
+use super::ENDORSEMENT_PAYLOAD_PREFIX;
 use super::models::{Endorsements, UpsertEndorsementRequest};
 use crate::error::FlashnetError;
 
@@ -27,13 +28,18 @@ impl RewardsClient {
         }
     }
 
+    /// The wallet's identity pubkey, which endorses and receives the rewards.
+    pub fn identity_public_key(&self) -> PublicKey {
+        self.spark_wallet.get_identity_public_key()
+    }
+
     /// The endorsements this wallet has set.
     pub async fn get_endorsements(&self) -> Result<Endorsements, FlashnetError> {
         let endorser = self.spark_wallet.get_identity_public_key();
         debug!("Rewards: GET /v1/rewards/{endorser}/endorsements");
         let url = format!("{}/v1/rewards/{endorser}/endorsements", self.base_url);
         let response = self.http_client.get(url, Some(json_headers())).await?;
-        parse_response(response)
+        parse_response(&response)
     }
 
     /// Creates or updates this wallet's endorsement of `to`.
@@ -41,7 +47,7 @@ impl RewardsClient {
         &self,
         to: &PublicKey,
         ratio_bps: u16,
-    ) -> Result<Endorsements, FlashnetError> {
+    ) -> Result<(), FlashnetError> {
         let endorser = self.spark_wallet.get_identity_public_key();
         let timestamp_nonce = uuid::Uuid::now_v7().to_string();
         let payload = upsert_payload(&endorser, to, ratio_bps, &timestamp_nonce);
@@ -64,14 +70,14 @@ impl RewardsClient {
             .http_client
             .post(url, Some(json_headers()), Some(body))
             .await?;
-        parse_response(response)
+        ensure_success(&response)
     }
 }
 
 /// The canonical YAML the API verifies the signature against.
 fn upsert_payload(endorser: &PublicKey, to: &PublicKey, ratio_bps: u16, nonce: &str) -> String {
     format!(
-        "kind: rewards_endorsement\n\
+        "{ENDORSEMENT_PAYLOAD_PREFIX}\n\
          version: 1\n\
          action: upsert\n\
          endorser: \"{endorser}\"\n\
@@ -88,19 +94,24 @@ fn json_headers() -> HashMap<String, String> {
 }
 
 /// Error bodies have the shape `{"error":"..."}`.
-fn parse_response<D: serde::de::DeserializeOwned>(
-    response: HttpResponse,
-) -> Result<D, FlashnetError> {
-    if !response.is_success() {
-        let reason = serde_json::from_str::<serde_json::Value>(&response.body)
-            .ok()
-            .and_then(|v| v.get("error")?.as_str().map(String::from))
-            .unwrap_or(response.body);
-        return Err(FlashnetError::Network {
-            reason,
-            code: Some(response.status),
-        });
+fn ensure_success(response: &HttpResponse) -> Result<(), FlashnetError> {
+    if response.is_success() {
+        return Ok(());
     }
+    let reason = serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .and_then(|v| v.get("error")?.as_str().map(String::from))
+        .unwrap_or_else(|| response.body.clone());
+    Err(FlashnetError::Network {
+        reason,
+        code: Some(response.status),
+    })
+}
+
+fn parse_response<D: serde::de::DeserializeOwned>(
+    response: &HttpResponse,
+) -> Result<D, FlashnetError> {
+    ensure_success(response)?;
     response
         .json::<D>()
         .map_err(|e| FlashnetError::Generic(format!("Failed to parse rewards response: {e}")))
@@ -136,7 +147,7 @@ mod tests {
             body: r#"{"error":"Nonce has already been used"}"#.to_string(),
             headers: HashMap::new(),
         };
-        let err = parse_response::<Endorsements>(response).unwrap_err();
+        let err = parse_response::<Endorsements>(&response).unwrap_err();
         assert!(matches!(
             err,
             FlashnetError::Network { reason, code: Some(400) }

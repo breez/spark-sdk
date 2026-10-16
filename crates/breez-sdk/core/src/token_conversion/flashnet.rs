@@ -1,12 +1,4 @@
-use std::{
-    collections::HashMap,
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use flashnet::{
@@ -14,7 +6,6 @@ use flashnet::{
     ExecuteSwapRequest, ExecuteSwapResponse, FlashnetClient, FlashnetConfig, FlashnetError,
     GetMinAmountsRequest, ListClawbackTransfersRequest, ListPoolsRequest, ListUserSwapsRequest,
     PoolSortOrder, SimulateSwapRequest, Swap, SwapOutcome, SwapSortOrder,
-    rewards::{MAX_RATIO_BPS, REWARDS_MAINNET_BASE_URL, RewardsClient},
 };
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::sync::broadcast;
@@ -50,9 +41,6 @@ use super::{
 const RECEIVED_LEG_POLL_INITIAL_DELAY_MS: u64 = 500;
 const RECEIVED_LEG_POLL_MAX_DELAY_MS: u64 = 2000;
 const RECEIVED_LEG_POLL_TIMEOUT_SECS: u64 = 15;
-
-/// Time limit for one rewards delegation attempt.
-const REWARDS_DELEGATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Min age before reconcile claws a transfer back — guards against racing a
 /// concurrent same-seed instance's in-flight healthy swap.
@@ -400,9 +388,6 @@ pub(crate) struct FlashnetTokenConverter {
     network: Network,
     refund_trigger: broadcast::Sender<RefundRequest>,
     integrator_fee_bps: u32,
-    /// Set on mainnet, the only network the Rewards API serves.
-    rewards_client: Option<Arc<RewardsClient>>,
-    rewards_delegation_checked: Arc<AtomicBool>,
 }
 
 impl FlashnetTokenConverter {
@@ -424,14 +409,6 @@ impl FlashnetTokenConverter {
             .as_ref()
             .map_or(0, |c| c.fee_bps);
 
-        let rewards_client = matches!(network, Network::Mainnet).then(|| {
-            Arc::new(RewardsClient::new(
-                REWARDS_MAINNET_BASE_URL.to_string(),
-                spark_wallet.clone(),
-                http_client.clone(),
-            ))
-        });
-
         let flashnet_client = Arc::new(FlashnetClient::new(
             flashnet_config,
             spark_wallet.clone(),
@@ -448,55 +425,7 @@ impl FlashnetTokenConverter {
             network,
             refund_trigger,
             integrator_fee_bps,
-            rewards_client,
-            rewards_delegation_checked: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Endorses whatever share of the rewards other endorsements leave
-    /// unallocated to the wallet itself, then records that it was done so it
-    /// is never repeated. Endorsements another app set are left as they are.
-    async fn delegate_unallocated_rewards(
-        &self,
-        rewards_client: &RewardsClient,
-    ) -> Result<(), ConversionError> {
-        let cache = ObjectCacheRepository::new(Arc::clone(&self.storage));
-        if cache.fetch_flashnet_rewards_delegated().await? {
-            debug!("Flashnet rewards delegation already recorded");
-            return Ok(());
-        }
-
-        let own_pubkey = self.spark_wallet.get_identity_public_key();
-        let own_hex = own_pubkey.to_string();
-        let endorsements = rewards_client.get_endorsements().await?.endorsements;
-        let is_own = |to: &str| to.eq_ignore_ascii_case(&own_hex);
-        let allocated_to_others = endorsements
-            .iter()
-            .filter(|e| !is_own(&e.to))
-            .fold(0u16, |sum, e| sum.saturating_add(e.ratio_bps));
-        let own_share = MAX_RATIO_BPS.saturating_sub(allocated_to_others);
-        let current_own_share = endorsements
-            .iter()
-            .find(|e| is_own(&e.to))
-            .map_or(0, |e| e.ratio_bps);
-
-        if own_share > 0 && own_share != current_own_share {
-            rewards_client
-                .upsert_endorsement(&own_pubkey, own_share)
-                .await?;
-            info!(
-                "Delegated {own_share} bps of Flashnet rewards to the wallet \
-                 ({allocated_to_others} bps to others, {current_own_share} bps to the wallet before)"
-            );
-        } else {
-            info!(
-                "Flashnet rewards need no delegation: {allocated_to_others} bps to others, \
-                 {current_own_share} bps to the wallet"
-            );
-        }
-
-        cache.save_flashnet_rewards_delegated().await?;
-        Ok(())
     }
 
     /// Refunds rows marked `ConversionStatus::RefundNeeded`.
@@ -2084,32 +2013,6 @@ impl TokenConverter for FlashnetTokenConverter {
     fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<RefundRequest>> {
         Some(self.refund_trigger.subscribe())
     }
-
-    async fn ensure_rewards_delegation(&self) {
-        let Some(rewards_client) = &self.rewards_client else {
-            return;
-        };
-        // One attempt per instance, whether or not it succeeds. Load first, so
-        // once the flag is set each call only reads it, which is cheaper than a
-        // swap.
-        if self.rewards_delegation_checked.load(Ordering::Relaxed)
-            || self
-                .rewards_delegation_checked
-                .swap(true, Ordering::Relaxed)
-        {
-            return;
-        }
-        match platform_utils::tokio::time::timeout(
-            REWARDS_DELEGATION_TIMEOUT,
-            self.delegate_unallocated_rewards(rewards_client),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => warn!("Failed to delegate unallocated Flashnet rewards: {e:?}"),
-            Err(_) => warn!("Flashnet rewards delegation timed out"),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -3274,372 +3177,5 @@ mod tests {
         assert_eq!(conversion_id, "conversion-1");
         assert_eq!(status, ConversionStatus::Completed);
         assert_eq!(fee, Some(7));
-    }
-
-    /// Serves the Rewards API with a fixed endorsement list, and records each
-    /// request as `METHOD url body`. Every request must go to `url`.
-    #[cfg(feature = "sqlite")]
-    struct MockRewards {
-        url: String,
-        endorsements: Vec<serde_json::Value>,
-        get_status: u16,
-        post_status: u16,
-        requests: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[cfg(feature = "sqlite")]
-    impl MockRewards {
-        fn respond(
-            &self,
-            method: &str,
-            url: &str,
-            body: Option<String>,
-        ) -> platform_utils::HttpResponse {
-            self.requests
-                .lock()
-                .unwrap()
-                .push(format!("{method} {url} {}", body.unwrap_or_default()));
-            assert_eq!(url, self.url, "unexpected request");
-            let status = if method == "POST" {
-                self.post_status
-            } else {
-                self.get_status
-            };
-            let body = if status == 200 {
-                serde_json::json!({ "endorser": "02", "endorsements": self.endorsements })
-            } else {
-                serde_json::json!({ "error": "rejected" })
-            };
-            platform_utils::HttpResponse {
-                status,
-                body: body.to_string(),
-                headers: HashMap::new(),
-            }
-        }
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[macros::async_trait]
-    impl platform_utils::HttpClient for MockRewards {
-        async fn get(
-            &self,
-            url: String,
-            _: Option<HashMap<String, String>>,
-        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
-            Ok(self.respond("GET", &url, None))
-        }
-
-        async fn post(
-            &self,
-            url: String,
-            _: Option<HashMap<String, String>>,
-            body: Option<String>,
-        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
-            Ok(self.respond("POST", &url, body))
-        }
-
-        async fn delete(
-            &self,
-            url: String,
-            _: Option<HashMap<String, String>>,
-            body: Option<String>,
-        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
-            Ok(self.respond("DELETE", &url, body))
-        }
-    }
-
-    #[cfg(feature = "sqlite")]
-    struct RewardsFixture {
-        converter: FlashnetTokenConverter,
-        storage: Arc<dyn Storage>,
-        own_pubkey: String,
-        requests: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[cfg(feature = "sqlite")]
-    impl RewardsFixture {
-        fn requests(&self) -> Vec<String> {
-            self.requests.lock().unwrap().clone()
-        }
-
-        /// The ratio of the endorsement posted to the wallet itself, after
-        /// checking it is signed the way the Rewards API verifies: a 64-byte
-        /// compact signature over the SHA-256 of the canonical YAML.
-        fn posted_ratio_bps(&self) -> Option<u64> {
-            use bitcoin::hashes::{Hash, sha256};
-            use bitcoin::secp256k1::{Message, Secp256k1, ecdsa::Signature};
-
-            self.requests().iter().find_map(|r| {
-                let body = r.strip_prefix("POST ")?.split_once(' ')?.1;
-                let body: serde_json::Value = serde_json::from_str(body).unwrap();
-                assert_eq!(body["endorser"], self.own_pubkey.as_str());
-                assert_eq!(body["to"], self.own_pubkey.as_str());
-                let ratio_bps = body["ratioBps"].as_u64().unwrap();
-
-                let payload = format!(
-                    "kind: rewards_endorsement\nversion: 1\naction: upsert\n\
-                     endorser: \"{}\"\nto: \"{}\"\nratioBps: {ratio_bps}\ntimestampNonce: \"{}\"",
-                    self.own_pubkey,
-                    self.own_pubkey,
-                    body["timestampNonce"].as_str().unwrap(),
-                );
-                let signature = hex::decode(body["signature"].as_str().unwrap()).unwrap();
-                assert_eq!(signature.len(), 64, "the signature must be compact");
-                let digest = sha256::Hash::hash(payload.as_bytes());
-                Secp256k1::verification_only()
-                    .verify_ecdsa(
-                        &Message::from_digest(digest.to_byte_array()),
-                        &Signature::from_compact(&signature).unwrap(),
-                        &PublicKey::from_str(&self.own_pubkey).unwrap(),
-                    )
-                    .expect("the signature must cover the canonical payload");
-                Some(ratio_bps)
-            })
-        }
-
-        async fn delegated(&self) -> bool {
-            ObjectCacheRepository::new(Arc::clone(&self.storage))
-                .fetch_flashnet_rewards_delegated()
-                .await
-                .unwrap()
-        }
-    }
-
-    /// Stand in for the wallet's own pubkey in a fixture's endorsements, in
-    /// lower and upper case hex.
-    #[cfg(feature = "sqlite")]
-    const SELF: &str = "self";
-    #[cfg(feature = "sqlite")]
-    const SELF_UPPER: &str = "SELF";
-
-    #[cfg(feature = "sqlite")]
-    const OTHER_PUBKEY: &str = "0257c86ea9ba12b11b24003aff7b546516dc31861b5b7b9ce5f96c9e3226d15e6d";
-    #[cfg(feature = "sqlite")]
-    const OTHER_PUBKEY_2: &str =
-        "02d1caf75f1a175db2bf751f04b676f114f3c10d964c7601b5706a581e6a69b1be";
-
-    /// What the Rewards API looks like to a fixture. The default is a mainnet
-    /// wallet with no endorsements, whose requests all succeed.
-    #[cfg(feature = "sqlite")]
-    struct RewardsSetup {
-        network: Network,
-        /// (recipient, ratio) pairs the GET returns.
-        endorsements: &'static [(&'static str, u16)],
-        get_status: u16,
-        post_status: u16,
-    }
-
-    #[cfg(feature = "sqlite")]
-    impl Default for RewardsSetup {
-        fn default() -> Self {
-            Self {
-                network: Network::Mainnet,
-                endorsements: &[],
-                get_status: 200,
-                post_status: 200,
-            }
-        }
-    }
-
-    #[cfg(feature = "sqlite")]
-    async fn rewards_converter(setup: RewardsSetup) -> RewardsFixture {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("breez-test-rewards-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let storage: Arc<dyn Storage> = Arc::new(crate::SqliteStorage::new(&dir).unwrap());
-
-        let signer = Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(
-            spark_wallet::DefaultSigner::new(&[7u8; 32], spark_wallet::Network::Regtest).unwrap(),
-        )));
-        let spark_wallet = Arc::new(
-            SparkWallet::connect(
-                spark_wallet::SparkWalletConfig::default_config(spark_wallet::Network::Regtest),
-                signer,
-            )
-            .await
-            .unwrap(),
-        );
-        let own_pubkey = spark_wallet.get_identity_public_key().to_string();
-        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let converter = FlashnetTokenConverter::new(
-            FlashnetConfig::default_config(setup.network.into(), None),
-            Arc::clone(&storage),
-            spark_wallet,
-            setup.network,
-            Arc::new(MockRewards {
-                url: format!("{REWARDS_MAINNET_BASE_URL}/v1/rewards/{own_pubkey}/endorsements"),
-                endorsements: setup
-                    .endorsements
-                    .iter()
-                    .map(|&(to, ratio_bps)| {
-                        let to = match to {
-                            SELF => own_pubkey.clone(),
-                            SELF_UPPER => own_pubkey.to_uppercase(),
-                            to => to.to_string(),
-                        };
-                        serde_json::json!({ "to": to, "ratioBps": ratio_bps })
-                    })
-                    .collect(),
-                get_status: setup.get_status,
-                post_status: setup.post_status,
-                requests: Arc::clone(&requests),
-            }),
-        );
-        RewardsFixture {
-            converter,
-            storage,
-            own_pubkey,
-            requests,
-        }
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_wallet_with_no_endorsements_delegates_everything_to_itself_once() {
-        let fixture = rewards_converter(RewardsSetup::default()).await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), Some(10_000));
-        assert!(fixture.delegated().await);
-
-        let made = fixture.requests().len();
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(
-            fixture.requests().len(),
-            made,
-            "a second call must do nothing"
-        );
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn only_the_unallocated_share_is_delegated_to_the_wallet() {
-        let fixture = rewards_converter(RewardsSetup {
-            endorsements: &[(OTHER_PUBKEY, 3000)],
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), Some(7000));
-        assert!(fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_stale_own_share_is_raised_to_the_unallocated_share() {
-        let fixture = rewards_converter(RewardsSetup {
-            endorsements: &[(OTHER_PUBKEY, 3000), (SELF, 5000)],
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), Some(7000));
-        assert!(fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_correct_own_share_is_left_alone_whatever_its_case() {
-        let fixture = rewards_converter(RewardsSetup {
-            endorsements: &[(OTHER_PUBKEY, 3000), (SELF_UPPER, 7000)],
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), None);
-        assert!(fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_fully_allocated_wallet_is_left_alone() {
-        let fixture = rewards_converter(RewardsSetup {
-            endorsements: &[(OTHER_PUBKEY, 10_000)],
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), None);
-        assert!(fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn an_over_allocated_wallet_is_left_alone() {
-        let fixture = rewards_converter(RewardsSetup {
-            endorsements: &[(OTHER_PUBKEY, 6000), (OTHER_PUBKEY_2, 6000)],
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), None);
-        assert!(fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_failed_lookup_records_nothing() {
-        let fixture = rewards_converter(RewardsSetup {
-            get_status: 500,
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(fixture.posted_ratio_bps(), None);
-        assert!(!fixture.delegated().await);
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_rejected_delegation_is_not_retried_before_the_next_connect() {
-        let fixture = rewards_converter(RewardsSetup {
-            post_status: 400,
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert!(!fixture.delegated().await);
-
-        let made = fixture.requests().len();
-        fixture.converter.ensure_rewards_delegation().await;
-        assert_eq!(
-            fixture.requests().len(),
-            made,
-            "a failed attempt waits for the next connect"
-        );
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn a_recorded_delegation_is_not_repeated() {
-        let fixture = rewards_converter(RewardsSetup::default()).await;
-        ObjectCacheRepository::new(Arc::clone(&fixture.storage))
-            .save_flashnet_rewards_delegated()
-            .await
-            .unwrap();
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert!(fixture.requests().is_empty());
-    }
-
-    #[cfg(feature = "sqlite")]
-    #[tokio::test]
-    async fn rewards_are_not_delegated_off_mainnet() {
-        let fixture = rewards_converter(RewardsSetup {
-            network: Network::Regtest,
-            ..Default::default()
-        })
-        .await;
-
-        fixture.converter.ensure_rewards_delegation().await;
-        assert!(fixture.requests().is_empty());
-        assert!(!fixture.delegated().await);
     }
 }

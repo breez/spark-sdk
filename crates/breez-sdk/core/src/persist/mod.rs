@@ -46,7 +46,7 @@ const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
-const FLASHNET_REWARDS_DELEGATED_KEY: &str = "flashnet_rewards_delegated";
+const FLASHNET_REWARDS_DELEGATION_KEY: &str = "flashnet_rewards_delegation";
 pub(crate) const STABLE_BALANCE_ACTIVE_LABEL_KEY: &str = "stable_balance_active_label";
 const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 const PENDING_LIGHTNING_SENDS_KEY: &str = "pending_lightning_sends";
@@ -986,22 +986,30 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) async fn save_flashnet_rewards_delegated(&self) -> Result<(), StorageError> {
+    pub(crate) async fn save_rewards_delegation(
+        &self,
+        value: &CachedRewardsDelegation,
+    ) -> Result<(), StorageError> {
         self.storage
             .set_cached_item(
-                FLASHNET_REWARDS_DELEGATED_KEY.to_string(),
-                "true".to_string(),
+                FLASHNET_REWARDS_DELEGATION_KEY.to_string(),
+                serde_json::to_string(value)?,
             )
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn fetch_flashnet_rewards_delegated(&self) -> Result<bool, StorageError> {
+    pub(crate) async fn fetch_rewards_delegation(
+        &self,
+    ) -> Result<Option<CachedRewardsDelegation>, StorageError> {
         let value = self
             .storage
-            .get_cached_item(FLASHNET_REWARDS_DELEGATED_KEY.to_string())
+            .get_cached_item(FLASHNET_REWARDS_DELEGATION_KEY.to_string())
             .await?;
-        Ok(value.is_some_and(|value| value == "true"))
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn save_stable_balance_active_label(
@@ -1169,6 +1177,15 @@ impl ObjectCacheRepository {
             .set_cached_item(LAST_SYNC_TIME_KEY.to_string(), time.to_string())
             .await
     }
+}
+
+/// Outcome of the Flashnet rewards delegation.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CachedRewardsDelegation {
+    /// Delegation is checked and settled.
+    Done,
+    /// No attempt before this unix time.
+    RetryAfter(u64),
 }
 
 #[derive(Serialize, Deserialize, Default)]

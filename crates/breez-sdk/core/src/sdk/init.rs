@@ -39,6 +39,7 @@ impl BreezSdk {
             input_parser: params.input_parser,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             token_converter: params.token_converter,
+            rewards_delegator: params.rewards_delegator,
             stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
             cross_chain_context: params.cross_chain_context,

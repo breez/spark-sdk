@@ -36,7 +36,11 @@ impl RuntimeProfile for ServerRuntime {
         force: bool,
     ) -> Result<(), SdkError> {
         sdk.sync_wallet_internal(sync_type, force).await?;
-        sdk.token_converter.ensure_rewards_delegation().await;
+        if let Some(rewards_delegator) = &sdk.rewards_delegator
+            && rewards_delegator.should_delegate()
+        {
+            rewards_delegator.delegate().await;
+        }
         Ok(())
     }
 

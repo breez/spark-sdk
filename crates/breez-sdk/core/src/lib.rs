@@ -17,6 +17,7 @@ mod models;
 pub mod passkey;
 mod persist;
 mod realtime_sync;
+mod rewards;
 mod sdk;
 mod sdk_builder;
 mod sdk_context;

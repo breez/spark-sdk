@@ -13,6 +13,7 @@ use spark_wallet::{
 use tokio::sync::watch;
 use tracing::{Instrument, debug, info, warn};
 
+use flashnet::rewards::{REWARDS_MAINNET_BASE_URL, RewardsClient};
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
 use crate::{
@@ -27,6 +28,7 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::backend::{ResolvedStores, StorageBackend},
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
+    rewards::RewardsDelegator,
     sdk::{BreezSdk, BreezSdkParams, SdkRuntime, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
     signer::{breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner},
@@ -586,6 +588,8 @@ impl SdkBuilder {
         let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(context.breez_server.clone()));
         let token_converter =
             build_token_converter(&self.config, &storage, &spark_wallet, &context);
+        let rewards_delegator =
+            build_rewards_delegator(&self.config, &storage, &spark_wallet, &context);
 
         let sync_coordinator = SyncCoordinator::new();
 
@@ -640,6 +644,7 @@ impl SdkBuilder {
             event_emitter,
             buy_bitcoin_provider,
             token_converter,
+            rewards_delegator,
             stable_balance,
             sync_coordinator,
             cross_chain_context,
@@ -1086,6 +1091,26 @@ fn build_token_converter(
         config.network,
         context.http_client.clone(),
     ))
+}
+
+/// Builds the rewards delegator on mainnet, the only network the Rewards API
+/// serves.
+fn build_rewards_delegator(
+    config: &Config,
+    storage: &Arc<dyn crate::persist::Storage>,
+    spark_wallet: &Arc<SparkWallet>,
+    context: &SdkContext,
+) -> Option<Arc<RewardsDelegator>> {
+    matches!(config.network, Network::Mainnet).then(|| {
+        Arc::new(RewardsDelegator::new(
+            RewardsClient::new(
+                REWARDS_MAINNET_BASE_URL.to_string(),
+                Arc::clone(spark_wallet),
+                context.http_client.clone(),
+            ),
+            Arc::clone(storage),
+        ))
+    })
 }
 
 /// Builds the optional [`StableBalance`] middleware, which must be registered
@@ -2068,6 +2093,18 @@ mod tests {
             event_emitter.upgrade().is_some(),
             spark_wallet.upgrade().is_some(),
         );
+    }
+
+    #[tokio::test]
+    async fn rewards_delegator_is_not_built_off_mainnet() {
+        let sdk = SdkBuilder::new(default_config(Network::Regtest), test_seed())
+            .with_default_storage(unique_storage_dir("rewards-off-mainnet"))
+            .build()
+            .await
+            .expect("build should succeed");
+
+        assert!(sdk.rewards_delegator.is_none());
+        sdk.disconnect().await.expect("disconnect should succeed");
     }
 
     /// Regression test for <https://github.com/breez/spark-sdk/issues/947>:
