@@ -68,8 +68,7 @@ jobs:
         run: |
           npx ondocs index ./src \
             --out ./book/ask-index.json \
-            --base-url https://sdk-doc-spark.breez.technology \
-            --extension none
+            --base-url https://sdk-doc-spark.breez.technology
 
       - name: Archive book
         uses: actions/upload-artifact@v4
