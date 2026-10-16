@@ -12,18 +12,23 @@ pub(crate) fn configure_sdk() -> Result<()> {
     config.max_deposit_claim_fee = None;
 
     // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
-    config.max_deposit_claim_fee = Some(MaxFee::Rate {
-        sat_per_vbyte: 10,
+    config.max_deposit_claim_fee = Some(MaxFee {
+        onchain: MaxOnchainFee::Rate { sat_per_vbyte: 10 },
         proportional_ppm: Some(1_000),
     });
 
     // Set a maximum fee of 1000 sat
-    config.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 1000 });
+    config.max_deposit_claim_fee = Some(MaxFee {
+        onchain: MaxOnchainFee::Fixed { amount: 1000 },
+        proportional_ppm: None,
+    });
 
     // Set the maximum fee to the fastest network recommended fee at the time of claim
     // with a leeway of 1 sats/vbyte
-    config.max_deposit_claim_fee = Some(MaxFee::NetworkRecommended {
-        leeway_sat_per_vbyte: 1,
+    config.max_deposit_claim_fee = Some(MaxFee {
+        onchain: MaxOnchainFee::NetworkRecommended {
+            leeway_sat_per_vbyte: 1,
+        },
         proportional_ppm: None,
     });
     // ANCHOR_END: max-deposit-claim-fee

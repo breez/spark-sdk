@@ -70,7 +70,10 @@ class RefundingPayments {
                     val claimRequest = ClaimDepositRequest(
                         txid = deposit.txid,
                         vout = deposit.vout,
-                        maxFee = MaxFee.Fixed(requiredFee)
+                        maxFee = MaxFee(
+                            onchain = MaxOnchainFee.Fixed(requiredFee),
+                            proportionalPpm = null
+                        )
                     )
                     sdk.claimDeposit(claimRequest)
                 }
@@ -149,8 +152,8 @@ class RefundingPayments {
 
         // Set the maximum fee to the fastest network recommended fee at the time of claim
         // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
-        config.maxDepositClaimFee = MaxFee.NetworkRecommended(
-            leewaySatPerVbyte = 1u,
+        config.maxDepositClaimFee = MaxFee(
+            onchain = MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte = 1u),
             proportionalPpm = 1000u
         )
         // ANCHOR_END: set-max-fee-to-recommended-fees
@@ -170,7 +173,10 @@ class RefundingPayments {
                     val claimRequest = ClaimDepositRequest(
                         txid = deposit.txid,
                         vout = deposit.vout,
-                        maxFee = MaxFee.Fixed(requiredFee)
+                        maxFee = MaxFee(
+                            onchain = MaxOnchainFee.Fixed(requiredFee),
+                            proportionalPpm = null
+                        )
                     )
                     sdk.claimDeposit(claimRequest)
                 }

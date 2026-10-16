@@ -54,7 +54,10 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: MaxFee.fixed(amount: requiredFee),
+        maxFee: MaxFee(
+          onchain: MaxOnchainFee.fixed(amount: requiredFee),
+          proportionalPpm: null,
+        ),
       );
       await sdk.claimDeposit(request: claimRequest);
     }
@@ -124,8 +127,10 @@ Future<void> setMaxFeeToRecommendedFees() async {
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
   config = config.copyWith(
-      maxDepositClaimFee: MaxFee.networkRecommended(
-          leewaySatPerVbyte: BigInt.from(1), proportionalPpm: 1000));
+      maxDepositClaimFee: MaxFee(
+          onchain:
+              MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)),
+          proportionalPpm: 1000));
   // ANCHOR_END: set-max-fee-to-recommended-fees
   print("Config: $config");
 }
@@ -144,7 +149,10 @@ Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
       final claimRequest = ClaimDepositRequest(
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: MaxFee.fixed(amount: requiredFee),
+        maxFee: MaxFee(
+          onchain: MaxOnchainFee.fixed(amount: requiredFee),
+          proportionalPpm: null,
+        ),
       );
       await sdk.claimDeposit(request: claimRequest);
     }

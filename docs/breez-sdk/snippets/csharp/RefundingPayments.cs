@@ -71,7 +71,10 @@ namespace BreezSdkSnippets
                     var claimRequest = new ClaimDepositRequest(
                         txid: deposit.txid,
                         vout: deposit.vout,
-                        maxFee: new MaxFee.Fixed(amount: requiredFee)
+                        maxFee: new MaxFee(
+                            onchain: new MaxOnchainFee.Fixed(amount: requiredFee),
+                            proportionalPpm: null
+                        )
                     );
                     await sdk.ClaimDeposit(request: claimRequest);
                 }
@@ -147,8 +150,8 @@ namespace BreezSdkSnippets
             // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
             config = config with
             {
-                maxDepositClaimFee = new MaxFee.NetworkRecommended(
-                    leewaySatPerVbyte: 1,
+                maxDepositClaimFee = new MaxFee(
+                    onchain: new MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte: 1),
                     proportionalPpm: 1000
                 )
             };
@@ -170,7 +173,10 @@ namespace BreezSdkSnippets
                     var claimRequest = new ClaimDepositRequest(
                         txid: deposit.txid,
                         vout: deposit.vout,
-                        maxFee: new MaxFee.Fixed(amount: requiredFee)
+                        maxFee: new MaxFee(
+                            onchain: new MaxOnchainFee.Fixed(amount: requiredFee),
+                            proportionalPpm: null
+                        )
                     );
                     await sdk.ClaimDeposit(request: claimRequest);
                 }

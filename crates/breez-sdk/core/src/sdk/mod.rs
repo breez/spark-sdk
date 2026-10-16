@@ -262,8 +262,8 @@ pub fn default_config(network: Network) -> Config {
         api_key: None,
         network,
         sync_interval_secs: 60, // every 1 minute
-        max_deposit_claim_fee: Some(crate::MaxFee::Rate {
-            sat_per_vbyte: 1,
+        max_deposit_claim_fee: Some(crate::MaxFee {
+            onchain: crate::MaxOnchainFee::Rate { sat_per_vbyte: 1 },
             proportional_ppm: Some(1_000),
         }),
         lnurl_domain,

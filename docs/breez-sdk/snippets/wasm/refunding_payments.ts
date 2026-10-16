@@ -73,7 +73,7 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: { type: 'fixed', amount: requiredFee }
+        maxFee: { onchain: { type: 'fixed', amount: requiredFee } }
       }
       await sdk.claimDeposit(claimRequest)
     }
@@ -145,8 +145,7 @@ const setMaxFeeToRecommendedFees = () => {
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
   config.maxDepositClaimFee = {
-    type: 'networkRecommended',
-    leewaySatPerVbyte: 1,
+    onchain: { type: 'networkRecommended', leewaySatPerVbyte: 1 },
     proportionalPpm: 1000
   }
   // ANCHOR_END: set-max-fee-to-recommended-fees
@@ -164,7 +163,7 @@ const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
       const claimRequest: ClaimDepositRequest = {
         txid: deposit.txid,
         vout: deposit.vout,
-        maxFee: { type: 'fixed', amount: requiredFee }
+        maxFee: { onchain: { type: 'fixed', amount: requiredFee } }
       }
       await sdk.claimDeposit(claimRequest)
     }

@@ -77,7 +77,7 @@ content = """
 - `ReceivePaymentMethod` → `{ type: 'sparkAddress' }`, `{ type: 'bolt11Invoice', description, amountSats }`, etc.
 - `SendPaymentOptions` → `{ type: 'bitcoinAddress', confirmationSpeed: 'fast' }`, etc.
 - `ConversionType` → `{ type: 'fromBitcoin' }` or `{ type: 'toBitcoin', fromTokenIdentifier: '...' }`
-- `MaxFee` → `{ type: 'fixed', amount }`, `{ type: 'rate', satPerVbyte }`, `{ type: 'networkRecommended', leewaySatPerVbyte }`
+- `MaxFee` → `{ onchain, proportionalPpm? }`, where `onchain` (`MaxOnchainFee`) is `{ type: 'fixed', amount }`, `{ type: 'rate', satPerVbyte }` or `{ type: 'networkRecommended', leewaySatPerVbyte }`
 - `InputType` → check `input.type === 'lnurlPay'`, fields are directly on the object
 
 **Interactive prompts:**

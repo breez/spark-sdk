@@ -8,7 +8,8 @@ use bitcoin::{Address, Amount};
 use breez_sdk_itest::{SignerBackend, build_local_sdk_with_config, wait_for_balance};
 use breez_sdk_spark::{
     ClaimDepositOutcome, ClaimDepositRequest, GetInfoRequest, InstantClaimStatus,
-    ListUnclaimedDepositsRequest, MaxFee, ReceivePaymentMethod, ReceivePaymentRequest,
+    ListUnclaimedDepositsRequest, MaxFee, MaxOnchainFee, ReceivePaymentMethod,
+    ReceivePaymentRequest,
 };
 use rstest::*;
 use spark_itest::fixtures::setup::TestFixtures;
@@ -59,7 +60,10 @@ async fn test_instant_static_deposit_claim_local() -> Result<()> {
     // with its own ceiling, claims the deposit.
     let local =
         build_local_sdk_with_config(Arc::clone(&fixtures), SignerBackend::Seed, None, |cfg| {
-            cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 0 });
+            cfg.max_deposit_claim_fee = Some(MaxFee {
+                onchain: MaxOnchainFee::Fixed { amount: 0 },
+                proportional_ppm: None,
+            });
         })
         .await?;
 
@@ -113,7 +117,10 @@ async fn test_instant_static_deposit_claim_local() -> Result<()> {
                 txid: txid.to_string(),
                 vout,
                 // Headroom over the SSP's instant claim fee.
-                max_fee: Some(MaxFee::Fixed { amount: 3_000 }),
+                max_fee: Some(MaxFee {
+                    onchain: MaxOnchainFee::Fixed { amount: 3_000 },
+                    proportional_ppm: None,
+                }),
             })
             .await
         {

@@ -15,9 +15,9 @@ use breez_sdk_spark::{
     CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod, Fee, FeePolicy,
     FetchClaimDepositQuoteRequest, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
     GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MoonpayDelivery,
-    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MaxOnchainFee,
+    MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
+    PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
     PrepareSendPaymentRequest, PullReceiver, ReceivePaymentMethod, ReceivePaymentRequest,
     RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod,
     SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
@@ -411,7 +411,7 @@ pub enum Command {
         #[arg(long)]
         recommended_fee_leeway: Option<u64>,
 
-        /// A share of the deposit amount, in parts per million, allowed on top of the max fee per vbyte or the recommended fee
+        /// A share of the deposit amount, in parts per million, allowed on top of the max fee
         #[arg(long)]
         proportional_ppm: Option<u32>,
     },
@@ -734,23 +734,14 @@ pub(crate) async fn execute_command(
             recommended_fee_leeway,
             proportional_ppm,
         } => {
-            if proportional_ppm.is_some()
-                && sat_per_vbyte.is_none()
-                && recommended_fee_leeway.is_none()
-            {
-                return Err(anyhow::anyhow!(
-                    "proportional_ppm requires sat_per_vbyte or recommended_fee_leeway"
-                ));
-            }
-            let max_fee = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
+            let onchain = if let Some(recommended_fee_leeway) = recommended_fee_leeway {
                 if fee_sat.is_some() || sat_per_vbyte.is_some() {
                     return Err(anyhow::anyhow!(
                         "Cannot specify fee_sat or sat_per_vbyte when using recommended fee"
                     ));
                 }
-                Some(MaxFee::NetworkRecommended {
+                Some(MaxOnchainFee::NetworkRecommended {
                     leeway_sat_per_vbyte: recommended_fee_leeway,
-                    proportional_ppm,
                 })
             } else {
                 match (fee_sat, sat_per_vbyte) {
@@ -759,14 +750,20 @@ pub(crate) async fn execute_command(
                             "Cannot specify both fee_sat and sat_per_vbyte"
                         ));
                     }
-                    (Some(fee_sat), None) => Some(MaxFee::Fixed { amount: fee_sat }),
-                    (None, Some(sat_per_vbyte)) => Some(MaxFee::Rate {
-                        sat_per_vbyte,
-                        proportional_ppm,
-                    }),
+                    (Some(fee_sat), None) => Some(MaxOnchainFee::Fixed { amount: fee_sat }),
+                    (None, Some(sat_per_vbyte)) => Some(MaxOnchainFee::Rate { sat_per_vbyte }),
                     (None, None) => None,
                 }
             };
+            if onchain.is_none() && proportional_ppm.is_some() {
+                return Err(anyhow::anyhow!(
+                    "proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway"
+                ));
+            }
+            let max_fee = onchain.map(|onchain| MaxFee {
+                onchain,
+                proportional_ppm,
+            });
             let value = sdk
                 .claim_deposit(ClaimDepositRequest {
                     txid,

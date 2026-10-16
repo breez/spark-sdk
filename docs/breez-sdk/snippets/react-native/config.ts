@@ -2,6 +2,7 @@ import {
   defaultConfig,
   Network,
   MaxFee,
+  MaxOnchainFee,
   StableBalanceConfig
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -15,15 +16,21 @@ const exampleConfigureSdk = () => {
   config.maxDepositClaimFee = undefined
 
   // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
-  config.maxDepositClaimFee = new MaxFee.Rate({ satPerVbyte: BigInt(10), proportionalPpm: 1000 })
+  config.maxDepositClaimFee = MaxFee.create({
+    onchain: new MaxOnchainFee.Rate({ satPerVbyte: BigInt(10) }),
+    proportionalPpm: 1000
+  })
 
   // Set a maximum fee of 1000 sat
-  config.maxDepositClaimFee = new MaxFee.Fixed({ amount: BigInt(1000) })
+  config.maxDepositClaimFee = MaxFee.create({
+    onchain: new MaxOnchainFee.Fixed({ amount: BigInt(1000) }),
+    proportionalPpm: undefined
+  })
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte
-  config.maxDepositClaimFee = new MaxFee.NetworkRecommended({
-    leewaySatPerVbyte: BigInt(1),
+  config.maxDepositClaimFee = MaxFee.create({
+    onchain: new MaxOnchainFee.NetworkRecommended({ leewaySatPerVbyte: BigInt(1) }),
     proportionalPpm: undefined
   })
   // ANCHOR_END: max-deposit-claim-fee

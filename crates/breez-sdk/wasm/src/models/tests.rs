@@ -8,8 +8,8 @@ use wasm_bindgen_test::wasm_bindgen_test;
 use super::{
     CheckRecoverFundsRequest, CrossChainAcceptedAsset, CrossChainAddressDetails,
     CrossChainAddressFamily, CrossChainProvider, CrossChainRouteFilter, CrossChainRouteLimits,
-    CrossChainRoutePair, DeliveryMethod, PaymentRequest, ReceivePaymentMethod, RecoverFundsLeaf,
-    RecoverFundsResponse, RecoveryMethod, SparkAsset,
+    CrossChainRoutePair, DeliveryMethod, DepositInfo, MaxFee, MaxOnchainFee, PaymentRequest,
+    ReceivePaymentMethod, RecoverFundsLeaf, RecoverFundsResponse, RecoveryMethod, SparkAsset,
 };
 
 // Values the SDK returns must be accepted back, BigInts included, inside the
@@ -198,6 +198,45 @@ fn tagged_enums_report_what_is_wrong() {
         message("({ type: 'crossChain', amount: 'lots' })"),
         "expected a u128 BigInt, got JsValue(\"lots\")"
     );
+}
+
+fn stored_max_claim_fee(max_claim_fee: &str) -> Option<MaxFee> {
+    let source = format!(
+        "({{ txid: 'tx', vout: 0, amountSats: 1000, isMature: true, maxClaimFee: {max_claim_fee} }})"
+    );
+    DepositInfo::from_js(js_sys::eval(&source).unwrap())
+        .unwrap()
+        .max_claim_fee
+}
+
+#[wasm_bindgen_test]
+fn deposits_read_a_max_claim_fee_stored_in_either_shape() {
+    let current =
+        stored_max_claim_fee("{ onchain: { type: 'fixed', amount: 500 }, proportionalPpm: 1000 }")
+            .unwrap();
+    assert!(matches!(
+        current.onchain,
+        MaxOnchainFee::Fixed { amount: 500 }
+    ));
+    assert_eq!(current.proportional_ppm, Some(1_000));
+
+    let flat =
+        stored_max_claim_fee("{ type: 'rate', satPerVbyte: 4, proportionalPpm: 750 }").unwrap();
+    assert!(matches!(
+        flat.onchain,
+        MaxOnchainFee::Rate { sat_per_vbyte: 4 }
+    ));
+    assert_eq!(flat.proportional_ppm, Some(750));
+
+    let flat_without_ppm = stored_max_claim_fee("{ type: 'fixed', amount: 25000 }").unwrap();
+    assert!(matches!(
+        flat_without_ppm.onchain,
+        MaxOnchainFee::Fixed { amount: 25_000 }
+    ));
+    assert_eq!(flat_without_ppm.proportional_ppm, None);
+
+    assert!(stored_max_claim_fee("null").is_none());
+    assert!(stored_max_claim_fee("undefined").is_none());
 }
 
 // Every source file in the crate, so a buffered type is caught wherever it is
