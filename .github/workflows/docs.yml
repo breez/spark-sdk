@@ -33,7 +33,7 @@ jobs:
       - name: Get latest tag
         uses: actions-ecosystem/action-get-latest-tag@v1
         id: get-latest-tag
-      
+
       - name: Set latest tag in book
         working-directory: docs/breez-sdk/src/guide
         run: |
@@ -62,6 +62,14 @@ jobs:
           else
             echo "Files found in root. Skipping flattening."
           fi
+
+      - name: Generate AI Search Index (ondocs)
+        working-directory: docs/breez-sdk
+        run: |
+          npx ondocs index ./src \
+            --out ./book/ask-index.json \
+            --base-url https://sdk-doc-spark.breez.technology \
+            --extension none
 
       - name: Archive book
         uses: actions/upload-artifact@v4
