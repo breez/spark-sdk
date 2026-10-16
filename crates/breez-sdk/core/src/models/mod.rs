@@ -1269,8 +1269,8 @@ pub enum MaxOnchainFee {
 }
 
 /// How a [`MaxFee`] is persisted: one variant per on-chain kind, each carrying the
-/// proportional part. Stored ceilings predate the split, and older SDKs still
-/// read this shape.
+/// proportional part. Ceilings stored before the split are in this shape, so
+/// keeping it lets them load as they are.
 #[derive(Serialize, Deserialize)]
 enum StoredMaxFee {
     Fixed {
@@ -3887,7 +3887,7 @@ mod tests {
     }
 
     #[test_all]
-    fn max_fee_is_stored_in_the_shape_older_sdks_read() {
+    fn max_fee_is_stored_in_its_flat_shape() {
         let max_fee = MaxFee {
             onchain: MaxOnchainFee::Fixed { amount: 500 },
             proportional_ppm: Some(1_000),
