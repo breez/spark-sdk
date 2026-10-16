@@ -211,8 +211,9 @@ impl BreezSdk {
     /// hashed before signing. The returned signature will be hex encoded in
     /// DER format by default, or compact format if specified.
     ///
-    /// Messages in the `breez-lnurl:` namespace are refused: it is reserved for
-    /// the SDK's own requests to the Lightning address server.
+    /// Messages starting with `breez-lnurl:` or `kind: rewards_endorsement` are
+    /// refused: they are reserved for the SDK's own requests to the Lightning
+    /// address server and to Flashnet's rewards service.
     pub async fn sign_message(
         &self,
         request: SignMessageRequest,
@@ -728,22 +729,32 @@ fn bridge_from_cash_app_response(
     })
 }
 
-/// Refuses a message in the namespace reserved for the LNURL server.
-///
-/// The identity key signs both user messages and the SDK's own requests to that
-/// server, and this API is for the former. Matching is ASCII case-insensitive:
-/// the server compares exact bytes, so a caller arriving here with another case
-/// did not compose the message either way.
+/// Message prefixes reserved for the SDK's own signed requests, each with what
+/// it is reserved for.
+const RESERVED_PREFIXES: [(&str, &str); 2] = [
+    (
+        lnurl_models::signed_message::RESERVED_NAMESPACE,
+        "Lightning address requests",
+    ),
+    (
+        flashnet::rewards::ENDORSEMENT_PAYLOAD_PREFIX,
+        "Flashnet rewards endorsements",
+    ),
+];
+
+/// Refuses a message starting with a prefix reserved for the SDK's own
+/// requests. Matching is ASCII case-insensitive.
 fn reject_reserved_namespace(message: &str) -> Result<(), SdkError> {
-    let namespace = lnurl_models::signed_message::RESERVED_NAMESPACE;
-    let reserved = message
-        .as_bytes()
-        .get(..namespace.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(namespace.as_bytes()));
-    if reserved {
-        return Err(SdkError::InvalidInput(format!(
-            "messages starting with '{namespace}' are reserved for Lightning address requests and cannot be signed here"
-        )));
+    for (prefix, purpose) in RESERVED_PREFIXES {
+        let reserved = message
+            .as_bytes()
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()));
+        if reserved {
+            return Err(SdkError::InvalidInput(format!(
+                "messages starting with '{prefix}' are reserved for {purpose} and cannot be signed here"
+            )));
+        }
     }
     Ok(())
 }
@@ -946,6 +957,23 @@ mod tests {
     }
 
     #[test]
+    fn reject_reserved_namespace_refuses_rewards_endorsements() {
+        for message in [
+            "kind: rewards_endorsement\nversion: 1\naction: upsert\n...",
+            "KIND: REWARDS_ENDORSEMENT\naction: delete",
+            "kind: rewards_endorsement",
+        ] {
+            assert!(
+                matches!(
+                    reject_reserved_namespace(message),
+                    Err(SdkError::InvalidInput(_))
+                ),
+                "expected {message:?} to be refused"
+            );
+        }
+    }
+
+    #[test]
     fn reject_reserved_namespace_allows_everything_else() {
         for message in [
             "",
@@ -954,6 +982,8 @@ mod tests {
             "breez lnurl:v2",
             // Only a leading namespace authorizes anything.
             "please sign breez-lnurl:v2\nregister",
+            "please sign kind: rewards_endorsement",
+            "kind: rewards",
             // A multi-byte first character must not panic the prefix check.
             "🥖",
         ] {

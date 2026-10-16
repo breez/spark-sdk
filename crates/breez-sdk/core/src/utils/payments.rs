@@ -272,7 +272,7 @@ pub(crate) async fn insert_payment_with_metadata(
 pub(crate) async fn update_balances(
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
-) -> Result<(), SdkError> {
+) -> Result<CachedAccountInfo, SdkError> {
     let total_start = Instant::now();
 
     let t = Instant::now();
@@ -290,13 +290,12 @@ pub(crate) async fn update_balances(
 
     let object_repository = ObjectCacheRepository::new(storage.clone());
 
+    let account_info = CachedAccountInfo {
+        balance_sats,
+        token_balances,
+    };
     let t = Instant::now();
-    object_repository
-        .save_account_info(&CachedAccountInfo {
-            balance_sats,
-            token_balances,
-        })
-        .await?;
+    object_repository.save_account_info(&account_info).await?;
     let save_dt = t.elapsed();
 
     debug!(
@@ -312,7 +311,7 @@ pub(crate) async fn update_balances(
         get_token_balances_dt,
         save_dt
     );
-    Ok(())
+    Ok(account_info)
 }
 
 /// Gets a payment from storage by ID to include already stored payment metadata

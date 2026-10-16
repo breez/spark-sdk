@@ -254,6 +254,7 @@ async fn on_sync_request(
     info!("Sync trigger changed: {:?}", &sync_request);
     let cloned_sdk = sdk.clone();
     let initial_synced_sender = initial_synced_sender.clone();
+    let delegation_shutdown = shutdown_receiver.clone();
     matches!(
         Box::pin(run_with_shutdown(
             shutdown_receiver.clone(),
@@ -271,6 +272,15 @@ async fn on_sync_request(
                 if sync_request.sync_type.contains(SyncType::Full) {
                     if let Err(e) = initial_synced_sender.send(true) {
                         error!("Failed to send initial synced signal: {e:?}");
+                    }
+                    if let Some(rewards_delegator) = cloned_sdk.rewards_delegator.clone()
+                        && rewards_delegator.should_delegate()
+                    {
+                        platform_utils::spawn(run_with_shutdown(
+                            delegation_shutdown,
+                            "Rewards delegation",
+                            async move { rewards_delegator.delegate().await },
+                        ));
                     }
                     return true;
                 }

@@ -35,8 +35,9 @@ use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 use crate::{
     BitcoinChainService, LeafOptimizationConfig, Logger, Network, TokenOptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    models::SparkConfig, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
-    stable_balance::StableBalance, token_conversion::TokenConverter,
+    models::SparkConfig, persist::Storage, rewards::RewardsDelegator,
+    signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
+    token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -118,6 +119,8 @@ pub struct BreezSdk {
     pub(crate) input_parser: Arc<SdkInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
+    /// Set on mainnet only.
+    pub(crate) rewards_delegator: Option<Arc<RewardsDelegator>>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub(crate) cross_chain_context: crate::cross_chain::CrossChainContext,
@@ -148,6 +151,7 @@ pub(crate) struct BreezSdkParams {
     pub event_emitter: Arc<EventEmitter>,
     pub buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub token_converter: Arc<dyn TokenConverter>,
+    pub rewards_delegator: Option<Arc<RewardsDelegator>>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_context: crate::cross_chain::CrossChainContext,

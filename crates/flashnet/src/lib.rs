@@ -4,6 +4,7 @@ mod config;
 mod error;
 pub mod models;
 pub mod orchestra;
+pub mod rewards;
 
 pub use amm::api::{BTC_ASSET_ADDRESS, FlashnetClient};
 pub use amm::models::*;
