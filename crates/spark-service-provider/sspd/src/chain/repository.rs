@@ -48,9 +48,10 @@ pub trait ChainRepository {
         &self,
         addresses: &[Address],
     ) -> Result<Vec<Address>, ChainRepositoryError>;
-    async fn get_txos_for_address(
+    /// The outputs at `addresses` that are in a block of the chain record.
+    async fn get_txos_for_addresses(
         &self,
-        address: &Address,
+        addresses: &[Address],
     ) -> Result<Vec<Txo>, ChainRepositoryError>;
     /// Only spends by confirmed transactions are returned.
     async fn get_spenders(

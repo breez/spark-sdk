@@ -426,9 +426,9 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_txos_for_address(
+        async fn get_txos_for_addresses(
             &self,
-            _address: &Address,
+            _addresses: &[Address],
         ) -> Result<Vec<Txo>, ChainRepositoryError> {
             unimplemented!()
         }

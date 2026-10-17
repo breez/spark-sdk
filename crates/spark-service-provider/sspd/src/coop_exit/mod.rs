@@ -823,7 +823,13 @@ pub trait CoopExitExecutor: Send + Sync {
     /// Returns `false` when the transfer is not claimable.
     async fn claim(&self, transfer_id: &TransferId) -> Result<bool, BoxError>;
     async fn committed_transfer_is_valid(&self, record: &CoopExitRecord) -> Result<bool, BoxError>;
-    async fn exit_confirmations(&self, record: &CoopExitRecord) -> Result<u64, BoxError>;
+    /// The confirmations of the exit transaction of each of `records`, by the
+    /// record's id. The map has no entry for a record whose exit transaction is
+    /// not in a block.
+    async fn exit_confirmations(
+        &self,
+        records: &[CoopExitRecord],
+    ) -> Result<HashMap<String, u64>, BoxError>;
 }
 
 pub struct CoopExitWorkerDeps {
@@ -862,8 +868,19 @@ pub async fn process_pending_coop_exits(deps: &CoopExitWorkerDeps) -> Result<(),
             error!(coop_exit_id = %record.id, "failed to settle incomplete coop exit: {e}");
         }
     }
-    for record in deps.store.pending().await? {
-        if let Err(e) = process_coop_exit(deps, &record).await {
+    let pending = deps.store.pending().await?;
+    // When the worker cannot read the confirmations, it still broadcasts and
+    // claims, and settles the exits in a later pass.
+    let confirmations = match deps.executor.exit_confirmations(&pending).await {
+        Ok(confirmations) => confirmations,
+        Err(e) => {
+            error!("could not read the confirmations of the pending coop exits: {e}");
+            HashMap::new()
+        }
+    };
+    for record in pending {
+        let confirmations = confirmations.get(&record.id).copied().unwrap_or(0);
+        if let Err(e) = process_coop_exit(deps, &record, confirmations).await {
             error!(coop_exit_id = %record.id, "failed to advance coop exit: {e}");
         }
     }
@@ -887,6 +904,7 @@ async fn settle_incomplete(
 async fn process_coop_exit(
     deps: &CoopExitWorkerDeps,
     record: &CoopExitRecord,
+    exit_confirmations: u64,
 ) -> Result<(), BoxError> {
     // A node refuses a confirmed transaction once all its outputs are spent, so a
     // refused broadcast still goes on to the claim.
@@ -905,9 +923,7 @@ async fn process_coop_exit(
         info!(coop_exit_id = %record.id, "coop exit: claimed user leaves");
         leaves_claimed = true;
     }
-    if leaves_claimed
-        && deps.executor.exit_confirmations(record).await? >= EXIT_SETTLED_CONFIRMATIONS
-    {
+    if leaves_claimed && exit_confirmations >= EXIT_SETTLED_CONFIRMATIONS {
         deps.store.set_settled(&record.id).await?;
     }
     Ok(())
@@ -960,6 +976,7 @@ mod tests {
         check_leaf_count, connector_tx_weight, process_pending_coop_exits,
     };
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1012,8 +1029,15 @@ mod tests {
         ) -> Result<bool, BoxError> {
             Ok(false)
         }
-        async fn exit_confirmations(&self, _record: &CoopExitRecord) -> Result<u64, BoxError> {
-            Ok(self.confirmations.load(Ordering::SeqCst) as u64)
+        async fn exit_confirmations(
+            &self,
+            records: &[CoopExitRecord],
+        ) -> Result<HashMap<String, u64>, BoxError> {
+            let confirmations = self.confirmations.load(Ordering::SeqCst) as u64;
+            Ok(records
+                .iter()
+                .map(|record| (record.id.clone(), confirmations))
+                .collect())
         }
     }
 
