@@ -9,16 +9,22 @@ use sqlx::{PgConnection, PgPool, Row, postgres::PgRow};
 use tracing::instrument;
 
 use crate::chain::{self, AddressUtxo, BlockHeader, ChainRepositoryError, SpentTxo, Txo};
+use crate::wakeup::Wakeup;
 
 #[derive(Debug)]
 pub struct ChainRepository {
     network: Network,
-    pool: Arc<PgPool>,
+    pub(super) pool: Arc<PgPool>,
+    pub(super) watched: Wakeup,
 }
 
 impl ChainRepository {
     pub fn new(pool: Arc<PgPool>, network: Network) -> Self {
-        Self { network, pool }
+        Self {
+            network,
+            pool,
+            watched: Wakeup::new(),
+        }
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -92,6 +98,50 @@ impl ChainRepository {
                 script_pubkey: address.script_pubkey(),
             },
         })
+    }
+
+    async fn mark_watched_outputs_spent(
+        &self,
+        tx: &mut PgConnection,
+        block: &BlockHeader,
+        txos: &[SpentTxo],
+    ) -> Result<(), ChainRepositoryError> {
+        let tx_ids: Vec<_> = txos.iter().map(|u| u.outpoint.txid.to_string()).collect();
+        let output_indices: Vec<_> = txos.iter().map(|u| u.outpoint.vout.cast_signed()).collect();
+        let spending_tx_ids: Vec<_> = txos.iter().map(|u| u.spending_tx.to_string()).collect();
+        sqlx::query(
+            r#"INSERT INTO brz_ssp_chain_spent_outputs (
+                   tx_id
+               ,   output_index
+               ,   spending_tx_id
+               ,   block_hash
+               ,   height)
+               SELECT i.tx_id
+               ,      i.output_index
+               ,      i.spending_tx_id
+               ,      $4
+               ,      $5
+               FROM UNNEST(
+                   $1::text[]
+               ,   $2::int[]
+               ,   $3::text[]
+               ) AS i (
+                   tx_id
+               ,   output_index
+               ,   spending_tx_id)
+               INNER JOIN brz_ssp_chain_watch_outputs w
+                   ON w.tx_id = i.tx_id AND w.output_index = i.output_index
+               ON CONFLICT DO NOTHING"#,
+        )
+        .bind(&tx_ids)
+        .bind(&output_indices)
+        .bind(&spending_tx_ids)
+        .bind(block.hash.to_string())
+        .bind(block.height.cast_signed())
+        .execute(tx)
+        .await?;
+
+        Ok(())
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -168,6 +218,8 @@ impl chain::ChainRepository for ChainRepository {
         self.add_utxos(&mut tx, tx_outputs).await?;
 
         self.mark_spent(&mut tx, tx_inputs).await?;
+        self.mark_watched_outputs_spent(&mut tx, block, tx_inputs)
+            .await?;
 
         let txns: Vec<_> = tx_outputs
             .iter()
