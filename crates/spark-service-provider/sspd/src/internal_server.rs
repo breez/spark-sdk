@@ -18,6 +18,7 @@ use crate::lightning::repository::{
 use crate::pool::refund_outputs::RefundOutputs;
 use crate::pool::restock::{PoolEvent, RestockService};
 use crate::postgresql::PostgresLeafStore;
+use crate::postgresql::Reported;
 use crate::static_deposit::repository::{StaticDepositClaimRecord, StaticDepositClaimStore};
 use crate::swap::SwapStore;
 use crate::swap::repository::SwapDetail;
@@ -42,6 +43,7 @@ use ssp_internal_api::{
     onchain_wallet_server::OnchainWallet, pool_event, pool_server::Pool,
     ssp_manager_server::SspManager,
 };
+use ssp_internal_api::{Dispute, ListDisputesRequest, ListDisputesResponse};
 
 const DEFAULT_COOP_EXIT_LIMIT: u32 = 100;
 const DEFAULT_SWAP_LIMIT: u32 = 100;
@@ -565,6 +567,43 @@ impl Pool for PoolServer {
             value_sats: sweep.value_sats,
             fee_sats: sweep.fee_sats,
         }))
+    }
+
+    async fn list_disputes(
+        &self,
+        _request: Request<ListDisputesRequest>,
+    ) -> Result<Response<ListDisputesResponse>, Status> {
+        let disputes = self
+            .leaf_store
+            .all_disputes()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the disputes: {e}")))?;
+        let disputes = disputes.into_iter().map(dispute_to_proto).collect();
+        Ok(Response::new(ListDisputesResponse { disputes }))
+    }
+}
+
+fn dispute_to_proto(details: crate::postgresql::DisputeDetails) -> Dispute {
+    let (difference, operator_status) = match details.dispute.reported {
+        Reported::Unreported => ("unreported", None),
+        Reported::Status(status) => ("status", Some(status)),
+        Reported::AnotherOwner => ("owner", None),
+        Reported::AnotherRefund => ("refund", None),
+        Reported::Available => ("exiting", None),
+    };
+    Dispute {
+        leaf_id: details.dispute.node_id.to_string(),
+        difference: difference.to_string(),
+        value_sats: details.value,
+        refund_txid: details.refund_txid.to_string(),
+        refund_timelock: details.refund_timelock,
+        operator_status,
+        operator_refund_txid: details.operator_refund_txid,
+        operator_reported_since: details.observed_at.map(|at| at.to_rfc3339()),
+        spent_txid: details.exiting.map(|spend| spend.outpoint.txid.to_string()),
+        spent_vout: details.exiting.map(|spend| spend.outpoint.vout),
+        spending_txid: details.exiting.map(|spend| spend.txid.to_string()),
+        spending_block_height: details.exiting.map(|spend| spend.block_height),
     }
 }
 

@@ -13,6 +13,7 @@
 )]
 
 use clap::{Parser, Subcommand};
+use ssp_internal_api::ListDisputesRequest;
 use ssp_internal_api::{
     BalanceRequest, GetInfoRequest, GetLightningRequestRequest, ListPendingLightningRequest,
     ListRefundOutputsRequest, NewAddressRequest, PoolStatusRequest, RequestRestockRequest,
@@ -91,6 +92,9 @@ enum PoolCommand {
         #[arg(long)]
         replace: bool,
     },
+    /// List the unreserved leaves that only one of the SSP and the operators
+    /// would use, with what each side has for them
+    Disputes,
 }
 
 #[derive(Subcommand)]
@@ -205,10 +209,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PoolCommand::SweepExits { fee_rate, replace } => {
                     sweep_refund_outputs(&mut client, fee_rate, replace).await?;
                 }
+                PoolCommand::Disputes => list_disputes(&mut client).await?,
             }
         }
     }
 
+    Ok(())
+}
+
+async fn list_disputes(client: &mut PoolClient<Channel>) -> Result<(), Box<dyn std::error::Error>> {
+    let response = client
+        .list_disputes(Request::new(ListDisputesRequest {}))
+        .await?
+        .into_inner();
+    println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 
