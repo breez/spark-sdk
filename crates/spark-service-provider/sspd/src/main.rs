@@ -238,6 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coop_exit_wakeup = wakeup::Wakeup::new();
     let static_deposit_blocks = wakeup::Wakeup::new();
     let htlc_sweep_blocks = wakeup::Wakeup::new();
+    let unilateral_exit_blocks = wakeup::Wakeup::new();
     let spend_check_blocks = wakeup::Wakeup::new();
     let static_deposit_claims = wakeup::Wakeup::new();
 
@@ -283,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             coop_exit_wakeup.clone(),
             static_deposit_blocks.clone(),
             htlc_sweep_blocks.clone(),
+            unilateral_exit_blocks.clone(),
             spend_check_blocks.clone(),
         ],
         &token,
@@ -430,6 +432,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let operator_view_token = token.clone();
     tracker.spawn(async move {
         pool::operator_view::run_operator_view_loop(operator_view, operator_view_token).await;
+    });
+
+    let unilateral_exit = pool::unilateral_exit::UnilateralExitDeps {
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
+        unilateral_exit_store: Arc::new(postgresql::PostgresUnilateralExitStore::new(Arc::clone(
+            &pgpool,
+        ))),
+        chain_repository: Arc::clone(&chain_repository),
+        chain_tip: chain_tip.clone(),
+        chain_client: Arc::clone(&chain_client) as Arc<dyn chain::ChainClient + Send + Sync>,
+        onchain: Arc::clone(&ssp_wallet.onchain),
+        blocks: unilateral_exit_blocks,
+    };
+    let unilateral_exit_token = token.clone();
+    tracker.spawn(async move {
+        pool::unilateral_exit::run_unilateral_exit_loop(unilateral_exit, unilateral_exit_token)
+            .await;
     });
 
     let spend_check = chain::spend_check::SpendCheckDeps {
