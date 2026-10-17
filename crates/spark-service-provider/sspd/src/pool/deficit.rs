@@ -153,7 +153,6 @@ mod tests {
         PoolConfig {
             leaves_per_denomination: target,
             max_denomination_power: max_power,
-            replenish_interval: std::time::Duration::from_secs(60),
         }
     }
 
