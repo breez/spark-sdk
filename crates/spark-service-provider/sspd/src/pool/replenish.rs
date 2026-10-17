@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::{Address, FeeRate, OutPoint, Transaction};
+use bitcoin::{Address, FeeRate, OutPoint, Transaction, Weight};
 use futures::{StreamExt, TryStreamExt};
 use spark::tree::TreeNodeId;
 use tokio_util::sync::CancellationToken;
@@ -228,12 +228,9 @@ where
     let available_sats: u64 = available.iter().map(|u| u.value).sum();
     // Charged as if every coin were spent, with change, since the funding
     // transaction's inputs are not selected yet.
-    let base_fee = fees::fee_sats(
-        fee_rate,
-        tx_builder::funding_tx_weight_wu(available.len(), 1),
-    )
-    .saturating_add(fees::P2TR_DUST_SATS);
-    let output_fee = fees::fee_sats(fee_rate, fees::P2TR_OUTPUT_WU);
+    let base_fee = fees::fee_sats(fee_rate, fees::p2tr_tx_weight(available.len(), 1))
+        .saturating_add(fees::P2TR_DUST_SATS);
+    let output_fee = fees::fee_sats(fee_rate, fees::P2TR_OUTPUT);
 
     let leaves = wallet.spark.tree_store.get_leaves().await?;
     let requested = restock.pending();
@@ -353,12 +350,12 @@ where
 }
 
 fn bump_due(deposit: &DepositTx, height: u64, fee_rate: FeeRate) -> bool {
-    let weight = deposit.tx.weight().to_wu();
+    let weight = deposit.tx.weight();
     let (waited_from, paid_sats, paid_weight) = match &deposit.latest_bump {
         Some(bump) => (
             bump.height,
             deposit.fee_sats.saturating_add(bump.fee_sats),
-            weight.saturating_add(bump.tx.weight().to_wu()),
+            weight.checked_add(bump.tx.weight()).unwrap_or(Weight::MAX),
         ),
         None => (deposit.stored_height, deposit.fee_sats, weight),
     };
@@ -402,10 +399,10 @@ where
     }
     let reused_sats: u64 = reused.iter().map(|u| u.value).sum();
 
-    let weight = deposit.tx.weight().to_wu();
+    let weight = deposit.tx.weight();
     let replaces = deposit.latest_bump.as_ref().map(|bump| ReplacedChild {
         fee_sats: bump.fee_sats,
-        weight_wu: bump.tx.weight().to_wu(),
+        weight: bump.tx.weight(),
     });
     let base_inputs = reused.len().saturating_add(1);
     let fee =

@@ -3,6 +3,7 @@
 //! timeout passes. The SSP sweeps such an output with the preimage as it confirms.
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,8 +14,9 @@ use bitcoin::secp256k1::{PublicKey, XOnlyPublicKey};
 use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
 use bitcoin::{
-    Address, Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, absolute::LockTime,
-    transaction::Version,
+    Address, Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness,
+    absolute::LockTime,
+    transaction::{InputWeightPrediction, Version, predict_weight},
 };
 use spark::signer::Signer;
 use spark::utils::htlc_transactions::{create_hash_lock_script, create_htlc_taproot_address};
@@ -39,9 +41,12 @@ const SWEEP_BACKUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const UNSPENDABLE_INTERNAL_KEY: &str =
     "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
-/// Outpoint, empty scriptSig and sequence at 4 WU per byte, plus a witness of the
-/// element count, signature, preimage, hash lock script and control block.
-const HASH_LOCK_INPUT_WU: u64 = 41 * 4 + 1 + 65 + 33 + 70 + 66;
+const HASH_LOCK_SCRIPT_LEN: usize = 69;
+
+/// The witness elements are a signature, the preimage, the hash lock script and the
+/// control block.
+const HASH_LOCK_INPUT: InputWeightPrediction =
+    InputWeightPrediction::from_slice(0, &[64, 32, HASH_LOCK_SCRIPT_LEN, 65]);
 
 pub struct HtlcSweepDeps<R: ChainRepository> {
     pub store: Arc<dyn LightningStore>,
@@ -101,9 +106,10 @@ where
         hash_lock_spend(first, &ssp, deps.network)?;
 
     let rate = deps.fee_rates.fee_rate().await?;
-    let weight = fees::TX_OVERHEAD_WU
-        .saturating_add(HASH_LOCK_INPUT_WU.saturating_mul(outputs.len() as u64))
-        .saturating_add(fees::P2TR_OUTPUT_WU);
+    let weight = predict_weight(
+        iter::repeat_n(HASH_LOCK_INPUT, outputs.len()),
+        [fees::P2TR_SCRIPT_LEN],
+    );
     let total: u64 = outputs.iter().map(|output| output.value_sats).sum();
     let Some(value) = total
         .checked_sub(fees::fee_sats(rate, weight))
@@ -262,7 +268,6 @@ mod tests {
             &Preimage::try_from(vec![5u8; 32]).unwrap().compute_hash(),
             &pubkey(1),
         );
-        assert_eq!(script.len(), 69);
-        assert_eq!(HASH_LOCK_INPUT_WU, 164 + 1 + 65 + 33 + (1 + 69) + (1 + 65));
+        assert_eq!(script.len(), HASH_LOCK_SCRIPT_LEN);
     }
 }
