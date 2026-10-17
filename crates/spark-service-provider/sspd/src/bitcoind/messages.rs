@@ -57,6 +57,7 @@ pub struct SubmitPackageTxResult {
 
 #[derive(Deserialize)]
 pub struct GetTxOutResponse {
+    pub bestblock: String,
     pub confirmations: u64,
     /// BTC.
     pub value: f64,

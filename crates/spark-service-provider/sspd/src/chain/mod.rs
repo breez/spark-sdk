@@ -14,6 +14,7 @@ pub use client::UnspentOutput;
 pub use client::{BroadcastError, ChainClient, ChainError, OutputSpend};
 pub use fee_rates::CachedFeeRates;
 pub use monitor::ChainMonitor;
+pub use repository::TransactionConfirmations;
 pub use repository::{
     AddressUtxo, ChainRepository, ChainRepositoryError, ConfirmedOutput, OutputStates, Spender,
     SpentTxo, WatchedOutput,

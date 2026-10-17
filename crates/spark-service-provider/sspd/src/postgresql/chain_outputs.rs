@@ -5,6 +5,7 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, Row};
 
 use super::ChainRepository;
+use crate::chain::TransactionConfirmations;
 use crate::chain::{
     ChainRepositoryError, ConfirmedOutput, OutputSpend, OutputStates, Spender, WatchedOutput,
 };
@@ -237,6 +238,48 @@ impl ChainRepository {
         rows.iter()
             .map(|(tx_id, height)| Ok((tx_id.parse()?, height.cast_unsigned())))
             .collect()
+    }
+
+    /// Records the block of each of `confirmed`. It records nothing for a
+    /// transaction unless the tip at which bitcoind counted its confirmations
+    /// is the record's tip, and the record has the transaction's block. When
+    /// the chain monitor undoes a block, Postgres deletes the rows with that
+    /// block. Returns how many blocks it recorded.
+    pub async fn record_tx_blocks(
+        &self,
+        confirmed: &[TransactionConfirmations],
+    ) -> Result<u64, ChainRepositoryError> {
+        let mut tx_ids = Vec::with_capacity(confirmed.len());
+        let mut best_blocks = Vec::with_capacity(confirmed.len());
+        let mut depths = Vec::with_capacity(confirmed.len());
+        for tx in confirmed {
+            let Some(depth) = tx.confirmations.checked_sub(1) else {
+                continue;
+            };
+            tx_ids.push(tx.txid.to_string());
+            best_blocks.push(tx.best_block.to_string());
+            depths.push(depth.cast_signed());
+        }
+        if tx_ids.is_empty() {
+            return Ok(0);
+        }
+        let recorded = sqlx::query(
+            r"INSERT INTO brz_ssp_chain_tx_blocks (tx_id, block_hash)
+               SELECT confirmed.tx_id, block.block_hash
+               FROM UNNEST($1::text[], $2::text[], $3::bigint[])
+                    AS confirmed (tx_id, best_block, depth)
+               JOIN brz_ssp_chain_blocks tip ON tip.block_hash = confirmed.best_block
+               JOIN brz_ssp_chain_blocks block ON block.height = tip.height - confirmed.depth
+               WHERE tip.height = (SELECT MAX(height) FROM brz_ssp_chain_blocks)
+               ON CONFLICT (tx_id, block_hash) DO NOTHING",
+        )
+        .bind(&tx_ids)
+        .bind(&best_blocks)
+        .bind(&depths)
+        .execute(&*self.pool)
+        .await?
+        .rows_affected();
+        Ok(recorded)
     }
 
     /// Up to `limit` queued outputs that the spend check can query bitcoind for
