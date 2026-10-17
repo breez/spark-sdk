@@ -41,7 +41,8 @@ use crate::wakeup::Wakeup;
 
 use self::repository::{
     InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore, PendingCredit,
-    StaticDepositClaimRecord, StaticDepositClaimStore,
+    StaticDepositAddress, StaticDepositAddressStore, StaticDepositClaimRecord,
+    StaticDepositClaimStore,
 };
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -288,6 +289,7 @@ pub trait StaticDepositSpendCosigner: Send + Sync {
 pub struct StaticDepositService {
     store: Arc<dyn StaticDepositClaimStore>,
     instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
+    addresses: Arc<dyn StaticDepositAddressStore>,
     transfer_service: Arc<TransferService>,
     leaf_store: Arc<PostgresLeafStore>,
     operator_pool: Arc<OperatorPool>,
@@ -306,6 +308,7 @@ impl StaticDepositService {
     pub fn new(
         store: Arc<dyn StaticDepositClaimStore>,
         instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
+        addresses: Arc<dyn StaticDepositAddressStore>,
         transfer_service: Arc<TransferService>,
         leaf_store: Arc<PostgresLeafStore>,
         operator_pool: Arc<OperatorPool>,
@@ -320,6 +323,7 @@ impl StaticDepositService {
         Self {
             store,
             instant_quote_store,
+            addresses,
             transfer_service,
             leaf_store,
             operator_pool,
@@ -855,7 +859,13 @@ impl StaticDepositService {
         let transfer = self
             .build_credit_transfer(record, transfer_id, leaves)
             .await?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         Ok(crate::operator_rpc::InitiateStaticDepositUtxoSwapRequest {
             on_chain_utxo: Some(deposit_utxo(record)?),
             ssp_signature: decode_signature(&record.quote_signature, "quote_signature")?,
@@ -1050,14 +1060,15 @@ impl StaticDepositService {
             })?,
         );
         let share_public_key = self.signer.public_key_from_secret(&share).await?;
-        let address =
-            query_deposit_address(&self.operator_pool, user, deposit_address, network).await?;
-        let address_key = PublicKey::from_slice(&address.user_signing_public_key).map_err(|e| {
-            StaticDepositError::InvalidInput(format!(
-                "the operators reported an invalid deposit address key: {e}"
-            ))
-        })?;
-        if share_public_key != address_key {
+        let address = confirmed_deposit_address(
+            &self.operator_pool,
+            self.addresses.as_ref(),
+            user,
+            deposit_address,
+            network,
+        )
+        .await?;
+        if share_public_key != address.user_signing_public_key {
             return Err(StaticDepositError::InvalidInput(
                 "the deposit key share is not the key of the deposit address".to_string(),
             ));
@@ -1288,6 +1299,75 @@ async fn query_deposit_address(
         })
 }
 
+/// An address always has the same user and keys, so the SSP queries the
+/// coordinator for an address only until it has stored what the coordinator
+/// reports.
+async fn confirmed_deposit_address(
+    operator_pool: &OperatorPool,
+    addresses: &dyn StaticDepositAddressStore,
+    user: &PublicKey,
+    deposit_address: &str,
+    network: spark::Network,
+) -> Result<StaticDepositAddress, StaticDepositError> {
+    if let Some(recorded) = addresses
+        .get(deposit_address)
+        .await
+        .map_err(StaticDepositError::Store)?
+    {
+        return (recorded.user_identity_public_key == *user)
+            .then_some(recorded)
+            .ok_or_else(|| {
+                StaticDepositError::InvalidInput(format!(
+                    "{deposit_address} is not one of the user's static deposit addresses"
+                ))
+            });
+    }
+    let reported = query_deposit_address(operator_pool, user, deposit_address, network).await?;
+    let confirmed = confirm_deposit_address(&reported, user, deposit_address, network)?;
+    addresses
+        .insert(&confirmed)
+        .await
+        .map_err(StaticDepositError::Store)?;
+    Ok(confirmed)
+}
+
+fn confirm_deposit_address(
+    reported: &pb::DepositAddressQueryResult,
+    user: &PublicKey,
+    deposit_address: &str,
+    network: spark::Network,
+) -> Result<StaticDepositAddress, StaticDepositError> {
+    let user_signing_public_key = PublicKey::from_slice(&reported.user_signing_public_key)
+        .map_err(|e| {
+            StaticDepositError::InvalidInput(format!(
+                "the operators reported an invalid deposit address key: {e}"
+            ))
+        })?;
+    let invalid = |e: &dyn std::fmt::Display| {
+        StaticDepositError::InvalidInput(format!("invalid deposit address: {e}"))
+    };
+    let script = Address::from_str(deposit_address)
+        .map_err(|e| invalid(&e))?
+        .require_network(network.into())
+        .map_err(|e| invalid(&e))?
+        .script_pubkey();
+    let verifying_public_key = PublicKey::from_slice(&reported.verifying_public_key)
+        .ok()
+        .filter(|key| p2tr_script(key) == script)
+        .ok_or_else(|| {
+            StaticDepositError::InvalidInput(
+                "the operators reported a verifying key that is not the deposit address's"
+                    .to_string(),
+            )
+        })?;
+    Ok(StaticDepositAddress {
+        address: deposit_address.to_string(),
+        user_identity_public_key: *user,
+        user_signing_public_key,
+        verifying_public_key,
+    })
+}
+
 /// The deposit output, built from the claim's address and amount.
 fn deposit_prevout(record: &StaticDepositClaimRecord) -> Result<TxOut, StaticDepositError> {
     let invalid = |e: &dyn std::fmt::Display| {
@@ -1321,27 +1401,19 @@ impl SignedSpend {
 async fn sign_spend(
     operator_pool: &OperatorPool,
     signer: &Arc<dyn Signer>,
+    addresses: &dyn StaticDepositAddressStore,
     record: &StaticDepositClaimRecord,
 ) -> Result<SignedSpend, StaticDepositError> {
     let prevout = deposit_prevout(record)?;
-    let address = query_deposit_address(
+    let verifying_key = confirmed_deposit_address(
         operator_pool,
+        addresses,
         &record.user_identity_public_key,
         &record.deposit_address,
         record.network,
     )
-    .await?;
-    // The operators report the verifying key. The SSP signs with it only when it
-    // is the key of the deposit's script.
-    let verifying_key = PublicKey::from_slice(&address.verifying_public_key)
-        .ok()
-        .filter(|key| p2tr_script(key) == prevout.script_pubkey)
-        .ok_or_else(|| {
-            StaticDepositError::InvalidInput(
-                "the operators reported a verifying key that is not the deposit address's"
-                    .to_string(),
-            )
-        })?;
+    .await?
+    .verifying_public_key;
     let sighash = sighash_from_tx(&record.spend_tx, 0, &prevout).map_err(ServiceError::from)?;
 
     let commitments = operator_commitments(&operator_pool.get_coordinator().client, 1, 1)
@@ -1417,6 +1489,7 @@ fn is_already_claimed(error: &OperatorRpcError) -> bool {
 
 pub struct SparkStaticDepositSpendCosigner {
     store: Arc<dyn StaticDepositClaimStore>,
+    addresses: Arc<dyn StaticDepositAddressStore>,
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     chain: Arc<dyn StaticDepositChain>,
@@ -1425,12 +1498,14 @@ pub struct SparkStaticDepositSpendCosigner {
 impl SparkStaticDepositSpendCosigner {
     pub fn new(
         store: Arc<dyn StaticDepositClaimStore>,
+        addresses: Arc<dyn StaticDepositAddressStore>,
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         chain: Arc<dyn StaticDepositChain>,
     ) -> Self {
         Self {
             store,
+            addresses,
             operator_pool,
             signer,
             chain,
@@ -1514,7 +1589,13 @@ impl SparkStaticDepositSpendCosigner {
                 "instant claim record is not reserved (no utxo swap id)".to_string(),
             )
         })?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         let request = crate::operator_rpc::ClaimInstantStaticDepositUtxoSwapRequest {
             on_chain_utxo: Some(deposit_utxo(record)?),
             utxo_swap_id,
@@ -1542,7 +1623,13 @@ impl SparkStaticDepositSpendCosigner {
             .signer
             .sign_message_ecdsa(&identity_path(), &statement)
             .await?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         let request = crate::operator_rpc::SignStaticDepositSweepTxRequest {
             network: record.network.to_proto_network() as i32,
             raw_tx: bitcoin::consensus::serialize(&record.spend_tx),
@@ -1710,6 +1797,7 @@ mod tests {
         deposit_prevout, is_already_claimed, max_credit_sats, p2tr_script,
         process_pending_static_deposit_claims, signed_spend_transaction, sweep_statement,
     };
+    use super::{StaticDepositError, confirm_deposit_address, pb};
     use crate::frost::sign_share;
     use crate::frost::testing::TestOperator;
     use bitcoin::hashes::Hash as _;
@@ -2243,5 +2331,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(claimer.calls.load(Ordering::SeqCst), 2);
+    }
+
+    fn reported_address(
+        verifying: &PublicKey,
+        user_signing: &PublicKey,
+        reported_verifying: &PublicKey,
+    ) -> (String, pb::DepositAddressQueryResult) {
+        let address = Address::p2tr(
+            &Secp256k1::new(),
+            verifying.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        )
+        .to_string();
+        let reported = pb::DepositAddressQueryResult {
+            deposit_address: address.clone(),
+            user_signing_public_key: user_signing.serialize().to_vec(),
+            verifying_public_key: reported_verifying.serialize().to_vec(),
+            ..Default::default()
+        };
+        (address, reported)
+    }
+
+    fn public_key(byte: u8) -> PublicKey {
+        SecretKey::from_slice(&[byte; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    #[test]
+    fn an_address_is_confirmed_with_the_keys_the_operators_report() {
+        let (user, user_signing, verifying) = (public_key(1), public_key(2), public_key(3));
+        let (address, reported) = reported_address(&verifying, &user_signing, &verifying);
+
+        let confirmed =
+            confirm_deposit_address(&reported, &user, &address, spark::Network::Regtest).unwrap();
+
+        assert_eq!(confirmed.address, address);
+        assert_eq!(confirmed.user_identity_public_key, user);
+        assert_eq!(confirmed.user_signing_public_key, user_signing);
+        assert_eq!(confirmed.verifying_public_key, verifying);
+    }
+
+    #[test]
+    fn an_address_whose_reported_verifying_key_is_another_is_not_confirmed() {
+        let (user, user_signing) = (public_key(1), public_key(2));
+        let (address, reported) = reported_address(&public_key(3), &user_signing, &public_key(4));
+
+        let refused = confirm_deposit_address(&reported, &user, &address, spark::Network::Regtest);
+
+        assert!(matches!(refused, Err(StaticDepositError::InvalidInput(_))));
     }
 }
