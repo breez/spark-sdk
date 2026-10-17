@@ -133,13 +133,14 @@ pub trait CoopExitOnchainWallet: Send + Sync {
         &self,
         need: &(dyn Fn(usize) -> u64 + Send + Sync),
     ) -> Result<(Vec<Utxo>, HeldCoins), BoxError>;
-    /// A fresh taproot address the wallet can sign for.
-    async fn next_address(&self) -> Result<bitcoin::Address, BoxError>;
-    /// The untweaked secret key of one of this wallet's taproot addresses.
-    async fn derive_keypair_for_address(
+    /// `count` fresh taproot addresses the wallet can sign for.
+    async fn next_addresses(&self, count: u32) -> Result<Vec<bitcoin::Address>, BoxError>;
+    /// The untweaked secret key of each of `addresses`, all of them taproot
+    /// addresses of this wallet.
+    async fn keys_for_addresses(
         &self,
-        address: &bitcoin::Address,
-    ) -> Result<bitcoin::secp256k1::SecretKey, BoxError>;
+        addresses: &[bitcoin::Address],
+    ) -> Result<HashMap<bitcoin::Address, bitcoin::secp256k1::SecretKey>, BoxError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -451,16 +452,20 @@ impl CoopExitService {
         }
         let inputs_sum: u64 = selected.iter().map(|u| u.value).sum();
 
-        let connector_funding_addr = self
+        // The connector outputs are for an address of the SSP's wallet, because
+        // whoever broadcasts a leaf's refund has to sign its connector input.
+        let addresses = self
             .wallet
-            .next_address()
+            .next_addresses(3)
             .await
             .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-        let change_addr = self
-            .wallet
-            .next_address()
-            .await
-            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
+        let Ok([connector_funding_addr, change_addr, connector_out_addr]) =
+            <[bitcoin::Address; 3]>::try_from(addresses)
+        else {
+            return Err(CoopExitError::Wallet(
+                "the wallet did not make three addresses".to_string(),
+            ));
+        };
 
         let coop_inputs: Vec<TxIn> = selected
             .iter()
@@ -500,13 +505,6 @@ impl CoopExitService {
         };
         let coop_exit_txid = coop_exit_tx.compute_txid();
 
-        // The leaf connectors pay the SSP: broadcasting a leaf's refund takes a
-        // signature for its connector input.
-        let connector_out_addr = self
-            .wallet
-            .next_address()
-            .await
-            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
         let connector_spk = connector_out_addr.script_pubkey();
         let mut connector_outputs: Vec<TxOut> = (0..num_connector_leaves)
             .map(|_| TxOut {
@@ -612,7 +610,7 @@ impl CoopExitService {
         }
 
         let mut prevouts: Vec<TxOut> = Vec::with_capacity(tx.input.len());
-        let mut keys = Vec::with_capacity(tx.input.len());
+        let mut addresses = Vec::with_capacity(tx.input.len());
         for input in &tx.input {
             let (txout, address) =
                 prevout_by_outpoint
@@ -624,12 +622,21 @@ impl CoopExitService {
                         ))
                     })?;
             prevouts.push(txout.clone());
-            let secret_key = self
-                .wallet
-                .derive_keypair_for_address(address)
-                .await
-                .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-            keys.push(secret_key);
+            addresses.push(address.clone());
+        }
+        let wallet_keys = self
+            .wallet
+            .keys_for_addresses(&addresses)
+            .await
+            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
+        let keys: Vec<_> = addresses
+            .iter()
+            .filter_map(|address| wallet_keys.get(address))
+            .collect();
+        if keys.len() != addresses.len() {
+            return Err(CoopExitError::Wallet(
+                "the wallet has no key for an input".to_string(),
+            ));
         }
 
         let secp = Secp256k1::new();

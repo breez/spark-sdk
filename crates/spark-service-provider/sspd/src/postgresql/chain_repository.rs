@@ -202,13 +202,14 @@ impl chain::ChainRepository for ChainRepository {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn add_watch_address(&self, address: &Address) -> Result<(), ChainRepositoryError> {
+    async fn add_watch_addresses(&self, addresses: &[Address]) -> Result<(), ChainRepositoryError> {
+        let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
         sqlx::query(
             r#"INSERT INTO brz_ssp_chain_watch_addresses (address)
-               VALUES ($1)
+               SELECT * FROM UNNEST($1::text[])
                ON CONFLICT DO NOTHING"#,
         )
-        .bind(address.to_string())
+        .bind(&addresses)
         .execute(&*self.pool)
         .await?;
 

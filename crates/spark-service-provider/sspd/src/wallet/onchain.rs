@@ -96,20 +96,39 @@ impl<R: ChainRepository> OnchainWallet<R> {
     }
 
     pub async fn next_address(&self) -> Result<(Address, u32), OnchainWalletError> {
-        let index = self.take_address_index().await?;
-        let address = self.derive_address(index)?;
+        let mut addresses = self.next_addresses(1).await?;
+        addresses.pop().ok_or_else(|| {
+            OnchainWalletError::Persistence("the wallet made no address".to_string())
+        })
+    }
+
+    pub async fn next_addresses(
+        &self,
+        count: u32,
+    ) -> Result<Vec<(Address, u32)>, OnchainWalletError> {
+        let first = self.take_address_indexes(count).await?;
+        let mut addresses = Vec::new();
+        for index in first..first.saturating_add(count) {
+            addresses.push((self.derive_address(index)?, index));
+        }
+        let texts: Vec<String> = addresses.iter().map(|(a, _)| a.to_string()).collect();
+        let indexes: Vec<i64> = addresses.iter().map(|(_, i)| i64::from(*i)).collect();
         sqlx::query(
             "INSERT INTO brz_ssp_onchain_wallet_addresses (address, derivation_index)
-             VALUES ($1, $2) ON CONFLICT (address) DO NOTHING",
+             SELECT * FROM UNNEST($1::text[], $2::bigint[])
+             ON CONFLICT (address) DO NOTHING",
         )
-        .bind(address.to_string())
-        .bind(i64::from(index))
+        .bind(&texts)
+        .bind(&indexes)
         .execute(self.pgpool.as_ref())
         .await
         .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
-        self.chain_repository.add_watch_address(&address).await?;
-        info!(%address, index, "registered new onchain wallet address");
-        Ok((address, index))
+        let watched: Vec<Address> = addresses.iter().map(|(a, _)| a.clone()).collect();
+        self.chain_repository.add_watch_addresses(&watched).await?;
+        for (address, index) in &addresses {
+            info!(%address, index, "registered new onchain wallet address");
+        }
+        Ok(addresses)
     }
 
     /// The wallet's confirmed unspent outputs, less those a build in progress holds
@@ -269,19 +288,22 @@ impl<R: ChainRepository> OnchainWallet<R> {
         Ok(Address::p2tr(&self.secp, xonly, None, self.network))
     }
 
-    async fn take_address_index(&self) -> Result<u32, OnchainWalletError> {
+    /// Takes `count` address indexes in a row, and returns the first.
+    async fn take_address_indexes(&self, count: u32) -> Result<u32, OnchainWalletError> {
         let (next,): (String,) = sqlx::query_as(
-            "INSERT INTO brz_ssp_onchain_wallet_meta (key, value) VALUES ('next_address_index', '1')
+            "INSERT INTO brz_ssp_onchain_wallet_meta (key, value)
+             VALUES ('next_address_index', $1::BIGINT::TEXT)
              ON CONFLICT (key) DO UPDATE
-             SET value = (brz_ssp_onchain_wallet_meta.value::BIGINT + 1)::TEXT
+             SET value = (brz_ssp_onchain_wallet_meta.value::BIGINT + $1::BIGINT)::TEXT
              RETURNING value",
         )
+        .bind(i64::from(count))
         .fetch_one(self.pgpool.as_ref())
         .await
         .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
         next.parse::<u32>()
             .ok()
-            .and_then(|next| next.checked_sub(1))
+            .and_then(|next| next.checked_sub(count))
             .ok_or_else(|| OnchainWalletError::Persistence(format!("bad address index {next}")))
     }
 
@@ -330,36 +352,13 @@ impl<R: ChainRepository> OnchainWallet<R> {
         Ok(keys)
     }
 
-    /// Watches `address` without making it one of the wallet's own.
-    pub async fn register_watch_address(
+    /// Watches `addresses` without making them the wallet's own.
+    pub async fn register_watch_addresses(
         &self,
-        address: &Address,
+        addresses: &[Address],
     ) -> Result<(), OnchainWalletError> {
-        self.chain_repository.add_watch_address(address).await?;
+        self.chain_repository.add_watch_addresses(addresses).await?;
         Ok(())
-    }
-
-    /// The untweaked taproot secret key of an address this wallet derived.
-    pub async fn derive_keypair_for_address(
-        &self,
-        address: &Address,
-    ) -> Result<secp256k1::SecretKey, OnchainWalletError> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT derivation_index FROM brz_ssp_onchain_wallet_addresses WHERE address = $1",
-        )
-        .bind(address.to_string())
-        .fetch_optional(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
-        let Some((index,)) = row else {
-            return Err(OnchainWalletError::KeyDerivation(format!(
-                "address {address} is not one this wallet derived"
-            )));
-        };
-        let index = u32::try_from(index).map_err(|_| {
-            OnchainWalletError::Persistence(format!("derivation index {index} out of range"))
-        })?;
-        self.derive_secret_key(index)
     }
 }
 
@@ -410,14 +409,19 @@ impl<R: ChainRepository + Send + Sync + 'static> crate::coop_exit::CoopExitOncha
         Ok(OnchainWallet::select_coins(self, need).await?)
     }
 
-    async fn next_address(&self) -> Result<Address, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(OnchainWallet::next_address(self).await?.0)
+    async fn next_addresses(
+        &self,
+        count: u32,
+    ) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync>> {
+        let addresses = OnchainWallet::next_addresses(self, count).await?;
+        Ok(addresses.into_iter().map(|(address, _)| address).collect())
     }
 
-    async fn derive_keypair_for_address(
+    async fn keys_for_addresses(
         &self,
-        address: &Address,
-    ) -> Result<secp256k1::SecretKey, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(OnchainWallet::derive_keypair_for_address(self, address).await?)
+        addresses: &[Address],
+    ) -> Result<HashMap<Address, secp256k1::SecretKey>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        Ok(OnchainWallet::keys_for_addresses(self, addresses).await?)
     }
 }

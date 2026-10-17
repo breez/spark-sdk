@@ -412,7 +412,10 @@ mod tests {
                 }))
         }
 
-        async fn add_watch_address(&self, _address: &Address) -> Result<(), ChainRepositoryError> {
+        async fn add_watch_addresses(
+            &self,
+            _addresses: &[Address],
+        ) -> Result<(), ChainRepositoryError> {
             unimplemented!()
         }
 
