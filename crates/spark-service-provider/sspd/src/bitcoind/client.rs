@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::trace;
 
+use crate::chain::SyncState;
 use crate::chain::{BroadcastError, ChainClient, ChainError};
 
 use super::{
@@ -214,6 +215,14 @@ impl ChainClient for BitcoindClient {
 
     async fn get_blockheight(&self) -> Result<u64, ChainError> {
         Ok(self.call("getblockcount", json!([])).await?)
+    }
+
+    async fn sync_state(&self) -> Result<SyncState, ChainError> {
+        let info: GetBlockchainInfoResponse = self.call("getblockchaininfo", json!([])).await?;
+        Ok(SyncState {
+            height: info.blocks,
+            synced: !info.initialblockdownload && info.headers <= info.blocks,
+        })
     }
 
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {
