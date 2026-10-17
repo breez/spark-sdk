@@ -60,15 +60,13 @@ const INSTANT_SECONDARY_CREDIT_AMOUNT_SATS: u64 = 0;
 /// confirmations.
 const INSTANT_CLAIM_MIN_CONFIRMATIONS: u64 = 1;
 
-const SPEND_TX_WEIGHT_WU: u64 = fees::TX_OVERHEAD_WU + fees::P2TR_INPUT_WU + fees::P2TR_OUTPUT_WU;
-
 /// Headroom for the fee rate rising between a quote and its claim, which builds the
 /// deposit spend at the rate then.
 const QUOTE_FEE_MARGIN_PERCENT: u64 = 20;
 
 #[must_use]
 pub fn spend_tx_fee_sats(fee_rate: FeeRate) -> u64 {
-    fees::fee_sats(fee_rate, SPEND_TX_WEIGHT_WU)
+    fees::fee_sats(fee_rate, fees::p2tr_tx_weight(1, 1))
 }
 
 #[must_use]
@@ -1737,7 +1735,7 @@ mod tests {
     use crate::frost::testing::TestOperator;
     use bitcoin::hashes::Hash as _;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use bitcoin::{Address, Transaction, Txid};
+    use bitcoin::{Address, Transaction, Txid, Witness};
     use spark::bitcoin::sighash_from_tx;
     use spark::operator::rpc::OperatorRpcError;
     use spark::signer::{DefaultSigner, SecretSource, Signer};
@@ -1761,10 +1759,9 @@ mod tests {
 
     #[test]
     fn spend_tx_weight_matches_the_built_tx() {
-        let tx = build_spend_tx(&Txid::all_zeros(), 0, 10_000, 300, &address(1));
-        // Signing adds the segwit marker and flag, and one key-path signature.
-        let signed = tx.weight().to_wu() + 2 + crate::fees::P2TR_KEY_PATH_WITNESS_WU;
-        assert_eq!(signed, super::SPEND_TX_WEIGHT_WU);
+        let mut tx = build_spend_tx(&Txid::all_zeros(), 0, 10_000, 300, &address(1));
+        tx.input[0].witness = Witness::from_slice(&[[0u8; 64]]);
+        assert_eq!(tx.weight(), crate::fees::p2tr_tx_weight(1, 1));
     }
 
     #[test]

@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use crate::fees::{self, FeeRateSource};
 use crate::wallet::onchain::{HeldCoins, Utxo};
-use bitcoin::FeeRate;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::transaction::{InputWeightPrediction, predict_weight_from_slices};
+use bitcoin::{FeeRate, Weight};
 use spark::operator::OperatorPool;
 use spark::services::{
     ServiceError, Transfer, TransferId, TransferService, TransferStatus, TransferType,
@@ -33,7 +34,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 const COOP_EXIT_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Nodes do not relay a transaction weighing more.
-const MAX_STANDARD_TX_WEIGHT_WU: u64 = 400_000;
+const MAX_STANDARD_TX_WEIGHT: Weight = Weight::from_wu(400_000);
 
 /// An exit is rebroadcast until it has this many confirmations, even once its
 /// leaves are claimed: a reorg can unconfirm it.
@@ -43,28 +44,27 @@ pub const INCOMPLETE_REQUEST_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A quoted fee is sized before coin selection runs, so it assumes this many
 /// wallet inputs.
-const QUOTED_COOP_EXIT_INPUTS: u64 = 2;
+const QUOTED_COOP_EXIT_INPUTS: usize = 2;
 
 /// Headroom on a quoted fee for a coin selection needing more inputs than assumed.
 const QUOTE_FEE_MARGIN_PERCENT: u64 = 20;
 
-const REFUND_TX_WEIGHT_WU: u64 =
-    fees::TX_OVERHEAD_WU + 2 * fees::P2TR_INPUT_WU + fees::P2TR_OUTPUT_WU + fees::P2A_OUTPUT_WU;
+const REFUND_TX_WEIGHT: Weight = predict_weight_from_slices(
+    &[InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH; 2],
+    &[fees::P2TR_SCRIPT_LEN, fees::P2A_SCRIPT_LEN],
+);
 
-fn connector_tx_weight_wu(num_leaves: u64) -> u64 {
-    fees::TX_OVERHEAD_WU
-        .saturating_add(fees::P2TR_INPUT_WU)
-        .saturating_add(
-            num_leaves
-                .saturating_add(1)
-                .saturating_mul(fees::P2TR_OUTPUT_WU),
-        )
+fn connector_tx_weight(num_leaves: u64) -> Weight {
+    let outputs = usize::try_from(num_leaves.saturating_add(1)).unwrap_or(usize::MAX);
+    fees::p2tr_tx_weight(1, outputs)
 }
 
 /// Nodes relay a version 3 transaction of at most 10,000 vbytes, and the
 /// connector transaction has an output for each leaf.
-pub const MAX_COOP_EXIT_LEAVES: u64 =
-    (40_000 - fees::TX_OVERHEAD_WU - fees::P2TR_INPUT_WU) / fees::P2TR_OUTPUT_WU - 1;
+pub const MAX_COOP_EXIT_LEAVES: u64 = (40_000
+    - predict_weight_from_slices(&[InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH], &[]).to_wu())
+    / fees::P2TR_OUTPUT.to_wu()
+    - 1;
 
 pub fn check_leaf_count(num_leaves: u64) -> Result<(), CoopExitError> {
     if num_leaves > MAX_COOP_EXIT_LEAVES {
@@ -75,23 +75,17 @@ pub fn check_leaf_count(num_leaves: u64) -> Result<(), CoopExitError> {
     Ok(())
 }
 
-fn coop_exit_tx_weight_wu(num_inputs: u64, num_outputs: u64) -> u64 {
-    fees::TX_OVERHEAD_WU
-        .saturating_add(num_inputs.saturating_mul(fees::P2TR_INPUT_WU))
-        .saturating_add(num_outputs.saturating_mul(fees::P2TR_OUTPUT_WU))
-}
-
 /// A leaf's refund spends its connector output, and the operators fix the refund's
 /// outputs, so the connector's value goes to the refund's fee.
 fn per_leaf_connector_sats(fee_rate: FeeRate) -> u64 {
-    fees::fee_sats(fee_rate, REFUND_TX_WEIGHT_WU).max(fees::P2TR_DUST_SATS)
+    fees::fee_sats(fee_rate, REFUND_TX_WEIGHT).max(fees::P2TR_DUST_SATS)
 }
 
 fn connector_funding_sats(num_leaves: u64, fee_rate: FeeRate) -> u64 {
     num_leaves
         .saturating_mul(per_leaf_connector_sats(fee_rate))
         .saturating_add(fees::P2TR_DUST_SATS)
-        .saturating_add(fees::fee_sats(fee_rate, connector_tx_weight_wu(num_leaves)))
+        .saturating_add(fees::fee_sats(fee_rate, connector_tx_weight(num_leaves)))
 }
 
 fn miner_fees_sats(
@@ -121,7 +115,7 @@ pub struct CoopExitFees {
 
 #[must_use]
 pub fn coop_exit_fees(num_leaves: u64, fee_rate: FeeRate) -> CoopExitFees {
-    let exit_tx_fee = fees::fee_sats(fee_rate, coop_exit_tx_weight_wu(QUOTED_COOP_EXIT_INPUTS, 3));
+    let exit_tx_fee = fees::fee_sats(fee_rate, fees::p2tr_tx_weight(QUOTED_COOP_EXIT_INPUTS, 3));
     CoopExitFees {
         l1_broadcast_fee_sats: with_margin(
             connector_funding_sats(num_leaves, fee_rate).saturating_add(exit_tx_fee),
@@ -443,17 +437,14 @@ impl CoopExitService {
         let need = |inputs: usize| {
             payout
                 .saturating_add(connector_funding)
-                .saturating_add(fees::fee_sats(
-                    rate,
-                    coop_exit_tx_weight_wu(inputs as u64, 3),
-                ))
+                .saturating_add(fees::fee_sats(rate, fees::p2tr_tx_weight(inputs, 3)))
         };
         let (selected, held) = self
             .wallet
             .select_coins(&need)
             .await
             .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-        if coop_exit_tx_weight_wu(selected.len() as u64, 3) > MAX_STANDARD_TX_WEIGHT_WU {
+        if fees::p2tr_tx_weight(selected.len(), 3) > MAX_STANDARD_TX_WEIGHT {
             return Err(CoopExitError::Wallet(
                 "the exit needs more coins than one standard transaction spends".to_string(),
             ));
@@ -959,7 +950,7 @@ mod tests {
     use super::repository::{CoopExitRecord, CoopExitStore, InMemoryCoopExitStore};
     use super::{
         BoxError, CoopExitExecutor, CoopExitWorkerDeps, MAX_COOP_EXIT_LEAVES, TransferId,
-        check_leaf_count, connector_tx_weight_wu, process_pending_coop_exits,
+        check_leaf_count, connector_tx_weight, process_pending_coop_exits,
     };
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use std::sync::Arc;
@@ -968,8 +959,8 @@ mod tests {
     #[test]
     fn the_most_leaves_an_exit_carries_fit_a_relayable_connector_tx() {
         let one_more = MAX_COOP_EXIT_LEAVES.saturating_add(1);
-        assert!(connector_tx_weight_wu(MAX_COOP_EXIT_LEAVES) <= 40_000);
-        assert!(connector_tx_weight_wu(one_more) > 40_000);
+        assert!(connector_tx_weight(MAX_COOP_EXIT_LEAVES) <= bitcoin::Weight::from_wu(40_000));
+        assert!(connector_tx_weight(one_more) > bitcoin::Weight::from_wu(40_000));
         assert!(check_leaf_count(MAX_COOP_EXIT_LEAVES).is_ok());
         assert!(check_leaf_count(one_more).is_err());
     }

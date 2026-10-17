@@ -1,5 +1,5 @@
 use bitcoin::{
-    Address, Amount, FeeRate, Sequence, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, FeeRate, Sequence, Transaction, TxIn, TxOut, Weight, Witness,
     absolute::LockTime,
     hashes::Hash,
     key::TapTweak,
@@ -29,13 +29,6 @@ pub struct DepositOutput {
     pub amount: u64,
 }
 
-/// Assumes P2TR key-path inputs and P2TR outputs.
-pub fn funding_tx_weight_wu(inputs: usize, outputs: usize) -> u64 {
-    fees::TX_OVERHEAD_WU
-        .saturating_add((inputs as u64).saturating_mul(fees::P2TR_INPUT_WU))
-        .saturating_add((outputs as u64).saturating_mul(fees::P2TR_OUTPUT_WU))
-}
-
 /// Always includes dust for a change output: a child spends the change to raise the
 /// funding transaction's fee rate.
 pub fn funding_need(destinations: &[DepositOutput], inputs: usize, fee_rate: FeeRate) -> u64 {
@@ -43,19 +36,19 @@ pub fn funding_need(destinations: &[DepositOutput], inputs: usize, fee_rate: Fee
     total
         .saturating_add(fees::fee_sats(
             fee_rate,
-            funding_tx_weight_wu(inputs, destinations.len().saturating_add(1)),
+            fees::p2tr_tx_weight(inputs, destinations.len().saturating_add(1)),
         ))
         .saturating_add(fees::P2TR_DUST_SATS)
 }
 
-pub fn bump_tx_weight_wu(inputs: usize) -> u64 {
-    funding_tx_weight_wu(inputs, 1)
+pub fn bump_tx_weight(inputs: usize) -> Weight {
+    fees::p2tr_tx_weight(inputs, 1)
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReplacedChild {
     pub fee_sats: u64,
-    pub weight_wu: u64,
+    pub weight: Weight,
 }
 
 /// The fee a child with `inputs` inputs pays so it and its parent together pay at least
@@ -64,16 +57,19 @@ pub struct ReplacedChild {
 /// fee plus the relay fee for its own weight, at a higher fee rate, as a node requires.
 pub fn bump_fee(
     fee_rate: FeeRate,
-    parent_weight_wu: u64,
+    parent_weight: Weight,
     parent_fee_sats: u64,
     inputs: usize,
     replaces: Option<ReplacedChild>,
 ) -> u64 {
-    let weight = bump_tx_weight_wu(inputs);
+    let weight = bump_tx_weight(inputs);
     let relay = fees::fee_sats(fees::MIN_FEE_RATE, weight);
-    let package = fees::fee_sats(fee_rate, parent_weight_wu.saturating_add(weight))
-        .saturating_sub(parent_fee_sats)
-        .max(relay);
+    let package = fees::fee_sats(
+        fee_rate,
+        parent_weight.checked_add(weight).unwrap_or(Weight::MAX),
+    )
+    .saturating_sub(parent_fee_sats)
+    .max(relay);
     replaces.map_or(package, |earlier| {
         package
             .max(earlier.fee_sats.saturating_add(relay))
@@ -81,18 +77,18 @@ pub fn bump_fee(
     })
 }
 
-/// The least fee for `weight_wu` whose rate a node counts as higher than
-/// `earlier`'s. A node compares whole sats per 1000 virtual bytes.
-fn fee_above_rate_of(earlier: ReplacedChild, weight_wu: u64) -> u64 {
-    let vbytes = |weight_wu: u64| weight_wu.div_ceil(4);
+/// The least fee for `weight` at a fee rate higher than that of `earlier`, in whole
+/// sats per 1,000 virtual bytes. Older versions of Bitcoin Core compare fee rates in
+/// those units.
+fn fee_above_rate_of(earlier: ReplacedChild, weight: Weight) -> u64 {
     let earlier_rate = earlier
         .fee_sats
         .saturating_mul(1000)
-        .checked_div(vbytes(earlier.weight_wu))
+        .checked_div(earlier.weight.to_vbytes_ceil())
         .unwrap_or(u64::MAX);
     earlier_rate
         .saturating_add(1)
-        .saturating_mul(vbytes(weight_wu))
+        .saturating_mul(weight.to_vbytes_ceil())
         .div_ceil(1000)
 }
 
@@ -303,7 +299,7 @@ mod tests {
         let fee = 10_000 - tx.output.iter().map(|o| o.value.to_sat()).sum::<u64>();
         assert_eq!(
             fee,
-            fees::fee_sats(ONE_SAT_PER_VB, funding_tx_weight_wu(1, 2))
+            fees::fee_sats(ONE_SAT_PER_VB, fees::p2tr_tx_weight(1, 2))
         );
     }
 
@@ -331,20 +327,20 @@ mod tests {
     #[test]
     fn a_bump_pays_for_its_parent_to_reach_the_rate() {
         let rate = FeeRate::from_sat_per_vb_u32(10);
-        let parent_weight = funding_tx_weight_wu(1, 2);
+        let parent_weight = fees::p2tr_tx_weight(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
 
         let fee = bump_fee(rate, parent_weight, parent_fee, 1, None);
 
         assert_eq!(
             parent_fee + fee,
-            fees::fee_sats(rate, parent_weight + bump_tx_weight_wu(1))
+            fees::fee_sats(rate, parent_weight.checked_add(bump_tx_weight(1)).unwrap())
         );
     }
 
     #[test]
     fn a_bump_replacing_another_pays_more_than_it() {
-        let parent_weight = funding_tx_weight_wu(1, 2);
+        let parent_weight = fees::p2tr_tx_weight(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
         let earlier = ReplacedChild {
             fee_sats: bump_fee(
@@ -354,7 +350,7 @@ mod tests {
                 1,
                 None,
             ),
-            weight_wu: bump_tx_weight_wu(1),
+            weight: bump_tx_weight(1),
         };
 
         let fee = bump_fee(
@@ -365,12 +361,12 @@ mod tests {
             Some(earlier),
         );
 
-        assert!(fee >= earlier.fee_sats + fees::fee_sats(fees::MIN_FEE_RATE, bump_tx_weight_wu(1)));
+        assert!(fee >= earlier.fee_sats + fees::fee_sats(fees::MIN_FEE_RATE, bump_tx_weight(1)));
     }
 
     #[test]
     fn a_heavier_bump_replacing_another_pays_a_higher_rate_than_it() {
-        let parent_weight = funding_tx_weight_wu(1, 2);
+        let parent_weight = fees::p2tr_tx_weight(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
         let earlier = ReplacedChild {
             fee_sats: bump_fee(
@@ -380,9 +376,9 @@ mod tests {
                 1,
                 None,
             ),
-            weight_wu: bump_tx_weight_wu(1),
+            weight: bump_tx_weight(1),
         };
-        let weight = bump_tx_weight_wu(5);
+        let weight = bump_tx_weight(5);
 
         let fee = bump_fee(
             FeeRate::from_sat_per_vb_u32(20),
@@ -392,8 +388,8 @@ mod tests {
             Some(earlier),
         );
 
-        let rate = |fee: u64, weight: u64| fee * 1000 / weight.div_ceil(4);
-        assert!(rate(fee, weight) > rate(earlier.fee_sats, earlier.weight_wu));
+        let rate = |fee: u64, weight: Weight| fee * 1000 / weight.to_vbytes_ceil();
+        assert!(rate(fee, weight) > rate(earlier.fee_sats, earlier.weight));
     }
 
     #[test]
