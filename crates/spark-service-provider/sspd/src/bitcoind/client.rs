@@ -14,6 +14,7 @@ use tracing::trace;
 
 use crate::chain::SyncState;
 use crate::chain::{BlockHeader, BroadcastError, ChainClient, ChainError, OutputSpend};
+use crate::chain::{RequestChainClient, UnspentOutput};
 
 use super::{
     EstimateSmartFeeResponse, GetBlockHeaderResponse, GetBlockchainInfoResponse,
@@ -34,12 +35,6 @@ const RPC_VERIFY_ALREADY_IN_CHAIN: i64 = -27;
 const RPC_INVALID_PARAMETER: i64 = -8;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub struct UnspentOutput {
-    pub tx_out: TxOut,
-    /// Zero while the output is only in the mempool.
-    pub confirmations: u64,
-}
 
 pub struct ChainInfo {
     pub network: bitcoin::Network,
@@ -323,6 +318,20 @@ impl ChainClient for BitcoindClient {
             )
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestChainClient for BitcoindClient {
+    async fn unspent_output(
+        &self,
+        outpoint: &OutPoint,
+    ) -> Result<Option<UnspentOutput>, ChainError> {
+        BitcoindClient::unspent_output(self, outpoint).await
+    }
+
+    async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
+        ChainClient::get_spends(self, outpoints).await
     }
 }
 
