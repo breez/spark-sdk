@@ -64,7 +64,7 @@ fn sats_to_i64(sats: u64) -> Result<i64, String> {
 impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
     async fn insert(&self, record: &InstantStaticDepositQuoteRecord) -> Result<(), String> {
         sqlx::query(
-            r#"INSERT INTO brz_ssp_instant_static_deposit_quotes
+            r#"INSERT INTO brz_ssp_static_deposit_instant_quotes
                (id, txid, vout, network, deposit_amount_sats, credit_amount_sats,
                 destination_address, quote_signature)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
@@ -85,7 +85,7 @@ impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
 
     async fn get(&self, id: &str) -> Result<Option<InstantStaticDepositQuoteRecord>, String> {
         sqlx::query_as::<_, InstantQuoteRow>(
-            r#"SELECT * FROM brz_ssp_instant_static_deposit_quotes WHERE id = $1"#,
+            r#"SELECT * FROM brz_ssp_static_deposit_instant_quotes WHERE id = $1"#,
         )
         .bind(id)
         .fetch_optional(self.pool.as_ref())
@@ -99,7 +99,7 @@ impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
         &self,
         time: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM brz_ssp_instant_static_deposit_quotes WHERE created_at < $1"#)
+        sqlx::query(r#"DELETE FROM brz_ssp_static_deposit_instant_quotes WHERE created_at < $1"#)
             .bind(time)
             .execute(self.pool.as_ref())
             .await
