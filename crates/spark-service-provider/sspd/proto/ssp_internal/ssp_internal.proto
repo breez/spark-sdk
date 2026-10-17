@@ -29,6 +29,8 @@ service Pool {
     rpc ListRefundOutputs(ListRefundOutputsRequest) returns (ListRefundOutputsResponse);
     // Sweeps those outputs into the onchain wallet.
     rpc SweepRefundOutputs(SweepRefundOutputsRequest) returns (SweepRefundOutputsResponse);
+    // The unreserved leaves that only one of the SSP and the operators would use.
+    rpc ListDisputes(ListDisputesRequest) returns (ListDisputesResponse);
 }
 
 service OnchainWallet {
@@ -301,4 +303,30 @@ message SweepRefundOutputsResponse {
     // The value of the transactions' outputs, which are the onchain wallet's.
     uint64 value_sats = 3;
     uint64 fee_sats = 4;
+}
+
+message Dispute {
+    string leaf_id = 1;
+    // How the SSP and the operators differ on the leaf: `unreported`,
+    // `status`, `owner`, `refund`, or `exiting` for a leaf the operators
+    // report as AVAILABLE while the SSP finds it exiting.
+    string difference = 2;
+    uint64 value_sats = 3;
+    // The refund the SSP has for the leaf, and its timelock in blocks.
+    string refund_txid = 4;
+    uint32 refund_timelock = 5;
+    optional string operator_status = 6;
+    optional string operator_refund_txid = 7;
+    optional string operator_reported_since = 8;
+    // The SSP finds the leaf exiting because of this confirmed spend.
+    optional string spent_txid = 9;
+    optional uint32 spent_vout = 10;
+    optional string spending_txid = 11;
+    optional uint64 spending_block_height = 12;
+}
+
+message ListDisputesRequest {}
+
+message ListDisputesResponse {
+    repeated Dispute disputes = 1;
 }
