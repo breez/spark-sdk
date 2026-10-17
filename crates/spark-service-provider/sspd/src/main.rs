@@ -362,6 +362,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&pgpool),
     ))
         as Arc<dyn static_deposit::repository::InstantStaticDepositQuoteStore>;
+    let static_deposit_addresses = Arc::new(postgresql::PostgresStaticDepositAddressStore::new(
+        Arc::clone(&pgpool),
+    ))
+        as Arc<dyn static_deposit::repository::StaticDepositAddressStore>;
     let static_deposit_chain = Arc::new(BitcoindStaticDepositChain {
         chain_client: Arc::clone(&chain_client),
         call_queue: Arc::clone(&call_queue),
@@ -373,6 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let static_deposit_service = Arc::new(static_deposit::StaticDepositService::new(
         Arc::clone(&static_deposit_store),
         Arc::clone(&instant_quote_store),
+        Arc::clone(&static_deposit_addresses),
         Arc::clone(&ssp_wallet.spark.transfer_service),
         Arc::clone(&ssp_wallet.spark.leaf_store),
         Arc::clone(&ssp_wallet.spark.operator_pool),
@@ -427,6 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &static_deposit_service,
         &static_deposit_store,
         &instant_quote_store,
+        &static_deposit_addresses,
         &static_deposit_chain,
         &ssp_wallet,
         static_deposit_blocks,
@@ -973,6 +979,7 @@ fn spawn_static_deposit_worker(
     static_deposit_service: &Arc<static_deposit::StaticDepositService>,
     static_deposit_store: &Arc<dyn static_deposit::repository::StaticDepositClaimStore>,
     instant_quote_store: &Arc<dyn static_deposit::repository::InstantStaticDepositQuoteStore>,
+    static_deposit_addresses: &Arc<dyn static_deposit::repository::StaticDepositAddressStore>,
     static_deposit_chain: &Arc<dyn static_deposit::StaticDepositChain>,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     blocks: wakeup::Wakeup,
@@ -981,6 +988,7 @@ fn spawn_static_deposit_worker(
 ) {
     let spend_cosigner = Arc::new(static_deposit::SparkStaticDepositSpendCosigner::new(
         Arc::clone(static_deposit_store),
+        Arc::clone(static_deposit_addresses),
         Arc::clone(&ssp_wallet.spark.operator_pool),
         Arc::clone(&ssp_wallet.spark.signer),
         Arc::clone(static_deposit_chain),
