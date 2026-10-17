@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::RequestCoopExitInput;
+use crate::incoming_leaves::{IncomingLeafCheck, IncomingLeafError};
 use crate::leaves::{ClaimDeps, IncomingTransfer, claim_into_pool};
 use crate::wakeup::Wakeup;
 
@@ -159,6 +160,8 @@ pub enum CoopExitError {
     TransferNotFound(String),
     #[error("coop-exit request not found: {0}")]
     NotFound(String),
+    #[error(transparent)]
+    LeafCheck(IncomingLeafError),
 }
 
 pub struct BuiltCoopExitTxs {
@@ -177,6 +180,7 @@ pub struct CoopExitService {
     transfer_service: Arc<TransferService>,
     wallet: Arc<dyn CoopExitOnchainWallet>,
     fee_rates: Arc<dyn FeeRateSource>,
+    incoming_leaves: Arc<IncomingLeafCheck>,
     network: spark::Network,
     worker: Wakeup,
 }
@@ -190,6 +194,7 @@ impl CoopExitService {
         transfer_service: Arc<TransferService>,
         wallet: Arc<dyn CoopExitOnchainWallet>,
         fee_rates: Arc<dyn FeeRateSource>,
+        incoming_leaves: Arc<IncomingLeafCheck>,
         network: spark::Network,
         worker: Wakeup,
     ) -> Self {
@@ -200,6 +205,7 @@ impl CoopExitService {
             transfer_service,
             wallet,
             fee_rates,
+            incoming_leaves,
             network,
             worker,
         }
@@ -748,7 +754,11 @@ impl CoopExitService {
                 "the SSP could not claim the transfer's leaves".to_string(),
             ));
         }
-        Ok(())
+        match self.incoming_leaves.check(&incoming.transfer).await {
+            Ok(()) => Ok(()),
+            Err(IncomingLeafError::Refused(why)) => Err(CoopExitError::InvalidInput(why)),
+            Err(e @ IncomingLeafError::Unavailable) => Err(CoopExitError::LeafCheck(e)),
+        }
     }
 }
 

@@ -39,6 +39,7 @@ use tonic::transport::Server;
 use tracing::{field, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use sspd_lib::incoming_leaves::{CoordinatorAncestors, IncomingLeafCheck};
 use sspd_lib::{
     auth, bitcoind, chain, coop_exit, fees, graphql, in_flight, internal_server, leaves, lightning,
     pool, postgresql, shutdown, static_deposit, swap, wakeup, wallet,
@@ -122,6 +123,9 @@ struct Args {
     /// before the SSP adds the tree's leaves to the pool. Set it to the
     /// operators' `non_static_confirmation_threshold`: they make a tree
     /// available at that count.
+    ///
+    /// The SSP also refuses a user's transfer while the tree of one of the
+    /// transfer's leaves has a funding output with fewer confirmations.
     #[arg(long, default_value = "3")]
     pub deposit_confirmations: u64,
 
@@ -309,6 +313,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool_repo = Arc::new(postgresql::PoolRepository::new(Arc::clone(&pgpool)));
     let renewal = wakeup::Wakeup::new();
+    let incoming_leaves = Arc::new(IncomingLeafCheck {
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
+        chain_repository: Arc::clone(&chain_repository),
+        chain_tip: chain_tip.clone(),
+        ancestors: Arc::new(CoordinatorAncestors {
+            operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+            network: ssp_wallet.spark.network,
+        }),
+        call_queue: Arc::clone(&call_queue),
+        synced: synced.clone(),
+        confirmations: args.deposit_confirmations,
+        timeout: chain::call_queue::TIMEOUT,
+    });
     let claim = Arc::new(leaves::ClaimDeps {
         transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
         operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
@@ -332,6 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&ssp_wallet.spark.transfer_service),
         Arc::clone(&ssp_wallet.onchain) as Arc<dyn coop_exit::CoopExitOnchainWallet>,
         Arc::clone(&fee_rates),
+        Arc::clone(&incoming_leaves),
         ssp_wallet.spark.network,
         coop_exit_wakeup.clone(),
     ));
@@ -467,6 +485,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lightning = build_lightning(
         &claim,
+        &incoming_leaves,
         &tracker,
         &lightning_config,
         &ssp_wallet,
@@ -490,6 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &synced,
         &pool_repo,
         &swap_repo,
+        &incoming_leaves,
         &swap_requests,
         swap_claim_wakeup,
         &lightning_store,
@@ -1059,6 +1079,7 @@ fn invoice_signing_key(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_lightning(
     claim: &Arc<leaves::ClaimDeps>,
+    incoming_leaves: &Arc<IncomingLeafCheck>,
     tracker: &TaskTracker,
     config: &LightningConfig,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
@@ -1107,6 +1128,7 @@ fn build_lightning(
         Arc::clone(&ssp_wallet.spark.operator_pool),
         Arc::clone(&ssp_wallet.spark.signer),
         Arc::clone(&ssp_wallet.spark.transfer_service),
+        Arc::clone(incoming_leaves),
         ssp_wallet.spark.network,
         lightning::send::LightningSendFeePolicy {
             base_sats: config.send_base_fee_sats,
@@ -1209,6 +1231,7 @@ fn spawn_servers(
     synced: &chain::Synced,
     pool_repo: &Arc<postgresql::PoolRepository>,
     swap_repo: &Arc<postgresql::SwapRepository>,
+    incoming_leaves: &Arc<IncomingLeafCheck>,
     swap_requests: &Arc<in_flight::InFlight>,
     swap_claim_wakeup: wakeup::Wakeup,
     lightning_store: &Arc<dyn lightning::repository::LightningStore>,
@@ -1235,6 +1258,7 @@ fn spawn_servers(
         ssp_wallet,
         pool_repo,
         swap_repo,
+        incoming_leaves,
         swap_requests,
         swap_claim_wakeup,
         lightning_store,
@@ -1286,6 +1310,7 @@ fn spawn_graphql_server(
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     pool_repo: &Arc<postgresql::PoolRepository>,
     swap_repo: &Arc<postgresql::SwapRepository>,
+    incoming_leaves: &Arc<IncomingLeafCheck>,
     swap_requests: &Arc<in_flight::InFlight>,
     swap_claim_wakeup: wakeup::Wakeup,
     lightning_store: &Arc<dyn lightning::repository::LightningStore>,
@@ -1309,6 +1334,7 @@ fn spawn_graphql_server(
         ssp_wallet.spark.network,
         Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
         Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>,
+        Arc::clone(incoming_leaves),
         Arc::clone(swap_requests),
         swap_claim_wakeup,
         largest_denomination,

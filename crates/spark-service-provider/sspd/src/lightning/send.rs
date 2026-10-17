@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::handover::is_refusal;
+use crate::incoming_leaves::{IncomingLeafCheck, IncomingLeafError};
 use crate::leaves::{ClaimDeps, IncomingTransfer, claim_into_pool};
 use crate::wakeup::Wakeup;
 
@@ -208,6 +209,8 @@ pub enum LightningSendError {
     AmountRequired,
     #[error("transfer not found: {0}")]
     TransferNotFound(String),
+    #[error(transparent)]
+    IncomingLeaf(#[from] IncomingLeafError),
     #[error("the transfer or idempotency key belongs to a different send request")]
     RequestConflict,
     #[error("the invoice is already being paid")]
@@ -249,6 +252,7 @@ pub struct LightningSendService {
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     transfer_service: Arc<TransferService>,
+    incoming_leaves: Arc<IncomingLeafCheck>,
     network: spark::Network,
     fee_policy: LightningSendFeePolicy,
     wakeup: Wakeup,
@@ -262,6 +266,7 @@ impl LightningSendService {
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         transfer_service: Arc<TransferService>,
+        incoming_leaves: Arc<IncomingLeafCheck>,
         network: spark::Network,
         fee_policy: LightningSendFeePolicy,
         wakeup: Wakeup,
@@ -272,6 +277,7 @@ impl LightningSendService {
             operator_pool,
             signer,
             transfer_service,
+            incoming_leaves,
             network,
             fee_policy,
             wakeup,
@@ -379,6 +385,7 @@ impl LightningSendService {
                 "the SSP could not claim the transfer's leaves".to_string(),
             ));
         }
+        self.incoming_leaves.check(transfer).await?;
 
         let min_fee = self.fee_policy.fee_for(amount_sats);
         let required = amount_sats.saturating_add(min_fee);
