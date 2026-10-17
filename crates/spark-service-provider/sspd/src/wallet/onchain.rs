@@ -233,6 +233,14 @@ impl<R: ChainRepository> OnchainWallet<R> {
         &self,
         need: &(dyn Fn(usize) -> u64 + Send + Sync),
     ) -> Result<(Vec<Utxo>, HeldCoins), OnchainWalletError> {
+        self.select_at_most(usize::MAX, need).await
+    }
+
+    pub async fn select_at_most(
+        &self,
+        most: usize,
+        need: &(dyn Fn(usize) -> u64 + Send + Sync),
+    ) -> Result<(Vec<Utxo>, HeldCoins), OnchainWalletError> {
         let _selection = self.selection.lock().await;
         let mut utxos = self.list_utxos().await?;
         utxos.sort_by_key(|u| std::cmp::Reverse(u.value));
@@ -240,7 +248,7 @@ impl<R: ChainRepository> OnchainWallet<R> {
         let mut selected = Vec::new();
         let mut total: u64 = 0;
         for utxo in utxos {
-            if total >= need(selected.len()) && !selected.is_empty() {
+            if (total >= need(selected.len()) && !selected.is_empty()) || selected.len() >= most {
                 break;
             }
             total = total.saturating_add(utxo.value);
@@ -966,6 +974,26 @@ mod tests {
             })
         ));
         assert_eq!(fixture.coins().await, coins);
+    }
+
+    #[tokio::test]
+    async fn a_selection_of_at_most_some_coins_fails_when_those_do_not_cover_the_need() {
+        let fixture = Fixture::new().await;
+        fixture.coin(1, 5_000).await;
+        fixture.coin(2, 3_000).await;
+        let wallet = &fixture.wallet;
+
+        let one = wallet.select_at_most(1, &|_| 6_000).await;
+        assert!(matches!(
+            one,
+            Err(OnchainWalletError::InsufficientFunds {
+                need: 6_000,
+                have: 5_000
+            })
+        ));
+
+        let (two, _held) = wallet.select_at_most(2, &|_| 6_000).await.unwrap();
+        assert_eq!(two.len(), 2);
     }
 
     #[tokio::test]
