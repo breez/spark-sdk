@@ -265,12 +265,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("bitcoind is pruned, but the daemon reads every block since it started".into());
     }
 
+    let chain_tip = chain::ChainTip::load(chain_repository.as_ref()).await?;
     spawn_chain_monitor(
         &tracker,
         args.network,
         Duration::from_secs(args.chain_poll_interval_seconds),
         &chain_client,
         &chain_repository,
+        chain_tip.clone(),
         vec![
             replenish_wakeup.clone(),
             pooling_wakeup.clone(),
@@ -549,6 +551,7 @@ fn spawn_chain_monitor(
     poll_interval: Duration,
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
+    chain_tip: chain::ChainTip,
     chain_advanced: Vec<wakeup::Wakeup>,
     token: &CancellationToken,
 ) {
@@ -559,6 +562,7 @@ fn spawn_chain_monitor(
         Arc::clone(chain_repository),
         poll_interval,
         chain_advanced,
+        chain_tip,
     ));
     tracker.spawn(async move {
         info!("Starting chain monitor");
