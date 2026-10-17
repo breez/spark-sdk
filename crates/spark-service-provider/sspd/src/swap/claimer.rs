@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use spark::services::{TransferId, TransferService, TransferStatus};
+use spark::services::{TransferService, TransferStatus};
 use spark::tree::TreeNodeId;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -73,10 +73,12 @@ pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<bool, BoxError>
 
 async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), BoxError> {
     let swap = &detail.swap;
-    let transfer_id = TransferId::from_str(&swap.user_transfer_id)
-        .map_err(|e| format!("invalid user transfer id {}: {e}", swap.user_transfer_id))?;
 
-    let Some(transfer) = deps.transfer_service.query_transfer(&transfer_id).await? else {
+    let Some(transfer) = deps
+        .transfer_service
+        .query_transfer(&swap.user_transfer_id)
+        .await?
+    else {
         return Ok(());
     };
 

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use spark::services::TransferId;
 
@@ -29,8 +30,8 @@ struct StaticDepositClaimRow {
     encrypted_deposit_secret_key: String,
     quote_signature: String,
     user_signature: String,
-    transfer_id: Option<String>,
-    pending_transfer_id: Option<String>,
+    transfer_id: Option<Uuid>,
+    pending_transfer_id: Option<Uuid>,
     reservation_id: Option<String>,
     reserved_leaf_ids: Option<Vec<String>>,
     utxo_swap_id: Option<String>,
@@ -57,7 +58,7 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             .map_err(|err| format!("invalid signed spend transaction: {err}"))?;
         let pending_credit = match (row.pending_transfer_id, row.reservation_id) {
             (Some(transfer_id), Some(id)) => Some(PendingCredit {
-                transfer_id: TransferId::from_str(&transfer_id)
+                transfer_id: TransferId::from_str(&transfer_id.to_string())
                     .map_err(|e| format!("invalid pending transfer id: {e}"))?,
                 reservation: HandoverReservation {
                     id,
@@ -95,7 +96,7 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             encrypted_deposit_secret_key: row.encrypted_deposit_secret_key,
             quote_signature: row.quote_signature,
             user_signature: row.user_signature,
-            transfer_id: row.transfer_id,
+            transfer_id: row.transfer_id.map(|id| id.to_string()),
             pending_credit,
             utxo_swap_id: row.utxo_swap_id,
             spend_tx,
@@ -133,7 +134,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
                 credit_amount_sats, is_instant, deposit_amount_sats,
                 encrypted_deposit_secret_key, quote_signature, user_signature,
                 pending_transfer_id, reservation_id, reserved_leaf_ids, prep_spend_tx)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14,
                        $15, $16)"#,
         )
         .bind(&record.id)
@@ -199,7 +200,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         transfer_id: &str,
     ) -> Result<Option<StaticDepositClaimRecord>, String> {
         sqlx::query_as::<_, StaticDepositClaimRow>(
-            r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE transfer_id = $1"#,
+            r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE transfer_id = $1::uuid"#,
         )
         .bind(transfer_id)
         .fetch_optional(self.pool.as_ref())
@@ -212,7 +213,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2,
+               SET transfer_id = $2::uuid,
                    pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
@@ -242,7 +243,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     ) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2, utxo_swap_id = $3,
+               SET transfer_id = $2::uuid, utxo_swap_id = $3,
                    pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
@@ -264,7 +265,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     ) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2,
+               SET transfer_id = $2::uuid,
                    signed_spend_transaction = $3,
                    pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
                    updated_at = NOW()

@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
+use spark::services::TransferId;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::swap::SwapStore;
 use crate::swap::repository::{SwapDetail, SwapLeaf, SwapRecord};
@@ -40,7 +42,7 @@ impl SwapRepository {
     }
 }
 
-type SwapRow = (String, Vec<u8>, String, String, String, i64, i64, i64);
+type SwapRow = (String, Vec<u8>, Uuid, Uuid, String, i64, i64, i64);
 
 const SWAP_COLUMNS: &str = "id, user_identity_public_key, user_transfer_id, counter_transfer_id, \
      reservation_id, total_amount_sats, target_amount_sats, fee_sats";
@@ -59,8 +61,8 @@ fn swap_record(row: SwapRow) -> SwapRecord {
     SwapRecord {
         id,
         user_identity_public_key,
-        user_transfer_id,
-        counter_transfer_id,
+        user_transfer_id: TransferId::from_bytes(user_transfer_id.into_bytes()),
+        counter_transfer_id: TransferId::from_bytes(counter_transfer_id.into_bytes()),
         reservation_id,
         total_amount_sats,
         target_amount_sats,
@@ -116,12 +118,12 @@ impl SwapStore for SwapRepository {
             r#"INSERT INTO brz_ssp_swaps
                (id, user_identity_public_key, user_transfer_id, counter_transfer_id,
                 reservation_id, total_amount_sats, target_amount_sats, fee_sats)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+               VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8)"#,
         )
         .bind(&swap.id)
         .bind(&swap.user_identity_public_key)
-        .bind(&swap.user_transfer_id)
-        .bind(&swap.counter_transfer_id)
+        .bind(swap.user_transfer_id.to_string())
+        .bind(swap.counter_transfer_id.to_string())
         .bind(&swap.reservation_id)
         .bind(swap.total_amount_sats)
         .bind(swap.target_amount_sats)
@@ -142,7 +144,7 @@ impl SwapStore for SwapRepository {
         user_transfer_id: &str,
     ) -> Result<Option<SwapRecord>, String> {
         let row: Option<SwapRow> = sqlx::query_as(&format!(
-            "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE user_transfer_id = $1"
+            "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE user_transfer_id = $1::uuid"
         ))
         .bind(user_transfer_id)
         .fetch_optional(self.pool.as_ref())

@@ -8,6 +8,7 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use spark::services::{Preimage, TransferId};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::handover::HandoverReservation;
 use crate::lightning::node::LightningPaymentId;
@@ -41,7 +42,7 @@ struct SendRow {
     payment_hash: Vec<u8>,
     amount_sats: i64,
     fee_sats: i64,
-    user_transfer_id: String,
+    user_transfer_id: Uuid,
     htlc_address: String,
     idempotency_key: Option<String>,
     ln_payment_id: Option<String>,
@@ -72,7 +73,7 @@ impl TryFrom<SendRow> for LightningSendRecord {
             amount_sats: u64::try_from(row.amount_sats)
                 .map_err(|e| format!("invalid amount: {e}"))?,
             fee_sats: u64::try_from(row.fee_sats).map_err(|e| format!("invalid fee: {e}"))?,
-            user_transfer_id: TransferId::from_str(&row.user_transfer_id)
+            user_transfer_id: TransferId::from_str(&row.user_transfer_id.to_string())
                 .map_err(|e| format!("invalid transfer id: {e}"))?,
             htlc_address: row.htlc_address,
             idempotency_key: row.idempotency_key,
@@ -98,7 +99,7 @@ struct ReceiveRow {
     payment_hash: Vec<u8>,
     amount_sats: i64,
     encoded_invoice: String,
-    transfer_id: Option<String>,
+    transfer_id: Option<Uuid>,
     transfer_amount_sats: Option<i64>,
     reservation_id: Option<String>,
     reserved_leaf_ids: Option<Vec<String>>,
@@ -136,7 +137,7 @@ impl TryFrom<ReceiveRow> for LightningReceiveRecord {
             encoded_invoice: row.encoded_invoice,
             transfer_id: row
                 .transfer_id
-                .map(|id| TransferId::from_str(&id))
+                .map(|id| TransferId::from_str(&id.to_string()))
                 .transpose()
                 .map_err(|e| format!("invalid transfer id: {e}"))?,
             transfer_amount_sats: row
@@ -194,7 +195,7 @@ impl LightningStore for PostgresLightningStore {
             r#"INSERT INTO brz_ssp_lightning_send_requests
                (id, user_identity_public_key, encoded_invoice, payment_hash, amount_sats,
                 fee_sats, user_transfer_id, htlc_address, idempotency_key)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8, $9)"#,
         )
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
@@ -358,7 +359,7 @@ impl LightningStore for PostgresLightningStore {
         transfer_id: &TransferId,
     ) -> Result<Option<LightningSendRecord>, String> {
         sqlx::query_as::<_, SendRow>(
-            r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE user_transfer_id = $1"#,
+            r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE user_transfer_id = $1::uuid"#,
         )
         .bind(transfer_id.to_string())
         .fetch_optional(self.pool.as_ref())
@@ -435,7 +436,7 @@ impl LightningStore for PostgresLightningStore {
             .collect();
         sqlx::query(
             r#"UPDATE brz_ssp_lightning_receive_requests
-               SET transfer_id = $2, transfer_amount_sats = $3, reservation_id = $4,
+               SET transfer_id = $2::uuid, transfer_amount_sats = $3, reservation_id = $4,
                    reserved_leaf_ids = $5, updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -537,7 +538,7 @@ impl LightningStore for PostgresLightningStore {
         transfer_id: &TransferId,
     ) -> Result<Option<LightningReceiveRecord>, String> {
         sqlx::query_as::<_, ReceiveRow>(
-            r#"SELECT * FROM brz_ssp_lightning_receive_requests WHERE transfer_id = $1"#,
+            r#"SELECT * FROM brz_ssp_lightning_receive_requests WHERE transfer_id = $1::uuid"#,
         )
         .bind(transfer_id.to_string())
         .fetch_optional(self.pool.as_ref())
