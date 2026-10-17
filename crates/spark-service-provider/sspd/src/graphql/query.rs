@@ -1,5 +1,6 @@
 #![allow(clippy::unused_async, clippy::wildcard_imports)]
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -167,55 +168,82 @@ impl QueryRoot {
         let coop_exits = ctx.data::<Arc<crate::coop_exit::CoopExitService>>()?;
         let network = *ctx.data::<BitcoinNetwork>()?;
 
-        // The SDK treats a transfer left out of the answer as having no SSP request.
-        let mut transfers = Vec::new();
-        for spark_id in transfer_spark_ids {
-            let Ok(transfer_id) = TransferId::from_str(&spark_id.to_string()) else {
-                continue;
-            };
-            if let Some(record) = store
-                .get_send_by_transfer_id(&transfer_id)
-                .await
-                .map_err(Error::new)?
-                .filter(|r| r.user_identity_public_key == caller)
-            {
-                transfers.push(super::lightning::send_transfer_to_type(&record, network));
-                continue;
-            }
-            if let Some(transfer) = store
-                .get_receive_by_transfer_id(&transfer_id)
-                .await
-                .map_err(Error::new)?
-                .filter(|r| r.user_identity_public_key == caller)
-                .and_then(|record| super::lightning::receive_transfer_to_type(&record, network))
-            {
-                transfers.push(transfer);
-                continue;
-            }
-            if let Some(transfer) = static_deposit
-                .claim_by_transfer_id(&spark_id.to_string())
-                .await
-                .map_err(Error::new)?
-                .filter(|r| r.user_identity_public_key == caller)
-                .and_then(|record| super::static_deposit::claim_transfer_to_type(&record, network))
-            {
-                transfers.push(transfer);
-                continue;
-            }
-            if let Some(record) = coop_exits
-                .request_for_transfer(&transfer_id, &caller)
-                .await
-                .map_err(|e| Error::new(e.to_string()))?
-            {
-                transfers.push(super::coop_exit::coop_exit_transfer_to_type(
-                    &record, network,
-                ));
+        // The SDK treats a transfer left out of the result as having no SSP
+        // request.
+        let ids: Vec<TransferId> = transfer_spark_ids
+            .iter()
+            .filter_map(|spark_id| TransferId::from_str(&spark_id.to_string()).ok())
+            .collect();
+        let mut found: HashMap<TransferId, Transfer> = HashMap::new();
+        let sends = store
+            .get_sends_by_transfer_ids(&ids)
+            .await
+            .map_err(Error::new)?;
+        for record in &sends {
+            if record.user_identity_public_key == caller {
+                let transfer = super::lightning::send_transfer_to_type(record, network);
+                found.insert(record.user_transfer_id.clone(), transfer);
             }
         }
-        Ok(transfers)
+
+        let left = without_request(&ids, &found);
+        if !left.is_empty() {
+            let receives = store
+                .get_receives_by_transfer_ids(&left)
+                .await
+                .map_err(Error::new)?;
+            for record in &receives {
+                if record.user_identity_public_key == caller
+                    && let Some(id) = &record.transfer_id
+                    && let Some(transfer) =
+                        super::lightning::receive_transfer_to_type(record, network)
+                {
+                    found.insert(id.clone(), transfer);
+                }
+            }
+        }
+
+        let left = without_request(&ids, &found);
+        if !left.is_empty() {
+            let left: Vec<String> = left.iter().map(ToString::to_string).collect();
+            let claims = static_deposit
+                .claims_by_transfer_ids(&left)
+                .await
+                .map_err(Error::new)?;
+            for record in &claims {
+                let id = record.transfer_id.as_deref();
+                if record.user_identity_public_key == caller
+                    && let Some(id) = id.and_then(|id| TransferId::from_str(id).ok())
+                    && let Some(transfer) =
+                        super::static_deposit::claim_transfer_to_type(record, network)
+                {
+                    found.insert(id, transfer);
+                }
+            }
+        }
+
+        let left = without_request(&ids, &found);
+        if !left.is_empty() {
+            let requests = coop_exits
+                .requests_for_transfers(&left, &caller)
+                .await
+                .map_err(|e| Error::new(e.to_string()))?;
+            for record in &requests {
+                let transfer = super::coop_exit::coop_exit_transfer_to_type(record, network);
+                found.insert(record.user_transfer_id.clone(), transfer);
+            }
+        }
+        Ok(ids.iter().filter_map(|id| found.get(id).cloned()).collect())
     }
 
     async fn wallet_webhooks(&self, _ctx: &Context<'_>) -> Result<ListSparkWalletWebhooksOutput> {
         Err("not implemented".into())
     }
+}
+
+fn without_request(ids: &[TransferId], found: &HashMap<TransferId, Transfer>) -> Vec<TransferId> {
+    ids.iter()
+        .filter(|id| !found.contains_key(id))
+        .cloned()
+        .collect()
 }

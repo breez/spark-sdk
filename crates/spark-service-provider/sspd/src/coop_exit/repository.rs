@@ -61,6 +61,10 @@ pub trait CoopExitStore: Send + Sync {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Option<CoopExitRecord>, String>;
+    async fn get_by_transfer_ids(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<CoopExitRecord>, String>;
     /// Completed requests not yet settled.
     async fn pending(&self) -> Result<Vec<CoopExitRecord>, String>;
     async fn incomplete_before(
@@ -268,6 +272,42 @@ pub(crate) mod scenarios {
 
         assert!(by_id.is_none());
         assert!(by_transfer.is_none());
+    }
+
+    pub(crate) async fn the_requests_paid_for_with_the_given_transfers_are_returned(
+        store: &dyn CoopExitStore,
+    ) {
+        let requests = ["first", "second", "third"].map(request);
+        for request in &requests {
+            store.insert(request, &[]).await.unwrap();
+        }
+        let [first, second, third] = requests.map(|request| request.user_transfer_id);
+        let paid_for_with = async |transfers: &[TransferId]| {
+            sorted_ids(store.get_by_transfer_ids(transfers).await.unwrap())
+        };
+
+        assert!(paid_for_with(&[]).await.is_empty());
+        assert_eq!(paid_for_with(&[second]).await, ["second"]);
+        let not_stored = TransferId::generate();
+        assert_eq!(
+            paid_for_with(&[third, not_stored, first]).await,
+            ["first", "third"]
+        );
+    }
+
+    pub(crate) async fn the_request_of_a_transfer_given_twice_is_returned_once(
+        store: &dyn CoopExitStore,
+    ) {
+        let request = request("a");
+        store.insert(&request, &[]).await.unwrap();
+        let transfer = request.user_transfer_id;
+
+        let found = store
+            .get_by_transfer_ids(&[transfer.clone(), transfer])
+            .await
+            .unwrap();
+
+        assert_eq!(ids(found), ["a"]);
     }
 
     pub(crate) async fn a_second_request_paid_for_with_the_same_transfer_is_not_stored(

@@ -353,6 +353,24 @@ impl LightningStore for PostgresLightningStore {
         .transpose()
     }
 
+    async fn get_sends_by_transfer_ids(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<LightningSendRecord>, String> {
+        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
+        sqlx::query_as::<_, SendRow>(
+            r#"SELECT * FROM brz_ssp_lightning_send_requests
+               WHERE user_transfer_id = ANY($1::uuid[])"#,
+        )
+        .bind(&ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(LightningSendRecord::try_from)
+        .collect()
+    }
+
     async fn get_unfailed_send_by_payment_hash(
         &self,
         payment_hash: &sha256::Hash,
@@ -494,19 +512,22 @@ impl LightningStore for PostgresLightningStore {
         .transpose()
     }
 
-    async fn get_receive_by_transfer_id(
+    async fn get_receives_by_transfer_ids(
         &self,
-        transfer_id: &TransferId,
-    ) -> Result<Option<LightningReceiveRecord>, String> {
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<LightningReceiveRecord>, String> {
+        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
         sqlx::query_as::<_, ReceiveRow>(
-            r#"SELECT * FROM brz_ssp_lightning_receive_requests WHERE transfer_id = $1::uuid"#,
+            r#"SELECT * FROM brz_ssp_lightning_receive_requests
+               WHERE transfer_id = ANY($1::uuid[])"#,
         )
-        .bind(transfer_id.to_string())
-        .fetch_optional(self.pool.as_ref())
+        .bind(&ids)
+        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
+        .into_iter()
         .map(LightningReceiveRecord::try_from)
-        .transpose()
+        .collect()
     }
 
     async fn pending_receives(&self) -> Result<Vec<LightningReceiveRecord>, String> {
@@ -803,6 +824,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_transfer_ids_list_no_sends() {
+        let fixture = Fixture::new().await;
+        scenarios::no_transfer_ids_list_no_sends(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn one_transfer_id_lists_its_send() {
+        let fixture = Fixture::new().await;
+        scenarios::one_transfer_id_lists_its_send(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn several_transfer_ids_list_each_of_their_sends() {
+        let fixture = Fixture::new().await;
+        scenarios::several_transfer_ids_list_each_of_their_sends(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_id_without_a_send_lists_nothing() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_id_without_a_send_lists_nothing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_repeated_transfer_id_lists_its_send_once() {
+        let fixture = Fixture::new().await;
+        scenarios::a_repeated_transfer_id_lists_its_send_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_send_is_listed_for_its_transfer_id_in_every_state() {
+        let fixture = Fixture::new().await;
+        scenarios::a_send_is_listed_for_its_transfer_id_in_every_state(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn a_write_to_one_send_leaves_another_as_it_was() {
         let fixture = Fixture::new().await;
         scenarios::a_write_to_one_send_leaves_another_as_it_was(&fixture.store).await;
@@ -894,6 +951,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_receive_can_be_handed_over_again_after_its_handover_was_cleared() {
+        let fixture = Fixture::new().await;
+        scenarios::a_receive_can_be_handed_over_again_after_its_handover_was_cleared(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn a_receive_with_a_preimage_is_ready_to_settle() {
         let fixture = Fixture::new().await;
         scenarios::a_receive_with_a_preimage_is_ready_to_settle(&fixture.store).await;
@@ -934,6 +1000,42 @@ mod tests {
     async fn receives_handing_over_are_listed_in_order_of_creation() {
         let fixture = Fixture::new().await;
         scenarios::receives_handing_over_are_listed_in_order_of_creation(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn no_transfer_ids_list_no_receives() {
+        let fixture = Fixture::new().await;
+        scenarios::no_transfer_ids_list_no_receives(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn one_transfer_id_lists_its_receive() {
+        let fixture = Fixture::new().await;
+        scenarios::one_transfer_id_lists_its_receive(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn several_transfer_ids_list_each_of_their_receives() {
+        let fixture = Fixture::new().await;
+        scenarios::several_transfer_ids_list_each_of_their_receives(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_id_without_a_receive_lists_nothing() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_id_without_a_receive_lists_nothing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_repeated_transfer_id_lists_its_receive_once() {
+        let fixture = Fixture::new().await;
+        scenarios::a_repeated_transfer_id_lists_its_receive_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_receive_is_listed_for_its_transfer_id_in_every_state() {
+        let fixture = Fixture::new().await;
+        scenarios::a_receive_is_listed_for_its_transfer_id_in_every_state(&fixture.store).await;
     }
 
     #[tokio::test]

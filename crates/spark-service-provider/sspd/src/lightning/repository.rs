@@ -143,6 +143,10 @@ pub trait LightningStore: Send + Sync {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Option<LightningSendRecord>, String>;
+    async fn get_sends_by_transfer_ids(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<LightningSendRecord>, String>;
     async fn get_unfailed_send_by_payment_hash(
         &self,
         payment_hash: &sha256::Hash,
@@ -171,10 +175,10 @@ pub trait LightningStore: Send + Sync {
         &self,
         payment_hash: &sha256::Hash,
     ) -> Result<Option<LightningReceiveRecord>, String>;
-    async fn get_receive_by_transfer_id(
+    async fn get_receives_by_transfer_ids(
         &self,
-        transfer_id: &TransferId,
-    ) -> Result<Option<LightningReceiveRecord>, String>;
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<LightningReceiveRecord>, String>;
     async fn pending_receives(&self) -> Result<Vec<LightningReceiveRecord>, String>;
     /// Pending receives without a handover whose invoice has one of `payment_hashes`.
     async fn unhanded_receives(
@@ -335,6 +339,18 @@ pub(crate) mod scenarios {
         paid: LightningSendRecord,
         complete: LightningSendRecord,
         failed: LightningSendRecord,
+    }
+
+    impl Sends {
+        fn all(&self) -> [&LightningSendRecord; 5] {
+            [
+                &self.new,
+                &self.paying,
+                &self.paid,
+                &self.complete,
+                &self.failed,
+            ]
+        }
     }
 
     async fn sends_in_every_state(store: &dyn LightningStore) -> Sends {
@@ -743,6 +759,84 @@ pub(crate) mod scenarios {
         assert_eq!(failed.payment_status, SendPaymentStatus::Failed);
     }
 
+    pub(crate) async fn no_transfer_ids_list_no_sends(store: &dyn LightningStore) {
+        stored_send(store, 1).await;
+
+        let listed = store.get_sends_by_transfer_ids(&[]).await.unwrap();
+
+        assert!(listed.is_empty());
+    }
+
+    pub(crate) async fn one_transfer_id_lists_its_send(store: &dyn LightningStore) {
+        let send = stored_send(store, 1).await;
+        stored_send(store, 2).await;
+
+        let listed = store
+            .get_sends_by_transfer_ids(&[send.user_transfer_id])
+            .await
+            .unwrap();
+
+        assert_eq!(send_ids(&listed), ["send-1"]);
+    }
+
+    pub(crate) async fn several_transfer_ids_list_each_of_their_sends(store: &dyn LightningStore) {
+        let first = stored_send(store, 1).await;
+        stored_send(store, 2).await;
+        let third = stored_send(store, 3).await;
+
+        let listed = store
+            .get_sends_by_transfer_ids(&[first.user_transfer_id, third.user_transfer_id])
+            .await
+            .unwrap();
+
+        assert_eq!(send_ids(&listed), ["send-1", "send-3"]);
+    }
+
+    pub(crate) async fn a_transfer_id_without_a_send_lists_nothing(store: &dyn LightningStore) {
+        let send = stored_send(store, 1).await;
+        let without_send = new_send(2).user_transfer_id;
+
+        let alone = store
+            .get_sends_by_transfer_ids(std::slice::from_ref(&without_send))
+            .await
+            .unwrap();
+        let among = store
+            .get_sends_by_transfer_ids(&[without_send, send.user_transfer_id])
+            .await
+            .unwrap();
+
+        assert!(alone.is_empty());
+        assert_eq!(send_ids(&among), ["send-1"]);
+    }
+
+    pub(crate) async fn a_repeated_transfer_id_lists_its_send_once(store: &dyn LightningStore) {
+        let send = stored_send(store, 1).await;
+
+        let listed = store
+            .get_sends_by_transfer_ids(&[send.user_transfer_id.clone(), send.user_transfer_id])
+            .await
+            .unwrap();
+
+        assert_eq!(send_ids(&listed), ["send-1"]);
+    }
+
+    pub(crate) async fn a_send_is_listed_for_its_transfer_id_in_every_state(
+        store: &dyn LightningStore,
+    ) {
+        let sends = sends_in_every_state(store).await;
+        let transfer_ids = sends.all().map(|send| send.user_transfer_id.clone());
+
+        let listed = store
+            .get_sends_by_transfer_ids(&transfer_ids)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            send_ids(&listed),
+            ["complete", "failed", "new", "paid", "paying"]
+        );
+    }
+
     pub(crate) async fn a_write_to_one_send_leaves_another_as_it_was(store: &dyn LightningStore) {
         let (paid, failed) = (stored_send(store, 1).await, stored_send(store, 2).await);
         let other = stored_send(store, 3).await;
@@ -1023,6 +1117,29 @@ pub(crate) mod scenarios {
         assert_eq!(stored.state(), ReceiveState::AwaitingPayment);
     }
 
+    pub(crate) async fn a_receive_can_be_handed_over_again_after_its_handover_was_cleared(
+        store: &dyn LightningStore,
+    ) {
+        let receive = stored_receive(store, 1).await;
+        let (first, second) = (TransferId::generate(), TransferId::generate());
+        store
+            .set_receive_handover(&receive.id, &first, 1_000)
+            .await
+            .unwrap();
+        store.clear_receive_handover(&receive.id).await.unwrap();
+
+        store
+            .set_receive_handover(&receive.id, &second, 2_000)
+            .await
+            .unwrap();
+
+        let stored = read_receive(store, &receive.id).await;
+        assert_eq!(stored.transfer_id, Some(second));
+        assert_eq!(stored.transfer_amount_sats, Some(2_000));
+        let by_first = store.get_receives_by_transfer_ids(&[first]).await.unwrap();
+        assert!(by_first.is_empty());
+    }
+
     pub(crate) async fn a_receive_with_a_preimage_is_ready_to_settle(store: &dyn LightningStore) {
         let receive = stored_receive(store, 1).await;
         hand_over(store, &receive).await;
@@ -1139,6 +1256,102 @@ pub(crate) mod scenarios {
 
         assert_eq!(handing_over.len(), 3);
         assert!(handing_over.is_sorted_by_key(|receive| receive.created_at));
+    }
+
+    pub(crate) async fn no_transfer_ids_list_no_receives(store: &dyn LightningStore) {
+        let receive = stored_receive(store, 1).await;
+        hand_over(store, &receive).await;
+
+        let listed = store.get_receives_by_transfer_ids(&[]).await.unwrap();
+
+        assert!(listed.is_empty());
+    }
+
+    pub(crate) async fn one_transfer_id_lists_its_receive(store: &dyn LightningStore) {
+        let (receive, other) = (
+            stored_receive(store, 1).await,
+            stored_receive(store, 2).await,
+        );
+        hand_over(store, &receive).await;
+        hand_over(store, &other).await;
+
+        let listed = store
+            .get_receives_by_transfer_ids(&[handover_transfer(&receive)])
+            .await
+            .unwrap();
+
+        assert_eq!(receive_ids(&listed), ["receive-1"]);
+    }
+
+    pub(crate) async fn several_transfer_ids_list_each_of_their_receives(
+        store: &dyn LightningStore,
+    ) {
+        let first = stored_receive(store, 1).await;
+        let second = stored_receive(store, 2).await;
+        let third = stored_receive(store, 3).await;
+        for receive in [&first, &second, &third] {
+            hand_over(store, receive).await;
+        }
+
+        let listed = store
+            .get_receives_by_transfer_ids(&[handover_transfer(&first), handover_transfer(&third)])
+            .await
+            .unwrap();
+
+        assert_eq!(receive_ids(&listed), ["receive-1", "receive-3"]);
+    }
+
+    pub(crate) async fn a_transfer_id_without_a_receive_lists_nothing(store: &dyn LightningStore) {
+        let (handed_over, unhanded) = (
+            stored_receive(store, 1).await,
+            stored_receive(store, 2).await,
+        );
+        hand_over(store, &handed_over).await;
+        let without_receive = handover_transfer(&unhanded);
+
+        let alone = store
+            .get_receives_by_transfer_ids(std::slice::from_ref(&without_receive))
+            .await
+            .unwrap();
+        let among = store
+            .get_receives_by_transfer_ids(&[without_receive, handover_transfer(&handed_over)])
+            .await
+            .unwrap();
+
+        assert!(alone.is_empty());
+        assert_eq!(receive_ids(&among), ["receive-1"]);
+    }
+
+    pub(crate) async fn a_repeated_transfer_id_lists_its_receive_once(store: &dyn LightningStore) {
+        let receive = stored_receive(store, 1).await;
+        hand_over(store, &receive).await;
+
+        let listed = store
+            .get_receives_by_transfer_ids(&[
+                handover_transfer(&receive),
+                handover_transfer(&receive),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(receive_ids(&listed), ["receive-1"]);
+    }
+
+    pub(crate) async fn a_receive_is_listed_for_its_transfer_id_in_every_state(
+        store: &dyn LightningStore,
+    ) {
+        let receives = receives_in_every_state(store).await;
+        let transfer_ids = receives.all().map(handover_transfer);
+
+        let listed = store
+            .get_receives_by_transfer_ids(&transfer_ids)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            receive_ids(&listed),
+            ["failed", "handed-over", "ready-to-settle", "settled"]
+        );
     }
 
     pub(crate) async fn no_payment_hashes_list_no_unhanded_receives(store: &dyn LightningStore) {

@@ -337,17 +337,18 @@ impl CoopExitService {
             .filter(|record| record.user_identity_public_key == *caller))
     }
 
-    pub async fn request_for_transfer(
+    pub async fn requests_for_transfers(
         &self,
-        transfer_id: &TransferId,
+        transfer_ids: &[TransferId],
         caller: &PublicKey,
-    ) -> Result<Option<CoopExitRecord>, CoopExitError> {
-        Ok(self
+    ) -> Result<Vec<CoopExitRecord>, CoopExitError> {
+        let mut requests = self
             .store
-            .get_by_transfer_id(transfer_id)
+            .get_by_transfer_ids(transfer_ids)
             .await
-            .map_err(CoopExitError::Store)?
-            .filter(|record| record.user_identity_public_key == *caller))
+            .map_err(CoopExitError::Store)?;
+        requests.retain(|record| record.user_identity_public_key == *caller);
+        Ok(requests)
     }
 
     async fn fee_rate(&self) -> Result<FeeRate, CoopExitError> {
@@ -1102,6 +1103,13 @@ mod tests {
             &self,
             _transfer_id: &TransferId,
         ) -> Result<Option<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_ids(
+            &self,
+            _transfer_ids: &[TransferId],
+        ) -> Result<Vec<CoopExitRecord>, String> {
             unimplemented!()
         }
 

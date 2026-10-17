@@ -54,10 +54,11 @@ pub trait StaticDepositClaimStore: Send + Sync {
         txid: &str,
         vout: u32,
     ) -> Result<Option<StaticDepositClaimRecord>, String>;
-    async fn get_by_transfer_id(
+    /// Finds claims by their made credit only, not by a pending credit.
+    async fn get_by_transfer_ids(
         &self,
-        transfer_id: &str,
-    ) -> Result<Option<StaticDepositClaimRecord>, String>;
+        transfer_ids: &[String],
+    ) -> Result<Vec<StaticDepositClaimRecord>, String>;
     /// Also forgets the pending credit.
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String>;
     async fn delete(&self, id: &str) -> Result<(), String>;
@@ -252,6 +253,12 @@ pub(crate) mod scenarios {
 
         async fn pending_ids(store: &dyn StaticDepositClaimStore) -> Vec<String> {
             ids(&store.pending().await.unwrap())
+        }
+
+        /// The claim record has no equality, so a scenario compares two reads
+        /// of a claim by how they print.
+        fn printed(claim: &StaticDepositClaimRecord) -> String {
+            format!("{claim:?}")
         }
 
         /// Every write that updates a stored claim.
@@ -506,6 +513,31 @@ pub(crate) mod scenarios {
             assert!(stored.signed_spend_transaction.is_some());
         }
 
+        pub(crate) async fn a_claim_reads_the_same_however_the_store_finds_it(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let claim = claim("a");
+            store.insert(&claim).await.unwrap();
+            let transfer = new_transfer();
+            store.set_reserved("a", &transfer, "swap").await.unwrap();
+            store
+                .set_signed_spend_transaction("a", &transfer, &signed_spend())
+                .await
+                .unwrap();
+            store.set_spend_broadcast_txid("a", "spend").await.unwrap();
+            let by_id = printed(&store.get("a").await.unwrap().unwrap());
+
+            let by_output = store.get_by_utxo(&claim.txid, claim.vout).await.unwrap();
+            let by_transfer = store.get_by_transfer_ids(&[transfer]).await.unwrap();
+            let pending = store.pending().await.unwrap();
+
+            assert_eq!(printed(&by_output.unwrap()), by_id);
+            for found in [by_transfer, pending] {
+                let found: Vec<String> = found.iter().map(printed).collect();
+                assert_eq!(found, std::slice::from_ref(&by_id));
+            }
+        }
+
         pub(crate) async fn a_claim_stays_pending_until_its_spend_confirms(
             store: &dyn StaticDepositClaimStore,
         ) {
@@ -596,6 +628,100 @@ pub(crate) mod scenarios {
 
             let listed: Vec<&str> = pending.iter().map(|claim| claim.id.as_str()).collect();
             assert_eq!(listed, ["c", "a", "b"]);
+        }
+
+        pub(crate) async fn no_claim_is_found_by_no_transfers(store: &dyn StaticDepositClaimStore) {
+            credited(store, "a").await;
+
+            let found = store.get_by_transfer_ids(&[]).await.unwrap();
+
+            assert!(found.is_empty());
+        }
+
+        pub(crate) async fn a_credited_claim_is_found_by_its_transfer(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let transfer = credited(store, "a").await;
+            credited(store, "b").await;
+
+            let found = store
+                .get_by_transfer_ids(std::slice::from_ref(&transfer))
+                .await
+                .unwrap();
+
+            assert_eq!(ids(&found), ["a"]);
+            assert_eq!(found[0].transfer_id, Some(transfer));
+        }
+
+        pub(crate) async fn claims_are_found_by_several_transfers_at_once(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let credited_with = credited(store, "credited").await;
+            for id in ["reserved", "co-signed", "left out"] {
+                store.insert(&claim(id)).await.unwrap();
+            }
+            let (reserved_with, co_signed_with) = (new_transfer(), new_transfer());
+            store
+                .set_reserved("reserved", &reserved_with, "swap")
+                .await
+                .unwrap();
+            store
+                .set_signed_spend_transaction("co-signed", &co_signed_with, &signed_spend())
+                .await
+                .unwrap();
+            store
+                .set_transfer_id("left out", &new_transfer())
+                .await
+                .unwrap();
+
+            let found = store
+                .get_by_transfer_ids(&[co_signed_with, credited_with, reserved_with])
+                .await
+                .unwrap();
+
+            assert_eq!(ids(&found), ["co-signed", "credited", "reserved"]);
+        }
+
+        pub(crate) async fn a_transfer_of_no_claim_finds_no_claim(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let transfer = credited(store, "a").await;
+
+            let found = store.get_by_transfer_ids(&[new_transfer()]).await.unwrap();
+            assert!(found.is_empty());
+
+            let found = store
+                .get_by_transfer_ids(&[new_transfer(), transfer, new_transfer()])
+                .await
+                .unwrap();
+            assert_eq!(ids(&found), ["a"]);
+        }
+
+        pub(crate) async fn a_transfer_given_twice_finds_its_claim_once(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let transfer = credited(store, "a").await;
+
+            let found = store
+                .get_by_transfer_ids(&[transfer.clone(), transfer])
+                .await
+                .unwrap();
+
+            assert_eq!(ids(&found), ["a"]);
+        }
+
+        pub(crate) async fn a_claim_is_not_found_by_the_transfer_of_its_pending_credit(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let claim = claim("a");
+            store.insert(&claim).await.unwrap();
+
+            let found = store
+                .get_by_transfer_ids(&[pending_transfer(&claim)])
+                .await
+                .unwrap();
+
+            assert!(found.is_empty());
         }
 
         pub(crate) async fn the_deposit_output_of_a_deleted_claim_can_be_claimed_again(

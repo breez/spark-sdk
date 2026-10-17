@@ -167,19 +167,21 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .transpose()
     }
 
-    async fn get_by_transfer_id(
+    async fn get_by_transfer_ids(
         &self,
-        transfer_id: &str,
-    ) -> Result<Option<StaticDepositClaimRecord>, String> {
+        transfer_ids: &[String],
+    ) -> Result<Vec<StaticDepositClaimRecord>, String> {
         sqlx::query_as::<_, StaticDepositClaimRow>(
-            r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE transfer_id = $1::uuid"#,
+            r#"SELECT * FROM brz_ssp_static_deposit_claims
+               WHERE transfer_id = ANY($1::uuid[])"#,
         )
-        .bind(transfer_id)
-        .fetch_optional(self.pool.as_ref())
+        .bind(transfer_ids)
+        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
+        .into_iter()
         .map(StaticDepositClaimRecord::try_from)
-        .transpose()
+        .collect()
     }
 
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String> {
@@ -410,6 +412,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_claim_reads_the_same_however_the_store_finds_it() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_reads_the_same_however_the_store_finds_it(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn a_claim_stays_pending_until_its_spend_confirms() {
         let fixture = Fixture::new().await;
         scenarios::a_claim_stays_pending_until_its_spend_confirms(&fixture.store).await;
@@ -438,6 +446,42 @@ mod tests {
     async fn pending_claims_are_listed_oldest_first() {
         let fixture = Fixture::new().await;
         scenarios::pending_claims_are_listed_oldest_first(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn no_claim_is_found_by_no_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::no_claim_is_found_by_no_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_credited_claim_is_found_by_its_transfer() {
+        let fixture = Fixture::new().await;
+        scenarios::a_credited_claim_is_found_by_its_transfer(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn claims_are_found_by_several_transfers_at_once() {
+        let fixture = Fixture::new().await;
+        scenarios::claims_are_found_by_several_transfers_at_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_of_no_claim_finds_no_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_of_no_claim_finds_no_claim(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_given_twice_finds_its_claim_once() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_given_twice_finds_its_claim_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_not_found_by_the_transfer_of_its_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_is_not_found_by_the_transfer_of_its_pending_credit(&fixture.store).await;
     }
 
     #[tokio::test]

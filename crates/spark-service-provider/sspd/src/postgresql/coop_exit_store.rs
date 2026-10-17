@@ -192,6 +192,24 @@ impl CoopExitStore for PostgresCoopExitStore {
         .transpose()
     }
 
+    async fn get_by_transfer_ids(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<Vec<CoopExitRecord>, String> {
+        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
+        sqlx::query_as::<_, CoopExitRow>(
+            r#"SELECT * FROM brz_ssp_coop_exit_requests
+               WHERE user_transfer_id = ANY($1::uuid[])"#,
+        )
+        .bind(&ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(CoopExitRecord::try_from)
+        .collect()
+    }
+
     async fn incomplete_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
@@ -427,6 +445,19 @@ mod tests {
             &fixture.store,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn the_requests_paid_for_with_the_given_transfers_are_returned() {
+        let fixture = Fixture::new().await;
+        scenarios::the_requests_paid_for_with_the_given_transfers_are_returned(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_request_of_a_transfer_given_twice_is_returned_once() {
+        let fixture = Fixture::new().await;
+        scenarios::the_request_of_a_transfer_given_twice_is_returned_once(&fixture.store).await;
     }
 
     #[tokio::test]
