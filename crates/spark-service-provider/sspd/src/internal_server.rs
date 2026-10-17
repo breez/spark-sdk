@@ -88,7 +88,7 @@ fn swap_leaf_to_proto(leaf: &crate::swap::repository::SwapLeaf) -> SwapLeaf {
 fn swap_to_proto(detail: &SwapDetail) -> Swap {
     Swap {
         id: detail.swap.id.clone(),
-        user_transfer_id: detail.swap.user_transfer_id.clone(),
+        user_transfer_id: detail.swap.user_transfer_id.to_string(),
         total_amount_sats: detail.swap.total_amount_sats.unsigned_abs(),
         target_amount_sats: detail.swap.target_amount_sats.unsigned_abs(),
         fee_sats: detail.swap.fee_sats.unsigned_abs(),

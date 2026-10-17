@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
 use spark::services::TransferId;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::coop_exit::repository::{CoopExitRecord, CoopExitStore};
 use crate::wallet::onchain::record_spends;
@@ -15,7 +16,7 @@ use crate::wallet::onchain::record_spends;
 struct CoopExitRow {
     id: String,
     user_identity_public_key: Vec<u8>,
-    user_transfer_id: String,
+    user_transfer_id: Uuid,
     withdrawal_address: String,
     amount_sats: i64,
     fee_sats: i64,
@@ -39,7 +40,7 @@ impl TryFrom<CoopExitRow> for CoopExitRecord {
             id: row.id,
             user_identity_public_key: PublicKey::from_slice(&row.user_identity_public_key)
                 .map_err(|e| format!("invalid user public key: {e}"))?,
-            user_transfer_id: TransferId::from_str(&row.user_transfer_id)
+            user_transfer_id: TransferId::from_str(&row.user_transfer_id.to_string())
                 .map_err(|e| format!("invalid transfer id: {e}"))?,
             withdrawal_address: row.withdrawal_address,
             amount_sats: u64::try_from(row.amount_sats)
@@ -98,7 +99,7 @@ impl CoopExitStore for PostgresCoopExitStore {
                (id, user_identity_public_key, user_transfer_id, withdrawal_address,
                 amount_sats, fee_sats, raw_coop_exit_tx, raw_connector_tx, coop_exit_txid,
                 prevouts)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+               VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10)"#,
         )
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
@@ -181,7 +182,7 @@ impl CoopExitStore for PostgresCoopExitStore {
         transfer_id: &TransferId,
     ) -> Result<Option<CoopExitRecord>, String> {
         sqlx::query_as::<_, CoopExitRow>(
-            r#"SELECT * FROM brz_ssp_coop_exit_requests WHERE user_transfer_id = $1"#,
+            r#"SELECT * FROM brz_ssp_coop_exit_requests WHERE user_transfer_id = $1::uuid"#,
         )
         .bind(transfer_id.to_string())
         .fetch_optional(self.pool.as_ref())

@@ -244,8 +244,8 @@ impl SwapService {
         let record = SwapRecord {
             id: uuid::Uuid::now_v7().to_string(),
             user_identity_public_key: caller.serialize().to_vec(),
-            user_transfer_id: primary_transfer_id.to_string(),
-            counter_transfer_id: counter_transfer_id.to_string(),
+            user_transfer_id: primary_transfer_id.clone(),
+            counter_transfer_id: counter_transfer_id.clone(),
             reservation_id: reservation.id.clone(),
             total_amount_sats: i64::try_from(total_amount).unwrap_or(i64::MAX),
             target_amount_sats: i64::try_from(amount_to_send).unwrap_or(i64::MAX),
@@ -264,7 +264,7 @@ impl SwapService {
             // swap keeps its reservation for the claim loop to settle.
             match self
                 .swap_repo
-                .get_by_user_transfer_id(&record.user_transfer_id)
+                .get_by_user_transfer_id(&record.user_transfer_id.to_string())
                 .await
             {
                 Ok(None) => release_reservation(self.tree_store.as_ref(), &reservation).await,
@@ -329,11 +329,9 @@ impl SwapService {
                 "the transfer was already swapped".to_string(),
             ));
         }
-        let counter_transfer_id = TransferId::from_str(&existing.counter_transfer_id)
-            .map_err(|e| SwapError::Persistence(format!("invalid counter transfer id: {e}")))?;
         let Some(counter_transfer) = self
             .transfer_service
-            .query_transfer(&counter_transfer_id)
+            .query_transfer(&existing.counter_transfer_id)
             .await?
         else {
             return Err(SwapError::Refused(
