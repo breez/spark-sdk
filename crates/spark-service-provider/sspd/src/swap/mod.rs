@@ -2,6 +2,7 @@ pub mod claimer;
 pub mod repository;
 pub mod select;
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -45,6 +46,12 @@ pub trait SwapStore: Send + Sync {
 
     /// The most recent `limit` swaps, newest first.
     async fn list_swaps(&self, limit: u32) -> Result<Vec<SwapDetail>, String>;
+
+    /// Returns the given transfers that are a swap's counter transfer.
+    async fn counter_transfers_among(
+        &self,
+        transfer_ids: &[String],
+    ) -> Result<HashSet<String>, String>;
 
     async fn record_outbound_leaves(
         &self,

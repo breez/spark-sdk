@@ -169,6 +169,21 @@ impl SwapStore for SwapRepository {
             .await
     }
 
+    async fn counter_transfers_among(
+        &self,
+        transfer_ids: &[String],
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT counter_transfer_id::text FROM brz_ssp_swaps
+             WHERE counter_transfer_id = ANY($1::uuid[])",
+        )
+        .bind(transfer_ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(ids.into_iter().map(|(id,)| id).collect())
+    }
+
     async fn record_outbound_leaves(
         &self,
         swap_id: &str,
@@ -221,6 +236,8 @@ impl SwapStore for SwapRepository {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use futures::future::join_all;
 
@@ -769,6 +786,50 @@ mod tests {
             pairs(&detail.inbound),
             [("d", 5000), ("e", 6000), ("f", 4000)]
         );
+    }
+
+    #[tokio::test]
+    async fn the_counter_transfers_among_the_given_transfers_are_returned() {
+        let fixture = Fixture::new().await;
+        let swaps = [
+            fixture.swap().await,
+            fixture.swap().await,
+            fixture.swap().await,
+        ];
+        let [first, second, third] = swaps.map(|swap| swap.counter_transfer_id.to_string());
+        let not_stored = TransferId::generate().to_string();
+        let among = async |transfer_ids: &[String]| {
+            let found = fixture.store.counter_transfers_among(transfer_ids).await;
+            found.unwrap()
+        };
+
+        assert!(among(&[]).await.is_empty());
+        assert_eq!(
+            among(std::slice::from_ref(&second)).await,
+            HashSet::from([second])
+        );
+        assert_eq!(
+            among(&[third.clone(), not_stored, first.clone()]).await,
+            HashSet::from([first.clone(), third])
+        );
+        assert_eq!(
+            among(&[first.clone(), first.clone()]).await,
+            HashSet::from([first])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_transfer_of_a_user_is_not_returned_as_a_counter_transfer() {
+        let fixture = Fixture::new().await;
+        let swap = fixture.swap().await;
+
+        let found = fixture
+            .store
+            .counter_transfers_among(&[swap.user_transfer_id.to_string()])
+            .await
+            .unwrap();
+
+        assert!(found.is_empty());
     }
 
     #[tokio::test]

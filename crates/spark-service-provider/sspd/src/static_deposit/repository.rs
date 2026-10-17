@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
 use spark::services::TransferId;
@@ -59,6 +61,8 @@ pub trait StaticDepositClaimStore: Send + Sync {
         &self,
         transfer_ids: &[String],
     ) -> Result<Vec<StaticDepositClaimRecord>, String>;
+    /// Returns the given transfers that are a claim's credit, pending or made.
+    async fn transfers_among(&self, transfer_ids: &[String]) -> Result<HashSet<String>, String>;
     /// Also forgets the pending credit.
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String>;
     async fn delete(&self, id: &str) -> Result<(), String>;
@@ -124,6 +128,8 @@ pub(crate) mod scenarios {
     }
 
     pub(crate) mod claims {
+        use std::collections::HashSet;
+
         use bitcoin::absolute::LockTime;
         use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
         use bitcoin::transaction::Version;
@@ -538,6 +544,28 @@ pub(crate) mod scenarios {
             }
         }
 
+        pub(crate) async fn a_transfer_id_that_is_not_a_uuid_is_refused(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let claim = claim("a");
+            store.insert(&claim).await.unwrap();
+            let (transfer, signed) = ("transfer-1", signed_spend());
+
+            assert!(store.set_transfer_id("a", transfer).await.is_err());
+            assert!(store.set_reserved("a", transfer, "swap").await.is_err());
+            let co_signed = store
+                .set_signed_spend_transaction("a", transfer, &signed)
+                .await;
+            assert!(co_signed.is_err());
+            let transfers = [transfer.to_string()];
+            assert!(store.get_by_transfer_ids(&transfers).await.is_err());
+            assert!(store.transfers_among(&transfers).await.is_err());
+
+            let stored = store.get("a").await.unwrap().unwrap();
+            assert_eq!(stored.transfer_id, None);
+            assert_eq!(stored.pending_credit, claim.pending_credit);
+        }
+
         pub(crate) async fn a_claim_stays_pending_until_its_spend_confirms(
             store: &dyn StaticDepositClaimStore,
         ) {
@@ -590,6 +618,31 @@ pub(crate) mod scenarios {
 
             assert!(pending_ids(store).await.is_empty());
             assert!(store.get("a").await.unwrap().unwrap().deposit_lost);
+        }
+
+        pub(crate) async fn a_claim_no_longer_pending_is_still_found_by_its_output_and_transfer(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let (confirmed, lost) = (claim("confirmed"), claim("lost"));
+            let mut transfers = Vec::new();
+            for claim in [&confirmed, &lost] {
+                store.insert(claim).await.unwrap();
+                let transfer = pending_transfer(claim);
+                store.set_transfer_id(&claim.id, &transfer).await.unwrap();
+                transfers.push(transfer);
+            }
+            store.set_spend_confirmed("confirmed").await.unwrap();
+            store.set_deposit_lost("lost").await.unwrap();
+            assert!(pending_ids(store).await.is_empty());
+
+            for claim in [&confirmed, &lost] {
+                let found = store.get_by_utxo(&claim.txid, claim.vout).await.unwrap();
+                assert_eq!(found.unwrap().id, claim.id);
+            }
+            let found = store.get_by_transfer_ids(&transfers).await.unwrap();
+            assert_eq!(ids(&found), ["confirmed", "lost"]);
+            let credits = store.transfers_among(&transfers).await.unwrap();
+            assert_eq!(credits, HashSet::from_iter(transfers));
         }
 
         pub(crate) async fn the_pending_claims_are_those_the_record_calls_pending(
@@ -724,6 +777,130 @@ pub(crate) mod scenarios {
             assert!(found.is_empty());
         }
 
+        pub(crate) async fn no_credit_is_found_among_no_transfers(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            credited(store, "made").await;
+            store.insert(&claim("pending")).await.unwrap();
+
+            let credits = store.transfers_among(&[]).await.unwrap();
+
+            assert!(credits.is_empty());
+        }
+
+        pub(crate) async fn a_pending_credit_is_found_among_transfers(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let claim = claim("a");
+            let transfer = pending_transfer(&claim);
+            store.insert(&claim).await.unwrap();
+
+            let credits = store
+                .transfers_among(std::slice::from_ref(&transfer))
+                .await
+                .unwrap();
+
+            assert_eq!(credits, HashSet::from([transfer]));
+        }
+
+        pub(crate) async fn a_made_credit_is_found_among_transfers(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let transfer = credited(store, "a").await;
+
+            let credits = store
+                .transfers_among(std::slice::from_ref(&transfer))
+                .await
+                .unwrap();
+
+            assert_eq!(credits, HashSet::from([transfer]));
+        }
+
+        pub(crate) async fn every_credit_among_several_transfers_is_found(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let pending = claim("pending");
+            store.insert(&pending).await.unwrap();
+            let pending = pending_transfer(&pending);
+            let made = credited(store, "made").await;
+            store.insert(&claim("reserved")).await.unwrap();
+            let reserved = new_transfer();
+            store
+                .set_reserved("reserved", &reserved, "swap")
+                .await
+                .unwrap();
+            credited(store, "left out").await;
+            let transfers = [
+                made.clone(),
+                new_transfer(),
+                reserved.clone(),
+                pending.clone(),
+            ];
+
+            let credits = store.transfers_among(&transfers).await.unwrap();
+
+            assert_eq!(credits, HashSet::from([pending, made, reserved]));
+        }
+
+        pub(crate) async fn a_transfer_that_is_no_claims_credit_is_left_out(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            credited(store, "made").await;
+            store.insert(&claim("pending")).await.unwrap();
+
+            let credits = store.transfers_among(&[new_transfer()]).await.unwrap();
+
+            assert!(credits.is_empty());
+        }
+
+        pub(crate) async fn a_transfer_given_twice_is_found_as_one_credit(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let made = credited(store, "made").await;
+            let pending = claim("pending");
+            store.insert(&pending).await.unwrap();
+            let pending = pending_transfer(&pending);
+            let transfers = [made.clone(), pending.clone(), pending.clone(), made.clone()];
+
+            let credits = store.transfers_among(&transfers).await.unwrap();
+
+            assert_eq!(credits, HashSet::from([made, pending]));
+        }
+
+        pub(crate) async fn a_pending_credit_is_forgotten_once_another_transfer_credits_its_claim(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let claim = claim("a");
+            let pending = pending_transfer(&claim);
+            store.insert(&claim).await.unwrap();
+            let made = new_transfer();
+
+            store.set_reserved("a", &made, "swap").await.unwrap();
+
+            let credits = store
+                .transfers_among(&[pending, made.clone()])
+                .await
+                .unwrap();
+            assert_eq!(credits, HashSet::from([made]));
+        }
+
+        pub(crate) async fn a_deleted_claim_is_gone(store: &dyn StaticDepositClaimStore) {
+            let claim = claim("a");
+            store.insert(&claim).await.unwrap();
+
+            store.delete("a").await.unwrap();
+
+            assert!(store.get("a").await.unwrap().is_none());
+            let claimed = store.get_by_utxo(&claim.txid, claim.vout).await.unwrap();
+            assert!(claimed.is_none());
+            assert!(store.pending().await.unwrap().is_empty());
+            let credits = store
+                .transfers_among(&[pending_transfer(&claim)])
+                .await
+                .unwrap();
+            assert!(credits.is_empty());
+        }
+
         pub(crate) async fn the_deposit_output_of_a_deleted_claim_can_be_claimed_again(
             store: &dyn StaticDepositClaimStore,
         ) {
@@ -765,6 +942,22 @@ pub(crate) mod scenarios {
             assert!(!after.spend_confirmed);
             assert!(!after.deposit_lost);
             assert_eq!(after.updated_at, before.updated_at);
+        }
+
+        pub(crate) async fn a_write_to_a_claim_the_store_does_not_have_stores_nothing(
+            store: &dyn StaticDepositClaimStore,
+        ) {
+            let (transfer, signed) = (new_transfer(), signed_spend());
+
+            for write in writes(store, "a", &transfer, &signed) {
+                write.await.unwrap();
+            }
+            store.delete("a").await.unwrap();
+
+            assert!(store.get("a").await.unwrap().is_none());
+            assert!(store.pending().await.unwrap().is_empty());
+            let credits = store.transfers_among(&[transfer]).await.unwrap();
+            assert!(credits.is_empty());
         }
 
         pub(crate) async fn a_claim_keeps_the_time_it_was_created(

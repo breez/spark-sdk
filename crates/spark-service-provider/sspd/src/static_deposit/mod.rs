@@ -1866,6 +1866,13 @@ mod tests {
             unimplemented!()
         }
 
+        async fn transfers_among(
+            &self,
+            _transfer_ids: &[String],
+        ) -> Result<HashSet<String>, String> {
+            unimplemented!()
+        }
+
         async fn set_transfer_id(&self, _id: &str, _transfer_id: &str) -> Result<(), String> {
             unimplemented!()
         }
