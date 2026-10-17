@@ -39,7 +39,9 @@ pub trait SwapStore: Send + Sync {
 
     async fn delete_swap(&self, swap_id: &str) -> Result<(), String>;
 
-    async fn get_unclaimed_swaps(&self) -> Result<Vec<SwapDetail>, String>;
+    async fn get_unclaimed_swaps(&self) -> Result<Vec<SwapRecord>, String>;
+
+    async fn has_unclaimed_swaps(&self) -> Result<bool, String>;
 
     /// The most recent `limit` swaps, newest first.
     async fn list_swaps(&self, limit: u32) -> Result<Vec<SwapDetail>, String>;

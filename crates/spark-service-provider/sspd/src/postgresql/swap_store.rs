@@ -140,15 +140,21 @@ impl SwapStore for SwapRepository {
         Ok(())
     }
 
-    async fn get_unclaimed_swaps(&self) -> Result<Vec<SwapDetail>, String> {
+    async fn get_unclaimed_swaps(&self) -> Result<Vec<SwapRecord>, String> {
         let rows: Vec<SwapRow> = sqlx::query_as(&format!(
             "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE NOT claimed ORDER BY created_at"
         ))
         .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
-        self.with_leaves(rows.into_iter().map(swap_record).collect())
+        Ok(rows.into_iter().map(swap_record).collect())
+    }
+
+    async fn has_unclaimed_swaps(&self) -> Result<bool, String> {
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM brz_ssp_swaps WHERE NOT claimed)")
+            .fetch_one(self.pool.as_ref())
             .await
+            .map_err(|e| e.to_string())
     }
 
     async fn list_swaps(&self, limit: u32) -> Result<Vec<SwapDetail>, String> {
