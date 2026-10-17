@@ -6,7 +6,6 @@ pub struct SwapRecord {
     pub user_identity_public_key: Vec<u8>,
     pub user_transfer_id: TransferId,
     pub counter_transfer_id: TransferId,
-    pub reservation_id: String,
     pub total_amount_sats: i64,
     pub target_amount_sats: i64,
     pub fee_sats: i64,

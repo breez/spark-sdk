@@ -23,7 +23,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::RequestCoopExitInput;
-use crate::leaves::{IncomingLeafStore, IncomingTransfer, LeafSigningKeys, claim_into_pool};
+use crate::leaves::{ClaimDeps, IncomingTransfer, claim_into_pool};
 use crate::wakeup::Wakeup;
 
 use self::repository::{CoopExitPrevout, CoopExitRecord, CoopExitStore};
@@ -931,26 +931,16 @@ async fn process_coop_exit(
 
 /// Returns `false` when the transfer is missing or not claimable.
 pub async fn claim_user_transfer(
-    transfer_service: &TransferService,
-    incoming: &Arc<dyn IncomingLeafStore>,
-    admission: &Wakeup,
-    leaf_signing_keys: &Arc<dyn LeafSigningKeys>,
+    claim: &ClaimDeps,
     transfer_id: &TransferId,
 ) -> Result<bool, BoxError> {
-    let Some(transfer) = transfer_service.query_transfer(transfer_id).await? else {
+    let Some(transfer) = claim.transfer_service.query_transfer(transfer_id).await? else {
         return Ok(false);
     };
     if !is_claimable(transfer.status) {
         return Ok(false);
     }
-    claim_into_pool(
-        transfer_service,
-        leaf_signing_keys.as_ref(),
-        incoming.as_ref(),
-        admission,
-        &transfer,
-    )
-    .await?;
+    claim_into_pool(claim, &transfer).await?;
     Ok(true)
 }
 

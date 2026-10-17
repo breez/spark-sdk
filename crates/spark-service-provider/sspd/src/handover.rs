@@ -3,50 +3,6 @@ use spark::operator::rpc::OperatorRpcError;
 use spark::operator::rpc::spark::{TransferFilter, transfer_filter::Participant};
 use spark::operator::{Operator, OperatorPool};
 use spark::services::{ServiceError, Transfer, TransferId, TransferStatus};
-use spark::tree::{LeavesReservation, LeavesReservationId, TreeNode, TreeNodeId, TreeStore};
-
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HandoverReservation {
-    pub id: LeavesReservationId,
-    pub leaf_ids: Vec<TreeNodeId>,
-}
-
-impl HandoverReservation {
-    pub async fn leaves(&self, tree_store: &dyn TreeStore) -> Result<LeavesReservation, BoxError> {
-        let leaves: Vec<TreeNode> = tree_store
-            .get_leaves()
-            .await?
-            .reserved_for_payment
-            .into_iter()
-            .filter(|leaf| self.leaf_ids.contains(&leaf.id))
-            .collect();
-        if leaves.len() != self.leaf_ids.len() {
-            return Err(format!(
-                "the leaf store holds {} of the {} leaves of reservation {}",
-                leaves.len(),
-                self.leaf_ids.len(),
-                self.id
-            )
-            .into());
-        }
-        Ok(LeavesReservation::new(leaves, self.id.clone()))
-    }
-}
-
-impl From<&LeavesReservation> for HandoverReservation {
-    fn from(reservation: &LeavesReservation) -> Self {
-        Self {
-            id: reservation.id.clone(),
-            leaf_ids: reservation
-                .leaves
-                .iter()
-                .map(|leaf| leaf.id.clone())
-                .collect(),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum HandoverOutcome {

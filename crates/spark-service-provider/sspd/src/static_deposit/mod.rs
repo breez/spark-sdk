@@ -5,7 +5,7 @@ pub mod repository;
 
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fees::{self, FeeRateSource};
@@ -24,17 +24,18 @@ use spark::services::{
     LeafKeyTweak, ServiceError, TransferId, TransferService, UtxoSwapRequestType,
     serialize_instant_static_deposit_claim_payload, serialize_static_deposit_claim_payload,
 };
-use spark::signer::{LeafSigningKey, SecretSource, Signer};
-use spark::tree::{
-    LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNodeId, TreeStore,
-};
+use spark::signer::{SecretSource, Signer};
+use spark::tree::TreeNode;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::{ClaimStaticDepositInput, CreateClaimInstantStaticDepositInput};
-use crate::handover::{HandoverOutcome, HandoverReservation, is_refusal, observe_handover};
-use crate::leaves::{LeafSigningKeys, release_reserved_leaves};
+use crate::handover::{HandoverOutcome, is_refusal, observe_handover};
+use crate::in_flight::InFlight;
+use crate::leaves::{self, LeafSigningKeys};
+use crate::pool::operator_view;
+use crate::postgresql::{LeafStoreError, PostgresLeafStore};
 use crate::swap::select::decompose_into_powers_of_two;
 use crate::wakeup::Wakeup;
 
@@ -103,8 +104,8 @@ fn max_credit_sats(deposit_sats: u64, claim_fee_sats: u64) -> Option<u64> {
 pub enum StaticDepositError {
     #[error("signer error: {0}")]
     Signer(#[from] spark::signer::SignerError),
-    #[error("tree store error: {0}")]
-    TreeStore(#[from] spark::tree::TreeServiceError),
+    #[error("leaf store error: {0}")]
+    LeafStore(#[from] LeafStoreError),
     #[error("spark service error: {0}")]
     Service(#[from] spark::services::ServiceError),
     #[error("operator rpc error: {0}")]
@@ -180,7 +181,6 @@ impl PendingCreditSettler for StaticDepositService {
             &credit.transfer_id,
         )
         .await?;
-        let reservation = &credit.reservation;
         match outcome {
             HandoverOutcome::Committed if record.is_instant => {
                 // The coordinator answers a retry of a reservation it committed with
@@ -200,16 +200,14 @@ impl PendingCreditSettler for StaticDepositService {
                 self.reserve(record, credit, request).await?;
             }
             HandoverOutcome::Committed => {
-                self.tree_store
-                    .finalize_reservation(&reservation.id, None)
-                    .await?;
+                self.leaf_store.transferred(&credit.transfer_id).await?;
                 self.store
                     .set_transfer_id(&record.id, &credit.transfer_id.to_string())
                     .await?;
                 info!(claim_id = %record.id, transfer_id = %credit.transfer_id, "static deposit: the user was credited but the claim's answer was lost; the deposit is swept instead");
             }
             HandoverOutcome::RolledBack { settled: true } => {
-                self.forget(record, reservation).await?;
+                self.forget(record, credit).await?;
                 info!(claim_id = %record.id, "static deposit: the operators rolled the credit back; its leaves are back in the pool");
             }
             HandoverOutcome::Undetermined { held: false } => {
@@ -224,12 +222,18 @@ impl PendingCreditSettler for StaticDepositService {
                     )
                     .await?;
                     if matches!(outcome, HandoverOutcome::Undetermined { held: false }) {
-                        self.forget(record, reservation).await?;
+                        self.forget(record, credit).await?;
                         info!(claim_id = %record.id, "static deposit: another swap claimed the deposit; the credit's leaves are back in the pool");
                     }
                     return Ok(());
                 }
-                let leaves = reservation.leaves(self.tree_store.as_ref()).await?;
+                // The service may have stored the claim without having reserved
+                // its leaves.
+                let Some(leaves) = self.reserved_leaves(record, credit).await? else {
+                    self.forget(record, credit).await?;
+                    info!(claim_id = %record.id, "static deposit: the pool cannot back a credit no operator has seen, so the SSP abandons the claim");
+                    return Ok(());
+                };
                 if record.is_instant {
                     // The operators credit an INSTANT claim before its deposit
                     // confirms, and the deposit can be replaced meanwhile.
@@ -239,7 +243,7 @@ impl PendingCreditSettler for StaticDepositService {
                         .await?
                         .is_none()
                     {
-                        self.forget(record, reservation).await?;
+                        self.forget(record, credit).await?;
                         info!(claim_id = %record.id, "static deposit: the deposit is gone; the credit's leaves are back in the pool");
                         return Ok(());
                     }
@@ -270,39 +274,11 @@ pub trait StaticDepositSpendCosigner: Send + Sync {
     async fn cosign_spend(&self, record: &StaticDepositClaimRecord) -> Result<bool, BoxError>;
 }
 
-#[derive(Default)]
-struct ClaimCalls(std::sync::Mutex<HashSet<String>>);
-
-impl ClaimCalls {
-    fn start(&self, id: &str) -> Option<ClaimCall<'_>> {
-        let mut running = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        running.insert(id.to_string()).then(|| ClaimCall {
-            calls: self,
-            id: id.to_string(),
-        })
-    }
-}
-
-struct ClaimCall<'a> {
-    calls: &'a ClaimCalls,
-    id: String,
-}
-
-impl Drop for ClaimCall<'_> {
-    fn drop(&mut self) {
-        self.calls
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.id);
-    }
-}
-
 pub struct StaticDepositService {
     store: Arc<dyn StaticDepositClaimStore>,
     instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
     transfer_service: Arc<TransferService>,
-    tree_store: Arc<dyn TreeStore>,
+    leaf_store: Arc<PostgresLeafStore>,
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     chain: Arc<dyn StaticDepositChain>,
@@ -311,7 +287,7 @@ pub struct StaticDepositService {
     accept_unconfirmed_deposits: bool,
     largest_denomination: u64,
     wakeup: Wakeup,
-    calls: ClaimCalls,
+    calls: InFlight,
 }
 
 impl StaticDepositService {
@@ -320,7 +296,7 @@ impl StaticDepositService {
         store: Arc<dyn StaticDepositClaimStore>,
         instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
         transfer_service: Arc<TransferService>,
-        tree_store: Arc<dyn TreeStore>,
+        leaf_store: Arc<PostgresLeafStore>,
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         chain: Arc<dyn StaticDepositChain>,
@@ -334,7 +310,7 @@ impl StaticDepositService {
             store,
             instant_quote_store,
             transfer_service,
-            tree_store,
+            leaf_store,
             operator_pool,
             signer,
             chain,
@@ -343,7 +319,7 @@ impl StaticDepositService {
             accept_unconfirmed_deposits,
             largest_denomination,
             wakeup,
-            calls: ClaimCalls::default(),
+            calls: InFlight::default(),
         }
     }
 
@@ -492,10 +468,8 @@ impl StaticDepositService {
         }
         let spend_tx = self.spend_tx(&txid, vout, deposit_value, fee_sats).await?;
 
-        let reservation = self.reserve_leaves(credit_amount_sats).await?;
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation::from(&reservation),
         };
         let now = chrono::Utc::now();
         let record = StaticDepositClaimRecord {
@@ -523,17 +497,14 @@ impl StaticDepositService {
             updated_at: now,
         };
         let call = self.calls.start(&record.id);
-        if let Err(e) = self.store.insert(&record).await {
-            self.cancel_unless_stored(&record, &reservation).await;
-            return Err(StaticDepositError::Store(e));
-        }
+        let leaves = self.store_and_reserve(&record, &credit).await?;
         let request = match self
-            .build_swap_request(&record, &credit.transfer_id, &reservation)
+            .build_swap_request(&record, &credit.transfer_id, &leaves)
             .await
         {
             Ok(request) => request,
             Err(e) => {
-                self.abandon(&record, &reservation).await;
+                self.abandon(&record, &credit).await;
                 return Err(e);
             }
         };
@@ -561,14 +532,10 @@ impl StaticDepositService {
             Err(e) if is_refusal(&e) => return Err(self.refused(record, credit, e).await),
             Err(e) => return Err(e.into()),
         };
-        let reservation_id = &credit.reservation.id;
-        if let Err(e) = self
-            .tree_store
-            .finalize_reservation(reservation_id, None)
-            .await
-        {
-            error!(%reservation_id, "failed to finalize reservation: {e:?}");
-        }
+        // The service marks the leaves transferred before it records the result.
+        // If this call fails, the claim still has its pending credit, and the
+        // worker marks the leaves transferred when it settles that credit.
+        self.leaf_store.transferred(&credit.transfer_id).await?;
 
         let transfer_id = credit.transfer_id.to_string();
         match signed_spend_transaction(record, &response.spend_tx_signature) {
@@ -616,7 +583,7 @@ impl StaticDepositService {
                 HandoverOutcome::Undetermined { held: false }
                 | HandoverOutcome::RolledBack { settled: true },
             ) => {
-                if let Err(e) = self.forget(record, &credit.reservation).await {
+                if let Err(e) = self.forget(record, credit).await {
                     error!(claim_id = %record.id, "failed to give up a refused claim: {e}");
                 }
             }
@@ -631,12 +598,13 @@ impl StaticDepositService {
     async fn forget(
         &self,
         record: &StaticDepositClaimRecord,
-        reservation: &HandoverReservation,
+        credit: &PendingCredit,
     ) -> Result<(), StaticDepositError> {
-        release_reserved_leaves(
-            self.tree_store.as_ref(),
-            &reservation.id,
-            &reservation.leaf_ids,
+        operator_view::release(
+            &self.operator_pool,
+            record.network,
+            &self.leaf_store,
+            &credit.transfer_id,
         )
         .await?;
         self.store
@@ -783,10 +751,8 @@ impl StaticDepositService {
             .spend_tx(&txid, vout, quote.deposit_amount_sats, fee_sats)
             .await?;
 
-        let reservation = self.reserve_leaves(quote.credit_amount_sats).await?;
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation::from(&reservation),
         };
         let now = chrono::Utc::now();
         let record = StaticDepositClaimRecord {
@@ -814,18 +780,15 @@ impl StaticDepositService {
             updated_at: now,
         };
         let call = self.calls.start(&record.id);
-        if let Err(e) = self.store.insert(&record).await {
-            self.cancel_unless_stored(&record, &reservation).await;
-            return Err(StaticDepositError::Store(e));
-        }
+        let leaves = self.store_and_reserve(&record, &credit).await?;
         let request = match self
-            .build_credit_transfer(&record, &credit.transfer_id, &reservation)
+            .build_credit_transfer(&record, &credit.transfer_id, &leaves)
             .await
             .and_then(|transfer| reserve_request(&record, transfer))
         {
             Ok(request) => request,
             Err(e) => {
-                self.abandon(&record, &reservation).await;
+                self.abandon(&record, &credit).await;
                 return Err(e);
             }
         };
@@ -853,14 +816,10 @@ impl StaticDepositService {
             Err(e) if is_refusal(&e) => return Err(self.refused(record, credit, e).await),
             Err(e) => return Err(e.into()),
         };
-        let reservation_id = &credit.reservation.id;
-        if let Err(e) = self
-            .tree_store
-            .finalize_reservation(reservation_id, None)
-            .await
-        {
-            error!(%reservation_id, "failed to finalize reservation: {e:?}");
-        }
+        // The service marks the leaves transferred before it records the result.
+        // If this call fails, the claim still has its pending credit, and the
+        // worker marks the leaves transferred when it settles that credit.
+        self.leaf_store.transferred(&credit.transfer_id).await?;
 
         let transfer_id = response
             .transfer
@@ -880,10 +839,10 @@ impl StaticDepositService {
         &self,
         record: &StaticDepositClaimRecord,
         transfer_id: &TransferId,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<crate::operator_rpc::InitiateStaticDepositUtxoSwapRequest, StaticDepositError> {
         let transfer = self
-            .build_credit_transfer(record, transfer_id, reservation)
+            .build_credit_transfer(record, transfer_id, leaves)
             .await?;
         let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
         Ok(crate::operator_rpc::InitiateStaticDepositUtxoSwapRequest {
@@ -924,9 +883,9 @@ impl StaticDepositService {
         &self,
         record: &StaticDepositClaimRecord,
         transfer_id: &TransferId,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<pb::StartTransferRequest, StaticDepositError> {
-        let leaf_key_tweaks = self.build_leaf_key_tweaks(reservation).await?;
+        let leaf_key_tweaks = self.build_leaf_key_tweaks(leaves).await?;
         let mut prepared = self
             .transfer_service
             .prepare_transfer_request(
@@ -1103,77 +1062,60 @@ impl StaticDepositService {
             .map_err(|e| StaticDepositError::Chain(e.to_string()))
     }
 
-    async fn reserve_leaves(&self, amount: u64) -> Result<LeavesReservation, StaticDepositError> {
-        let denominations = decompose_into_powers_of_two(amount, self.largest_denomination);
-        let target = TargetAmounts::new_exact_denominations(denominations);
-        match self
-            .tree_store
-            .try_reserve_leaves(Some(&target), true, ReservationPurpose::Payment)
-            .await?
-        {
-            ReserveResult::Success(reservation) => Ok(reservation),
-            ReserveResult::InsufficientFunds | ReserveResult::WaitForPending { .. } => {
-                Err(StaticDepositError::InsufficientPool { amount })
-            }
-        }
-    }
-
-    async fn abandon(&self, record: &StaticDepositClaimRecord, reservation: &LeavesReservation) {
-        self.cancel_reservation(reservation).await;
-        if let Err(e) = self.store.delete(&record.id).await {
-            error!(claim_id = %record.id, "failed to delete an abandoned claim: {e}");
-        }
-    }
-
-    /// The insert may have committed without its answer arriving; a stored claim
-    /// keeps its reservation for the worker to settle.
-    async fn cancel_unless_stored(
+    /// Stores the claim before it reserves the claim's leaves, so that a
+    /// reservation's transfer id is always that of a stored claim.
+    async fn store_and_reserve(
         &self,
         record: &StaticDepositClaimRecord,
-        reservation: &LeavesReservation,
-    ) {
-        match self.store.get_by_utxo(&record.txid, record.vout).await {
-            Ok(Some(stored)) if stored.id == record.id => {}
-            Ok(_) => self.cancel_reservation(reservation).await,
+        credit: &PendingCredit,
+    ) -> Result<Vec<TreeNode>, StaticDepositError> {
+        self.store
+            .insert(record)
+            .await
+            .map_err(StaticDepositError::Store)?;
+        match self.reserved_leaves(record, credit).await {
+            Ok(Some(leaves)) => Ok(leaves),
+            Ok(None) => {
+                self.abandon(record, credit).await;
+                Err(StaticDepositError::InsufficientPool {
+                    amount: record.credit_amount_sats,
+                })
+            }
             Err(e) => {
-                error!(claim_id = %record.id, "could not tell whether a claim was stored, so its leaves stay reserved: {e}");
+                self.abandon(record, credit).await;
+                Err(e)
             }
         }
     }
 
-    async fn cancel_reservation(&self, reservation: &LeavesReservation) {
-        if let Err(e) = self
-            .tree_store
-            .cancel_reservation(&reservation.id, &reservation.leaves)
-            .await
-        {
-            error!(reservation_id = %reservation.id, "failed to cancel reservation: {e:?}");
+    /// The leaves reserved for the credit. The function reserves them if none are
+    /// reserved yet, and returns `None` when the pool is short of them.
+    async fn reserved_leaves(
+        &self,
+        record: &StaticDepositClaimRecord,
+        credit: &PendingCredit,
+    ) -> Result<Option<Vec<TreeNode>>, StaticDepositError> {
+        let denominations =
+            decompose_into_powers_of_two(record.credit_amount_sats, self.largest_denomination);
+        Ok(self
+            .leaf_store
+            .reserve(&denominations, &credit.transfer_id)
+            .await?)
+    }
+
+    async fn abandon(&self, record: &StaticDepositClaimRecord, credit: &PendingCredit) {
+        if let Err(e) = self.forget(record, credit).await {
+            error!(claim_id = %record.id, "failed to abandon a claim: {e}");
         }
     }
 
     async fn build_leaf_key_tweaks(
         &self,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<Vec<LeafKeyTweak>, StaticDepositError> {
-        let mut leaf_key_tweaks = Vec::with_capacity(reservation.leaves.len());
-        for node in &reservation.leaves {
-            let signing_leaf_id = self
-                .key_resolver
-                .get_signing_leaf_id(&node.id.to_string())
-                .await
-                .map_err(|e| StaticDepositError::InvalidInput(format!("key resolver error: {e}")))?
-                .map(|id| id.parse::<TreeNodeId>())
-                .transpose()
-                .map_err(|e| StaticDepositError::InvalidInput(format!("invalid leaf id: {e}")))?
-                .unwrap_or_else(|| node.id.clone());
-            leaf_key_tweaks.push(LeafKeyTweak {
-                node: node.clone(),
-                signing_key: LeafSigningKey {
-                    derived_from: signing_leaf_id,
-                },
-            });
-        }
-        Ok(leaf_key_tweaks)
+        leaves::leaf_key_tweaks(self.key_resolver.as_ref(), leaves)
+            .await
+            .map_err(|e| StaticDepositError::InvalidInput(format!("key resolver error: {e}")))
     }
 }
 
@@ -1749,11 +1691,10 @@ mod tests {
         StaticDepositClaimRecord, StaticDepositClaimStore,
     };
     use super::{
-        BoxError, ClaimCalls, DepositOutput, HandoverReservation, PendingCredit,
-        PendingCreditSettler, StaticDepositChain, StaticDepositSpendCosigner,
-        StaticDepositWorkerDeps, TransferId, build_spend_tx, deposit_prevout, is_already_claimed,
-        max_credit_sats, p2tr_script, process_pending_static_deposit_claims,
-        signed_spend_transaction, sweep_statement,
+        BoxError, DepositOutput, PendingCredit, PendingCreditSettler, StaticDepositChain,
+        StaticDepositSpendCosigner, StaticDepositWorkerDeps, TransferId, build_spend_tx,
+        deposit_prevout, is_already_claimed, max_credit_sats, p2tr_script,
+        process_pending_static_deposit_claims, signed_spend_transaction, sweep_statement,
     };
     use crate::frost::sign_share;
     use crate::frost::testing::TestOperator;
@@ -1918,10 +1859,6 @@ mod tests {
         };
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation {
-                id: "reservation".to_string(),
-                leaf_ids: Vec::new(),
-            },
         };
         for id in ["a", "b"] {
             let mut pending = record(id);
@@ -1933,16 +1870,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(settler.settled.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn a_claim_call_is_running_until_its_guard_drops() {
-        let calls = ClaimCalls::default();
-        let call = calls.start("claim").expect("nothing is running");
-        assert!(calls.start("claim").is_none());
-        assert!(calls.start("other").is_some());
-        drop(call);
-        assert!(calls.start("claim").is_some());
     }
 
     #[test]

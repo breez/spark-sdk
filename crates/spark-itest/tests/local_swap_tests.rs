@@ -242,16 +242,14 @@ async fn test_swap_ssp_claims_user_leaves() -> Result<()> {
 
     // A claimed leaf is admitted to the pool separately, after its refund
     // timelock is checked.
-    let claimed_id: Vec<String> = inbound.iter().map(|l| l.leaf_id.clone()).collect();
-    let store = fixture.fixtures.sspd().await?.tree_store().await?;
+    let claimed_id = inbound
+        .iter()
+        .map(|l| l.leaf_id.parse().map_err(anyhow::Error::msg))
+        .collect::<Result<Vec<_>, _>>()?;
+    let store = fixture.fixtures.sspd().await?.leaf_store().await?;
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
-        let pooled = store.get_leaves().await?;
-        if pooled
-            .available
-            .iter()
-            .any(|l| claimed_id.contains(&l.id.to_string()))
-        {
+        if !store.available_among(&claimed_id).await?.is_empty() {
             break;
         }
         assert!(

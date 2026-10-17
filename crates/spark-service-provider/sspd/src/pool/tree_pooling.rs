@@ -1,7 +1,12 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use spark::tree::{TreeNode, TreeNodeStatus, assemble_exit_chains, chain_reaches_root};
+use crate::operator_rpc::{self, NodeQuery};
+use chrono::Utc;
+use spark::tree::{
+    LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus, assemble_exit_chains, chain_reaches_root,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -24,9 +29,6 @@ const BACKUP_INTERVAL: Duration = Duration::from_secs(600);
 /// How soon a pass that failed or found a confirmed tree not yet available is tried
 /// again.
 const OPERATOR_RETRY_INTERVAL: Duration = Duration::from_secs(10);
-
-/// The operators refuse a node query by more ids than this.
-pub(crate) const MAX_NODE_IDS_PER_QUERY: usize = 1000;
 
 pub struct TreePoolingDeps<R: ChainRepository> {
     pub wallet: Arc<SspWallet<R>>,
@@ -107,7 +109,7 @@ where
                     deposit_address: tree.deposit_address.clone(),
                     denominations: values,
                 }),
-                Ok(Pooling::Unconfirmed) => {}
+                Ok(Pooling::Unconfirmed | Pooling::AlreadyPooled) => {}
                 Ok(Pooling::WaitingForOperators) => waiting = true,
                 Err(e) => {
                     warn!("could not pool the tree on {}: {e}", tree.outpoint);
@@ -141,6 +143,7 @@ enum Pooling {
     Pooled(Vec<u64>),
     Unconfirmed,
     WaitingForOperators,
+    AlreadyPooled,
 }
 
 async fn pool_tree<R>(
@@ -162,30 +165,22 @@ where
     }
     let nodes = pool_repo.tree_nodes(&tree.outpoint).await?;
 
-    // A leaf no longer reported as the SSP's was spent after an earlier pass stored
-    // it without marking the tree pooled.
+    let queried_at = Utc::now();
     let ids: Vec<_> = nodes.leaves.iter().map(|leaf| leaf.id.clone()).collect();
     let identity = wallet.spark.identity_public_key;
-    let mut leaves: Vec<TreeNode> = Vec::with_capacity(ids.len());
-    for chunk in ids.chunks(MAX_NODE_IDS_PER_QUERY) {
-        leaves.extend(
-            wallet
-                .spark
-                .tree_service
-                .fetch_nodes(chunk, false)
-                .await?
-                .into_iter()
-                .filter(|node| node.owner_identity_public_key == Some(identity)),
-        );
-    }
+    let client = &wallet.spark.operator_pool.get_coordinator().client;
+    let leaves: Vec<TreeNode> =
+        operator_rpc::nodes(client, wallet.spark.network, &ids, false, NodeQuery::Public)
+            .await?
+            .into_iter()
+            .filter(|node| node.owner_identity_public_key == Some(identity))
+            .collect();
     if leaves
         .iter()
         .any(|leaf| leaf.status != TreeNodeStatus::Available)
     {
         return Ok(Pooling::WaitingForOperators);
     }
-
-    wallet.spark.tree_store.add_leaves(&leaves).await?;
 
     let by_id = nodes
         .leaves
@@ -194,21 +189,49 @@ where
         .map(|node| (node.id.clone(), node.clone()))
         .collect();
     let pooled_ids: Vec<_> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
-    let rooted: Vec<_> = assemble_exit_chains(&by_id, &pooled_ids)
-        .into_iter()
-        .filter(|p| chain_reaches_root(&p.leaf, &p.ancestors))
-        .collect();
-    if rooted.len() < pooled_ids.len() {
-        warn!(
-            "{} of {} leaves on {} have no chain to the root, and cannot be exited unilaterally",
-            pooled_ids.len().saturating_sub(rooted.len()),
+    let mut ancestors: HashMap<TreeNodeId, Vec<TreeNode>> =
+        assemble_exit_chains(&by_id, &pooled_ids)
+            .into_iter()
+            .filter(|p| chain_reaches_root(&p.leaf, &p.ancestors))
+            .map(|p| (p.leaf.id, p.ancestors))
+            .collect();
+    // The SSP needs every node above a leaf up to the root to exit the leaf
+    // unilaterally. The function adds none of the tree's leaves unless each one
+    // has those nodes.
+    if ancestors.len() < pooled_ids.len() {
+        return Err(format!(
+            "{} of {} leaves on {} have no chain to the root",
+            pooled_ids.len().saturating_sub(ancestors.len()),
             pooled_ids.len(),
             tree.outpoint,
-        );
+        )
+        .into());
     }
-    wallet.spark.tree_store.store_ancestors(&rooted).await?;
-
-    pool_repo.mark_pooled(&tree.outpoint).await?;
+    let pedigrees: Vec<LeafPedigree> = leaves
+        .iter()
+        .map(|leaf| LeafPedigree {
+            ancestors: ancestors.remove(&leaf.id).unwrap_or_default(),
+            leaf: leaf.clone(),
+        })
+        .collect();
+    let pooled = pool_repo
+        .pool_tree(
+            &tree.outpoint,
+            &wallet.spark.leaf_store,
+            &pedigrees,
+            queried_at,
+        )
+        .await?;
+    if !pooled {
+        return Ok(Pooling::AlreadyPooled);
+    }
+    for leaf in &leaves {
+        let refund_txid = leaf
+            .refund_tx
+            .as_ref()
+            .map(bitcoin::Transaction::compute_txid);
+        info!(leaf_id = %leaf.id, ?refund_txid, tree = %tree.outpoint, "a leaf of the SSP's own tree joined the pool");
+    }
     info!(
         "{} leaves on {} joined the pool",
         leaves.len(),

@@ -13,20 +13,18 @@ use spark::operator::OperatorPool;
 use spark::operator::rpc::spark::PreimageRequestRole;
 use spark::services::{
     HtlcService, LeafKeyTweak, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
-    QueryHtlcFilter, Transfer, TransferId, TransferStatus, TransferType,
+    QueryHtlcFilter, TransferId, TransferStatus, TransferType,
 };
-use spark::signer::LeafSigningKey;
 use spark::signer::Signer;
-use spark::tree::{
-    LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNode, TreeNodeId,
-    TreeNodeStatus, TreeService, TreeStore,
-};
+use spark::tree::TreeNode;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::handover::{HandoverOutcome, HandoverReservation, is_refusal, observe_handover};
-use crate::leaves::{LeafSigningKeys, release_reserved_leaves};
+use crate::handover::{HandoverOutcome, is_refusal, observe_handover};
+use crate::leaves::{self, LeafSigningKeys};
+use crate::pool::operator_view;
+use crate::postgresql::PostgresLeafStore;
 use crate::swap::select::decompose_into_powers_of_two;
 use crate::wakeup::Wakeup;
 
@@ -217,7 +215,6 @@ impl LightningReceiveService {
             encoded_invoice,
             transfer_id: None,
             transfer_amount_sats: None,
-            reservation: None,
             preimage: None,
             invoice_status: HoldInvoiceStatus::Pending,
             expires_at,
@@ -283,8 +280,7 @@ pub struct ReceiveWorkerDeps {
     pub operator_pool: Arc<OperatorPool>,
     pub signer: Arc<dyn Signer>,
     pub htlc_service: Arc<HtlcService>,
-    pub tree_service: Arc<dyn TreeService>,
-    pub tree_store: Arc<dyn TreeStore>,
+    pub leaf_store: Arc<PostgresLeafStore>,
     pub key_resolver: Arc<dyn LeafSigningKeys>,
     pub network: spark::Network,
     pub wakeup: Wakeup,
@@ -380,12 +376,9 @@ async fn process_receive(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
 ) -> Result<(), BoxError> {
-    match (&record.transfer_id, &record.reservation) {
-        (None, _) => give_leaves(deps, record).await,
-        (Some(transfer_id), Some(reservation)) => {
-            settle_handover(deps, record, transfer_id, reservation).await
-        }
-        (Some(transfer_id), None) => advance_after_give(deps, record, transfer_id).await,
+    match &record.transfer_id {
+        None => give_leaves(deps, record).await,
+        Some(transfer_id) => advance_handover(deps, record, transfer_id).await,
     }
 }
 
@@ -428,8 +421,9 @@ async fn held_payment(
     }
 }
 
-/// The handover is recorded before it is made, so a pass after a crash settles it
-/// by its transfer id.
+/// The worker records the handover before it reserves the leaves and makes the
+/// handover. After a crash, the worker can then query the operators for the
+/// handover by its transfer id.
 async fn give_leaves(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
@@ -454,37 +448,11 @@ async fn give_leaves(
     }
 
     let transfer_id = TransferId::generate();
-    let reservation = reserve_leaves(deps, amount_sats).await?;
-    if let Err(e) = deps
-        .store
-        .set_receive_handover(
-            &record.id,
-            &transfer_id,
-            amount_sats,
-            &HandoverReservation::from(&reservation),
-        )
-        .await
-    {
-        // The write may have committed without its answer arriving; a recorded
-        // handover keeps its reservation.
-        match deps.store.get_receive(&record.id).await {
-            Ok(Some(stored)) if stored.transfer_id.is_none() => {
-                if let Err(cancel_err) = deps
-                    .tree_store
-                    .cancel_reservation(&reservation.id, &reservation.leaves)
-                    .await
-                {
-                    error!(reservation_id = %reservation.id, "Failed to cancel reservation: {cancel_err:?}");
-                }
-            }
-            Ok(_) => {}
-            Err(read) => {
-                error!(reservation_id = %reservation.id, "could not tell whether a handover was recorded, so its leaves stay reserved: {read}");
-            }
-        }
-        return Err(e.into());
-    }
-    hand_over(deps, record, &transfer_id, amount_sats, &reservation).await
+    deps.store
+        .set_receive_handover(&record.id, &transfer_id, amount_sats)
+        .await?;
+    let leaves = reserve_leaves(deps, record, &transfer_id, amount_sats).await?;
+    hand_over(deps, record, &transfer_id, amount_sats, &leaves).await
 }
 
 fn expired(record: &LightningReceiveRecord) -> bool {
@@ -520,24 +488,17 @@ async fn payment_backs_handover(
     Ok(true)
 }
 
-async fn settle_handover(
+async fn advance_handover(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
     transfer_id: &TransferId,
-    reservation: &HandoverReservation,
 ) -> Result<(), BoxError> {
     let sender = spark::signer::derive_identity_public_key(deps.signer.as_ref()).await?;
     let outcome = observe_handover(&deps.operator_pool, &sender, deps.network, transfer_id).await?;
     match outcome {
-        HandoverOutcome::Committed => {
-            deps.tree_store
-                .finalize_reservation(&reservation.id, None)
-                .await?;
-            deps.store.clear_receive_reservation(&record.id).await?;
-            info!(receive_id = %record.id, "lightning receive: the handover went through");
-        }
+        HandoverOutcome::Committed => return advance_after_give(deps, record, transfer_id).await,
         HandoverOutcome::RolledBack { settled: true } => {
-            release_handover(deps, record, reservation).await?;
+            release_handover(deps, record, transfer_id).await?;
             info!(receive_id = %record.id, "lightning receive: the operators rolled the handover back; its leaves are back in the pool");
             if held_payment(deps, record).await?.is_none() {
                 return cancel_receive(deps, record).await;
@@ -549,11 +510,11 @@ async fn settle_handover(
                 .ok_or("a recorded handover has no amount")?;
             match held_payment(deps, record).await? {
                 Some(held) if payment_backs_handover(deps, record, amount_sats, held).await? => {
-                    let reservation = reservation.leaves(deps.tree_store.as_ref()).await?;
-                    return hand_over(deps, record, transfer_id, amount_sats, &reservation).await;
+                    let leaves = reserve_leaves(deps, record, transfer_id, amount_sats).await?;
+                    return hand_over(deps, record, transfer_id, amount_sats, &leaves).await;
                 }
                 _ => {
-                    release_handover(deps, record, reservation).await?;
+                    release_handover(deps, record, transfer_id).await?;
                     info!(receive_id = %record.id, "lightning receive: gave up a handover no operator has seen, which the payment no longer backs");
                     return cancel_receive(deps, record).await;
                 }
@@ -567,17 +528,26 @@ async fn settle_handover(
     Ok(())
 }
 
+async fn release_leaves(
+    deps: &ReceiveWorkerDeps,
+    transfer_id: &TransferId,
+) -> Result<(), BoxError> {
+    operator_view::release(
+        &deps.operator_pool,
+        deps.network,
+        &deps.leaf_store,
+        transfer_id,
+    )
+    .await?;
+    Ok(())
+}
+
 async fn release_handover(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
-    reservation: &HandoverReservation,
+    transfer_id: &TransferId,
 ) -> Result<(), BoxError> {
-    release_reserved_leaves(
-        deps.tree_store.as_ref(),
-        &reservation.id,
-        &reservation.leaf_ids,
-    )
-    .await?;
+    release_leaves(deps, transfer_id).await?;
     deps.store.clear_receive_handover(&record.id).await?;
     Ok(())
 }
@@ -585,6 +555,7 @@ async fn release_handover(
 /// Settles once the operators have applied the sender key tweak, which puts the
 /// leaves out of the SSP's reach, or once the claim deadline is near: a preimage
 /// alone can be learned from a `ProvidePreimage` call the operators rolled back.
+/// The leaves stay reserved until the operators apply the tweak or return them.
 async fn advance_after_give(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
@@ -613,8 +584,9 @@ async fn advance_after_give(
     // leaves are the SSP's again, so the payer is refunded even with the preimage
     // known.
     if request.status == PreimageRequestStatus::Returned {
-        reclaim_returned_leaves(deps, record, request.transfer.as_ref()).await?;
-        return cancel_receive(deps, record).await;
+        release_leaves(deps, transfer_id).await?;
+        info!(receive_id = %record.id, "lightning receive: the operators returned the handover; its leaves are back in the pool");
+        return end_returned(deps, record).await;
     }
     let Some(preimage) = preimage else {
         return Ok(());
@@ -623,8 +595,13 @@ async fn advance_after_give(
         .transfer
         .as_ref()
         .is_some_and(|transfer| sender_key_tweaked(transfer.status));
-    if tweaked || settle_deadline_reached(deps, record).await? {
-        return settle_receive(deps, record, preimage).await;
+    if tweaked {
+        deps.leaf_store.transferred(transfer_id).await?;
+        return settle_receive(deps, record, preimage, true).await;
+    }
+    if settle_deadline_reached(deps, record).await? {
+        // The SSP claims the payment before ldk-server fails it back.
+        return settle_receive(deps, record, preimage, false).await;
     }
     info!(receive_id = %record.id, "lightning receive: waiting for the operators to apply or return the handover");
     Ok(())
@@ -656,10 +633,29 @@ async fn settle_deadline_reached(
     Ok(held.claim_deadline.saturating_sub(tip) <= min_blocks_until_deadline(Duration::ZERO))
 }
 
+async fn end_returned(
+    deps: &ReceiveWorkerDeps,
+    record: &LightningReceiveRecord,
+) -> Result<(), BoxError> {
+    let payment_hash = record.payment_hash.to_byte_array();
+    let payment = deps.node.incoming_payment(&payment_hash).await?;
+    if payment.is_some_and(|payment| payment.state == PaymentState::Succeeded) {
+        deps.store
+            .set_receive_invoice_status(&record.id, HoldInvoiceStatus::Settled)
+            .await?;
+        error!(receive_id = %record.id, "lightning receive: the SSP claimed the payment at its claim deadline and the operators returned the handover, so the SSP owes the receiver the amount");
+        return Ok(());
+    }
+    cancel_receive(deps, record).await
+}
+
+/// `handed_over` is true once the operators have applied the handover. Until
+/// then, the function leaves the receive open.
 async fn settle_receive(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
     preimage: &Preimage,
+    handed_over: bool,
 ) -> Result<(), BoxError> {
     let payment_hash = record.payment_hash.to_byte_array();
     let payment = deps
@@ -675,6 +671,8 @@ async fn settle_receive(
         deps.node
             .settle_hold_invoice(&payment_hash, &preimage)
             .await?;
+    } else if !handed_over {
+        info!(receive_id = %record.id, "lightning receive: waiting for the operators to apply or return the handover");
     } else if payment.state == PaymentState::Succeeded {
         deps.store
             .set_receive_invoice_status(&record.id, HoldInvoiceStatus::Settled)
@@ -689,62 +687,14 @@ async fn settle_receive(
     Ok(())
 }
 
-/// Safe once the request is `Returned`, since the operators unlock the leaves in the
-/// transaction that marks it. A returned leaf keeps its signing key: only a transfer
-/// whose sender key tweak was never applied is returned.
-async fn reclaim_returned_leaves(
-    deps: &ReceiveWorkerDeps,
-    record: &LightningReceiveRecord,
-    transfer: Option<&Transfer>,
-) -> Result<(), BoxError> {
-    let node_ids: Vec<TreeNodeId> = transfer
-        .map(|t| t.leaves.iter().map(|l| l.leaf.id.clone()).collect())
-        .unwrap_or_default();
-    if node_ids.is_empty() {
-        return Ok(());
-    }
-
-    let identity_public_key =
-        spark::signer::derive_identity_public_key(deps.signer.as_ref()).await?;
-    let reclaimed: Vec<TreeNode> = deps
-        .tree_service
-        .fetch_nodes(&node_ids, false)
-        .await?
-        .into_iter()
-        .filter(|node| {
-            node.status == TreeNodeStatus::Available
-                && node.owner_identity_public_key == Some(identity_public_key)
-        })
-        .collect();
-
-    if reclaimed.len() != node_ids.len() {
-        warn!(
-            receive_id = %record.id,
-            reclaimed = reclaimed.len(),
-            fronted = node_ids.len(),
-            "lightning receive: returned transfer gave back fewer leaves than were fronted"
-        );
-    }
-    if reclaimed.is_empty() {
-        return Ok(());
-    }
-    deps.tree_store.add_leaves(&reclaimed).await?;
-    info!(
-        receive_id = %record.id,
-        count = reclaimed.len(),
-        "lightning receive: took the returned transfer's leaves back into the pool"
-    );
-    Ok(())
-}
-
 async fn hand_over(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
     transfer_id: &TransferId,
     amount_sats: u64,
-    reservation: &LeavesReservation,
+    leaves: &[TreeNode],
 ) -> Result<(), BoxError> {
-    let leaf_key_tweaks = build_leaf_key_tweaks(deps, reservation).await?;
+    let leaf_key_tweaks = build_leaf_key_tweaks(deps, leaves).await?;
 
     // The operators drop this expiry when they hold the preimage shares, so it only
     // returns the leaves of a handover whose preimage has not arrived by then.
@@ -769,14 +719,10 @@ async fn hand_over(
         Err(e) if matches!(&e, spark::services::ServiceError::ServiceConnectionError(rpc) if is_refusal(rpc)) =>
         {
             warn!(receive_id = %record.id, "lightning receive: the operators refused the handover: {e}");
-            return refused_handover(deps, record, transfer_id, reservation).await;
+            return refused_handover(deps, record, transfer_id).await;
         }
         Err(e) => return Err(e.into()),
     };
-    deps.tree_store
-        .finalize_reservation(&reservation.id, None)
-        .await?;
-    deps.store.clear_receive_reservation(&record.id).await?;
 
     match preimage {
         Some(preimage) => {
@@ -799,13 +745,12 @@ async fn refused_handover(
     deps: &ReceiveWorkerDeps,
     record: &LightningReceiveRecord,
     transfer_id: &TransferId,
-    reservation: &LeavesReservation,
 ) -> Result<(), BoxError> {
     let sender = spark::signer::derive_identity_public_key(deps.signer.as_ref()).await?;
     match observe_handover(&deps.operator_pool, &sender, deps.network, transfer_id).await? {
         HandoverOutcome::Undetermined { held: false }
         | HandoverOutcome::RolledBack { settled: true } => {
-            release_handover(deps, record, &HandoverReservation::from(reservation)).await?;
+            release_handover(deps, record, transfer_id).await?;
             cancel_receive(deps, record).await
         }
         _ => Ok(()),
@@ -848,47 +793,29 @@ async fn query_htlc(
     Ok(result.items.into_iter().next())
 }
 
+/// When the pool is short of leaves, the function forgets the handover, so
+/// that the worker starts over in its next pass.
 async fn reserve_leaves(
     deps: &ReceiveWorkerDeps,
+    record: &LightningReceiveRecord,
+    transfer_id: &TransferId,
     amount: u64,
-) -> Result<LeavesReservation, BoxError> {
+) -> Result<Vec<TreeNode>, BoxError> {
     let denominations = decompose_into_powers_of_two(amount, deps.largest_denomination);
-    let target = TargetAmounts::new_exact_denominations(denominations);
-    match deps
-        .tree_store
-        .try_reserve_leaves(Some(&target), true, ReservationPurpose::Payment)
-        .await?
-    {
-        ReserveResult::Success(reservation) => Ok(reservation),
-        ReserveResult::InsufficientFunds | ReserveResult::WaitForPending { .. } => {
-            Err(format!("insufficient pool leaves for amount {amount}").into())
-        }
+    if let Some(leaves) = deps.leaf_store.reserve(&denominations, transfer_id).await? {
+        return Ok(leaves);
     }
+    deps.store.clear_receive_handover(&record.id).await?;
+    Err(format!("insufficient pool leaves for amount {amount}").into())
 }
 
 async fn build_leaf_key_tweaks(
     deps: &ReceiveWorkerDeps,
-    reservation: &LeavesReservation,
+    leaves: &[TreeNode],
 ) -> Result<Vec<LeafKeyTweak>, BoxError> {
-    let mut leaf_key_tweaks = Vec::with_capacity(reservation.leaves.len());
-    for node in &reservation.leaves {
-        let signing_leaf_id = deps
-            .key_resolver
-            .get_signing_leaf_id(&node.id.to_string())
-            .await
-            .map_err(|e| format!("key resolver error: {e}"))?
-            .map(|id| id.parse::<TreeNodeId>())
-            .transpose()
-            .map_err(|e| format!("invalid leaf id: {e}"))?
-            .unwrap_or_else(|| node.id.clone());
-        leaf_key_tweaks.push(LeafKeyTweak {
-            node: node.clone(),
-            signing_key: LeafSigningKey {
-                derived_from: signing_leaf_id,
-            },
-        });
-    }
-    Ok(leaf_key_tweaks)
+    leaves::leaf_key_tweaks(deps.key_resolver.as_ref(), leaves)
+        .await
+        .map_err(|e| format!("key resolver error: {e}").into())
 }
 
 #[cfg(test)]

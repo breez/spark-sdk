@@ -2,12 +2,9 @@ use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
 use spark::services::TransferId;
 
-use crate::handover::HandoverReservation;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingCredit {
     pub transfer_id: TransferId,
-    pub reservation: HandoverReservation,
 }
 
 #[derive(Debug, Clone)]

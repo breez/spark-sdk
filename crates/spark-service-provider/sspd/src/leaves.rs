@@ -1,13 +1,17 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use spark::operator::OperatorPool;
+use spark::operator::rpc::OperatorRpcError;
 use spark::services::{
     ClaimTransferConfig, LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService,
 };
 use spark::signer::{LeafSigningKey, SecretSource, Signer};
-use spark::tree::{LeavesReservationId, TreeNode, TreeNodeId, TreeServiceError, TreeStore};
+use spark::tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains, chain_reaches_root};
 
+use crate::operator_rpc::{self, NodeQuery};
+use crate::postgresql::PostgresLeafStore;
 use crate::wakeup::Wakeup;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -24,10 +28,6 @@ pub trait LeafSigningKeys: Send + Sync {
         &self,
         node_ids: &[String],
     ) -> Result<HashMap<String, String>, String>;
-
-    /// The id `node_id`'s signing key derives from, or `None` when that is
-    /// `node_id` itself.
-    async fn get_signing_leaf_id(&self, node_id: &str) -> Result<Option<String>, String>;
 
     async fn mark_signing_under_node_id(&self, node_ids: &[String]) -> Result<(), String>;
 }
@@ -153,18 +153,62 @@ fn held_under_after_tweak(
         .ok()
 }
 
-/// Claiming moves each leaf onto the key derived from its node id, so that is
-/// recorded before the leaves are held: a spend reading the stale id would sign
-/// with a key the operators reject.
+#[derive(Debug, thiserror::Error)]
+pub enum AncestorsError {
+    #[error("could not query the coordinator: {0}")]
+    Query(#[from] OperatorRpcError),
+
+    #[error("the operators do not report the ancestors of leaf {0} up to its tree's root")]
+    MissingAncestors(TreeNodeId),
+}
+
+pub async fn with_ancestors(
+    operator_pool: &OperatorPool,
+    network: spark::Network,
+    leaves: &[TreeNode],
+    query: NodeQuery,
+) -> Result<Vec<LeafPedigree>, AncestorsError> {
+    let ids: Vec<TreeNodeId> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    let client = &operator_pool.get_coordinator().client;
+    let mut nodes: HashMap<TreeNodeId, TreeNode> =
+        operator_rpc::nodes(client, network, &ids, true, query)
+            .await?
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
+            .collect();
+    // The caller's copy of a leaf has the caller's refund.
+    nodes.extend(leaves.iter().map(|leaf| (leaf.id.clone(), leaf.clone())));
+    let pedigrees = assemble_exit_chains(&nodes, &ids);
+    if let Some(pedigree) = pedigrees
+        .iter()
+        .find(|pedigree| !chain_reaches_root(&pedigree.leaf, &pedigree.ancestors))
+    {
+        return Err(AncestorsError::MissingAncestors(pedigree.leaf.id.clone()));
+    }
+    Ok(pedigrees)
+}
+
+pub struct ClaimDeps {
+    pub transfer_service: Arc<TransferService>,
+    pub operator_pool: Arc<OperatorPool>,
+    pub network: spark::Network,
+    pub signing_keys: Arc<dyn LeafSigningKeys>,
+    pub leaf_store: Arc<PostgresLeafStore>,
+    pub renewal: Wakeup,
+}
+
+/// Once the SSP has claimed a leaf, the signer derives the leaf's signing key
+/// from the leaf's node id. The function records that before it adds the
+/// leaves to the pool: code that read the old id would sign with a key the
+/// operators reject.
 pub async fn claim_into_pool(
-    transfer_service: &TransferService,
-    signing_keys: &dyn LeafSigningKeys,
-    incoming: &dyn IncomingLeafStore,
-    admission: &Wakeup,
+    deps: &ClaimDeps,
     transfer: &Transfer,
 ) -> Result<Vec<TreeNode>, BoxError> {
+    let queried_at = chrono::Utc::now();
     // One attempt: retrying a failed claim is left to the caller.
-    let claimed = transfer_service
+    let claimed = deps
+        .transfer_service
         .claim_transfer(
             transfer,
             Some(ClaimTransferConfig {
@@ -174,60 +218,23 @@ pub async fn claim_into_pool(
         )
         .await?;
     let node_ids: Vec<String> = claimed.iter().map(|node| node.id.to_string()).collect();
-    signing_keys.mark_signing_under_node_id(&node_ids).await?;
-    hold_for_admission(incoming, admission, claimed.clone()).await?;
+    deps.signing_keys
+        .mark_signing_under_node_id(&node_ids)
+        .await?;
+    let pedigrees = with_ancestors(
+        &deps.operator_pool,
+        deps.network,
+        &claimed,
+        NodeQuery::Public,
+    )
+    .await?;
+    deps.leaf_store
+        .claimed(&transfer.id, &pedigrees, queried_at)
+        .await?;
+    // The refund of a claimed leaf may need renewal before the SSP can use the
+    // leaf.
+    deps.renewal.wake();
     Ok(claimed)
-}
-
-pub struct IncomingLeaf {
-    pub leaf: TreeNode,
-    pub attempts: i32,
-}
-
-#[async_trait::async_trait]
-pub trait IncomingLeafStore: Send + Sync {
-    async fn hold(&self, leaves: &[TreeNode]) -> Result<(), BoxError>;
-
-    /// At most `limit` leaves, fewest failed attempts first, then oldest first.
-    async fn held(&self, limit: i64) -> Result<Vec<IncomingLeaf>, BoxError>;
-
-    async fn admitted(&self, leaf_ids: &[TreeNodeId]) -> Result<(), BoxError>;
-
-    async fn failed(&self, leaf_ids: &[TreeNodeId]) -> Result<(), BoxError>;
-}
-
-/// Safe to run again for a reservation already released: a leaf another
-/// reservation has taken since keeps that reservation.
-pub async fn release_reserved_leaves(
-    tree_store: &dyn TreeStore,
-    reservation_id: &LeavesReservationId,
-    leaf_ids: &[TreeNodeId],
-) -> Result<(), TreeServiceError> {
-    let leaves: Vec<TreeNode> = tree_store
-        .get_leaves()
-        .await?
-        .reserved_for_payment
-        .into_iter()
-        .filter(|leaf| leaf_ids.contains(&leaf.id))
-        .collect();
-    tree_store.cancel_reservation(reservation_id, &leaves).await
-}
-
-pub fn is_fit(leaf: &TreeNode) -> Result<bool, BoxError> {
-    Ok(!leaf.needs_refund_tx_renewed()?)
-}
-
-pub async fn hold_for_admission(
-    store: &dyn IncomingLeafStore,
-    admission: &Wakeup,
-    claimed: Vec<TreeNode>,
-) -> Result<(), BoxError> {
-    if claimed.is_empty() {
-        return Ok(());
-    }
-    store.hold(&claimed).await?;
-    admission.wake();
-    Ok(())
 }
 
 #[cfg(test)]

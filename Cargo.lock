@@ -7940,7 +7940,6 @@ dependencies = [
  "serde_json",
  "serde_with",
  "spark",
- "spark-postgres",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",

@@ -3,8 +3,6 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use spark::services::{Preimage, TransferId};
 
-use crate::handover::HandoverReservation;
-
 use super::node::LightningPaymentId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,12 +85,12 @@ pub struct LightningReceiveRecord {
     /// What the invoice asks for, `0` for an invoice that names no amount.
     pub amount_sats: u64,
     pub encoded_invoice: String,
-    /// The SSP's transfer to the receiver, recorded before it is attempted.
+    /// The SSP's transfer to the receiver. The SSP records the transfer's id
+    /// before it makes the transfer.
     pub transfer_id: Option<TransferId>,
     /// What that transfer hands over: the held payment decides it for an invoice
     /// that names no amount.
     pub transfer_amount_sats: Option<u64>,
-    pub reservation: Option<HandoverReservation>,
     pub preimage: Option<Preimage>,
     pub invoice_status: HoldInvoiceStatus,
     pub expires_at: chrono::DateTime<chrono::Utc>,
@@ -160,9 +158,7 @@ pub trait LightningStore: Send + Sync {
         id: &str,
         transfer_id: &TransferId,
         amount_sats: u64,
-        reservation: &HandoverReservation,
     ) -> Result<(), String>;
-    async fn clear_receive_reservation(&self, id: &str) -> Result<(), String>;
     async fn clear_receive_handover(&self, id: &str) -> Result<(), String>;
     async fn set_receive_preimage(&self, id: &str, preimage: &Preimage) -> Result<(), String>;
     async fn set_receive_invoice_status(
@@ -334,20 +330,10 @@ impl LightningStore for InMemoryLightningStore {
         id: &str,
         transfer_id: &TransferId,
         amount_sats: u64,
-        reservation: &HandoverReservation,
     ) -> Result<(), String> {
         if let Some(record) = self.receives.write().await.get_mut(id) {
             record.transfer_id = Some(transfer_id.clone());
             record.transfer_amount_sats = Some(amount_sats);
-            record.reservation = Some(reservation.clone());
-            record.updated_at = chrono::Utc::now();
-        }
-        Ok(())
-    }
-
-    async fn clear_receive_reservation(&self, id: &str) -> Result<(), String> {
-        if let Some(record) = self.receives.write().await.get_mut(id) {
-            record.reservation = None;
             record.updated_at = chrono::Utc::now();
         }
         Ok(())
@@ -357,7 +343,6 @@ impl LightningStore for InMemoryLightningStore {
         if let Some(record) = self.receives.write().await.get_mut(id) {
             record.transfer_id = None;
             record.transfer_amount_sats = None;
-            record.reservation = None;
             record.updated_at = chrono::Utc::now();
         }
         Ok(())
@@ -560,7 +545,6 @@ mod tests {
             encoded_invoice: "lnbc-recv".to_string(),
             transfer_id: None,
             transfer_amount_sats: None,
-            reservation: None,
             preimage: None,
             invoice_status: HoldInvoiceStatus::Pending,
             expires_at: chrono::Utc::now(),
@@ -590,12 +574,8 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let reservation = super::HandoverReservation {
-            id: "reservation-1".to_string(),
-            leaf_ids: Vec::new(),
-        };
         store
-            .set_receive_handover("r1", &transfer_id, 2_000, &reservation)
+            .set_receive_handover("r1", &transfer_id, 2_000)
             .await
             .unwrap();
         assert_eq!(
