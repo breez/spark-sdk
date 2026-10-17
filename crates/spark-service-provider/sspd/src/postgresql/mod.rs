@@ -9,6 +9,7 @@ mod static_deposit_store;
 mod swap_store;
 #[cfg(test)]
 pub(crate) mod testing;
+mod unilateral_exit_store;
 
 pub use chain_repository::ChainRepository;
 pub use coop_exit_store::PostgresCoopExitStore;
@@ -23,6 +24,9 @@ pub use pool_store::PoolRepository;
 use sqlx::{Pool, Postgres};
 pub use static_deposit_store::PostgresStaticDepositClaimStore;
 pub use swap_store::SwapRepository;
+pub use unilateral_exit_store::{
+    PostgresUnilateralExitStore, StoredCpfpChild, UnilateralExitStoreError,
+};
 
 pub async fn migrate(pool: &Pool<Postgres>) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!("src/postgresql/migrations").run(pool).await
