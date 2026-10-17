@@ -277,6 +277,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::chain::SyncState;
     use crate::chain::{BroadcastError, ChainRepositoryError};
 
     #[derive(Default)]
@@ -284,6 +285,7 @@ mod tests {
         blocks: Mutex<HashMap<BlockHash, (Block, u64)>>,
         active: Mutex<BTreeMap<u64, BlockHash>>,
         unavailable: Mutex<Option<BlockHash>>,
+        syncing: AtomicBool,
     }
 
     impl Node {
@@ -368,6 +370,13 @@ mod tests {
 
         async fn get_blockheight(&self) -> Result<u64, ChainError> {
             Ok(self.height())
+        }
+
+        async fn sync_state(&self) -> Result<SyncState, ChainError> {
+            Ok(SyncState {
+                height: self.height(),
+                synced: !self.syncing.load(Ordering::SeqCst),
+            })
         }
 
         async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {

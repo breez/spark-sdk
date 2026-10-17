@@ -5,6 +5,7 @@ mod repository;
 mod tip;
 mod types;
 
+pub use client::SyncState;
 pub use client::{BroadcastError, ChainClient, ChainError};
 pub use fee_rates::CachedFeeRates;
 pub use monitor::ChainMonitor;

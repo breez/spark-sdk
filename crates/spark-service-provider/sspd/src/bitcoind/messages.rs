@@ -19,6 +19,9 @@ pub struct GetMempoolInfoResponse {
 pub struct GetBlockchainInfoResponse {
     pub chain: String,
     pub pruned: bool,
+    pub blocks: u64,
+    pub headers: u64,
+    pub initialblockdownload: bool,
 }
 
 #[derive(Deserialize)]

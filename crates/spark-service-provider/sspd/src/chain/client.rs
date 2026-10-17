@@ -24,6 +24,14 @@ pub enum ChainError {
     General(Box<dyn std::error::Error + Sync + Send>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncState {
+    pub height: u64,
+    /// Whether bitcoind has finished its initial block download and has
+    /// validated a block for every header it has.
+    pub synced: bool,
+}
+
 #[async_trait::async_trait]
 pub trait ChainClient {
     async fn broadcast_tx(&self, tx: Transaction) -> Result<(), BroadcastError>;
@@ -32,6 +40,7 @@ pub trait ChainClient {
     /// Estimates the fee rate for confirmation within `conf_target` blocks.
     async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError>;
     async fn get_blockheight(&self) -> Result<u64, ChainError>;
+    async fn sync_state(&self) -> Result<SyncState, ChainError>;
     /// `None` above the node's tip.
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError>;
     async fn get_block(&self, hash: &BlockHash) -> Result<Block, ChainError>;
