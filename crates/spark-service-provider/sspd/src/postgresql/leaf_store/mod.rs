@@ -198,6 +198,25 @@ pub fn exit_chain(pedigree: &LeafPedigree) -> Vec<ExitChainStep> {
     steps
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainTransaction {
+    pub txid: Txid,
+    pub step: ExitChainStep,
+}
+
+#[derive(Debug, Default)]
+pub struct StoredChains {
+    /// For each node transaction whose exit chain the store has up to its
+    /// tree's root: that transaction and the transactions above it, the root
+    /// last.
+    pub chains: HashMap<Txid, Vec<ChainTransaction>>,
+    /// What the chain record has about the inputs of those transactions.
+    pub states: OutputStates,
+    /// The height of each funding transaction that is in a block of the chain
+    /// record.
+    pub funding_heights: HashMap<Txid, u64>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PoolCounts {
     pub available: HashMap<u64, u32>,
@@ -295,6 +314,62 @@ impl PostgresLeafStore {
     ) -> Result<(), LeafStoreError> {
         rows::observe(db, nodes, &[], observed_at, true).await?;
         Ok(())
+    }
+
+    /// The caller must have verified each transaction's signature.
+    pub async fn store_nodes(&self, pedigrees: &[LeafPedigree]) -> Result<(), LeafStoreError> {
+        let mut rows = Rows::default();
+        for pedigree in pedigrees {
+            for node in pedigree.ancestors.iter().chain([&pedigree.leaf]) {
+                rows.node(node)?;
+            }
+        }
+        let mut db = self.pool.begin().await?;
+        rows.write(&mut db, &self.chain).await?;
+        db.commit().await?;
+        self.wake_spend_check();
+        Ok(())
+    }
+
+    pub async fn stored_chains(&self, node_txids: &[Txid]) -> Result<StoredChains, LeafStoreError> {
+        let mut stored = StoredChains::default();
+        if node_txids.is_empty() {
+            return Ok(stored);
+        }
+        let mut db = self.pool.acquire().await?;
+        stored.chains = rows::stored_chains(&mut db, node_txids).await?;
+        let inputs: HashSet<OutPoint> = stored
+            .chains
+            .values()
+            .flatten()
+            .map(|transaction| transaction.step.spends)
+            .collect();
+        let inputs: Vec<OutPoint> = inputs.into_iter().collect();
+        let funding: HashSet<Txid> = stored
+            .chains
+            .values()
+            .filter_map(|chain| chain.last())
+            .map(|root| root.step.spends.txid)
+            .collect();
+        let funding: Vec<Txid> = funding.into_iter().collect();
+        (stored.states, stored.funding_heights) = self
+            .chain
+            .output_states_and_tx_heights(&mut db, &inputs, &funding)
+            .await?;
+        Ok(stored)
+    }
+
+    pub async fn stored_transactions(
+        &self,
+        txids: &[Txid],
+    ) -> Result<HashSet<Txid>, LeafStoreError> {
+        let ids: Vec<String> = txids.iter().map(ToString::to_string).collect();
+        let stored: Vec<(String,)> =
+            sqlx::query_as("SELECT tx_id FROM brz_ssp_spark_txs WHERE tx_id = ANY($1)")
+                .bind(&ids)
+                .fetch_all(&*self.pool)
+                .await?;
+        stored.iter().map(|(id,)| rows::txid(id)).collect()
     }
 
     pub async fn claimed(

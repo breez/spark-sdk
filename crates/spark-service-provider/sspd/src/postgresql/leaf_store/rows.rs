@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use bitcoin::secp256k1::PublicKey;
@@ -559,6 +560,60 @@ pub struct ExitChainStep {
     /// Whether a direct transaction with a timelock has the same input. The
     /// operators' watchtower broadcasts such a transaction once it is mature.
     pub direct: bool,
+}
+
+pub(super) async fn stored_chains(
+    db: &mut PgConnection,
+    node_txids: &[Txid],
+) -> Result<HashMap<Txid, Vec<super::ChainTransaction>>, LeafStoreError> {
+    let ids: Vec<String> = node_txids.iter().map(ToString::to_string).collect();
+    let rows: Vec<(String, String, String, i32, bool, bool)> = sqlx::query_as(
+        r"WITH RECURSIVE exit_chain AS (
+               SELECT t.tx_id AS node_tx_id, 0 AS level, t.tx_id, t.previous_tx_id,
+                      t.previous_output_index
+               FROM brz_ssp_spark_txs t
+               WHERE t.tx_id = ANY($1)
+             UNION ALL
+               SELECT exit_chain.node_tx_id, exit_chain.level + 1, above.tx_id,
+                      above.previous_tx_id, above.previous_output_index
+               FROM exit_chain
+               JOIN brz_ssp_spark_txs above ON above.tx_id = exit_chain.previous_tx_id
+           )
+           SELECT exit_chain.node_tx_id, exit_chain.tx_id, exit_chain.previous_tx_id,
+                  exit_chain.previous_output_index,
+                  EXISTS (SELECT 1 FROM brz_ssp_spark_direct_txs direct
+                          WHERE direct.previous_tx_id = exit_chain.previous_tx_id
+                            AND direct.previous_output_index = exit_chain.previous_output_index
+                            AND direct.timelock > 0) AS direct,
+                  EXISTS (SELECT 1 FROM brz_ssp_spark_nodes node
+                          WHERE node.node_tx_id = exit_chain.tx_id
+                            AND node.parent_node_id IS NULL) AS root
+           FROM exit_chain
+           ORDER BY exit_chain.node_tx_id, exit_chain.level",
+    )
+    .bind(&ids)
+    .fetch_all(db)
+    .await?;
+    let mut chains: HashMap<Txid, Vec<super::ChainTransaction>> = HashMap::new();
+    let mut reaches_root: HashSet<Txid> = HashSet::new();
+    for (node_tx_id, tx_id, previous_tx_id, previous_output_index, direct, root) in rows {
+        let node_txid = txid(&node_tx_id)?;
+        chains
+            .entry(node_txid)
+            .or_default()
+            .push(super::ChainTransaction {
+                txid: txid(&tx_id)?,
+                step: ExitChainStep {
+                    spends: outpoint(&previous_tx_id, previous_output_index)?,
+                    direct,
+                },
+            });
+        if root {
+            reaches_root.insert(node_txid);
+        }
+    }
+    chains.retain(|node_txid, _| reaches_root.contains(node_txid));
+    Ok(chains)
 }
 
 #[derive(Debug, Clone)]
