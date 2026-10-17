@@ -293,4 +293,19 @@ impl LeafSigningKeys for PoolRepository {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    async fn get_signing_leaf_ids(
+        &self,
+        node_ids: &[String],
+    ) -> Result<HashMap<String, String>, String> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            r#"SELECT node_id, deposit_leaf_id FROM brz_ssp_spark_leaf_id_map
+               WHERE node_id = ANY($1)"#,
+        )
+        .bind(node_ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().collect())
+    }
 }

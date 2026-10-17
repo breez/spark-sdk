@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use spark::operator::OperatorPool;
-use spark::services::{ClaimTransferConfig, ServiceError, Transfer, TransferId, TransferService};
-use spark::signer::{SecretSource, Signer};
+use spark::services::{
+    ClaimTransferConfig, LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService,
+};
+use spark::signer::{LeafSigningKey, SecretSource, Signer};
 use spark::tree::{LeavesReservationId, TreeNode, TreeNodeId, TreeServiceError, TreeStore};
 
 use crate::wakeup::Wakeup;
@@ -15,11 +17,42 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// claims the leaf from a transfer.
 #[async_trait::async_trait]
 pub trait LeafSigningKeys: Send + Sync {
+    /// Returns, for each of `node_ids`, the id that the signer derives the
+    /// node's signing key from. A node whose key the signer derives from the
+    /// node's own id has no entry.
+    async fn get_signing_leaf_ids(
+        &self,
+        node_ids: &[String],
+    ) -> Result<HashMap<String, String>, String>;
+
     /// The id `node_id`'s signing key derives from, or `None` when that is
     /// `node_id` itself.
     async fn get_signing_leaf_id(&self, node_id: &str) -> Result<Option<String>, String>;
 
     async fn mark_signing_under_node_id(&self, node_ids: &[String]) -> Result<(), String>;
+}
+
+pub async fn leaf_key_tweaks(
+    signing_keys: &dyn LeafSigningKeys,
+    leaves: &[TreeNode],
+) -> Result<Vec<LeafKeyTweak>, String> {
+    let node_ids: Vec<String> = leaves.iter().map(|leaf| leaf.id.to_string()).collect();
+    let signing_ids = signing_keys.get_signing_leaf_ids(&node_ids).await?;
+    leaves
+        .iter()
+        .map(|leaf| {
+            let derived_from = match signing_ids.get(&leaf.id.to_string()) {
+                Some(id) => id
+                    .parse::<TreeNodeId>()
+                    .map_err(|e| format!("invalid leaf id: {e}"))?,
+                None => leaf.id.clone(),
+            };
+            Ok(LeafKeyTweak {
+                node: leaf.clone(),
+                signing_key: LeafSigningKey { derived_from },
+            })
+        })
+        .collect()
 }
 
 pub struct IncomingTransfer {
