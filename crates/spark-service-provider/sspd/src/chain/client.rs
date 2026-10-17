@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bitcoin::TxOut;
 use bitcoin::{Block, BlockHash, FeeRate, OutPoint, Transaction, Txid};
 use thiserror::Error;
 
@@ -30,6 +31,12 @@ pub struct OutputSpend {
     pub spender: Txid,
     /// `None` while the spending transaction is in the mempool.
     pub block: Option<BlockHeader>,
+}
+
+pub struct UnspentOutput {
+    pub tx_out: TxOut,
+    /// Zero while the output is only in the mempool.
+    pub confirmations: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

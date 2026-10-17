@@ -1,3 +1,4 @@
+pub mod call_queue;
 mod client;
 mod fee_rates;
 mod monitor;
@@ -7,7 +8,9 @@ mod synced;
 mod tip;
 mod types;
 
+pub use call_queue::{CallQueue, RequestChainClient};
 pub use client::SyncState;
+pub use client::UnspentOutput;
 pub use client::{BroadcastError, ChainClient, ChainError, OutputSpend};
 pub use fee_rates::CachedFeeRates;
 pub use monitor::ChainMonitor;
