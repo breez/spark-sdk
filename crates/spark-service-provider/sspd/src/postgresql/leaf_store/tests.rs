@@ -18,6 +18,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{Dispute, LeafStoreError, PostgresLeafStore, RenewalCursor, Reported, exit_chain};
+use crate::chain::ConfirmedOutput;
 use crate::chain::{BlockHeader, ChainRepository as _, OutputSpend, Spender, SpentTxo};
 use crate::postgresql::ChainRepository;
 use crate::postgresql::testing::TestDatabase;
@@ -118,6 +119,10 @@ impl Fixture {
     async fn disputes(&self) -> Vec<Dispute> {
         let disputes = self.store.all_disputes().await.unwrap();
         disputes.into_iter().map(|d| d.dispute).collect()
+    }
+
+    async fn unspent_outputs(&self) -> Vec<ConfirmedOutput> {
+        self.chain.confirmed_unspent_outputs().await.unwrap()
     }
 
     async fn confirm_spend(&self, spent: OutPoint, spender: Txid) -> BlockHash {
@@ -1128,6 +1133,312 @@ async fn a_leaf_whose_exit_chain_does_not_reach_the_root_is_listed() {
 
     fixture.store_ancestors(&[with(vec![root])]).await;
     assert!(store.leaves_missing_exit_chains().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_transaction_below_a_confirmed_one_is_mature_for_the_leaf_the_ssp_exits_unilaterally() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let funding = funding();
+    let root = node(&tree, None, funding, &[1000, 1000]);
+    let below = leaf(&tree, Some(&root), output(&root.node_tx, 0), 1000, 1900);
+    let refund = below.refund_tx.clone().unwrap();
+    let pedigrees = [
+        LeafPedigree {
+            leaf: below.clone(),
+            ancestors: vec![root.clone()],
+        },
+        alone(&root_leaf(1000)),
+    ];
+    fixture.own_pedigrees(&pedigrees).await.unwrap();
+    fixture.unspent().await;
+    let store = &fixture.store;
+    assert!(fixture.unspent_outputs().await.is_empty());
+
+    let root_block = fixture
+        .confirm_spend(funding, root.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(root_block).await;
+
+    let unspent = fixture.unspent_outputs().await;
+    let mature = store.mature_transactions(&unspent, height).await.unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, below.node_tx);
+    assert_eq!(mature[0].timelock, 0);
+    assert_eq!(mature[0].input_confirmation_height, height);
+    assert_eq!(mature[0].direct_timelock, Some(50));
+    assert_eq!(mature[0].leaves, std::slice::from_ref(&below.id));
+    assert_eq!(mature[0].value, 1000);
+    assert_eq!(mature[0].remaining, [below.node_tx.clone(), refund.clone()]);
+
+    // The node transaction confirms. Its refund can be in a block 1900 blocks
+    // higher, so the refund is mature once the tip is 1899 blocks higher.
+    let node_block = fixture
+        .confirm_spend(output(&root.node_tx, 0), below.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(node_block).await;
+    let unspent = fixture.unspent_outputs().await;
+    let early = store.mature_transactions(&unspent, height + 1898).await;
+    assert!(early.unwrap().is_empty());
+    let mature = store
+        .mature_transactions(&unspent, height + 1899)
+        .await
+        .unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, refund);
+    assert_eq!(mature[0].timelock, 1900);
+    assert_eq!(mature[0].direct_timelock, Some(1950));
+    assert_eq!(mature[0].remaining, std::slice::from_ref(&refund));
+
+    fixture
+        .confirm_spend(output(&below.node_tx, 0), refund.compute_txid())
+        .await;
+    let unspent = fixture.unspent_outputs().await;
+    let mature = store.mature_transactions(&unspent, height + 5000).await;
+    assert!(mature.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn nothing_to_broadcast_for_a_leaf_while_only_a_transaction_above_its_parent_confirmed() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let funding = funding();
+    let root = branch(&tree, None, funding, &[2000]);
+    let parent = branch(&tree, Some(&root), output(&root.node_tx, 0), &[1000, 1000]);
+    let leaf = leaf(&tree, Some(&parent), output(&parent.node_tx, 0), 1000, 2000);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![parent.clone(), root.clone()],
+    };
+    fixture.own_pedigrees(&[pedigree]).await.unwrap();
+    fixture.unspent().await;
+    let store = &fixture.store;
+
+    let block = fixture
+        .confirm_spend(funding, root.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(block).await;
+    // The parent's node transaction is mature, but the SSP does not broadcast
+    // it: the leaf stays available until that transaction confirms.
+    let unspent = fixture.unspent_outputs().await;
+    let mature = store.mature_transactions(&unspent, height).await;
+    assert!(mature.unwrap().is_empty());
+
+    let block = fixture
+        .confirm_spend(output(&root.node_tx, 0), parent.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(block).await;
+    let unspent = fixture.unspent_outputs().await;
+    let mature = store.mature_transactions(&unspent, height).await.unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, leaf.node_tx);
+    assert_eq!(mature[0].leaves, [leaf.id]);
+}
+
+#[tokio::test]
+async fn every_transaction_down_to_the_refund_is_listed_below_a_node_with_a_direct_transaction() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let funding = funding();
+    let root = branch(&tree, None, funding, &[2000]);
+    // The operators put a node like this above a leaf in a renewal. The
+    // watchtower broadcasts its direct transaction once that transaction is
+    // mature.
+    let split_node = node(&tree, Some(&root), output(&root.node_tx, 0), &[2000]);
+    let split_output = output(&split_node.node_tx, 0);
+    let parent = branch(&tree, Some(&split_node), split_output, &[1000, 1000]);
+    let leaf = leaf(&tree, Some(&parent), output(&parent.node_tx, 0), 1000, 2000);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![parent.clone(), split_node.clone(), root.clone()],
+    };
+    fixture.own_pedigrees(&[pedigree]).await.unwrap();
+    fixture.unspent().await;
+
+    let block = fixture
+        .confirm_spend(funding, root.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(block).await;
+
+    let unspent = fixture.unspent_outputs().await;
+    let mature = fixture
+        .store
+        .mature_transactions(&unspent, height)
+        .await
+        .unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, split_node.node_tx);
+    assert_eq!(mature[0].direct_timelock, Some(50));
+    assert_eq!(mature[0].input_confirmation_height, height);
+    assert_eq!(mature[0].leaves, std::slice::from_ref(&leaf.id));
+    assert_eq!(mature[0].value, 1000);
+    assert_eq!(
+        mature[0].remaining,
+        [
+            split_node.node_tx.clone(),
+            parent.node_tx.clone(),
+            leaf.node_tx.clone(),
+            leaf.refund_tx.clone().unwrap(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn nothing_to_broadcast_below_the_watchtowers_direct_transaction() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let funding = funding();
+    let root = node(&tree, None, funding, &[1000, 1000]);
+    let below = leaf(&tree, Some(&root), output(&root.node_tx, 0), 1000, 1900);
+    let pedigree = LeafPedigree {
+        leaf: below.clone(),
+        ancestors: vec![root.clone()],
+    };
+    fixture.own_pedigrees(&[pedigree]).await.unwrap();
+    fixture.unspent().await;
+    fixture
+        .confirm_spend(funding, root.node_tx.compute_txid())
+        .await;
+
+    // The watchtower's direct transaction confirms instead of the leaf's node
+    // transaction, which the SSP has a signature for.
+    let direct = below.direct_tx.as_ref().unwrap().compute_txid();
+    let block = fixture
+        .confirm_spend(output(&root.node_tx, 0), direct)
+        .await;
+    let height = fixture.height(block).await;
+
+    let unspent = fixture.unspent_outputs().await;
+    let mature = fixture
+        .store
+        .mature_transactions(&unspent, height + 5000)
+        .await;
+    assert!(mature.unwrap().is_empty());
+    assert!(fixture.available().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_old_refund_is_mature_once_an_old_node_transaction_confirmed() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let funding = funding();
+    let root = branch(&tree, None, funding, &[1000]);
+    let root_output = output(&root.node_tx, 0);
+    // This is the leaf as it was before a renewal.
+    let mut old = leaf(&tree, Some(&root), root_output, 1000, 100);
+    old.node_tx = spend(root_output, 1900, &[1000]);
+    old.direct_tx = None;
+    let old_refund = spend(output(&old.node_tx, 0), 100, &[1000]);
+    old.refund_tx = Some(old_refund.clone());
+    old.direct_refund_tx = None;
+    old.direct_from_cpfp_refund_tx = None;
+    fixture
+        .own_pedigrees(&[LeafPedigree {
+            leaf: old.clone(),
+            ancestors: vec![root.clone()],
+        }])
+        .await
+        .unwrap();
+    // In the renewal the operators lower the node transaction's timelock and
+    // reset the refund's timelock.
+    let mut renewed = old.clone();
+    renewed.node_tx = spend(root_output, 1800, &[1000]);
+    renewed.refund_tx = Some(spend(output(&renewed.node_tx, 0), 2000, &[1000]));
+    let after = [LeafPedigree {
+        leaf: renewed.clone(),
+        ancestors: vec![root.clone()],
+    }];
+    let store = &fixture.store;
+    store
+        .renewed(std::slice::from_ref(&old), &after, Utc::now())
+        .await
+        .unwrap();
+    fixture.unspent().await;
+
+    let block = fixture
+        .confirm_spends(&[
+            (funding, root.node_tx.compute_txid()),
+            // The old node transaction confirms instead of the renewed node
+            // transaction.
+            (root_output, old.node_tx.compute_txid()),
+        ])
+        .await;
+    let height = fixture.height(block).await;
+
+    let unspent = fixture.unspent_outputs().await;
+    assert!(
+        store
+            .mature_transactions(&unspent, height + 98)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mature = store
+        .mature_transactions(&unspent, height + 99)
+        .await
+        .unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, old_refund);
+    assert_eq!(mature[0].leaves, std::slice::from_ref(&renewed.id));
+    assert_eq!(mature[0].value, 1000);
+    assert_eq!(mature[0].remaining, std::slice::from_ref(&old_refund));
+}
+
+#[tokio::test]
+async fn the_refund_of_a_leaf_the_ssp_transferred_is_never_to_be_broadcast() {
+    let fixture = Fixture::new().await;
+    let leaf = root_leaf(1000);
+    fixture.own(std::slice::from_ref(&leaf)).await.unwrap();
+    let reservation = reserve(&fixture.store, &[1000]).await.unwrap();
+    fixture.store.transferred(&reservation.id).await.unwrap();
+
+    let funding = leaf.node_tx.input[0].previous_output;
+    let block = fixture
+        .confirm_spend(funding, leaf.node_tx.compute_txid())
+        .await;
+    let height = fixture.height(block).await;
+
+    let unspent = fixture.unspent_outputs().await;
+    assert_eq!(unspent.len(), 1, "the node transaction's output");
+    let mature = fixture
+        .store
+        .mature_transactions(&unspent, height + 5000)
+        .await;
+    assert!(mature.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_refund_is_mature_below_a_node_transaction_that_confirmed_in_its_parents_block() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let root = branch(&tree, None, funding(), &[2000]);
+    let parent = branch(&tree, Some(&root), output(&root.node_tx, 0), &[1000, 1000]);
+    let leaf = leaf(&tree, Some(&parent), output(&parent.node_tx, 0), 1000, 2000);
+    let pedigree = LeafPedigree {
+        leaf: leaf.clone(),
+        ancestors: vec![parent.clone(), root.clone()],
+    };
+    fixture.own_pedigrees(&[pedigree]).await.unwrap();
+    fixture.unspent().await;
+
+    let block = fixture
+        .confirm_spends(&[
+            (output(&root.node_tx, 0), parent.node_tx.compute_txid()),
+            (output(&parent.node_tx, 0), leaf.node_tx.compute_txid()),
+        ])
+        .await;
+    let height = fixture.height(block).await;
+
+    assert_eq!(fixture.count("brz_ssp_chain_spent_outputs").await, 2);
+    let unspent = fixture.unspent_outputs().await;
+    let mature = fixture
+        .store
+        .mature_transactions(&unspent, height + 1999)
+        .await
+        .unwrap();
+    assert_eq!(mature.len(), 1);
+    assert_eq!(mature[0].transaction, leaf.refund_tx.clone().unwrap());
+    assert_eq!(mature[0].input_confirmation_height, height);
 }
 
 #[tokio::test]

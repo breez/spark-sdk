@@ -1,4 +1,5 @@
 mod rows;
+mod unilateral_exit;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -20,6 +21,7 @@ use crate::chain::{ChainRepositoryError, OutputStates, Spender};
 
 use rows::{Compare, Compared, Rows, Selected, Wanted, Which, node_uuid, transfer_uuid};
 pub use rows::{Dispute, ExitChainStep, Reported};
+pub use unilateral_exit::MatureTransaction;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LeafStoreError {

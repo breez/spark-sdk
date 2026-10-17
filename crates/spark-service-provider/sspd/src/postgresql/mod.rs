@@ -13,6 +13,7 @@ pub(crate) mod testing;
 pub use chain_repository::ChainRepository;
 pub use coop_exit_store::PostgresCoopExitStore;
 pub use instant_quote_store::PostgresInstantStaticDepositQuoteStore;
+pub use leaf_store::MatureTransaction;
 pub use leaf_store::{
     Dispute, DisputeDetails, ExitChainStep, LeafStoreError, PoolCounts, PostgresLeafStore,
     RenewalCursor, Reported, Reservation, exit_chain, exiting_steps, refund_step,
