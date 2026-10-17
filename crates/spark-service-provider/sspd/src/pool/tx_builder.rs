@@ -45,6 +45,19 @@ pub fn bump_tx_weight(inputs: usize) -> Weight {
     fees::p2tr_tx_weight(inputs, 1)
 }
 
+/// With default settings, Bitcoin Core before version 29.1 accepts a replacement
+/// only if its fee exceeds the replaced transaction's fee by at least 1 sat per
+/// virtual byte of its size. So for a small rise of the fee rate, the SSP would pay
+/// more than the rate it wants.
+pub const MIN_BUMP: FeeRate = FeeRate::from_sat_per_vb_u32(1);
+
+pub fn bump_due(paid_rate: FeeRate, wanted_rate: FeeRate) -> bool {
+    let least = paid_rate
+        .to_sat_per_kwu()
+        .saturating_add(MIN_BUMP.to_sat_per_kwu());
+    wanted_rate.to_sat_per_kwu() >= least
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ReplacedChild {
     pub fee_sats: u64,
@@ -336,6 +349,16 @@ mod tests {
             parent_fee + fee,
             fees::fee_sats(rate, parent_weight.checked_add(bump_tx_weight(1)).unwrap())
         );
+    }
+
+    #[test]
+    fn a_bump_is_due_once_the_rate_wanted_is_a_sat_per_vbyte_higher() {
+        let paid = FeeRate::from_sat_per_vb_u32(10);
+        let a_sat_per_vbyte_more = FeeRate::from_sat_per_vb_u32(11);
+        let just_short = FeeRate::from_sat_per_kwu(a_sat_per_vbyte_more.to_sat_per_kwu() - 1);
+
+        assert!(!bump_due(paid, just_short));
+        assert!(bump_due(paid, a_sat_per_vbyte_more));
     }
 
     #[test]

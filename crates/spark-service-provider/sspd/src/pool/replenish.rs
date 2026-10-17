@@ -359,8 +359,14 @@ fn bump_due(deposit: &DepositTx, height: u64, fee_rate: FeeRate) -> bool {
         ),
         None => (deposit.stored_height, deposit.fee_sats, weight),
     };
+    let paid_rate = FeeRate::from_sat_per_kwu(
+        paid_sats
+            .saturating_mul(1000)
+            .checked_div(paid_weight.to_wu())
+            .unwrap_or(u64::MAX),
+    );
     height >= waited_from.saturating_add(BUMP_AFTER_BLOCKS)
-        && paid_sats < fees::fee_sats(fee_rate, paid_weight)
+        && tx_builder::bump_due(paid_rate, fee_rate)
 }
 
 /// Stores a child raising the funding transaction's fee rate, before anything
