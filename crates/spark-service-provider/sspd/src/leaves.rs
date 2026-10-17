@@ -10,6 +10,7 @@ use spark::services::{
 use spark::signer::{LeafSigningKey, SecretSource, Signer};
 use spark::tree::{LeafPedigree, TreeNode, TreeNodeId, assemble_exit_chains, chain_reaches_root};
 
+use crate::incoming_leaves::verify_claimed;
 use crate::operator_rpc::{self, NodeQuery};
 use crate::postgresql::PostgresLeafStore;
 use crate::wakeup::Wakeup;
@@ -228,6 +229,18 @@ pub async fn claim_into_pool(
         NodeQuery::Public,
     )
     .await?;
+    // The SSP verified the transactions above each leaf before it accepted the
+    // transfer, and the store has had them since. The SSP stores no transaction
+    // that the coordinator reports now without verifying it.
+    let node_txids: Vec<bitcoin::Txid> = pedigrees
+        .iter()
+        .flat_map(|pedigree| std::iter::once(&pedigree.leaf).chain(&pedigree.ancestors))
+        .map(|node| node.node_tx.compute_txid())
+        .collect();
+    let stored = deps.leaf_store.stored_transactions(&node_txids).await?;
+    for pedigree in &pedigrees {
+        verify_claimed(pedigree, &stored)?;
+    }
     deps.leaf_store
         .claimed(&transfer.id, &pedigrees, queried_at)
         .await?;

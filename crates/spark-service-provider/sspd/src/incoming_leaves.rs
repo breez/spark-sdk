@@ -540,6 +540,40 @@ fn spent_output<'a>(node: &TreeNode, parent: &'a TreeNode) -> Option<&'a TxOut> 
         })
 }
 
+/// Fails unless the SSP has a valid signature for every node transaction of
+/// `pedigree`. The SSP has one for each transaction in `stored`, the ones the
+/// store has, and verifies any other against the output above it. The root has
+/// to be in `stored`, because only the chain has the output above the root.
+pub(crate) fn verify_claimed(
+    pedigree: &LeafPedigree,
+    stored: &HashSet<Txid>,
+) -> Result<(), String> {
+    let leaf = &pedigree.leaf;
+    let nodes: Vec<&TreeNode> = std::iter::once(leaf).chain(&pedigree.ancestors).collect();
+    for pair in nodes.windows(2) {
+        let (Some(node), Some(parent)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        if stored.contains(&node.node_tx.compute_txid()) {
+            continue;
+        }
+        if !spent_output(node, parent).is_some_and(|spent| is_signed_for(&node.node_tx, spent)) {
+            return Err(format!(
+                "leaf {} has a node transaction without a valid signature",
+                leaf.id
+            ));
+        }
+    }
+    let root = nodes.last().copied().unwrap_or(leaf);
+    if !stored.contains(&root.node_tx.compute_txid()) {
+        return Err(format!(
+            "the SSP has not checked the root of the tree of leaf {}",
+            leaf.id
+        ));
+    }
+    Ok(())
+}
+
 /// `spends` has the spend of each spent output on the exit chain.
 /// `funding_confirmations` is the number of confirmations of the tree's funding
 /// output while that output is unspent.
@@ -972,6 +1006,34 @@ mod tests {
         let mut other_value = tree.funded.clone();
         other_value.value = Amount::from_sat(1);
         assert!(!is_signed_for(root, &other_value));
+    }
+
+    #[test]
+    fn a_claimed_leaf_needs_a_root_the_ssp_checked_and_signatures_below_it() {
+        let tree = Tree::new();
+        let root = tree.root().node_tx.compute_txid();
+        let all: HashSet<Txid> = std::iter::once(&tree.pedigree.leaf)
+            .chain(&tree.pedigree.ancestors)
+            .map(|node| node.node_tx.compute_txid())
+            .collect();
+        assert_eq!(verify_claimed(&tree.pedigree, &all), Ok(()));
+        // With only the root stored, the SSP verifies each transaction below
+        // the root against the output above it.
+        assert_eq!(
+            verify_claimed(&tree.pedigree, &HashSet::from([root])),
+            Ok(())
+        );
+
+        let unchecked = verify_claimed(&tree.pedigree, &HashSet::new()).unwrap_err();
+        assert!(
+            unchecked.contains("has not checked the root"),
+            "{unchecked}"
+        );
+
+        let forged = Tree::signed_with(7, [1, 8, 3]);
+        let root = forged.root().node_tx.compute_txid();
+        let unsigned = verify_claimed(&forged.pedigree, &HashSet::from([root])).unwrap_err();
+        assert!(unsigned.contains("without a valid signature"), "{unsigned}");
     }
 
     #[derive(Default)]
