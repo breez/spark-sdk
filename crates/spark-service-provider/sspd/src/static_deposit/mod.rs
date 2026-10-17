@@ -1687,8 +1687,8 @@ async fn process_static_deposit_claim(
 #[cfg(test)]
 mod tests {
     use super::repository::{
-        InMemoryInstantStaticDepositQuoteStore, InMemoryStaticDepositClaimStore,
-        StaticDepositClaimRecord, StaticDepositClaimStore,
+        InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore, StaticDepositClaimRecord,
+        StaticDepositClaimStore,
     };
     use super::{
         BoxError, DepositOutput, PendingCredit, PendingCreditSettler, StaticDepositChain,
@@ -1706,8 +1706,8 @@ mod tests {
     use spark::signer::{DefaultSigner, SecretSource, Signer};
     use std::collections::HashSet;
     use std::str::FromStr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     fn pubkey(byte: u8) -> PublicKey {
         let secp = Secp256k1::new();
@@ -1828,14 +1828,127 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MockClaimStore {
+        claims: Mutex<Vec<StaticDepositClaimRecord>>,
+    }
+
+    impl MockClaimStore {
+        fn write(&self, id: &str, change: impl FnOnce(&mut StaticDepositClaimRecord)) {
+            let mut claims = self.claims.lock().unwrap();
+            change(claims.iter_mut().find(|claim| claim.id == id).unwrap());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl StaticDepositClaimStore for MockClaimStore {
+        async fn insert(&self, _record: &StaticDepositClaimRecord) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn get(&self, id: &str) -> Result<Option<StaticDepositClaimRecord>, String> {
+            let claims = self.claims.lock().unwrap();
+            Ok(claims.iter().find(|claim| claim.id == id).cloned())
+        }
+
+        async fn get_by_utxo(
+            &self,
+            _txid: &str,
+            _vout: u32,
+        ) -> Result<Option<StaticDepositClaimRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_id(
+            &self,
+            _transfer_id: &str,
+        ) -> Result<Option<StaticDepositClaimRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn set_transfer_id(&self, _id: &str, _transfer_id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn delete(&self, _id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn set_reserved(
+            &self,
+            _id: &str,
+            _transfer_id: &str,
+            _utxo_swap_id: &str,
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn set_signed_spend_transaction(
+            &self,
+            id: &str,
+            _transfer_id: &str,
+            transaction: &Transaction,
+        ) -> Result<(), String> {
+            self.write(id, |claim| {
+                claim.signed_spend_transaction = Some(transaction.clone());
+            });
+            Ok(())
+        }
+
+        async fn set_spend_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
+            self.write(id, |claim| {
+                claim.spend_broadcast_txid = Some(txid.to_string());
+            });
+            Ok(())
+        }
+
+        async fn set_spend_confirmed(&self, id: &str) -> Result<(), String> {
+            self.write(id, |claim| claim.spend_confirmed = true);
+            Ok(())
+        }
+
+        async fn set_deposit_lost(&self, _id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn pending(&self) -> Result<Vec<StaticDepositClaimRecord>, String> {
+            let claims = self.claims.lock().unwrap();
+            Ok(claims
+                .iter()
+                .filter(|claim| claim.is_pending())
+                .cloned()
+                .collect())
+        }
+    }
+
+    struct MockQuoteStore;
+
+    #[async_trait::async_trait]
+    impl InstantStaticDepositQuoteStore for MockQuoteStore {
+        async fn insert(&self, _record: &InstantStaticDepositQuoteRecord) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn get(&self, _id: &str) -> Result<Option<InstantStaticDepositQuoteRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn delete_created_before(
+            &self,
+            _time: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     fn deps(
-        store: &Arc<InMemoryStaticDepositClaimStore>,
+        store: &Arc<MockClaimStore>,
         chain: &Arc<StubChain>,
         cosigner: Arc<dyn StaticDepositSpendCosigner>,
     ) -> StaticDepositWorkerDeps {
         StaticDepositWorkerDeps {
             store: Arc::clone(store) as Arc<dyn StaticDepositClaimStore>,
-            quotes: Arc::new(InMemoryInstantStaticDepositQuoteStore::default()),
+            quotes: Arc::new(MockQuoteStore),
             chain: Arc::clone(chain) as Arc<dyn StaticDepositChain>,
             spend_cosigner: cosigner,
             credit_settler: Arc::new(StubCreditSettler::default()),
@@ -1846,7 +1959,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_hands_every_pending_credit_to_the_settler() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let settler = Arc::new(StubCreditSettler::default());
         let deps = StaticDepositWorkerDeps {
@@ -1863,7 +1976,7 @@ mod tests {
         for id in ["a", "b"] {
             let mut pending = record(id);
             pending.pending_credit = Some(credit.clone());
-            store.insert(&pending).await.unwrap();
+            store.claims.lock().unwrap().push(pending);
         }
 
         process_pending_static_deposit_claims(&deps, false)
@@ -1989,7 +2102,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_broadcasts_the_spend_until_it_confirms() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let cosigner = Arc::new(StubCosigner::confirmed(&store, false));
         let deps = deps(
@@ -1998,19 +2111,16 @@ mod tests {
             Arc::clone(&cosigner) as Arc<dyn StaticDepositSpendCosigner>,
         );
 
-        let claim = record("s1");
-        store.insert(&claim).await.unwrap();
-        store.set_transfer_id("s1", "transfer-1").await.unwrap();
+        let mut claim = record("s1");
+        claim.transfer_id = Some("transfer-1".to_string());
+        store.claims.lock().unwrap().push(claim.clone());
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
         assert_eq!(cosigner.calls.load(Ordering::SeqCst), 1);
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 0);
 
-        store
-            .set_signed_spend_transaction("s1", "transfer-1", &claim.spend_tx)
-            .await
-            .unwrap();
+        store.claims.lock().unwrap()[0].signed_spend_transaction = Some(claim.spend_tx.clone());
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
@@ -2023,7 +2133,7 @@ mod tests {
             .unwrap();
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 2);
         assert_eq!(cosigner.calls.load(Ordering::SeqCst), 1);
-        let broadcast = store.get("s1").await.unwrap().unwrap();
+        let broadcast = store.claims.lock().unwrap()[0].clone();
         assert!(broadcast.spend_broadcast_txid.is_some());
         assert!(!broadcast.spend_confirmed);
 
@@ -2031,19 +2141,20 @@ mod tests {
         process_pending_static_deposit_claims(&deps, true)
             .await
             .unwrap();
-        assert!(store.get("s1").await.unwrap().unwrap().spend_confirmed);
-        assert!(store.pending().await.unwrap().is_empty());
+        let confirmed = store.claims.lock().unwrap()[0].clone();
+        assert!(confirmed.spend_confirmed);
+        assert!(!confirmed.is_pending());
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 2);
     }
 
     struct StubCosigner {
-        store: Arc<InMemoryStaticDepositClaimStore>,
+        store: Arc<MockClaimStore>,
         confirmed: AtomicBool,
         calls: AtomicUsize,
     }
 
     impl StubCosigner {
-        fn confirmed(store: &Arc<InMemoryStaticDepositClaimStore>, confirmed: bool) -> Self {
+        fn confirmed(store: &Arc<MockClaimStore>, confirmed: bool) -> Self {
             Self {
                 store: Arc::clone(store),
                 confirmed: AtomicBool::new(confirmed),
@@ -2069,7 +2180,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_runs_deferred_claim_before_broadcasting() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let claimer = Arc::new(StubCosigner::confirmed(&store, false));
         let deps = deps(
@@ -2080,11 +2191,9 @@ mod tests {
 
         let mut rec = record("i1");
         rec.is_instant = true;
-        store.insert(&rec).await.unwrap();
-        store
-            .set_reserved("i1", "transfer-i1", "swap-i1")
-            .await
-            .unwrap();
+        rec.transfer_id = Some("transfer-i1".to_string());
+        rec.utxo_swap_id = Some("swap-i1".to_string());
+        store.claims.lock().unwrap().push(rec);
 
         process_pending_static_deposit_claims(&deps, false)
             .await
@@ -2098,15 +2207,8 @@ mod tests {
             .unwrap();
         assert_eq!(claimer.calls.load(Ordering::SeqCst), 2);
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 1);
-        assert!(
-            store
-                .get("i1")
-                .await
-                .unwrap()
-                .unwrap()
-                .spend_broadcast_txid
-                .is_some()
-        );
+        let broadcast = store.claims.lock().unwrap()[0].clone();
+        assert!(broadcast.spend_broadcast_txid.is_some());
 
         process_pending_static_deposit_claims(&deps, false)
             .await
