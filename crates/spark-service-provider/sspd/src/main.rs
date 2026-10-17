@@ -120,11 +120,6 @@ struct Args {
     #[arg(long, default_value = "20")]
     pub max_denomination_power: u32,
 
-    /// Interval in seconds between pool replenishment checks. Blocks, changes to the
-    /// pool and restock requests start one sooner.
-    #[arg(long, default_value = "600")]
-    pub replenish_interval_seconds: u64,
-
     /// How long, in seconds, the SSP's leaves stay fronted to a user who has not
     /// revealed a HODL preimage before the operators return them. Hold invoices
     /// demand enough CLTV to outlast it.
@@ -192,7 +187,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool_config = pool::config::PoolConfig {
         leaves_per_denomination: args.leaves_per_denomination,
         max_denomination_power: args.max_denomination_power,
-        replenish_interval: Duration::from_secs(args.replenish_interval_seconds),
     };
     let lightning_config = LightningConfig::from_args(&args, pool_config.largest_denomination());
 

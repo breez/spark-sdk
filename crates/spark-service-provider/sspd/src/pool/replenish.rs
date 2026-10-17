@@ -47,7 +47,11 @@ const MIN_REPLENISH_SPACING: Duration = Duration::from_secs(10);
 const MAX_REPLENISH_BACKOFF: Duration = Duration::from_secs(60 * 60);
 
 /// Keeps unconfirmed funding transactions broadcast, bumps them when due, and
-/// funds new trees for what the pool is short of.
+/// funds new trees for what the pool is short of. The loop runs a cycle at
+/// startup, after a new block and after a restock request. It does not run a
+/// cycle when the pool changes: the leaves of a tree funded then would be in the
+/// pool a block sooner at most, and the loop would make more funding transactions
+/// for the same number of leaves.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_replenish_loop<C, R>(
     config: PoolConfig,
@@ -63,25 +67,11 @@ pub async fn run_replenish_loop<C, R>(
     C: ChainClient + Send + Sync + 'static,
     R: ChainRepository + Send + Sync + 'static,
 {
-    info!(
-        "Starting pool replenish loop (interval: {:?})",
-        config.replenish_interval
-    );
-    let mut pool_changes = wallet.spark.tree_store.subscribe_balance_changes();
+    info!("Starting pool replenish loop");
     let mut spacing = MIN_REPLENISH_SPACING;
 
     loop {
-        tokio::select! {
-            () = token.cancelled() => {
-                info!("Replenish loop cancelled");
-                return;
-            }
-            () = chain_advanced.waited() => {}
-            _ = pool_changes.changed() => {}
-            () = tokio::time::sleep(config.replenish_interval) => {}
-        }
-
-        match replenish_once(
+        let failed = match replenish_once(
             &config,
             &wallet,
             &chain_client,
@@ -92,15 +82,29 @@ pub async fn run_replenish_loop<C, R>(
         )
         .await
         {
-            Ok(()) => spacing = MIN_REPLENISH_SPACING,
+            Ok(()) => {
+                spacing = MIN_REPLENISH_SPACING;
+                false
+            }
             Err(e) => {
                 spacing = spacing.saturating_mul(2).min(MAX_REPLENISH_BACKOFF);
                 error!("Replenish cycle failed, trying again in {spacing:?}: {e}");
+                true
             }
-        }
+        };
         tokio::select! {
             () = token.cancelled() => return,
             () = tokio::time::sleep(spacing) => {}
+        }
+        if failed {
+            continue;
+        }
+        tokio::select! {
+            () = token.cancelled() => {
+                info!("Replenish loop cancelled");
+                return;
+            }
+            () = chain_advanced.waited() => {}
         }
     }
 }
