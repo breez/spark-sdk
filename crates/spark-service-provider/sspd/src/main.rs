@@ -364,6 +364,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         as Arc<dyn static_deposit::repository::InstantStaticDepositQuoteStore>;
     let static_deposit_chain = Arc::new(BitcoindStaticDepositChain {
         chain_client: Arc::clone(&chain_client),
+        call_queue: Arc::clone(&call_queue),
+        synced: synced.clone(),
         chain_repository: Arc::clone(&chain_repository),
         onchain: Arc::clone(&ssp_wallet.onchain),
         network: args.network,
@@ -866,6 +868,8 @@ impl graphql::RegtestFunder for Faucet {
 
 struct BitcoindStaticDepositChain {
     chain_client: Arc<BitcoindClient>,
+    call_queue: Arc<chain::CallQueue>,
+    synced: chain::Synced,
     chain_repository: Arc<postgresql::ChainRepository>,
     onchain: Arc<wallet::OnchainWallet<postgresql::ChainRepository>>,
     network: Network,
@@ -888,6 +892,28 @@ impl static_deposit::StaticDepositChain for BitcoindStaticDepositChain {
                 tx_out: output.tx_out,
                 confirmations: output.confirmations,
             }))
+    }
+
+    async fn requested_deposit_output(
+        &self,
+        txid: &bitcoin::Txid,
+        vout: u32,
+    ) -> Result<Option<static_deposit::DepositOutput>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        if !self.synced.is_synced() {
+            return Err("the chain record is not at bitcoind's tip".into());
+        }
+        let outpoint = bitcoin::OutPoint { txid: *txid, vout };
+        let output = tokio::time::timeout(
+            chain::call_queue::TIMEOUT,
+            self.call_queue.unspent_output(&outpoint),
+        )
+        .await
+        .map_err(|_| "bitcoind returned no result in time")??;
+        Ok(output.map(|output| static_deposit::DepositOutput {
+            tx_out: output.tx_out,
+            confirmations: output.confirmations,
+        }))
     }
 
     async fn new_address(
