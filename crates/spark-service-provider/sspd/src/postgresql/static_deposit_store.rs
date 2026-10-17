@@ -1,5 +1,6 @@
 #![allow(clippy::needless_raw_string_hashes)]
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -182,6 +183,21 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .into_iter()
         .map(StaticDepositClaimRecord::try_from)
         .collect()
+    }
+
+    async fn transfers_among(&self, transfer_ids: &[String]) -> Result<HashSet<String>, String> {
+        let ids: Vec<(String,)> = sqlx::query_as(
+            r#"SELECT transfer_id::text FROM brz_ssp_static_deposit_claims
+               WHERE transfer_id = ANY($1::uuid[])
+             UNION
+               SELECT pending_transfer_id::text FROM brz_ssp_static_deposit_claims
+               WHERE pending_transfer_id = ANY($1::uuid[])"#,
+        )
+        .bind(transfer_ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(ids.into_iter().map(|(id,)| id).collect())
     }
 
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String> {
@@ -418,6 +434,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_transfer_id_that_is_not_a_uuid_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_id_that_is_not_a_uuid_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn a_claim_stays_pending_until_its_spend_confirms() {
         let fixture = Fixture::new().await;
         scenarios::a_claim_stays_pending_until_its_spend_confirms(&fixture.store).await;
@@ -434,6 +456,15 @@ mod tests {
     async fn a_claim_whose_deposit_is_lost_is_no_longer_pending() {
         let fixture = Fixture::new().await;
         scenarios::a_claim_whose_deposit_is_lost_is_no_longer_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_no_longer_pending_is_still_found_by_its_output_and_transfer() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_no_longer_pending_is_still_found_by_its_output_and_transfer(
+            &fixture.store,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -485,6 +516,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_credit_is_found_among_no_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::no_credit_is_found_among_no_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_pending_credit_is_found_among_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::a_pending_credit_is_found_among_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_made_credit_is_found_among_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::a_made_credit_is_found_among_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn every_credit_among_several_transfers_is_found() {
+        let fixture = Fixture::new().await;
+        scenarios::every_credit_among_several_transfers_is_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_that_is_no_claims_credit_is_left_out() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_that_is_no_claims_credit_is_left_out(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_given_twice_is_found_as_one_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_given_twice_is_found_as_one_credit(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_pending_credit_is_forgotten_once_another_transfer_credits_its_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::a_pending_credit_is_forgotten_once_another_transfer_credits_its_claim(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_deleted_claim_is_gone() {
+        let fixture = Fixture::new().await;
+        scenarios::a_deleted_claim_is_gone(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn the_deposit_output_of_a_deleted_claim_can_be_claimed_again() {
         let fixture = Fixture::new().await;
         scenarios::the_deposit_output_of_a_deleted_claim_can_be_claimed_again(&fixture.store).await;
@@ -494,6 +576,12 @@ mod tests {
     async fn a_write_to_one_claim_leaves_another_as_it_was() {
         let fixture = Fixture::new().await;
         scenarios::a_write_to_one_claim_leaves_another_as_it_was(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_claim_the_store_does_not_have_stores_nothing() {
+        let fixture = Fixture::new().await;
+        scenarios::a_write_to_a_claim_the_store_does_not_have_stores_nothing(&fixture.store).await;
     }
 
     #[tokio::test]
