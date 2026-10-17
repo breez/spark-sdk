@@ -2,6 +2,7 @@ mod client;
 mod fee_rates;
 mod monitor;
 mod repository;
+pub mod spend_check;
 mod synced;
 mod tip;
 mod types;
