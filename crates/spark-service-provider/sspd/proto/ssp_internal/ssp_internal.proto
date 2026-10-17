@@ -35,8 +35,19 @@ service OnchainWallet {
 message GetInfoRequest {}
 
 message GetInfoResponse {
-    uint64 block_height = 1;
     string network = 2;
+    // The block sspd's record of the chain is at. Unset while the record has
+    // no block.
+    optional uint64 block_height = 1;
+    optional string block_hash = 3;
+    // Whether sspd is synced: its record of the chain is at bitcoind's tip, and
+    // bitcoind reports that it is synced itself.
+    bool synced = 4;
+    // While sspd is not synced, what bitcoind last reported: its height, and
+    // whether it is synced itself. Unset until bitcoind has reported them
+    // since sspd started.
+    optional uint64 bitcoind_block_height = 5;
+    optional bool bitcoind_synced = 6;
 }
 
 
