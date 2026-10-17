@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bitcoin::Amount;
 use serde::Deserialize;
 
@@ -43,6 +45,14 @@ pub struct SubmitPackageResponse {
     /// "success" once every transaction of the package is in the mempool, whether
     /// or not it was already, otherwise the package's reject reason.
     pub package_msg: String,
+    /// By wtxid. Here bitcoind gives its reason for refusing a transaction.
+    #[serde(rename = "tx-results", default)]
+    pub tx_results: HashMap<String, SubmitPackageTxResult>,
+}
+
+#[derive(Deserialize)]
+pub struct SubmitPackageTxResult {
+    pub error: Option<String>,
 }
 
 #[derive(Deserialize)]
