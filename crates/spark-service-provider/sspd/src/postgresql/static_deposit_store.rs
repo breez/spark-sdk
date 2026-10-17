@@ -302,3 +302,165 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::PostgresStaticDepositClaimStore;
+    use crate::postgresql::testing::TestDatabase;
+    use crate::static_deposit::repository::scenarios::claims as scenarios;
+
+    struct Fixture {
+        store: PostgresStaticDepositClaimStore,
+        _database: TestDatabase,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            let database = TestDatabase::new().await;
+            Self {
+                store: PostgresStaticDepositClaimStore::new(Arc::clone(&database.pool)),
+                _database: database,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claim_reads_back_as_it_was_stored() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_reads_back_as_it_was_stored(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_the_store_was_never_given_is_not_found() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_the_store_was_never_given_is_not_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn each_claim_is_found_by_its_own_deposit_output() {
+        let fixture = Fixture::new().await;
+        scenarios::each_claim_is_found_by_its_own_deposit_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_the_id_of_a_stored_one_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_the_id_of_a_stored_one_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_second_claim_of_a_deposit_output_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_second_claim_of_a_deposit_output_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_new_claim_is_stored_as_not_yet_credited() {
+        let fixture = Fixture::new().await;
+        scenarios::a_new_claim_is_stored_as_not_yet_credited(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_store_sets_the_times_of_a_new_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::the_store_sets_the_times_of_a_new_claim(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_a_pending_credit_is_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_a_pending_credit_is_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_no_credit_is_not_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_no_credit_is_not_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_credited_claim_has_its_transfer_and_no_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_credited_claim_has_its_transfer_and_no_pending_credit(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_reserved_claim_has_its_transfer_and_swap_and_no_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_reserved_claim_has_its_transfer_and_swap_and_no_pending_credit(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_spend_is_co_signed_has_its_transfer_and_signed_spend() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_spend_is_co_signed_has_its_transfer_and_signed_spend(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_reserved_claim_keeps_its_swap_when_its_spend_is_co_signed() {
+        let fixture = Fixture::new().await;
+        scenarios::a_reserved_claim_keeps_its_swap_when_its_spend_is_co_signed(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_stays_pending_until_its_spend_confirms() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_stays_pending_until_its_spend_confirms(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_spend_was_broadcast_has_the_txid_of_the_spend() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_spend_was_broadcast_has_the_txid_of_the_spend(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_deposit_is_lost_is_no_longer_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_deposit_is_lost_is_no_longer_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_pending_claims_are_those_the_record_calls_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::the_pending_claims_are_those_the_record_calls_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn pending_claims_are_listed_oldest_first() {
+        let fixture = Fixture::new().await;
+        scenarios::pending_claims_are_listed_oldest_first(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_deposit_output_of_a_deleted_claim_can_be_claimed_again() {
+        let fixture = Fixture::new().await;
+        scenarios::the_deposit_output_of_a_deleted_claim_can_be_claimed_again(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_to_one_claim_leaves_another_as_it_was() {
+        let fixture = Fixture::new().await;
+        scenarios::a_write_to_one_claim_leaves_another_as_it_was(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_keeps_the_time_it_was_created() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_keeps_the_time_it_was_created(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn each_write_to_a_claim_moves_the_time_it_last_changed() {
+        let fixture = Fixture::new().await;
+        scenarios::each_write_to_a_claim_moves_the_time_it_last_changed(&fixture.store).await;
+    }
+}
