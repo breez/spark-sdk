@@ -425,3 +425,616 @@ impl<R: ChainRepository + Send + Sync + 'static> crate::coop_exit::CoopExitOncha
         Ok(OnchainWallet::keys_for_addresses(self, addresses).await?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::hashes::Hash;
+    use bitcoin::secp256k1::SecretKey;
+    use bitcoin::{Amount, BlockHash, TxOut};
+
+    use super::*;
+    use crate::chain::{AddressUtxo, BlockHeader, ChainRepository as _, SpentTxo, Txo};
+    use crate::postgresql::ChainRepository;
+    use crate::postgresql::testing::TestDatabase;
+
+    const SEED: [u8; 32] = [7; 32];
+
+    struct Fixture {
+        wallet: Arc<OnchainWallet<ChainRepository>>,
+        chain: Arc<ChainRepository>,
+        pool: Arc<PgPool>,
+        _database: TestDatabase,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            Self::with(&SEED, Network::Regtest).await
+        }
+
+        async fn with(seed: &[u8], network: Network) -> Self {
+            let database = TestDatabase::new().await;
+            let pool = Arc::clone(&database.pool);
+            let chain = Arc::new(ChainRepository::new(Arc::clone(&pool), network));
+            let wallet =
+                OnchainWallet::new(seed, network, Arc::clone(&chain), Arc::clone(&pool)).unwrap();
+            Self {
+                wallet: Arc::new(wallet),
+                chain,
+                pool,
+                _database: database,
+            }
+        }
+
+        async fn addresses(&self, count: u32) -> Vec<Address> {
+            let addresses = self.wallet.next_addresses(count).await.unwrap();
+            addresses.into_iter().map(|(address, _)| address).collect()
+        }
+
+        async fn add_block(
+            &self,
+            height: u8,
+            outputs: &[(OutPoint, &Address, u64)],
+            spends: &[(OutPoint, Txid)],
+        ) {
+            let outputs: Vec<AddressUtxo> = outputs
+                .iter()
+                .map(|(outpoint, address, value)| AddressUtxo {
+                    address: (*address).clone(),
+                    utxo: Txo {
+                        block_height: u64::from(height),
+                        outpoint: *outpoint,
+                        tx_out: TxOut {
+                            value: Amount::from_sat(*value),
+                            script_pubkey: address.script_pubkey(),
+                        },
+                    },
+                })
+                .collect();
+            let spends: Vec<SpentTxo> = spends
+                .iter()
+                .zip(0..)
+                .map(|((outpoint, spending_tx), spending_input_index)| SpentTxo {
+                    outpoint: *outpoint,
+                    spending_tx: *spending_tx,
+                    spending_input_index,
+                })
+                .collect();
+            let block = BlockHeader {
+                hash: block_hash(height),
+                height: u64::from(height),
+            };
+            self.chain
+                .add_block(&block, &outputs, &spends)
+                .await
+                .unwrap();
+        }
+
+        async fn coin(&self, height: u8, value: u64) -> OutPoint {
+            let (address, _) = self.wallet.next_address().await.unwrap();
+            let coin = output(height);
+            self.add_block(height, &[(coin, &address, value)], &[])
+                .await;
+            coin
+        }
+
+        async fn coins(&self) -> Vec<OutPoint> {
+            let coins = self.wallet.list_utxos().await.unwrap();
+            let mut coins: Vec<OutPoint> = coins.iter().map(|coin| coin.outpoint).collect();
+            coins.sort();
+            coins
+        }
+
+        async fn record_spends(&self, spending_txid: Txid, outpoints: &[OutPoint]) {
+            let mut db = self.pool.acquire().await.unwrap();
+            super::record_spends(&mut db, &spending_txid, outpoints)
+                .await
+                .unwrap();
+        }
+    }
+
+    fn key(byte: u8) -> SecretKey {
+        SecretKey::from_slice(&[byte; 32]).unwrap()
+    }
+
+    fn taproot_address(key: &SecretKey) -> Address {
+        let secp = Secp256k1::new();
+        let (internal_key, _) = key.public_key(&secp).x_only_public_key();
+        Address::p2tr(&secp, internal_key, None, Network::Regtest)
+    }
+
+    fn block_hash(height: u8) -> BlockHash {
+        BlockHash::from_byte_array([height; 32])
+    }
+
+    fn txid(byte: u8) -> Txid {
+        Txid::from_byte_array([byte; 32])
+    }
+
+    fn output(byte: u8) -> OutPoint {
+        OutPoint::new(txid(byte), 0)
+    }
+
+    fn in_order(outputs: Vec<Utxo>) -> Vec<(OutPoint, u64, Address)> {
+        let mut outputs: Vec<_> = outputs
+            .into_iter()
+            .map(|output| (output.outpoint, output.value, output.address))
+            .collect();
+        outputs.sort();
+        outputs
+    }
+
+    #[tokio::test]
+    async fn new_addresses_take_consecutive_derivation_indexes() {
+        let fixture = Fixture::new().await;
+
+        let addresses = fixture.wallet.next_addresses(3).await.unwrap();
+
+        let indexes: Vec<u32> = addresses.iter().map(|(_, index)| *index).collect();
+        assert_eq!(indexes, [0, 1, 2]);
+        let distinct: HashSet<&Address> = addresses.iter().map(|(address, _)| address).collect();
+        assert_eq!(distinct.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_indexes_of_a_later_call_follow_those_of_an_earlier_one() {
+        let fixture = Fixture::new().await;
+        fixture.wallet.next_addresses(2).await.unwrap();
+
+        let addresses = fixture.wallet.next_addresses(3).await.unwrap();
+
+        let indexes: Vec<u32> = addresses.iter().map(|(_, index)| *index).collect();
+        assert_eq!(indexes, [2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn a_single_new_address_takes_one_index() {
+        let fixture = Fixture::new().await;
+
+        let (first, first_index) = fixture.wallet.next_address().await.unwrap();
+        let one = fixture.wallet.next_addresses(1).await.unwrap();
+        let (third, third_index) = fixture.wallet.next_address().await.unwrap();
+
+        assert_eq!(first_index, 0);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].1, 1);
+        assert_eq!(third_index, 2);
+        let distinct = HashSet::from([&first, &one[0].0, &third]);
+        assert_eq!(distinct.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn no_new_addresses_take_no_index() {
+        let fixture = Fixture::new().await;
+
+        assert!(fixture.wallet.next_addresses(0).await.unwrap().is_empty());
+        let (_, first_index) = fixture.wallet.next_address().await.unwrap();
+        assert!(fixture.wallet.next_addresses(0).await.unwrap().is_empty());
+        let (_, second_index) = fixture.wallet.next_address().await.unwrap();
+
+        assert_eq!((first_index, second_index), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn addresses_taken_at_the_same_time_get_distinct_indexes() {
+        let fixture = Fixture::new().await;
+
+        let calls: Vec<_> = (0..10)
+            .map(|_| {
+                let wallet = Arc::clone(&fixture.wallet);
+                tokio::spawn(async move { wallet.next_addresses(3).await.unwrap() })
+            })
+            .collect();
+        let mut indexes = Vec::new();
+        for call in calls {
+            let addresses = call.await.unwrap();
+            indexes.extend(addresses.into_iter().map(|(_, index)| index));
+        }
+
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..30).collect::<Vec<u32>>());
+    }
+
+    #[tokio::test]
+    async fn a_wallet_started_again_goes_on_from_the_stored_addresses() {
+        let fixture = Fixture::new().await;
+        let earlier = fixture.addresses(2).await;
+        let chain = Arc::clone(&fixture.chain);
+        let pool = Arc::clone(&fixture.pool);
+
+        let restarted = OnchainWallet::new(&SEED, Network::Regtest, chain, pool).unwrap();
+
+        let (_, index) = restarted.next_address().await.unwrap();
+        assert_eq!(index, 2);
+        let keys = restarted.keys_for_addresses(&earlier).await.unwrap();
+        for address in &earlier {
+            assert_eq!(taproot_address(&keys[address]), *address);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_addresses_of_a_seed_are_its_bip86_addresses() {
+        // The seed and the first two receiving addresses of the test vectors in
+        // BIP 86.
+        let seed = hex::decode(
+            "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1\
+             9a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+        )
+        .unwrap();
+        let fixture = Fixture::with(&seed, Network::Bitcoin).await;
+
+        let addresses = fixture.addresses(2).await;
+
+        let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            addresses,
+            [
+                "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
+                "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_chain_record_watches_every_new_address() {
+        let fixture = Fixture::new().await;
+        let not_the_wallets = taproot_address(&key(9));
+
+        let mut addresses = fixture.addresses(3).await;
+
+        addresses.push(not_the_wallets);
+        let watched = fixture
+            .chain
+            .filter_watch_addresses(&addresses)
+            .await
+            .unwrap();
+        let watched: HashSet<&Address> = watched.iter().collect();
+        assert_eq!(watched, addresses[..3].iter().collect());
+    }
+
+    #[tokio::test]
+    async fn each_address_gets_the_key_it_was_derived_from() {
+        let fixture = Fixture::new().await;
+        let addresses = fixture.addresses(3).await;
+
+        let keys = fixture.wallet.keys_for_addresses(&addresses).await.unwrap();
+
+        assert_eq!(keys.len(), 3);
+        for address in &addresses {
+            assert_eq!(taproot_address(&keys[address]), *address);
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_given_addresses_get_a_key() {
+        let fixture = Fixture::new().await;
+        let addresses = fixture.addresses(3).await;
+        let wallet = &fixture.wallet;
+
+        assert!(wallet.keys_for_addresses(&[]).await.unwrap().is_empty());
+        assert!(wallet.keys_for(&[]).await.unwrap().is_empty());
+        let keys = wallet.keys_for_addresses(&addresses[1..2]).await.unwrap();
+        assert_eq!(keys.keys().collect::<Vec<_>>(), [&addresses[1]]);
+    }
+
+    #[tokio::test]
+    async fn an_address_the_wallet_did_not_derive_gets_no_key() {
+        let fixture = Fixture::new().await;
+        let own = fixture.addresses(1).await.remove(0);
+        let not_the_wallets = taproot_address(&key(9));
+        let wallet = &fixture.wallet;
+
+        let alone = wallet
+            .keys_for_addresses(std::slice::from_ref(&not_the_wallets))
+            .await;
+        let among_its_own = wallet.keys_for_addresses(&[own, not_the_wallets]).await;
+
+        assert!(matches!(alone, Err(OnchainWalletError::KeyDerivation(_))));
+        assert!(matches!(
+            among_its_own,
+            Err(OnchainWalletError::KeyDerivation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_address_given_twice_gets_its_key_once() {
+        let fixture = Fixture::new().await;
+        let address = fixture.addresses(1).await.remove(0);
+
+        let keys = fixture
+            .wallet
+            .keys_for_addresses(&[address.clone(), address.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(keys.len(), 1);
+        assert_eq!(taproot_address(&keys[&address]), address);
+    }
+
+    #[tokio::test]
+    async fn the_coins_at_one_address_share_its_key() {
+        let fixture = Fixture::new().await;
+        let addresses = fixture.addresses(2).await;
+        fixture
+            .add_block(
+                1,
+                &[
+                    (output(1), &addresses[0], 5_000),
+                    (output(2), &addresses[0], 6_000),
+                    (output(3), &addresses[1], 7_000),
+                ],
+                &[],
+            )
+            .await;
+        let coins = fixture.wallet.list_utxos().await.unwrap();
+        assert_eq!(coins.len(), 3);
+
+        let keys = fixture.wallet.keys_for(&coins).await.unwrap();
+
+        assert_eq!(keys.len(), 2);
+        for address in &addresses {
+            assert_eq!(taproot_address(&keys[address]), *address);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coin_at_an_address_the_wallet_did_not_derive_gets_no_key() {
+        let fixture = Fixture::new().await;
+        let coin = Utxo {
+            outpoint: output(1),
+            value: 5_000,
+            block_height: 1,
+            address: taproot_address(&key(9)),
+        };
+
+        let keys = fixture.wallet.keys_for(&[coin]).await;
+
+        assert!(matches!(keys, Err(OnchainWalletError::KeyDerivation(_))));
+    }
+
+    #[tokio::test]
+    async fn an_address_registered_for_watching_only_is_not_the_wallets_own() {
+        let fixture = Fixture::new().await;
+        let address = taproot_address(&key(9));
+        let only = std::slice::from_ref(&address);
+
+        fixture.wallet.register_watch_addresses(only).await.unwrap();
+        fixture
+            .add_block(1, &[(output(1), &address, 5_000)], &[])
+            .await;
+
+        let watched = fixture.chain.filter_watch_addresses(only).await.unwrap();
+        assert_eq!(watched, only);
+        assert!(fixture.wallet.keys_for_addresses(only).await.is_err());
+        assert!(fixture.coins().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_output_at_an_address_of_the_wallets_in_a_block_is_a_coin() {
+        let fixture = Fixture::new().await;
+        let addresses = fixture.addresses(2).await;
+        fixture
+            .add_block(3, &[(output(1), &addresses[0], 5_000)], &[])
+            .await;
+        fixture
+            .add_block(4, &[(output(2), &addresses[1], 6_000)], &[])
+            .await;
+
+        let mut coins = fixture.wallet.list_utxos().await.unwrap();
+
+        coins.sort_by_key(|coin| coin.outpoint);
+        let heights: Vec<u64> = coins.iter().map(|coin| coin.block_height).collect();
+        assert_eq!(heights, [3, 4]);
+        assert_eq!(
+            in_order(coins),
+            [
+                (output(1), 5_000, addresses[0].clone()),
+                (output(2), 6_000, addresses[1].clone()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_coin_spent_on_chain_is_no_longer_listed() {
+        let fixture = Fixture::new().await;
+        let (spent, unspent) = (fixture.coin(1, 5_000).await, fixture.coin(2, 6_000).await);
+
+        fixture.add_block(3, &[], &[(spent, txid(9))]).await;
+
+        assert_eq!(fixture.coins().await, [unspent]);
+    }
+
+    #[tokio::test]
+    async fn a_coin_is_listed_again_once_the_block_of_its_spend_is_undone() {
+        let fixture = Fixture::new().await;
+        let coin = fixture.coin(1, 5_000).await;
+        fixture.add_block(2, &[], &[(coin, txid(9))]).await;
+
+        fixture.chain.undo_block(block_hash(2)).await.unwrap();
+
+        assert_eq!(fixture.coins().await, [coin]);
+    }
+
+    #[tokio::test]
+    async fn a_coin_whose_block_is_undone_is_no_longer_listed() {
+        let fixture = Fixture::new().await;
+        let (kept, undone) = (fixture.coin(1, 5_000).await, fixture.coin(2, 6_000).await);
+        assert_eq!(fixture.coins().await, [kept, undone]);
+
+        fixture.chain.undo_block(block_hash(2)).await.unwrap();
+
+        assert_eq!(fixture.coins().await, [kept]);
+    }
+
+    #[tokio::test]
+    async fn a_coin_with_a_recorded_spend_is_no_longer_listed() {
+        let fixture = Fixture::new().await;
+        let (first, second, other) = (
+            fixture.coin(1, 5_000).await,
+            fixture.coin(2, 6_000).await,
+            fixture.coin(3, 7_000).await,
+        );
+
+        fixture.record_spends(txid(8), &[]).await;
+        assert_eq!(fixture.coins().await, [first, second, other]);
+
+        fixture.record_spends(txid(8), &[first, second]).await;
+        assert_eq!(fixture.coins().await, [other]);
+    }
+
+    #[tokio::test]
+    async fn a_coin_whose_spend_was_recorded_before_its_block_is_never_listed() {
+        let fixture = Fixture::new().await;
+        let address = fixture.addresses(1).await.remove(0);
+        let coin = output(1);
+
+        fixture.record_spends(txid(8), &[coin]).await;
+        fixture.add_block(1, &[(coin, &address, 5_000)], &[]).await;
+
+        assert!(fixture.coins().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_spend_recorded_again_is_recorded_once() {
+        let fixture = Fixture::new().await;
+        let coin = fixture.coin(1, 5_000).await;
+
+        fixture.record_spends(txid(8), &[coin, coin]).await;
+        fixture.record_spends(txid(8), &[coin]).await;
+
+        let recorded: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM brz_ssp_onchain_wallet_spends")
+                .fetch_one(&*fixture.pool)
+                .await
+                .unwrap();
+        assert_eq!(recorded, 1);
+        assert!(fixture.coins().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_recorded_spend_frees_its_other_coins_once_a_conflicting_spend_has_six_confirmations()
+    {
+        let fixture = Fixture::new().await;
+        let (lost, other) = (fixture.coin(1, 5_000).await, fixture.coin(2, 6_000).await);
+        fixture.record_spends(txid(8), &[lost, other]).await;
+        fixture.add_block(10, &[], &[(lost, txid(9))]).await;
+
+        fixture.add_block(14, &[], &[]).await;
+        assert!(fixture.coins().await.is_empty(), "five confirmations");
+
+        fixture.add_block(15, &[], &[]).await;
+        assert_eq!(fixture.coins().await, [other], "six confirmations");
+    }
+
+    #[tokio::test]
+    async fn the_coins_selected_for_a_build_are_kept_out_until_the_build_drops_them() {
+        let fixture = Fixture::new().await;
+        let (large, small) = (fixture.coin(1, 5_000).await, fixture.coin(2, 1_000).await);
+
+        let (selected, held) = fixture.wallet.select_coins(&|_| 4_000).await.unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].outpoint, large);
+        assert_eq!(fixture.coins().await, [small]);
+
+        drop(held);
+        assert_eq!(fixture.coins().await, [large, small]);
+    }
+
+    #[tokio::test]
+    async fn the_largest_coins_are_selected_first_until_they_cover_the_need() {
+        let fixture = Fixture::new().await;
+        fixture.coin(1, 1_000).await;
+        let (largest, second) = (fixture.coin(2, 5_000).await, fixture.coin(3, 3_000).await);
+
+        let (selected, _held) = fixture.wallet.select_coins(&|_| 6_000).await.unwrap();
+
+        let selected: Vec<OutPoint> = selected.iter().map(|coin| coin.outpoint).collect();
+        assert_eq!(selected, [largest, second]);
+    }
+
+    #[tokio::test]
+    async fn a_selection_fails_when_the_coins_do_not_cover_the_need() {
+        let fixture = Fixture::new().await;
+        let coins = [fixture.coin(1, 1_000).await, fixture.coin(2, 2_000).await];
+
+        let selection = fixture.wallet.select_coins(&|_| 5_000).await;
+
+        assert!(matches!(
+            selection,
+            Err(OnchainWalletError::InsufficientFunds {
+                need: 5_000,
+                have: 3_000
+            })
+        ));
+        assert_eq!(fixture.coins().await, coins);
+    }
+
+    #[tokio::test]
+    async fn the_wallets_outputs_at_the_given_outpoints_are_read_spent_or_not() {
+        let fixture = Fixture::new().await;
+        let addresses = fixture.addresses(3).await;
+        let (unspent, spent, withheld) = (output(1), output(2), output(3));
+        fixture
+            .add_block(
+                1,
+                &[
+                    (unspent, &addresses[0], 5_000),
+                    (spent, &addresses[1], 6_000),
+                    (withheld, &addresses[2], 7_000),
+                ],
+                &[],
+            )
+            .await;
+        fixture.add_block(2, &[], &[(spent, txid(9))]).await;
+        fixture.record_spends(txid(8), &[withheld]).await;
+        let wallet = &fixture.wallet;
+
+        assert!(wallet.outputs_at(&[]).await.unwrap().is_empty());
+        let one = wallet.outputs_at(&[spent]).await.unwrap();
+        assert_eq!(in_order(one), [(spent, 6_000, addresses[1].clone())]);
+        let several = wallet.outputs_at(&[unspent, spent, withheld]).await;
+        assert_eq!(
+            in_order(several.unwrap()),
+            [
+                (unspent, 5_000, addresses[0].clone()),
+                (spent, 6_000, addresses[1].clone()),
+                (withheld, 7_000, addresses[2].clone()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_outpoint_that_is_no_output_of_the_wallets_is_left_out() {
+        let fixture = Fixture::new().await;
+        let own = fixture.coin(1, 5_000).await;
+        let watched = taproot_address(&key(9));
+        fixture
+            .wallet
+            .register_watch_addresses(std::slice::from_ref(&watched))
+            .await
+            .unwrap();
+        let (at_a_watched_address, not_stored) = (output(2), output(3));
+        fixture
+            .add_block(2, &[(at_a_watched_address, &watched, 6_000)], &[])
+            .await;
+
+        let outputs = fixture
+            .wallet
+            .outputs_at(&[own, at_a_watched_address, not_stored])
+            .await
+            .unwrap();
+
+        let outputs: Vec<OutPoint> = outputs.iter().map(|output| output.outpoint).collect();
+        assert_eq!(outputs, [own]);
+    }
+
+    #[tokio::test]
+    async fn the_wallets_output_is_returned_once_for_each_time_its_outpoint_is_given() {
+        let fixture = Fixture::new().await;
+        let coin = fixture.coin(1, 5_000).await;
+
+        let outputs = fixture.wallet.outputs_at(&[coin, coin]).await.unwrap();
+
+        let outputs: Vec<OutPoint> = outputs.iter().map(|output| output.outpoint).collect();
+        assert_eq!(outputs, [coin, coin]);
+    }
+}
