@@ -201,10 +201,19 @@ impl ChainClient for BitcoindClient {
         let hexes: Vec<String> = txs.iter().map(serialize_hex).collect();
         let response: SubmitPackageResponse = self.call("submitpackage", json!([hexes])).await?;
         if response.package_msg == "success" {
-            Ok(())
-        } else {
-            Err(BroadcastError::UnknownError(response.package_msg))
+            return Ok(());
         }
+        // bitcoind's reason for refusing the package is often only that a
+        // transaction failed.
+        let mut reasons: Vec<String> = response
+            .tx_results
+            .into_values()
+            .filter_map(|result| result.error)
+            .collect();
+        reasons.sort();
+        reasons.dedup();
+        reasons.insert(0, response.package_msg);
+        Err(BroadcastError::UnknownError(reasons.join(": ")))
     }
 
     async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError> {
