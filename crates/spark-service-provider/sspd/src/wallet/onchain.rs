@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -287,6 +287,47 @@ impl<R: ChainRepository> OnchainWallet<R> {
 
     pub fn network(&self) -> Network {
         self.network
+    }
+
+    /// The untweaked taproot secret key of each coin's address.
+    pub async fn keys_for(
+        &self,
+        coins: &[Utxo],
+    ) -> Result<HashMap<Address, secp256k1::SecretKey>, OnchainWalletError> {
+        let addresses: HashSet<&Address> = coins.iter().map(|coin| &coin.address).collect();
+        let addresses: Vec<Address> = addresses.into_iter().cloned().collect();
+        self.keys_for_addresses(&addresses).await
+    }
+
+    /// The untweaked taproot secret key of each of `addresses`. Fails for an
+    /// address this wallet did not derive.
+    pub async fn keys_for_addresses(
+        &self,
+        addresses: &[Address],
+    ) -> Result<HashMap<Address, secp256k1::SecretKey>, OnchainWalletError> {
+        let texts: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT address, derivation_index FROM brz_ssp_onchain_wallet_addresses
+             WHERE address = ANY($1)",
+        )
+        .bind(&texts)
+        .fetch_all(self.pgpool.as_ref())
+        .await
+        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
+        let indexes: HashMap<String, i64> = rows.into_iter().collect();
+        let mut keys = HashMap::with_capacity(addresses.len());
+        for (address, text) in addresses.iter().zip(&texts) {
+            let Some(index) = indexes.get(text) else {
+                return Err(OnchainWalletError::KeyDerivation(format!(
+                    "address {address} is not one this wallet derived"
+                )));
+            };
+            let index = u32::try_from(*index).map_err(|_| {
+                OnchainWalletError::Persistence(format!("derivation index {index} out of range"))
+            })?;
+            keys.insert(address.clone(), self.derive_secret_key(index)?);
+        }
+        Ok(keys)
     }
 
     /// Watches `address` without making it one of the wallet's own.
