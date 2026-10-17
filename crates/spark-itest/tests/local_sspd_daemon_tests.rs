@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use spark::tree::TreeStore;
 use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::fixtures::sspd::{FULL_POOL_ONCHAIN_SATS, SspdFixture};
 use tracing::info;
@@ -83,7 +82,7 @@ async fn test_stocked_leaves_carry_their_exit_chains() -> Result<()> {
     sspd.wait_for_pool(&fixtures.bitcoind, 1, Duration::from_secs(600))
         .await?;
 
-    let store = sspd.tree_store().await?;
+    let store = sspd.leaf_store().await?;
     let missing = store.leaves_missing_exit_chains().await?;
     assert!(
         missing.is_empty(),
@@ -108,7 +107,7 @@ async fn test_claimed_leaves_gain_their_exit_chains() -> Result<()> {
     sspd.wait_for_pool(&fixtures.bitcoind, 1, Duration::from_secs(600))
         .await?;
 
-    let store = sspd.tree_store().await?;
+    let store = sspd.leaf_store().await?;
     let deadline = std::time::Instant::now() + Duration::from_secs(180);
     loop {
         let missing = store.leaves_missing_exit_chains().await?;

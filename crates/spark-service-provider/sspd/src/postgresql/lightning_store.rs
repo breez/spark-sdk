@@ -10,7 +10,6 @@ use spark::services::{Preimage, TransferId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::handover::HandoverReservation;
 use crate::lightning::node::LightningPaymentId;
 use crate::lightning::repository::{
     HoldInvoiceStatus, HtlcOutput, LightningReceiveRecord, LightningSendRecord, LightningStore,
@@ -101,8 +100,6 @@ struct ReceiveRow {
     encoded_invoice: String,
     transfer_id: Option<Uuid>,
     transfer_amount_sats: Option<i64>,
-    reservation_id: Option<String>,
-    reserved_leaf_ids: Option<Vec<String>>,
     preimage: Option<Vec<u8>>,
     invoice_status: String,
     expires_at: chrono::DateTime<chrono::Utc>,
@@ -145,19 +142,6 @@ impl TryFrom<ReceiveRow> for LightningReceiveRecord {
                 .map(u64::try_from)
                 .transpose()
                 .map_err(|e| format!("invalid transfer amount: {e}"))?,
-            reservation: row
-                .reservation_id
-                .map(|id| {
-                    let leaf_ids = row
-                        .reserved_leaf_ids
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|leaf_id| leaf_id.parse())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| format!("invalid reserved leaf id: {e}"))?;
-                    Ok::<_, String>(HandoverReservation { id, leaf_ids })
-                })
-                .transpose()?,
             preimage: row
                 .preimage
                 .map(Preimage::try_from)
@@ -427,37 +411,15 @@ impl LightningStore for PostgresLightningStore {
         id: &str,
         transfer_id: &TransferId,
         amount_sats: u64,
-        reservation: &HandoverReservation,
     ) -> Result<(), String> {
-        let leaf_ids: Vec<String> = reservation
-            .leaf_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect();
         sqlx::query(
             r#"UPDATE brz_ssp_lightning_receive_requests
-               SET transfer_id = $2::uuid, transfer_amount_sats = $3, reservation_id = $4,
-                   reserved_leaf_ids = $5, updated_at = NOW()
+               SET transfer_id = $2::uuid, transfer_amount_sats = $3, updated_at = NOW()
                WHERE id = $1"#,
         )
         .bind(id)
         .bind(transfer_id.to_string())
         .bind(sats_to_i64(amount_sats)?)
-        .bind(&reservation.id)
-        .bind(leaf_ids)
-        .execute(self.pool.as_ref())
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    async fn clear_receive_reservation(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
-            r#"UPDATE brz_ssp_lightning_receive_requests
-               SET reservation_id = NULL, reserved_leaf_ids = NULL, updated_at = NOW()
-               WHERE id = $1"#,
-        )
-        .bind(id)
         .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
@@ -467,8 +429,7 @@ impl LightningStore for PostgresLightningStore {
     async fn clear_receive_handover(&self, id: &str) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_lightning_receive_requests
-               SET transfer_id = NULL, transfer_amount_sats = NULL, reservation_id = NULL,
-                   reserved_leaf_ids = NULL, updated_at = NOW()
+               SET transfer_id = NULL, transfer_amount_sats = NULL, updated_at = NOW()
                WHERE id = $1"#,
         )
         .bind(id)

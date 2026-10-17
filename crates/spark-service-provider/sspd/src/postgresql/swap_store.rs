@@ -21,32 +21,12 @@ impl SwapRepository {
     pub fn new(pool: Arc<PgPool>) -> Self {
         Self { pool }
     }
-
-    async fn insert_leaf(
-        db: &mut sqlx::PgConnection,
-        swap_id: &str,
-        direction: &str,
-        leaf: &SwapLeaf,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"INSERT INTO brz_ssp_swap_leaves (swap_id, direction, leaf_id, value_sats)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (swap_id, direction, leaf_id) DO NOTHING"#,
-        )
-        .bind(swap_id)
-        .bind(direction)
-        .bind(&leaf.leaf_id)
-        .bind(leaf.value_sats)
-        .execute(&mut *db)
-        .await?;
-        Ok(())
-    }
 }
 
-type SwapRow = (String, Vec<u8>, Uuid, Uuid, String, i64, i64, i64);
+type SwapRow = (String, Vec<u8>, Uuid, Uuid, i64, i64, i64);
 
 const SWAP_COLUMNS: &str = "id, user_identity_public_key, user_transfer_id, counter_transfer_id, \
-     reservation_id, total_amount_sats, target_amount_sats, fee_sats";
+     total_amount_sats, target_amount_sats, fee_sats";
 
 fn swap_record(row: SwapRow) -> SwapRecord {
     let (
@@ -54,7 +34,6 @@ fn swap_record(row: SwapRow) -> SwapRecord {
         user_identity_public_key,
         user_transfer_id,
         counter_transfer_id,
-        reservation_id,
         total_amount_sats,
         target_amount_sats,
         fee_sats,
@@ -64,7 +43,6 @@ fn swap_record(row: SwapRow) -> SwapRecord {
         user_identity_public_key,
         user_transfer_id: TransferId::from_bytes(user_transfer_id.into_bytes()),
         counter_transfer_id: TransferId::from_bytes(counter_transfer_id.into_bytes()),
-        reservation_id,
         total_amount_sats,
         target_amount_sats,
         fee_sats,
@@ -119,35 +97,24 @@ impl SwapRepository {
 
 #[async_trait::async_trait]
 impl SwapStore for SwapRepository {
-    async fn insert_swap(
-        &self,
-        swap: &SwapRecord,
-        outbound_leaves: &[SwapLeaf],
-    ) -> Result<(), String> {
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
+    async fn insert_swap(&self, swap: &SwapRecord) -> Result<(), String> {
         sqlx::query(
             r#"INSERT INTO brz_ssp_swaps
                (id, user_identity_public_key, user_transfer_id, counter_transfer_id,
-                reservation_id, total_amount_sats, target_amount_sats, fee_sats)
-               VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8)"#,
+                total_amount_sats, target_amount_sats, fee_sats)
+               VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7)"#,
         )
         .bind(&swap.id)
         .bind(&swap.user_identity_public_key)
         .bind(swap.user_transfer_id.to_string())
         .bind(swap.counter_transfer_id.to_string())
-        .bind(&swap.reservation_id)
         .bind(swap.total_amount_sats)
         .bind(swap.target_amount_sats)
         .bind(swap.fee_sats)
-        .execute(&mut *db)
+        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
-        for leaf in outbound_leaves {
-            Self::insert_leaf(&mut db, &swap.id, DIRECTION_OUTBOUND, leaf)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        db.commit().await.map_err(|e| e.to_string())
+        Ok(())
     }
 
     async fn get_by_user_transfer_id(
@@ -194,6 +161,28 @@ impl SwapStore for SwapRepository {
         .map_err(|e| e.to_string())?;
         self.with_leaves(rows.into_iter().map(swap_record).collect())
             .await
+    }
+
+    async fn record_outbound_leaves(
+        &self,
+        swap_id: &str,
+        outbound_leaves: &[SwapLeaf],
+    ) -> Result<(), String> {
+        let (leaf_ids, values) = leaf_columns(outbound_leaves);
+        sqlx::query(
+            r#"INSERT INTO brz_ssp_swap_leaves (swap_id, direction, leaf_id, value_sats)
+               SELECT $1, $2, leaf.leaf_id, leaf.value_sats
+               FROM UNNEST($3::text[], $4::bigint[]) AS leaf (leaf_id, value_sats)
+               ON CONFLICT (swap_id, direction, leaf_id) DO NOTHING"#,
+        )
+        .bind(swap_id)
+        .bind(DIRECTION_OUTBOUND)
+        .bind(&leaf_ids)
+        .bind(&values)
+        .execute(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     async fn record_inbound_leaves(

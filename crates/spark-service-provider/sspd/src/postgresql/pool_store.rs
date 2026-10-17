@@ -5,9 +5,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bitcoin::{OutPoint, Txid};
-use spark::tree::{TreeNode, TreeNodeId};
+use chrono::{DateTime, Utc};
+use spark::tree::{LeafPedigree, TreeNode, TreeNodeId};
 use sqlx::PgPool;
 use sqlx::types::Json;
+
+use super::{LeafStoreError, PostgresLeafStore};
 
 use crate::leaves::LeafSigningKeys;
 use crate::pool::repository::{DepositTree, DepositTx, FundingBump, TreeNodes};
@@ -280,31 +283,38 @@ impl PoolRepository {
         })
     }
 
-    pub async fn mark_pooled(&self, outpoint: &OutPoint) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"UPDATE brz_ssp_spark_pool_deposit_trees SET pooled = TRUE WHERE txid = $1 AND vout = $2"#,
+    /// Returns `false`, and changes nothing, for a tree that is pooled already.
+    pub async fn pool_tree(
+        &self,
+        outpoint: &OutPoint,
+        leaf_store: &PostgresLeafStore,
+        leaves: &[LeafPedigree],
+        queried_at: DateTime<Utc>,
+    ) -> Result<bool, LeafStoreError> {
+        let mut db = self.pool.begin().await?;
+        let marked = sqlx::query(
+            r#"UPDATE brz_ssp_spark_pool_deposit_trees SET pooled = TRUE
+               WHERE txid = $1 AND vout = $2 AND NOT pooled"#,
         )
         .bind(outpoint.txid.to_string())
         .bind(outpoint.vout.cast_signed())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(())
+        .execute(&mut *db)
+        .await?
+        .rows_affected();
+        if marked == 0 {
+            return Ok(false);
+        }
+        leaf_store.insert_leaves(&mut db, leaves).await?;
+        let reported: Vec<TreeNode> = leaves.iter().map(|leaf| leaf.leaf.clone()).collect();
+        leaf_store.observe(&mut db, &reported, queried_at).await?;
+        db.commit().await?;
+        leaf_store.wake_spend_check();
+        Ok(true)
     }
 }
 
 #[async_trait::async_trait]
 impl LeafSigningKeys for PoolRepository {
-    async fn get_signing_leaf_id(&self, node_id: &str) -> Result<Option<String>, String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            r#"SELECT deposit_leaf_id FROM brz_ssp_spark_leaf_id_map WHERE node_id = $1"#,
-        )
-        .bind(node_id)
-        .fetch_optional(self.pool.as_ref())
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(row.map(|(id,)| id))
-    }
-
     async fn mark_signing_under_node_id(&self, node_ids: &[String]) -> Result<(), String> {
         sqlx::query(r#"DELETE FROM brz_ssp_spark_leaf_id_map WHERE node_id = ANY($1)"#)
             .bind(node_ids)

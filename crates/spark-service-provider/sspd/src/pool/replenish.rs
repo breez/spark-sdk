@@ -271,7 +271,14 @@ where
         .saturating_add(fees::P2TR_DUST_SATS);
     let output_fee = fees::fee_sats(fee_rate, fees::P2TR_OUTPUT);
 
-    let leaves = wallet.spark.tree_store.get_leaves().await?;
+    let counts = wallet.spark.leaf_store.counts().await?;
+    // The pool has these leaves already. The store counts them as available
+    // once the SSP has checked their outputs with bitcoind.
+    for (denomination, count) in counts.unchecked {
+        let pending = pending.entry(denomination).or_default();
+        *pending = pending.saturating_add(count);
+    }
+    let leaves = counts.available;
     let requested = restock.pending();
     let plan = compute_trees_needed(
         &leaves,

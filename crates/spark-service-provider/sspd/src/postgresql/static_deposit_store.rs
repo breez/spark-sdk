@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use spark::services::TransferId;
 
-use crate::handover::HandoverReservation;
 use crate::static_deposit::repository::{
     PendingCredit, StaticDepositClaimRecord, StaticDepositClaimStore,
 };
@@ -32,8 +31,6 @@ struct StaticDepositClaimRow {
     user_signature: String,
     transfer_id: Option<Uuid>,
     pending_transfer_id: Option<Uuid>,
-    reservation_id: Option<String>,
-    reserved_leaf_ids: Option<Vec<String>>,
     utxo_swap_id: Option<String>,
     prep_spend_tx: Vec<u8>,
     signed_spend_transaction: Option<Vec<u8>>,
@@ -56,29 +53,14 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             .map(bitcoin::consensus::deserialize)
             .transpose()
             .map_err(|err| format!("invalid signed spend transaction: {err}"))?;
-        let pending_credit = match (row.pending_transfer_id, row.reservation_id) {
-            (Some(transfer_id), Some(id)) => Some(PendingCredit {
-                transfer_id: TransferId::from_str(&transfer_id.to_string())
-                    .map_err(|e| format!("invalid pending transfer id: {e}"))?,
-                reservation: HandoverReservation {
-                    id,
-                    leaf_ids: row
-                        .reserved_leaf_ids
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|leaf_id| leaf_id.parse())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| format!("invalid reserved leaf id: {e}"))?,
-                },
-            }),
-            (None, None) => None,
-            _ => {
-                return Err(format!(
-                    "static deposit claim {} has a partial pending credit",
-                    row.id
-                ));
-            }
-        };
+        let pending_credit = row
+            .pending_transfer_id
+            .map(|transfer_id| {
+                TransferId::from_str(&transfer_id.to_string())
+                    .map(|transfer_id| PendingCredit { transfer_id })
+                    .map_err(|e| format!("invalid pending transfer id: {e}"))
+            })
+            .transpose()?;
         Ok(StaticDepositClaimRecord {
             id: row.id,
             user_identity_public_key: PublicKey::from_slice(&row.user_identity_public_key)
@@ -133,9 +115,8 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
                (id, user_identity_public_key, txid, vout, network, deposit_address,
                 credit_amount_sats, is_instant, deposit_amount_sats,
                 encrypted_deposit_secret_key, quote_signature, user_signature,
-                pending_transfer_id, reservation_id, reserved_leaf_ids, prep_spend_tx)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14,
-                       $15, $16)"#,
+                pending_transfer_id, prep_spend_tx)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14)"#,
         )
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
@@ -150,15 +131,6 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .bind(&record.quote_signature)
         .bind(&record.user_signature)
         .bind(credit.map(|credit| credit.transfer_id.to_string()))
-        .bind(credit.map(|credit| credit.reservation.id.clone()))
-        .bind(credit.map(|credit| {
-            credit
-                .reservation
-                .leaf_ids
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        }))
         .bind(bitcoin::consensus::serialize(&record.spend_tx))
         .execute(self.pool.as_ref())
         .await
@@ -214,7 +186,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
                SET transfer_id = $2::uuid,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -244,7 +216,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
                SET transfer_id = $2::uuid, utxo_swap_id = $3,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -267,7 +239,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
             r#"UPDATE brz_ssp_static_deposit_claims
                SET transfer_id = $2::uuid,
                    signed_spend_transaction = $3,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )

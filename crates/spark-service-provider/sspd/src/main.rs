@@ -40,14 +40,12 @@ use tracing::{field, info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use sspd_lib::{
-    auth, bitcoind, chain, coop_exit, fees, graphql, internal_server, leaves, lightning, pool,
-    postgresql, shutdown, static_deposit, swap, wakeup, wallet,
+    auth, bitcoind, chain, coop_exit, fees, graphql, in_flight, internal_server, leaves, lightning,
+    pool, postgresql, shutdown, static_deposit, swap, wakeup, wallet,
 };
 
-/// How often held leaves are tried again. Arriving leaves do not wait for it.
-const LEAF_ADMISSION_INTERVAL: Duration = Duration::from_secs(30);
-
-const EXIT_CHAIN_RESOLVE_INTERVAL: Duration = Duration::from_secs(60);
+/// The renewal loop also runs a pass when sspd claims a transfer.
+const LEAF_RENEWAL_INTERVAL: Duration = Duration::from_secs(30);
 
 const DEPENDENCY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -83,8 +81,7 @@ struct Args {
     #[arg(skip)]
     pub db_url: String,
 
-    /// The most connections the daemon holds open to the postgres database, not
-    /// counting the leaf store's own pool.
+    /// The most connections the daemon has open to the postgres database.
     #[arg(long, default_value = "10")]
     pub db_max_connections: u32,
 
@@ -241,7 +238,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coop_exit_wakeup = wakeup::Wakeup::new();
     let static_deposit_blocks = wakeup::Wakeup::new();
     let htlc_sweep_blocks = wakeup::Wakeup::new();
-    let leaf_sync_blocks = wakeup::Wakeup::new();
     let spend_check_blocks = wakeup::Wakeup::new();
     let static_deposit_claims = wakeup::Wakeup::new();
 
@@ -287,7 +283,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             coop_exit_wakeup.clone(),
             static_deposit_blocks.clone(),
             htlc_sweep_blocks.clone(),
-            leaf_sync_blocks.clone(),
             spend_check_blocks.clone(),
         ],
         &token,
@@ -297,10 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         wallet::SspWallet::new(
             &seed,
             args.network,
-            spark_postgres::PostgresStorageConfig {
-                run_migration: args.auto_migrate,
-                ..spark_postgres::PostgresStorageConfig::with_defaults(&args.db_url)
-            },
+            Arc::clone(&chain_repository),
             Arc::clone(&chain_repository),
             Arc::clone(&pgpool),
             args.operators.clone(),
@@ -311,10 +303,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let pool_repo = Arc::new(postgresql::PoolRepository::new(Arc::clone(&pgpool)));
-    let incoming: Arc<dyn leaves::IncomingLeafStore> = Arc::new(
-        postgresql::PostgresIncomingLeafStore::new(Arc::clone(&pgpool)),
-    );
-    let admission = wakeup::Wakeup::new();
+    let renewal = wakeup::Wakeup::new();
+    let claim = Arc::new(leaves::ClaimDeps {
+        transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
+        operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+        network: ssp_wallet.spark.network,
+        signing_keys: Arc::clone(&pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
+        renewal: renewal.clone(),
+    });
     let swap_repo = Arc::new(postgresql::SwapRepository::new(Arc::clone(&pgpool)));
     let lightning_store = Arc::new(postgresql::PostgresLightningStore::new(Arc::clone(&pgpool)))
         as Arc<dyn lightning::repository::LightningStore>;
@@ -351,7 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&static_deposit_store),
         Arc::clone(&instant_quote_store),
         Arc::clone(&ssp_wallet.spark.transfer_service),
-        Arc::clone(&ssp_wallet.spark.tree_store),
+        Arc::clone(&ssp_wallet.spark.leaf_store),
         Arc::clone(&ssp_wallet.spark.operator_pool),
         Arc::clone(&ssp_wallet.spark.signer),
         Arc::clone(&static_deposit_chain),
@@ -379,27 +376,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &token,
     );
     let swap_claim_wakeup = wakeup::Wakeup::new();
+    let swap_requests = Arc::new(in_flight::InFlight::default());
     spawn_swap_claimer(
         &tracker,
-        &incoming,
-        &admission,
-        &ssp_wallet,
+        &claim,
         &swap_repo,
-        &pool_repo,
+        &swap_requests,
         swap_claim_wakeup.clone(),
         &token,
     );
     spawn_coop_exit_worker(
         &tracker,
-        &incoming,
-        &admission,
-        &ssp_wallet,
+        &claim,
         &chain_client,
         &chain_repository,
         &chain_tip,
         &coop_exit_service,
         &coop_exit_store,
-        &pool_repo,
         &coop_exit_wakeup,
         &token,
     );
@@ -429,15 +422,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         lightning::htlc_sweep::run_htlc_sweep_loop(htlc_sweep, htlc_sweep_token).await;
     });
 
-    let leaf_sync = pool::leaf_sync::LeafSyncDeps {
-        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
-        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
-        identity: ssp_wallet.spark.identity_public_key,
-        blocks: leaf_sync_blocks,
+    let operator_view = pool::operator_view::OperatorViewDeps {
+        operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+        network: ssp_wallet.spark.network,
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
     };
-    let leaf_sync_token = token.clone();
+    let operator_view_token = token.clone();
     tracker.spawn(async move {
-        pool::leaf_sync::run_leaf_sync_loop(leaf_sync, leaf_sync_token).await;
+        pool::operator_view::run_operator_view_loop(operator_view, operator_view_token).await;
     });
 
     let spend_check = chain::spend_check::SpendCheckDeps {
@@ -452,8 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let lightning = build_lightning(
-        &incoming,
-        &admission,
+        &claim,
         &tracker,
         &lightning_config,
         &ssp_wallet,
@@ -475,6 +466,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &synced,
         &pool_repo,
         &swap_repo,
+        &swap_requests,
         swap_claim_wakeup,
         &lightning_store,
         &coop_exit_store,
@@ -490,8 +482,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &shutdown,
     );
 
-    spawn_exit_chain_resolver(&tracker, &ssp_wallet, &token);
-    spawn_leaf_admission(&tracker, &ssp_wallet, &incoming, admission.clone(), &token);
+    spawn_leaf_renewal(&tracker, &ssp_wallet, renewal.clone(), &token);
 
     info!("sspd started");
 
@@ -656,38 +647,23 @@ fn spawn_pool_loops(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_swap_claimer(
     tracker: &TaskTracker,
-    incoming: &Arc<dyn leaves::IncomingLeafStore>,
-    admission: &wakeup::Wakeup,
-    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    claim: &Arc<leaves::ClaimDeps>,
     swap_repo: &Arc<postgresql::SwapRepository>,
-    pool_repo: &Arc<postgresql::PoolRepository>,
+    requests: &Arc<in_flight::InFlight>,
     wakeup: wakeup::Wakeup,
     token: &CancellationToken,
 ) {
-    let claim_repo = Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>;
-    let transfer_service = Arc::clone(&ssp_wallet.spark.transfer_service);
-    let incoming = Arc::clone(incoming);
-    let admission = admission.clone();
-    let tree_store = Arc::clone(&ssp_wallet.spark.tree_store);
-    let leaf_signing_keys = Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>;
+    let deps = swap::claimer::SwapClaimDeps {
+        swap_repo: Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>,
+        claim: Arc::clone(claim),
+        requests: Arc::clone(requests),
+        wakeup,
+    };
     let claim_token = token.clone();
     tracker.spawn(async move {
-        swap::claimer::run_swap_claim_loop(
-            swap::claimer::SwapClaimDeps {
-                swap_repo: claim_repo,
-                tree_store,
-                transfer_service,
-                incoming,
-                admission,
-                leaf_signing_keys,
-                wakeup,
-            },
-            claim_token,
-        )
-        .await;
+        swap::claimer::run_swap_claim_loop(deps, claim_token).await;
     });
 }
 
@@ -696,10 +672,7 @@ struct SparkCoopExitExecutor {
     chain_client: Arc<BitcoindClient>,
     chain_repository: Arc<postgresql::ChainRepository>,
     chain_tip: chain::ChainTip,
-    transfer_service: Arc<spark::services::TransferService>,
-    incoming: Arc<dyn leaves::IncomingLeafStore>,
-    admission: wakeup::Wakeup,
-    leaf_signing_keys: Arc<dyn leaves::LeafSigningKeys>,
+    claim: Arc<leaves::ClaimDeps>,
 }
 
 #[async_trait::async_trait]
@@ -728,14 +701,7 @@ impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
         &self,
         transfer_id: &spark::services::TransferId,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        coop_exit::claim_user_transfer(
-            &self.transfer_service,
-            &self.incoming,
-            &self.admission,
-            &self.leaf_signing_keys,
-            transfer_id,
-        )
-        .await
+        coop_exit::claim_user_transfer(&self.claim, transfer_id).await
     }
 
     async fn committed_transfer_is_valid(
@@ -804,15 +770,12 @@ fn connector_funding_output(
 #[allow(clippy::too_many_arguments)]
 fn spawn_coop_exit_worker(
     tracker: &TaskTracker,
-    incoming: &Arc<dyn leaves::IncomingLeafStore>,
-    admission: &wakeup::Wakeup,
-    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    claim: &Arc<leaves::ClaimDeps>,
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
     chain_tip: &chain::ChainTip,
     coop_exit_service: &Arc<coop_exit::CoopExitService>,
     coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
-    pool_repo: &Arc<postgresql::PoolRepository>,
     wakeup: &wakeup::Wakeup,
     token: &CancellationToken,
 ) {
@@ -821,10 +784,7 @@ fn spawn_coop_exit_worker(
         chain_client: Arc::clone(chain_client),
         chain_repository: Arc::clone(chain_repository),
         chain_tip: chain_tip.clone(),
-        transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
-        incoming: Arc::clone(incoming),
-        admission: admission.clone(),
-        leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        claim: Arc::clone(claim),
     }) as Arc<dyn coop_exit::CoopExitExecutor>;
     let deps = coop_exit::CoopExitWorkerDeps {
         store: Arc::clone(coop_exit_store),
@@ -1052,8 +1012,7 @@ fn invoice_signing_key(
 /// so an outage at startup leaves the rest of the daemon running.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_lightning(
-    incoming: &Arc<dyn leaves::IncomingLeafStore>,
-    admission: &wakeup::Wakeup,
+    claim: &Arc<leaves::ClaimDeps>,
     tracker: &TaskTracker,
     config: &LightningConfig,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
@@ -1132,11 +1091,8 @@ fn build_lightning(
         node: Arc::clone(&node),
         operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
         signer: Arc::clone(&ssp_wallet.spark.signer),
-        transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
         htlc_service: Arc::clone(&htlc_service),
-        incoming: Arc::clone(incoming),
-        admission: admission.clone(),
-        leaf_signing_keys: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
+        claim: Arc::clone(claim),
         network: ssp_wallet.spark.network,
         wakeup: send_wakeup,
     };
@@ -1147,8 +1103,7 @@ fn build_lightning(
         operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
         signer: Arc::clone(&ssp_wallet.spark.signer),
         htlc_service: Arc::clone(&htlc_service),
-        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
-        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
         key_resolver: Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
         network: ssp_wallet.spark.network,
         wakeup: receive_wakeup.clone(),
@@ -1206,6 +1161,7 @@ fn spawn_servers(
     synced: &chain::Synced,
     pool_repo: &Arc<postgresql::PoolRepository>,
     swap_repo: &Arc<postgresql::SwapRepository>,
+    swap_requests: &Arc<in_flight::InFlight>,
     swap_claim_wakeup: wakeup::Wakeup,
     lightning_store: &Arc<dyn lightning::repository::LightningStore>,
     coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
@@ -1228,6 +1184,7 @@ fn spawn_servers(
         ssp_wallet,
         pool_repo,
         swap_repo,
+        swap_requests,
         swap_claim_wakeup,
         lightning_store,
         coop_exit_service,
@@ -1274,6 +1231,7 @@ fn spawn_graphql_server(
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     pool_repo: &Arc<postgresql::PoolRepository>,
     swap_repo: &Arc<postgresql::SwapRepository>,
+    swap_requests: &Arc<in_flight::InFlight>,
     swap_claim_wakeup: wakeup::Wakeup,
     lightning_store: &Arc<dyn lightning::repository::LightningStore>,
     coop_exit_service: &Arc<coop_exit::CoopExitService>,
@@ -1289,13 +1247,14 @@ fn spawn_graphql_server(
     let shutdown = Arc::clone(shutdown);
     let graphql_token = token.clone();
     let swap_service = Arc::new(swap::SwapService::new(
-        Arc::clone(&ssp_wallet.spark.tree_store),
+        Arc::clone(&ssp_wallet.spark.leaf_store),
         Arc::clone(&ssp_wallet.spark.transfer_service),
         Arc::clone(&ssp_wallet.spark.operator_pool),
         Arc::clone(&ssp_wallet.spark.signer),
         ssp_wallet.spark.network,
         Arc::clone(pool_repo) as Arc<dyn leaves::LeafSigningKeys>,
         Arc::clone(swap_repo) as Arc<dyn swap::SwapStore>,
+        Arc::clone(swap_requests),
         swap_claim_wakeup,
         largest_denomination,
     ));
@@ -1370,7 +1329,7 @@ fn spawn_internal_server(
     let wallet_server = OnchainWalletServer::new(internal_server::WalletServer::new(&params));
     let pool_server = PoolServer::new(internal_server::PoolServer::new(
         Arc::clone(restock),
-        Arc::clone(&ssp_wallet.spark.tree_store),
+        Arc::clone(&ssp_wallet.spark.leaf_store),
         pool_config.denominations(),
         token.clone(),
     ));
@@ -1392,66 +1351,32 @@ fn spawn_internal_server(
     });
 }
 
-fn spawn_exit_chain_resolver(
+fn spawn_leaf_renewal(
     tracker: &TaskTracker,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
+    renewal: wakeup::Wakeup,
     token: &CancellationToken,
 ) {
-    let resolver = Arc::clone(&ssp_wallet.spark.exit_chains);
-    let token = token.clone();
-    tracker.spawn(async move {
-        let mut interval = tokio::time::interval(EXIT_CHAIN_RESOLVE_INTERVAL);
-        loop {
-            tokio::select! {
-                () = token.cancelled() => {
-                    info!("Exit chain resolver cancelled");
-                    return;
-                }
-                _ = interval.tick() => {
-                    if let Err(e) = resolver.resolve_missing_chains().await {
-                        tracing::warn!("could not resolve exit chains: {e:?}");
-                    }
-                }
-            }
-        }
-    });
-}
-
-fn spawn_leaf_admission(
-    tracker: &TaskTracker,
-    ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
-    incoming: &Arc<dyn leaves::IncomingLeafStore>,
-    admission: wakeup::Wakeup,
-    token: &CancellationToken,
-) {
-    let deps = pool::incoming::AdmissionDeps {
-        store: Arc::clone(incoming),
-        tree_service: Arc::clone(&ssp_wallet.spark.tree_service),
-        tree_store: Arc::clone(&ssp_wallet.spark.tree_store),
+    let deps = pool::renewal::RenewalDeps {
+        leaf_store: Arc::clone(&ssp_wallet.spark.leaf_store),
         timelocks: Arc::clone(&ssp_wallet.spark.timelocks),
-        identity: ssp_wallet.spark.identity_public_key,
+        operator_pool: Arc::clone(&ssp_wallet.spark.operator_pool),
+        network: ssp_wallet.spark.network,
     };
     let token = token.clone();
     tracker.spawn(async move {
-        let mut interval = tokio::time::interval(LEAF_ADMISSION_INTERVAL);
+        let mut attempts = pool::renewal::Attempts::default();
+        let mut interval = tokio::time::interval(LEAF_RENEWAL_INTERVAL);
         loop {
-            // Drains the backlog: a large arrival should not need one wake per batch.
-            while !token.is_cancelled() {
-                match pool::incoming::admit_once(&deps).await {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(e) => {
-                        tracing::warn!("could not admit claimed leaves: {e:?}");
-                        break;
-                    }
-                }
+            if let Err(e) = pool::renewal::renew_pass(&deps, &mut attempts).await {
+                tracing::warn!("could not renew pool leaves: {e}");
             }
             tokio::select! {
                 () = token.cancelled() => {
-                    info!("Leaf admission cancelled");
+                    info!("Leaf renewal cancelled");
                     return;
                 }
-                () = admission.waited() => {}
+                () = renewal.waited() => {}
                 _ = interval.tick() => {}
             }
         }

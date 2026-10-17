@@ -1,7 +1,5 @@
 pub mod config;
 pub mod deficit;
-pub mod incoming;
-pub mod leaf_sync;
 pub mod operator_view;
 pub mod renewal;
 pub mod replenish;

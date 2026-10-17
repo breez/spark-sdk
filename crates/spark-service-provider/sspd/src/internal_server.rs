@@ -16,6 +16,7 @@ use crate::lightning::repository::{
     SendPaymentStatus,
 };
 use crate::pool::restock::{PoolEvent, RestockService};
+use crate::postgresql::PostgresLeafStore;
 use crate::static_deposit::repository::{StaticDepositClaimRecord, StaticDepositClaimStore};
 use crate::swap::SwapStore;
 use crate::swap::repository::SwapDetail;
@@ -396,7 +397,7 @@ where
 
 pub struct PoolServer {
     restock: Arc<RestockService>,
-    tree_store: Arc<dyn spark::tree::TreeStore>,
+    leaf_store: Arc<PostgresLeafStore>,
     denominations: Vec<u64>,
     /// Ends the event streams at shutdown: the server does not stop while a
     /// stream is open.
@@ -406,13 +407,13 @@ pub struct PoolServer {
 impl PoolServer {
     pub fn new(
         restock: Arc<RestockService>,
-        tree_store: Arc<dyn spark::tree::TreeStore>,
+        leaf_store: Arc<PostgresLeafStore>,
         denominations: Vec<u64>,
         token: CancellationToken,
     ) -> Self {
         Self {
             restock,
-            tree_store,
+            leaf_store,
             denominations,
             token,
         }
@@ -460,18 +461,16 @@ impl Pool for PoolServer {
         &self,
         _request: Request<PoolStatusRequest>,
     ) -> Result<Response<PoolStatusResponse>, Status> {
-        let leaves = self
-            .tree_store
-            .get_leaves()
+        let counts = self
+            .leaf_store
+            .counts()
             .await
-            .map_err(|e| Status::internal(format!("could not read the leaf pool: {e}")))?;
-        let mut counts: HashMap<u64, u32> = HashMap::new();
-        let mut available_sats: u64 = 0;
-        for leaf in &leaves.available {
-            let count = counts.entry(leaf.value).or_insert(0);
-            *count = count.saturating_add(1);
-            available_sats = available_sats.saturating_add(leaf.value);
-        }
+            .map_err(|e| Status::internal(format!("could not read the leaf pool: {e}")))?
+            .available;
+        let available_sats = counts
+            .iter()
+            .map(|(value, count)| value.saturating_mul(u64::from(*count)))
+            .fold(0u64, u64::saturating_add);
         let mut available: Vec<PoolLeafCount> = counts
             .into_iter()
             .map(|(denomination_sats, count)| PoolLeafCount {

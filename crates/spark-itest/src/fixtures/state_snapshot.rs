@@ -146,8 +146,7 @@ pub fn check() -> Result<()> {
 
 /// Fails unless the daemon's dump holds a non-empty pool for
 /// `identity_public_key` in which every leaf has its exit chain.
-pub async fn verify(identity_public_key: &[u8]) -> Result<()> {
-    use spark::tree::TreeStore;
+pub async fn verify(identity_public_key: bitcoin::secp256k1::PublicKey) -> Result<()> {
     use testcontainers_modules::postgres::Postgres;
 
     let network = format!("bootstrap-verify-{}", std::process::id());
@@ -163,18 +162,18 @@ pub async fn verify(identity_public_key: &[u8]) -> Result<()> {
 
     let port = postgres.get_host_port_ipv4(5432).await?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let store = spark_postgres::PostgresTreeStore::from_config(
-        spark_postgres::PostgresStorageConfig::with_defaults(&url),
-        identity_public_key,
-    )
-    .await
-    .context("opening the restored tree store")?;
+    let network = bitcoin::Network::Regtest;
+    let store =
+        sspd_lib::postgresql::PostgresLeafStore::connect(&url, identity_public_key, network)
+            .await
+            .context("opening the restored leaf store")?;
 
-    let leaves = store
-        .get_leaves()
+    let available = store
+        .counts()
         .await
-        .context("reading the restored leaf pool")?;
-    if leaves.available.is_empty() {
+        .context("reading the restored leaf pool")?
+        .available;
+    if available.is_empty() {
         bail!("the bootstrap restored an empty leaf pool");
     }
 
