@@ -104,6 +104,17 @@ impl Leaves {
     }
 }
 
+/// The outcome of refreshing given leaves.
+#[derive(Clone, Debug, Default)]
+pub struct RefreshedLeaves {
+    /// The leaves every operator holds as available, which the tree service
+    /// stored.
+    pub available: Vec<TreeNode>,
+    /// The leaves the coordinator holds as available that another operator
+    /// does not hold the same way yet. The tree service does not store them.
+    pub available_missing_from_operators: Vec<TreeNode>,
+}
+
 /// The two public keys needed to confirm a stored leaf's ownership was already
 /// verified, without loading the full node (and its transaction blobs). Its
 /// signing pubkey is a deterministic function of the leaf id, so a stored leaf
@@ -1143,6 +1154,15 @@ pub trait TreeService: Send + Sync {
     /// # }
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
+
+    /// Refreshes the given leaves: fetches them by id from the coordinator and
+    /// every other operator, and stores each leaf they all hold as available,
+    /// as [`insert_leaves`](Self::insert_leaves) does. A leaf the coordinator
+    /// does not hold as available is in neither part of the outcome.
+    async fn refresh_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<RefreshedLeaves, TreeServiceError>;
 
     /// Inserts new leaves into the tree, each with the ancestors the caller
     /// already knows.

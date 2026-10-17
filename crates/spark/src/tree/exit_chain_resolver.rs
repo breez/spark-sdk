@@ -280,8 +280,8 @@ mod tests {
     use crate::services::LeafKeyTweak;
     use crate::tree::tests::create_test_node_with_parent;
     use crate::tree::{
-        LeafSelection, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose,
-        SelectLeavesOptions, TargetAmounts, TreeNode, TreeNodeStatus,
+        LeafSelection, Leaves, LeavesReservation, LeavesReservationId, RefreshedLeaves,
+        ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode, TreeNodeStatus,
     };
     use macros::async_test_all;
 
@@ -452,6 +452,13 @@ mod tests {
         }
 
         async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
+        async fn refresh_leaves_by_ids(
+            &self,
+            _leaf_ids: &[TreeNodeId],
+        ) -> Result<RefreshedLeaves, TreeServiceError> {
             unimplemented!("not exercised by ExitChainResolver")
         }
 

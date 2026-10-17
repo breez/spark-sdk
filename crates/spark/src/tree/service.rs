@@ -9,8 +9,8 @@ use platform_utils::tokio::sync::broadcast;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::tree::{
-    LeafPedigree, LeafSelection, Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions,
-    TreeNodeStatus,
+    LeafPedigree, LeafSelection, Leaves, RefreshedLeaves, ReservationPurpose, ReserveResult,
+    SelectLeavesOptions, TreeNodeStatus,
 };
 use crate::{
     Network,
@@ -379,32 +379,16 @@ impl TreeService for SynchronousTreeService {
         // Leaves added after this time will be preserved even if not in the refresh data.
         let refresh_started_at = self.state.now().await?;
 
-        // Prepare queries for coordinator and all operators and run them in parallel
-        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
-        let operators: Vec<_> = self
-            .operator_pool
-            .get_non_coordinator_operators()
-            .map(|op| (op.id, op.client.clone()))
-            .collect();
-
         // Leaves only. Asking for each leaf's ancestors here would re-download every
         // chain on every refresh, including the ones already stored.
-        let coord_fut = self.query_nodes(&coordinator_client, false, None, held_leaf_statuses());
-        let op_futs = operators.iter().map(|(id, client)| async move {
-            (
-                *id,
-                self.query_nodes(client, false, None, held_leaf_statuses())
-                    .await,
-            )
-        });
-
-        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
+        let (coordinator_nodes, operator_nodes) = self
+            .query_every_operator(None, held_leaf_statuses())
+            .await?;
         // Status cannot pick the leaves out of the response any more: now that a
         // mid-exit leaf is asked for, an ancestor of one is just as able to come
         // back `OnChain` as the leaf below it. Go by shape instead, and drop what
         // another node in the same response calls its parent: an ancestor is not
         // a leaf, whatever status it is in.
-        let coordinator_nodes = coordinator_leaves_res?;
         let parent_ids: HashSet<TreeNodeId> = coordinator_nodes
             .iter()
             .filter_map(|n| n.parent_node_id.clone())
@@ -418,55 +402,9 @@ impl TreeService for SynchronousTreeService {
             "refresh_leaves: fetched leaves"
         );
 
-        // Propagate any operator query error to preserve original behavior and
-        // collect successful operator leaves for later comparison
-        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
-        for (id, res) in operator_results {
-            match res {
-                Ok(leaves) => operator_leaves_vec.push(leaves),
-                Err(e) => {
-                    error!("Failed to query operator {id}: {e:?}");
-                    return Err(e);
-                }
-            }
-        }
-
-        let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        let missing_operator_leaves_map =
+            missing_from_operators(&coordinator_leaves, &operator_nodes);
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
-
-        // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
-            // Paging over a set the operator is concurrently mutating can return the
-            // same leaf on more than one page, so keep the first occurrence.
-            let mut operator_leaves_by_id: HashMap<&TreeNodeId, &TreeNode> =
-                HashMap::with_capacity(operator_leaves.len());
-            for operator_leaf in &operator_leaves {
-                operator_leaves_by_id
-                    .entry(&operator_leaf.id)
-                    .or_insert(operator_leaf);
-            }
-
-            for leaf in &coordinator_leaves {
-                match operator_leaves_by_id.get(&leaf.id).copied() {
-                    Some(operator_leaf) => {
-                        if operators_disagree(leaf, operator_leaf) {
-                            warn!(
-                                "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator_id.0, leaf, operator_leaf
-                            );
-                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator_id.0, leaf.id
-                        );
-                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                    }
-                }
-            }
-        }
 
         // Every reported leaf needs an ownership check (our signing share plus the
         // operators' share must equal the verifying key). The check is not gated on
@@ -540,6 +478,45 @@ impl TreeService for SynchronousTreeService {
         // know, so anything reported at all is announced.
         self.notify_leaves_added(&renewed_leaves);
         Ok(())
+    }
+
+    async fn refresh_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<RefreshedLeaves, TreeServiceError> {
+        let mut held_by_every_operator = Vec::new();
+        let mut missing = Vec::new();
+        for batch in leaf_ids.chunks(LEAVES_PER_FETCH) {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: batch.iter().map(ToString::to_string).collect(),
+            });
+            let (coordinator_nodes, operator_nodes) =
+                self.query_every_operator(Some(source), vec![]).await?;
+            let coordinator_leaves: Vec<TreeNode> = coordinator_nodes
+                .into_iter()
+                .filter(|leaf| {
+                    leaf.status == TreeNodeStatus::Available
+                        && well_formed(leaf, "a refresh of given leaves")
+                })
+                .collect();
+            let missing_by_id = missing_from_operators(&coordinator_leaves, &operator_nodes);
+            for leaf in coordinator_leaves {
+                if missing_by_id.contains_key(&leaf.id) {
+                    missing.push(leaf);
+                } else {
+                    held_by_every_operator.push(leaf);
+                }
+            }
+        }
+        let available = if held_by_every_operator.is_empty() {
+            Vec::new()
+        } else {
+            self.insert_leaves(held_by_every_operator).await?
+        };
+        Ok(RefreshedLeaves {
+            available,
+            available_missing_from_operators: missing,
+        })
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
@@ -959,6 +936,44 @@ impl SynchronousTreeService {
         Ok(nodes.items)
     }
 
+    /// Queries the coordinator and every other operator for the same nodes, all
+    /// at once, without ancestors. Returns the coordinator's nodes and each other
+    /// operator's nodes by operator id, or the error of a failed query.
+    async fn query_every_operator(
+        &self,
+        source: Option<Source>,
+        statuses: Vec<i32>,
+    ) -> Result<(Vec<TreeNode>, Vec<(usize, Vec<TreeNode>)>), TreeServiceError> {
+        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_non_coordinator_operators()
+            .map(|op| (op.id, op.client.clone()))
+            .collect();
+
+        let coord_fut =
+            self.query_nodes(&coordinator_client, false, source.clone(), statuses.clone());
+        let op_futs = operators.iter().map(|(id, client)| {
+            let source = source.clone();
+            let statuses = statuses.clone();
+            async move { (*id, self.query_nodes(client, false, source, statuses).await) }
+        });
+        let (coordinator_result, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
+
+        let coordinator_nodes = coordinator_result?;
+        let mut operator_nodes = Vec::with_capacity(operator_results.len());
+        for (id, result) in operator_results {
+            match result {
+                Ok(nodes) => operator_nodes.push((id, nodes)),
+                Err(e) => {
+                    error!("Failed to query operator {id}: {e:?}");
+                    return Err(e);
+                }
+            }
+        }
+        Ok((coordinator_nodes, operator_nodes))
+    }
+
     async fn check_renew_nodes(
         &self,
         pedigrees: Vec<LeafPedigree>,
@@ -1251,6 +1266,48 @@ fn query_nodes_request(
         source: Some(source),
         statuses,
     }
+}
+
+/// The coordinator's leaves that another operator does not hold, or holds
+/// differently, by id.
+fn missing_from_operators(
+    coordinator_leaves: &[TreeNode],
+    operator_nodes: &[(usize, Vec<TreeNode>)],
+) -> HashMap<TreeNodeId, TreeNode> {
+    let mut missing = HashMap::new();
+    for (operator_id, operator_leaves) in operator_nodes {
+        // Paging over a set the operator is concurrently mutating can return the
+        // same leaf on more than one page, so keep the first occurrence.
+        let mut operator_leaves_by_id: HashMap<&TreeNodeId, &TreeNode> =
+            HashMap::with_capacity(operator_leaves.len());
+        for operator_leaf in operator_leaves {
+            operator_leaves_by_id
+                .entry(&operator_leaf.id)
+                .or_insert(operator_leaf);
+        }
+
+        for leaf in coordinator_leaves {
+            match operator_leaves_by_id.get(&leaf.id).copied() {
+                Some(operator_leaf) => {
+                    if operators_disagree(leaf, operator_leaf) {
+                        warn!(
+                            "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
+                            operator_id, leaf, operator_leaf
+                        );
+                        missing.insert(leaf.id.clone(), leaf.clone());
+                    }
+                }
+                None => {
+                    warn!(
+                        "Ignoring leaf due to missing from operator {}: {:?}",
+                        operator_id, leaf.id
+                    );
+                    missing.insert(leaf.id.clone(), leaf.clone());
+                }
+            }
+        }
+    }
+    missing
 }
 
 /// Whether the coordinator's copy of a leaf and an operator's copy describe
