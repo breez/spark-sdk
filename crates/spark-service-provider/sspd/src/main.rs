@@ -1369,6 +1369,11 @@ fn spawn_internal_server(
         Arc::clone(restock),
         Arc::clone(&ssp_wallet.spark.leaf_store),
         refund_outputs,
+        internal_server::ReservingStores {
+            swaps: Arc::clone(swap_store),
+            lightning: Arc::clone(lightning_store),
+            static_deposits: Arc::clone(static_deposit_store),
+        },
         pool_config.denominations(),
         token.clone(),
     ));
