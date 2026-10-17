@@ -1382,6 +1382,15 @@ async fn an_old_refund_is_mature_once_an_old_node_transaction_confirmed() {
     assert_eq!(mature[0].leaves, std::slice::from_ref(&renewed.id));
     assert_eq!(mature[0].value, 1000);
     assert_eq!(mature[0].remaining, std::slice::from_ref(&old_refund));
+
+    fixture
+        .confirm_spend(output(&old.node_tx, 0), old_refund.compute_txid())
+        .await;
+    let unspent = fixture.unspent_outputs().await;
+    let outputs = store.refund_outputs(&unspent).await.unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].node_id, renewed.id);
+    assert_eq!(outputs[0].outpoint, output(&old_refund, 0));
 }
 
 #[tokio::test]
@@ -1439,6 +1448,61 @@ async fn a_refund_is_mature_below_a_node_transaction_that_confirmed_in_its_paren
     assert_eq!(mature.len(), 1);
     assert_eq!(mature[0].transaction, leaf.refund_tx.clone().unwrap());
     assert_eq!(mature[0].input_confirmation_height, height);
+}
+
+#[tokio::test]
+async fn a_confirmed_refund_leaves_a_refund_output() {
+    let fixture = Fixture::new().await;
+    let store = &fixture.store;
+    let exited = root_leaf(1000);
+    let by_watchtower = root_leaf(2000);
+    let waiting = root_leaf(3000);
+    fixture
+        .own(&[exited.clone(), by_watchtower.clone(), waiting])
+        .await
+        .unwrap();
+    let unspent = fixture.unspent_outputs().await;
+    assert!(store.refund_outputs(&unspent).await.unwrap().is_empty());
+
+    let refund = exited.refund_tx.as_ref().unwrap();
+    let block = fixture
+        .confirm_spends(&[
+            (
+                exited.node_tx.input[0].previous_output,
+                exited.node_tx.compute_txid(),
+            ),
+            (output(&exited.node_tx, 0), refund.compute_txid()),
+        ])
+        .await;
+    let direct = by_watchtower.direct_from_cpfp_refund_tx.as_ref().unwrap();
+    fixture
+        .confirm_spends(&[
+            (
+                by_watchtower.node_tx.input[0].previous_output,
+                by_watchtower.node_tx.compute_txid(),
+            ),
+            (output(&by_watchtower.node_tx, 0), direct.compute_txid()),
+        ])
+        .await;
+
+    let unspent = fixture.unspent_outputs().await;
+    let outputs = store.refund_outputs(&unspent).await.unwrap();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].node_id, exited.id);
+    assert_eq!(outputs[0].outpoint, output(refund, 0));
+    assert_eq!(outputs[0].output, refund.output[0]);
+    assert_eq!(outputs[0].height, fixture.height(block).await);
+    assert_eq!(outputs[1].node_id, by_watchtower.id);
+    assert_eq!(outputs[1].outpoint, output(direct, 0));
+    assert_eq!(outputs[1].output, direct.output[0]);
+
+    fixture
+        .confirm_spend(output(refund, 0), Txid::from_byte_array([0xee; 32]))
+        .await;
+    let unspent = fixture.unspent_outputs().await;
+    let outputs = store.refund_outputs(&unspent).await.unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].node_id, by_watchtower.id);
 }
 
 #[tokio::test]
