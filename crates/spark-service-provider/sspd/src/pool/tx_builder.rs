@@ -10,6 +10,7 @@ use bitcoin::{
     sighash::{Prevouts, SighashCache},
     transaction::Version,
 };
+use spark::services::{CpfpInput, compute_cpfp_package_fee, p2tr_key_path_input_weight};
 use thiserror::Error;
 
 use crate::fees;
@@ -25,6 +26,9 @@ pub enum TxBuildError {
 
     #[error("sighash error: {0}")]
     Sighash(String),
+
+    #[error("could not build a CPFP child: {0}")]
+    CpfpChild(String),
 }
 
 pub fn key_for<S: BuildHasher>(
@@ -55,6 +59,36 @@ pub fn funding_need(destinations: &[DepositOutput], inputs: usize, fee_rate: Fee
 
 pub fn bump_tx_weight(inputs: usize) -> Weight {
     fees::p2tr_tx_weight(inputs, 1)
+}
+
+/// Bitcoin Core relays a child of an unconfirmed version 3 transaction only if the
+/// child is at most 1,000 virtual bytes.
+const MAX_CPFP_CHILD_WEIGHT: Weight = Weight::from_vb_unchecked(1000);
+
+/// The weight of a CPFP child whose inputs are `inputs` wallet outputs and a
+/// parent's anchor.
+pub fn cpfp_child_weight(inputs: usize) -> Weight {
+    let input_weight = p2tr_key_path_input_weight()
+        .checked_mul(inputs as u64)
+        .unwrap_or(Weight::MAX);
+    // At 1000 sat/kw the fee in sats equals the weight.
+    Weight::from_wu(compute_cpfp_package_fee(
+        Weight::ZERO,
+        input_weight,
+        fees::P2TR_SCRIPT_LEN,
+        1000,
+    ))
+}
+
+pub fn max_cpfp_child_inputs() -> usize {
+    let spare = MAX_CPFP_CHILD_WEIGHT
+        .checked_sub(cpfp_child_weight(0))
+        .unwrap_or(Weight::ZERO);
+    let inputs = spare
+        .to_wu()
+        .checked_div(p2tr_key_path_input_weight().to_wu())
+        .unwrap_or(0);
+    usize::try_from(inputs).unwrap_or(usize::MAX).max(1)
 }
 
 /// With default settings, Bitcoin Core before version 29.1 accepts a replacement
@@ -149,7 +183,50 @@ pub fn build_bump_tx(
             script_pubkey: destination.script_pubkey(),
         }],
     };
-    sign_taproot_inputs(&mut tx, &inputs, signing_key_fn)?;
+    sign_taproot_inputs(&mut tx, &inputs, &[], signing_key_fn)?;
+    Ok(tx)
+}
+
+/// The CPFP child of `parent`, with `coins` and the parent's anchor as inputs. Its
+/// fee is `fee_sats` or a few sats more. Its one output has the rest of the value,
+/// at the first coin's address.
+pub fn build_cpfp_child(
+    parent: &Transaction,
+    coins: &[Utxo],
+    fee_sats: u64,
+    signing_key_fn: &dyn Fn(&Address) -> Result<SecretKey, TxBuildError>,
+) -> Result<Transaction, TxBuildError> {
+    let inputs: Vec<CpfpInput> = coins
+        .iter()
+        .map(|coin| CpfpInput {
+            outpoint: coin.outpoint,
+            witness_utxo: TxOut {
+                value: Amount::from_sat(coin.value),
+                script_pubkey: coin.address.script_pubkey(),
+            },
+            signed_input_weight: p2tr_key_path_input_weight().to_wu(),
+        })
+        .collect();
+    // A rate at which the fee of the parent and the CPFP child together is at
+    // least `fee_sats`.
+    let weight = parent
+        .weight()
+        .checked_add(cpfp_child_weight(coins.len()))
+        .unwrap_or(Weight::MAX);
+    let rate = fee_sats
+        .saturating_mul(1000)
+        .div_ceil(weight.to_wu().max(1));
+    let child = spark::services::build_cpfp_child(parent, &inputs, rate)
+        .map_err(|e| TxBuildError::CpfpChild(e.to_string()))?;
+    // The anchor is the CPFP child's last input.
+    let anchor = child
+        .psbt
+        .inputs
+        .last()
+        .and_then(|input| input.witness_utxo.clone())
+        .ok_or_else(|| TxBuildError::CpfpChild("the CPFP child has no anchor input".to_string()))?;
+    let mut tx = child.psbt.unsigned_tx;
+    sign_taproot_inputs(&mut tx, coins, &[anchor], signing_key_fn)?;
     Ok(tx)
 }
 
@@ -199,13 +276,17 @@ pub fn build_funding_tx(
         output: outputs,
     };
 
-    sign_taproot_inputs(&mut tx, inputs, signing_key_fn)?;
+    sign_taproot_inputs(&mut tx, inputs, &[], signing_key_fn)?;
     Ok(tx)
 }
 
+/// Signs the first inputs of `tx`, whose previous outputs are `selected`. `unsigned`
+/// has the previous outputs of the other inputs, because the taproot sighash
+/// includes those of every input.
 fn sign_taproot_inputs(
     tx: &mut Transaction,
     selected: &[Utxo],
+    unsigned: &[TxOut],
     signing_key_fn: &dyn Fn(&Address) -> Result<SecretKey, TxBuildError>,
 ) -> Result<(), TxBuildError> {
     let secp = Secp256k1::new();
@@ -215,6 +296,7 @@ fn sign_taproot_inputs(
             value: Amount::from_sat(utxo.value),
             script_pubkey: utxo.address.script_pubkey(),
         })
+        .chain(unsigned.iter().cloned())
         .collect();
 
     let mut signatures = Vec::with_capacity(selected.len());
