@@ -39,7 +39,6 @@ pub trait ChainClient {
     async fn broadcast_package(&self, txs: &[Transaction]) -> Result<(), BroadcastError>;
     /// Estimates the fee rate for confirmation within `conf_target` blocks.
     async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError>;
-    async fn get_blockheight(&self) -> Result<u64, ChainError>;
     async fn sync_state(&self) -> Result<SyncState, ChainError>;
     /// `None` above the node's tip.
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError>;

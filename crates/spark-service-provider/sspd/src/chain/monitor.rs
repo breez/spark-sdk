@@ -394,10 +394,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_blockheight(&self) -> Result<u64, ChainError> {
-            Ok(self.height())
-        }
-
         async fn sync_state(&self) -> Result<SyncState, ChainError> {
             Ok(SyncState {
                 height: self.height(),

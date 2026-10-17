@@ -213,10 +213,6 @@ impl ChainClient for BitcoindClient {
         Ok(FeeRate::from_sat_per_kwu(per_kvb.to_sat().div_ceil(4)))
     }
 
-    async fn get_blockheight(&self) -> Result<u64, ChainError> {
-        Ok(self.call("getblockcount", json!([])).await?)
-    }
-
     async fn sync_state(&self) -> Result<SyncState, ChainError> {
         let info: GetBlockchainInfoResponse = self.call("getblockchaininfo", json!([])).await?;
         Ok(SyncState {
