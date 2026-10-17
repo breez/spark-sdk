@@ -3,6 +3,7 @@ mod deployment;
 mod error;
 mod event;
 mod model;
+mod pending_deposits;
 mod unilateral_exit;
 mod wallet;
 mod wallet_builder;
