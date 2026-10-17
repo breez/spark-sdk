@@ -18,8 +18,6 @@ use crate::{
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-const REQUIRED_CONFIRMATIONS: u64 = 3;
-
 /// The loop also wakes on every block, which is what confirms a tree.
 const BACKUP_INTERVAL: Duration = Duration::from_secs(600);
 
@@ -35,6 +33,7 @@ pub async fn run_tree_pooling_loop<R>(
     chain_repository: Arc<R>,
     pool_repo: Arc<PoolRepository>,
     restock: Arc<RestockService>,
+    confirmations: u64,
     chain_advanced: Wakeup,
     token: CancellationToken,
 ) where
@@ -43,15 +42,22 @@ pub async fn run_tree_pooling_loop<R>(
     info!("Starting tree pooling loop");
 
     loop {
-        let retry_in =
-            match pool_confirmed_trees(&wallet, &chain_repository, &pool_repo, &restock).await {
-                Ok(false) => BACKUP_INTERVAL,
-                Ok(true) => OPERATOR_RETRY_INTERVAL,
-                Err(e) => {
-                    error!("Tree pooling failed: {e}");
-                    OPERATOR_RETRY_INTERVAL
-                }
-            };
+        let retry_in = match pool_confirmed_trees(
+            &wallet,
+            &chain_repository,
+            &pool_repo,
+            &restock,
+            confirmations,
+        )
+        .await
+        {
+            Ok(false) => BACKUP_INTERVAL,
+            Ok(true) => OPERATOR_RETRY_INTERVAL,
+            Err(e) => {
+                error!("Tree pooling failed: {e}");
+                OPERATOR_RETRY_INTERVAL
+            }
+        };
         tokio::select! {
             () = token.cancelled() => {
                 info!("Tree pooling loop cancelled");
@@ -70,6 +76,7 @@ async fn pool_confirmed_trees<R>(
     chain_repository: &Arc<R>,
     pool_repo: &PoolRepository,
     restock: &RestockService,
+    confirmations: u64,
 ) -> Result<bool, BoxError>
 where
     R: ChainRepository + Send + Sync + 'static,
@@ -83,7 +90,7 @@ where
     let mut waiting = false;
     for deposit in deposits {
         for tree in &deposit.trees {
-            match pool_tree(wallet, &txos, pool_repo, tree, height).await {
+            match pool_tree(wallet, &txos, pool_repo, tree, height, confirmations).await {
                 Ok(Pooling::Pooled(values)) => restock.publish(PoolEvent::LeavesAvailable {
                     deposit_address: tree.deposit_address.clone(),
                     denominations: values,
@@ -124,21 +131,20 @@ enum Pooling {
     WaitingForOperators,
 }
 
-/// Adds a tree's leaves to the leaf store once its funding output has enough
-/// confirmations and the operators report the leaves available.
 async fn pool_tree<R>(
     wallet: &SspWallet<R>,
     txos: &[crate::chain::Txo],
     pool_repo: &PoolRepository,
     tree: &DepositTree,
     height: u64,
+    confirmations: u64,
 ) -> Result<Pooling, BoxError>
 where
     R: ChainRepository + Send + Sync + 'static,
 {
-    let confirmed = txos.iter().any(|txo| {
-        txo.outpoint == tree.outpoint && txo.confirmations(height) >= REQUIRED_CONFIRMATIONS
-    });
+    let confirmed = txos
+        .iter()
+        .any(|txo| txo.outpoint == tree.outpoint && txo.confirmations(height) >= confirmations);
     if !confirmed {
         return Ok(Pooling::Unconfirmed);
     }
