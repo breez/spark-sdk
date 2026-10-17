@@ -14,6 +14,8 @@ use super::ChainTip;
 /// is never undone, so this assumes no reorg is that deep.
 const BIRTHDAY_DEPTH: u64 = 20;
 
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 pub struct ChainMonitor<C, R>
 where
     C: ChainClient,
@@ -52,6 +54,7 @@ where
 
     /// Follows the chain until `token` is cancelled.
     pub async fn start(self: Arc<Self>, token: CancellationToken) {
+        let mut retry = INITIAL_RETRY_DELAY;
         loop {
             let mut changed = false;
             let synced = self.sync(&token, &mut changed).await;
@@ -69,12 +72,14 @@ where
                             .await
                         {
                             warn!("waiting for a new block failed: {e}");
-                            tokio::time::sleep(self.poll_interval).await;
+                            self.back_off(&mut retry).await;
+                        } else {
+                            retry = INITIAL_RETRY_DELAY;
                         }
                     }
                     Err(e) => {
                         error!("chain sync failed, retrying: {e}");
-                        tokio::time::sleep(self.poll_interval).await;
+                        self.back_off(&mut retry).await;
                     }
                 }
             };
@@ -83,6 +88,11 @@ where
                 () = wait => {}
             }
         }
+    }
+
+    async fn back_off(&self, retry: &mut Duration) {
+        tokio::time::sleep((*retry).min(self.poll_interval)).await;
+        *retry = retry.saturating_mul(2);
     }
 
     /// Brings the stored chain in line with the node's and returns the stored tip's
@@ -763,6 +773,39 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), wakeup.waited())
             .await
             .expect("a new block did not wake the workers");
+
+        token.cancel();
+        running.await.unwrap();
+    }
+
+    fn slow_monitor(bitcoind: &Arc<Node>, store: &Arc<Store>) -> Arc<ChainMonitor<Node, Store>> {
+        Arc::new(ChainMonitor::new(
+            Network::Regtest,
+            Arc::clone(bitcoind),
+            Arc::clone(store),
+            Duration::from_secs(60),
+            Vec::new(),
+            ChainTip::default(),
+        ))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_monitor_calls_bitcoind_again_a_second_after_an_error() {
+        let bitcoind = Arc::new(Node::default());
+        let blocks = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        bitcoind.set_tip(blocks[29]);
+        *bitcoind.unavailable.lock().unwrap() = Some(blocks[29]);
+        let store = Arc::new(Store::default());
+        let monitor = slow_monitor(&bitcoind, &store);
+        let token = CancellationToken::new();
+        let running = tokio::spawn(Arc::clone(&monitor).start(token.clone()));
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!stored(&store).contains(&blocks[29]));
+
+        *bitcoind.unavailable.lock().unwrap() = None;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(stored(&store).contains(&blocks[29]));
 
         token.cancel();
         running.await.unwrap();
