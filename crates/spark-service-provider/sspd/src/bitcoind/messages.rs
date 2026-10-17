@@ -1,15 +1,18 @@
+use bitcoin::Amount;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct EstimateSmartFeeResponse {
-    /// BTC/kvB. Absent when the node has no estimate for the target.
-    pub feerate: Option<f64>,
+    /// The fee per kvB. Absent when bitcoind has no estimate for the target.
+    #[serde(default, with = "bitcoin::amount::serde::as_btc::opt")]
+    pub feerate: Option<Amount>,
 }
 
 #[derive(Deserialize)]
 pub struct GetMempoolInfoResponse {
-    /// BTC/kvB.
-    pub mempoolminfee: f64,
+    /// The fee per kvB.
+    #[serde(with = "bitcoin::amount::serde::as_btc")]
+    pub mempoolminfee: Amount,
 }
 
 #[derive(Deserialize)]

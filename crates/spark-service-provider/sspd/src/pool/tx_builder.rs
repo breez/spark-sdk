@@ -1,5 +1,5 @@
 use bitcoin::{
-    Address, Amount, Sequence, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, FeeRate, Sequence, Transaction, TxIn, TxOut, Witness,
     absolute::LockTime,
     hashes::Hash,
     key::TapTweak,
@@ -38,15 +38,11 @@ pub fn funding_tx_weight_wu(inputs: usize, outputs: usize) -> u64 {
 
 /// Always includes dust for a change output: a child spends the change to raise the
 /// funding transaction's fee rate.
-pub fn funding_need(
-    destinations: &[DepositOutput],
-    inputs: usize,
-    fee_rate_sat_per_kw: u64,
-) -> u64 {
+pub fn funding_need(destinations: &[DepositOutput], inputs: usize, fee_rate: FeeRate) -> u64 {
     let total: u64 = destinations.iter().map(|d| d.amount).sum();
     total
         .saturating_add(fees::fee_sats(
-            fee_rate_sat_per_kw,
+            fee_rate,
             funding_tx_weight_wu(inputs, destinations.len().saturating_add(1)),
         ))
         .saturating_add(fees::P2TR_DUST_SATS)
@@ -63,18 +59,19 @@ pub struct ReplacedChild {
 }
 
 /// The fee a child with `inputs` inputs pays so it and its parent together pay at least
-/// `fee_rate_sat_per_kw`. A child replacing `replaces` also pays at least that child's
+/// The fee for a CPFP child of `weight` at which it and its parent together have a fee rate
+/// of at least `fee_rate`. The replacement for `replaces` has a fee of at least that child's
 /// fee plus the relay fee for its own weight, at a higher fee rate, as a node requires.
 pub fn bump_fee(
-    fee_rate_sat_per_kw: u64,
+    fee_rate: FeeRate,
     parent_weight_wu: u64,
     parent_fee_sats: u64,
     inputs: usize,
     replaces: Option<ReplacedChild>,
 ) -> u64 {
     let weight = bump_tx_weight_wu(inputs);
-    let relay = fees::fee_sats(fees::MIN_FEE_RATE_SAT_PER_KW, weight);
-    let package = fees::fee_sats(fee_rate_sat_per_kw, parent_weight_wu.saturating_add(weight))
+    let relay = fees::fee_sats(fees::MIN_FEE_RATE, weight);
+    let package = fees::fee_sats(fee_rate, parent_weight_wu.saturating_add(weight))
         .saturating_sub(parent_fee_sats)
         .max(relay);
     replaces.map_or(package, |earlier| {
@@ -141,11 +138,11 @@ pub fn build_funding_tx(
     inputs: &[Utxo],
     destinations: &[DepositOutput],
     change_address: &Address,
-    fee_rate_sat_per_kw: u64,
+    fee_rate: FeeRate,
     signing_key_fn: &dyn Fn(&Address) -> Result<SecretKey, TxBuildError>,
 ) -> Result<Transaction, TxBuildError> {
     let input_total: u64 = inputs.iter().map(|u| u.value).sum();
-    let need = funding_need(destinations, inputs.len(), fee_rate_sat_per_kw);
+    let need = funding_need(destinations, inputs.len(), fee_rate);
     if input_total < need {
         return Err(TxBuildError::InsufficientFunds {
             need,
@@ -235,7 +232,7 @@ mod tests {
     use super::*;
     use bitcoin::{Network, OutPoint, Txid, hashes::Hash, key::Secp256k1};
 
-    const ONE_SAT_PER_VB: u64 = 250;
+    const ONE_SAT_PER_VB: FeeRate = FeeRate::from_sat_per_vb_u32(1);
 
     fn test_utxo(value: u64, index: u8) -> Utxo {
         let secp = Secp256k1::new();
@@ -333,7 +330,7 @@ mod tests {
 
     #[test]
     fn a_bump_pays_for_its_parent_to_reach_the_rate() {
-        let rate = 10 * ONE_SAT_PER_VB;
+        let rate = FeeRate::from_sat_per_vb_u32(10);
         let parent_weight = funding_tx_weight_wu(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
 
@@ -350,22 +347,25 @@ mod tests {
         let parent_weight = funding_tx_weight_wu(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
         let earlier = ReplacedChild {
-            fee_sats: bump_fee(10 * ONE_SAT_PER_VB, parent_weight, parent_fee, 1, None),
+            fee_sats: bump_fee(
+                FeeRate::from_sat_per_vb_u32(10),
+                parent_weight,
+                parent_fee,
+                1,
+                None,
+            ),
             weight_wu: bump_tx_weight_wu(1),
         };
 
         let fee = bump_fee(
-            10 * ONE_SAT_PER_VB,
+            FeeRate::from_sat_per_vb_u32(10),
             parent_weight,
             parent_fee,
             1,
             Some(earlier),
         );
 
-        assert!(
-            fee >= earlier.fee_sats
-                + fees::fee_sats(fees::MIN_FEE_RATE_SAT_PER_KW, bump_tx_weight_wu(1))
-        );
+        assert!(fee >= earlier.fee_sats + fees::fee_sats(fees::MIN_FEE_RATE, bump_tx_weight_wu(1)));
     }
 
     #[test]
@@ -373,13 +373,19 @@ mod tests {
         let parent_weight = funding_tx_weight_wu(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
         let earlier = ReplacedChild {
-            fee_sats: bump_fee(200 * ONE_SAT_PER_VB, parent_weight, parent_fee, 1, None),
+            fee_sats: bump_fee(
+                FeeRate::from_sat_per_vb_u32(200),
+                parent_weight,
+                parent_fee,
+                1,
+                None,
+            ),
             weight_wu: bump_tx_weight_wu(1),
         };
         let weight = bump_tx_weight_wu(5);
 
         let fee = bump_fee(
-            20 * ONE_SAT_PER_VB,
+            FeeRate::from_sat_per_vb_u32(20),
             parent_weight,
             parent_fee,
             5,

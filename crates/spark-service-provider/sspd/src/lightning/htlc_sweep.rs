@@ -100,7 +100,7 @@ where
     let (script_pubkey, hash_lock_script, control_block) =
         hash_lock_spend(first, &ssp, deps.network)?;
 
-    let rate = deps.fee_rates.sat_per_kw().await?;
+    let rate = deps.fee_rates.fee_rate().await?;
     let weight = fees::TX_OVERHEAD_WU
         .saturating_add(HASH_LOCK_INPUT_WU.saturating_mul(outputs.len() as u64))
         .saturating_add(fees::P2TR_OUTPUT_WU);
@@ -109,7 +109,7 @@ where
         .checked_sub(fees::fee_sats(rate, weight))
         .filter(|value| *value >= fees::P2TR_DUST_SATS)
     else {
-        warn!(send_id = %first.send_id, total, rate, "the HTLC outputs of a paid send are not worth sweeping at the current fee rate");
+        warn!(send_id = %first.send_id, total, %rate, "the HTLC outputs of a paid send are not worth sweeping at the current fee rate");
         return Ok(());
     };
     let destination = if let Some(address) = &first.sweep_address {

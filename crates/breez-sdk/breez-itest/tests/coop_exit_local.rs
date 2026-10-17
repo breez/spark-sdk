@@ -13,7 +13,7 @@ use breez_sdk_spark::{
 };
 use rstest::rstest;
 use sspd_lib::coop_exit::coop_exit_fees;
-use sspd_lib::fees::MIN_FEE_RATE_SAT_PER_KW;
+use sspd_lib::fees::MIN_FEE_RATE;
 use sspd_lib::static_deposit::claim_fee_sats;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::info;
@@ -21,7 +21,7 @@ use tracing::info;
 /// The SSP's coop-exit fee for one amount leaf, at the floor rate it quotes on
 /// regtest, where bitcoind has no fee history for `estimatesmartfee`.
 fn single_leaf_fee_sats() -> u64 {
-    let fees = coop_exit_fees(1, MIN_FEE_RATE_SAT_PER_KW);
+    let fees = coop_exit_fees(1, MIN_FEE_RATE);
     fees.l1_broadcast_fee_sats
         .saturating_add(fees.user_fee_sats)
 }
@@ -71,10 +71,7 @@ async fn test_coop_exit_withdraw_local(#[future] env: Result<Environment>) -> Re
     // The claim fee comes off the deposit, so funding it on top credits exactly
     // `CREDIT_SATS` at the floor fee rate.
     faucet
-        .fund_address(
-            &deposit_addr,
-            CREDIT_SATS + claim_fee_sats(MIN_FEE_RATE_SAT_PER_KW),
-        )
+        .fund_address(&deposit_addr, CREDIT_SATS + claim_fee_sats(MIN_FEE_RATE))
         .await?;
     env.local().fixtures().bitcoind.generate_blocks(1).await?;
     let funded = wait_for_balance(&local.sdk, Some(1), None, 180).await?;

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bitcoin::{
-    Amount, Block, BlockHash, OutPoint, ScriptBuf, Transaction, TxOut,
+    Amount, Block, BlockHash, FeeRate, OutPoint, ScriptBuf, Transaction, TxOut,
     consensus::{deserialize, encode::serialize_hex},
     hashes::hex::FromHex,
 };
@@ -196,22 +196,20 @@ impl ChainClient for BitcoindClient {
         }
     }
 
-    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<u64, ChainError> {
+    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError> {
         let estimate: EstimateSmartFeeResponse = self
             .call("estimatesmartfee", json!([conf_target.clamp(1, 1008)]))
             .await?;
         // A node without enough fee history answers with no `feerate`; the least
         // it relays then is the rate a transaction has to pay to be accepted.
-        let btc_per_kvb = if let Some(feerate) = estimate.feerate {
+        let per_kvb = if let Some(feerate) = estimate.feerate {
             feerate
         } else {
             let info: GetMempoolInfoResponse = self.call("getmempoolinfo", json!([])).await?;
             info.mempoolminfee
         };
-        // 1 BTC/kvB == 25_000_000 sat/kw.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let sat_per_kw = (btc_per_kvb * 25_000_000.0).ceil() as u64;
-        Ok(sat_per_kw)
+        // A virtual byte is four weight units.
+        Ok(FeeRate::from_sat_per_kwu(per_kvb.to_sat().div_ceil(4)))
     }
 
     async fn get_blockheight(&self) -> Result<u64, ChainError> {

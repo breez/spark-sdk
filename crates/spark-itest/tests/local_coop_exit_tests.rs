@@ -8,7 +8,7 @@ use spark::ssp::ServiceProvider;
 use spark_itest::fixtures::setup::{TestFixtures, create_test_signer_alice};
 use spark_wallet::{RetryConfig, ServiceProviderConfig};
 use sspd_lib::coop_exit::coop_exit_fees;
-use sspd_lib::fees::MIN_FEE_RATE_SAT_PER_KW;
+use sspd_lib::fees::MIN_FEE_RATE;
 use tracing::info;
 
 const WITHDRAWAL_ADDRESS: &str = "bcrt1qqxhsts0qkmhkgwvl5j03zw7gry4z56mm993s0z";
@@ -67,7 +67,7 @@ async fn test_coop_exit_quote_matches_the_fee_model() -> Result<()> {
             .ssp
             .get_coop_exit_fee_quote(leaf_ids(leaves), WITHDRAWAL_ADDRESS)
             .await?;
-        let expected = coop_exit_fees(leaves as u64, MIN_FEE_RATE_SAT_PER_KW);
+        let expected = coop_exit_fees(leaves as u64, MIN_FEE_RATE);
         let expected_total = expected
             .l1_broadcast_fee_sats
             .saturating_add(expected.user_fee_sats);

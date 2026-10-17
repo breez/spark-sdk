@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bitcoin::{Block, BlockHash, Transaction};
+use bitcoin::{Block, BlockHash, FeeRate, Transaction};
 use thiserror::Error;
 
 use super::ChainRepositoryError;
@@ -29,9 +29,8 @@ pub trait ChainClient {
     async fn broadcast_tx(&self, tx: Transaction) -> Result<(), BroadcastError>;
     /// Broadcasts `txs` as one package: the last spends outputs of the others.
     async fn broadcast_package(&self, txs: &[Transaction]) -> Result<(), BroadcastError>;
-    /// Estimates the fee rate (sat/kw) for confirmation within `conf_target`
-    /// blocks.
-    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<u64, ChainError>;
+    /// Estimates the fee rate for confirmation within `conf_target` blocks.
+    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError>;
     async fn get_blockheight(&self) -> Result<u64, ChainError>;
     /// `None` above the node's tip.
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError>;
