@@ -393,6 +393,19 @@ pub async fn record_spends(
     Ok(())
 }
 
+/// Undoes [`record_spends`] for each of `spending_txids`.
+pub async fn forget_spends(
+    db: &mut PgConnection,
+    spending_txids: &[Txid],
+) -> Result<(), sqlx::Error> {
+    let txids: Vec<String> = spending_txids.iter().map(ToString::to_string).collect();
+    sqlx::query("DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)")
+        .bind(&txids)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 fn outpoint(tx_id: &str, output_index: i32) -> Result<OutPoint, OnchainWalletError> {
     Ok(OutPoint {
         txid: tx_id
@@ -537,6 +550,11 @@ mod tests {
             super::record_spends(&mut db, &spending_txid, outpoints)
                 .await
                 .unwrap();
+        }
+
+        async fn forget_spends(&self, spending_txids: &[Txid]) {
+            let mut db = self.pool.acquire().await.unwrap();
+            super::forget_spends(&mut db, spending_txids).await.unwrap();
         }
     }
 
@@ -916,6 +934,49 @@ mod tests {
                 .unwrap();
         assert_eq!(recorded, 1);
         assert!(fixture.coins().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_coins_of_forgotten_transactions_are_listed_again() {
+        let fixture = Fixture::new().await;
+        let (first, second, other) = (
+            fixture.coin(1, 5_000).await,
+            fixture.coin(2, 6_000).await,
+            fixture.coin(3, 7_000).await,
+        );
+        fixture.record_spends(txid(7), &[first]).await;
+        fixture.record_spends(txid(8), &[second]).await;
+        fixture.record_spends(txid(9), &[other]).await;
+
+        fixture.forget_spends(&[txid(7), txid(8), txid(8)]).await;
+
+        assert_eq!(fixture.coins().await, [first, second]);
+    }
+
+    #[tokio::test]
+    async fn forgetting_no_transaction_or_one_without_a_recorded_spend_frees_no_coin() {
+        let fixture = Fixture::new().await;
+        let coin = fixture.coin(1, 5_000).await;
+        fixture.record_spends(txid(8), &[coin]).await;
+
+        fixture.forget_spends(&[]).await;
+        fixture.forget_spends(&[txid(9)]).await;
+
+        assert!(fixture.coins().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_coin_with_recorded_spends_of_two_transactions_is_listed_once_both_are_forgotten() {
+        let fixture = Fixture::new().await;
+        let coin = fixture.coin(1, 5_000).await;
+        fixture.record_spends(txid(8), &[coin]).await;
+        fixture.record_spends(txid(9), &[coin]).await;
+
+        fixture.forget_spends(&[txid(8)]).await;
+        assert!(fixture.coins().await.is_empty());
+
+        fixture.forget_spends(&[txid(9)]).await;
+        assert_eq!(fixture.coins().await, [coin]);
     }
 
     #[tokio::test]
