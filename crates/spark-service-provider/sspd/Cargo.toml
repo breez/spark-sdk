@@ -56,6 +56,8 @@ uuid = { workspace = true }
 tonic-build = { workspace = true }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true, features = ["test-util"] }
 toml = "0.8"
 tower = { version = "0.5", features = ["util"] }

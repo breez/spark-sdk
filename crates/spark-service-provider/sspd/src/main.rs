@@ -242,6 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let static_deposit_blocks = wakeup::Wakeup::new();
     let htlc_sweep_blocks = wakeup::Wakeup::new();
     let leaf_sync_blocks = wakeup::Wakeup::new();
+    let spend_check_blocks = wakeup::Wakeup::new();
     let static_deposit_claims = wakeup::Wakeup::new();
 
     let chain_info = loop {
@@ -287,6 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             static_deposit_blocks.clone(),
             htlc_sweep_blocks.clone(),
             leaf_sync_blocks.clone(),
+            spend_check_blocks.clone(),
         ],
         &token,
     );
@@ -436,6 +438,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let leaf_sync_token = token.clone();
     tracker.spawn(async move {
         pool::leaf_sync::run_leaf_sync_loop(leaf_sync, leaf_sync_token).await;
+    });
+
+    let spend_check = chain::spend_check::SpendCheckDeps {
+        chain_repository: Arc::clone(&chain_repository),
+        chain_tip: chain_tip.clone(),
+        chain_client: Arc::clone(&chain_client) as Arc<dyn chain::ChainClient + Send + Sync>,
+        blocks: spend_check_blocks,
+    };
+    let spend_check_token = token.clone();
+    tracker.spawn(async move {
+        chain::spend_check::run_spend_check_loop(spend_check, spend_check_token).await;
     });
 
     let lightning = build_lightning(

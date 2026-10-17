@@ -7,6 +7,8 @@ mod lightning_store;
 mod pool_store;
 mod static_deposit_store;
 mod swap_store;
+#[cfg(test)]
+pub(crate) mod testing;
 
 pub use chain_repository::ChainRepository;
 pub use coop_exit_store::PostgresCoopExitStore;

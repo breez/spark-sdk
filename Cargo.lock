@@ -7943,6 +7943,8 @@ dependencies = [
  "spark",
  "spark-postgres",
  "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
