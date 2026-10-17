@@ -164,6 +164,7 @@ impl BitcoindClient {
                         .map_err(|e| ChainError::General(Box::new(e)))?,
                 },
                 confirmations: output.confirmations,
+                best_block: output.bestblock.parse()?,
             })
         })
         .transpose()

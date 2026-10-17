@@ -47,6 +47,15 @@ pub struct ConfirmedOutput {
     pub height: u64,
 }
 
+/// The confirmations bitcoind counted for transaction `txid` while bitcoind's
+/// tip was `best_block`.
+#[derive(Debug, Clone, Copy)]
+pub struct TransactionConfirmations {
+    pub txid: Txid,
+    pub best_block: BlockHash,
+    pub confirmations: u64,
+}
+
 #[derive(Debug)]
 pub struct SpentTxo {
     pub outpoint: OutPoint,

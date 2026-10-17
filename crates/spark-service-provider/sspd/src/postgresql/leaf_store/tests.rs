@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::{Dispute, LeafStoreError, PostgresLeafStore, RenewalCursor, Reported, exit_chain};
 use crate::chain::ConfirmedOutput;
+use crate::chain::TransactionConfirmations;
 use crate::chain::{BlockHeader, ChainRepository as _, OutputSpend, Spender, SpentTxo};
 use crate::postgresql::ChainRepository;
 use crate::postgresql::testing::TestDatabase;
@@ -1896,4 +1897,47 @@ async fn node_transactions_are_stored_without_the_leaf_below_them() {
         .await
         .unwrap();
     assert_eq!(stored_txids, HashSet::from([below_txid]));
+}
+
+#[tokio::test]
+async fn the_block_of_a_transaction_is_recorded_from_its_confirmations() {
+    let fixture = Fixture::new().await;
+    let chain = fixture.chain();
+    let block = |byte: u8, height: u64| BlockHeader {
+        hash: BlockHash::from_byte_array([byte; 32]),
+        height,
+    };
+    let blocks = [block(0xc0, 200), block(0xc1, 201), block(0xc2, 202)];
+    for block in &blocks {
+        chain.add_block(block, &[], &[]).await.unwrap();
+    }
+    let tip = blocks[2].hash;
+    let txid = Txid::from_byte_array([0xd0; 32]);
+    let record = async |best_block: BlockHash, confirmations: u64| {
+        let confirmed = TransactionConfirmations {
+            txid,
+            best_block,
+            confirmations,
+        };
+        chain.record_tx_blocks(&[confirmed]).await.unwrap()
+    };
+
+    assert_eq!(record(blocks[1].hash, 1).await, 0, "not the record's tip");
+    assert_eq!(record(tip, 0).await, 0, "in the mempool only");
+    assert_eq!(record(tip, 4).await, 0, "in a block older than the record");
+    assert!(chain.tx_heights(&[txid]).await.unwrap().is_empty());
+
+    assert_eq!(record(tip, 2).await, 1);
+    assert_eq!(chain.tx_heights(&[txid]).await.unwrap()[&txid], 201);
+    let mut db = fixture.pool.acquire().await.unwrap();
+    let (_, heights) = chain
+        .output_states_and_tx_heights(&mut db, &[], &[txid])
+        .await
+        .unwrap();
+    assert_eq!(heights[&txid], 201);
+
+    chain.undo_block(tip).await.unwrap();
+    assert_eq!(chain.tx_heights(&[txid]).await.unwrap()[&txid], 201);
+    chain.undo_block(blocks[1].hash).await.unwrap();
+    assert!(chain.tx_heights(&[txid]).await.unwrap().is_empty());
 }

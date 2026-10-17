@@ -37,6 +37,8 @@ pub struct UnspentOutput {
     pub tx_out: TxOut,
     /// Zero while the output is only in the mempool.
     pub confirmations: u64,
+    /// bitcoind's tip when it counted the confirmations.
+    pub best_block: BlockHash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
