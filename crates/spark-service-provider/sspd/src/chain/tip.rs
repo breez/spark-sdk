@@ -1,11 +1,13 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
+use super::SyncState;
 use super::{BlockHeader, ChainRepository, ChainRepositoryError};
 
 #[derive(Default)]
 struct Tips {
     next: Option<BlockHeader>,
     stored: Option<BlockHeader>,
+    bitcoind: Option<SyncState>,
 }
 
 /// The chain monitor keeps the chain record's tip and bitcoind's sync state in
@@ -68,6 +70,12 @@ impl ChainTip {
         }
     }
 
+    /// bitcoind's sync state at the start of the chain monitor's last sync.
+    /// `None` until the monitor has fetched it.
+    pub fn bitcoind_sync_state(&self) -> Option<SyncState> {
+        self.tips().bitcoind
+    }
+
     pub(super) fn stored_is(&self, tip: Option<BlockHeader>) {
         let mut tips = self.tips();
         tips.next.clone_from(&tip);
@@ -81,6 +89,10 @@ impl ChainTip {
     pub(super) fn written(&self) {
         let tips = &mut *self.tips();
         tips.stored.clone_from(&tips.next);
+    }
+
+    pub(super) fn set_bitcoind_sync_state(&self, bitcoind: SyncState) {
+        self.tips().bitcoind = Some(bitcoind);
     }
 }
 
