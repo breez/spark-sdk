@@ -373,6 +373,8 @@ let
           ''--bitcoind-rpc-user="$BITCOIND_RPC_USER"''
           ''--leaves-per-denomination="$LEAVES_PER_DENOMINATION"''
           ''--max-denomination-power="$MAX_DENOMINATION_POWER"''
+          # The operators' non_static_confirmation_threshold is also 1.
+          "--deposit-confirmations=1"
           ''--ldk-server-url="127.0.0.1:$LDK_GRPC_PORT"''
           ''--ldk-server-cert-path="$SPARK_LOCAL_DIR/ldk/tls.crt"''
         ];

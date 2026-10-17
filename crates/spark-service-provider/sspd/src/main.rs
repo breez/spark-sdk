@@ -121,6 +121,13 @@ struct Args {
     #[arg(long, default_value = "20")]
     pub max_denomination_power: u32,
 
+    /// Confirmations the funding output of one of the SSP's own trees needs
+    /// before the SSP adds the tree's leaves to the pool. Set it to the
+    /// operators' `non_static_confirmation_threshold`: they make a tree
+    /// available at that count.
+    #[arg(long, default_value = "3")]
+    pub deposit_confirmations: u64,
+
     /// How long, in seconds, the SSP's leaves stay fronted to a user who has not
     /// revealed a HODL preimage before the operators return them. Hold invoices
     /// demand enough CLTV to outlast it.
@@ -354,6 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &chain_repository,
         &pool_repo,
         &fee_rates,
+        args.deposit_confirmations,
         replenish_wakeup,
         pooling_wakeup,
         &token,
@@ -568,6 +576,7 @@ fn spawn_pool_loops(
     chain_repository: &Arc<postgresql::ChainRepository>,
     pool_repo: &Arc<postgresql::PoolRepository>,
     fee_rates: &Arc<dyn fees::FeeRateSource>,
+    deposit_confirmations: u64,
     replenish_wakeup: wakeup::Wakeup,
     pooling_wakeup: wakeup::Wakeup,
     token: &CancellationToken,
@@ -606,6 +615,7 @@ fn spawn_pool_loops(
             pooling_chain_repo,
             pooling_repo,
             pooling_restock,
+            deposit_confirmations,
             pooling_wakeup,
             pooling_token,
         )

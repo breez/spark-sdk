@@ -300,6 +300,8 @@ services:
       - --bitcoind-rpc-user=${BITCOIND_RPC_USER}
       - --leaves-per-denomination=${LEAVES_PER_DENOMINATION:-8}
       - --max-denomination-power=${MAX_DENOMINATION_POWER:-16}
+      # The operators' non_static_confirmation_threshold is also 1.
+      - --deposit-confirmations=1
       - --ldk-server-url=ldk-server:3536
       - --ldk-server-cert-path=/ldk/tls.crt
     volumes:

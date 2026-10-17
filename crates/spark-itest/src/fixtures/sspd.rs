@@ -194,6 +194,10 @@ impl SspdFixture {
             MAX_DENOMINATION_POWER.to_string(),
             "--receive-leaf-transfer-expiry-seconds".to_string(),
             RECEIVE_LEAF_TRANSFER_EXPIRY_SECS.to_string(),
+            // The operators' `non_static_confirmation_threshold` in
+            // `so.config.yaml`.
+            "--deposit-confirmations".to_string(),
+            "1".to_string(),
         ];
 
         if let Some(ldk) = ldk {
