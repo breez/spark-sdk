@@ -219,7 +219,7 @@ impl LightningStore for PostgresLightningStore {
     }
 
     async fn unswept_htlc_outputs(&self) -> Result<Vec<HtlcOutput>, String> {
-        let rows: Vec<(String, Vec<u8>, Vec<u8>, Option<String>, String, i64, i64)> =
+        let rows: Vec<(String, Vec<u8>, Vec<u8>, Option<String>, String, i32, i64)> =
             sqlx::query_as(
                 r#"SELECT s.id, s.user_identity_public_key, s.preimage, s.htlc_sweep_address,
                           o.tx_id, o.output_index, o.amount
@@ -249,8 +249,7 @@ impl LightningStore for PostgresLightningStore {
                         outpoint: bitcoin::OutPoint {
                             txid: bitcoin::Txid::from_str(&tx_id)
                                 .map_err(|e| format!("invalid txid: {e}"))?,
-                            vout: u32::try_from(output_index)
-                                .map_err(|e| format!("invalid output index: {e}"))?,
+                            vout: output_index.cast_unsigned(),
                         },
                         value_sats: u64::try_from(amount)
                             .map_err(|e| format!("invalid amount: {e}"))?,

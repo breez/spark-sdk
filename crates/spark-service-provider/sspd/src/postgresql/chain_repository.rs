@@ -32,7 +32,7 @@ impl ChainRepository {
             .collect();
         let output_indices: Vec<_> = tx_outputs
             .iter()
-            .map(|u| i64::from(u.utxo.outpoint.vout))
+            .map(|u| u.utxo.outpoint.vout.cast_signed())
             .collect();
         let addresses: Vec<_> = tx_outputs.iter().map(|u| u.address.to_string()).collect();
         let amounts: Vec<_> = tx_outputs
@@ -48,7 +48,7 @@ impl ChainRepository {
                SELECT t.tx_id, t.output_index, t.address, t.amount
                FROM UNNEST(
                    $1::text[]
-               ,   $2::bigint[]
+               ,   $2::int[]
                ,   $3::text[]
                ,   $4::bigint[]
                ) AS t(tx_id, output_index, address, amount)
@@ -80,12 +80,12 @@ impl ChainRepository {
 
     fn map_txo(address: &Address, row: &PgRow) -> Result<Txo, ChainRepositoryError> {
         let tx_id: String = row.try_get("tx_id")?;
-        let output_index: i64 = row.try_get("output_index")?;
+        let output_index: i32 = row.try_get("output_index")?;
         let amount: i64 = row.try_get("amount")?;
         let height: i64 = row.try_get("height")?;
         Ok(Txo {
             block_height: height.cast_unsigned(),
-            outpoint: OutPoint::new(tx_id.parse()?, u32::try_from(output_index).unwrap_or(0)),
+            outpoint: OutPoint::new(tx_id.parse()?, output_index.cast_unsigned()),
             tx_out: TxOut {
                 value: Amount::from_sat(amount.cast_unsigned()),
                 script_pubkey: address.script_pubkey(),
@@ -100,11 +100,12 @@ impl ChainRepository {
         txos: &[SpentTxo],
     ) -> Result<(), ChainRepositoryError> {
         let tx_ids: Vec<_> = txos.iter().map(|u| u.outpoint.txid.to_string()).collect();
-        let tx_output_indices: Vec<_> = txos.iter().map(|u| i64::from(u.outpoint.vout)).collect();
+        let tx_output_indices: Vec<_> =
+            txos.iter().map(|u| u.outpoint.vout.cast_signed()).collect();
         let spending_tx_ids: Vec<_> = txos.iter().map(|u| u.spending_tx.to_string()).collect();
         let spending_tx_input_indices: Vec<_> = txos
             .iter()
-            .map(|u| i64::from(u.spending_input_index))
+            .map(|u| u.spending_input_index.cast_signed())
             .collect();
 
         sqlx::query(
@@ -119,9 +120,9 @@ impl ChainRepository {
                ,      i.spending_input_index
                FROM UNNEST(
                    $1::text[]
-               ,   $2::bigint[]
+               ,   $2::int[]
                ,   $3::text[]
-               ,   $4::bigint[]
+               ,   $4::int[]
                ) AS i (
                    tx_id
                ,   output_index
@@ -301,17 +302,17 @@ impl chain::ChainRepository for ChainRepository {
             return Ok(Vec::new());
         }
         let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
-        let output_indices: Vec<i64> = outpoints.iter().map(|o| i64::from(o.vout)).collect();
+        let output_indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
 
-        let rows: Vec<(String, i64, String, i64)> = sqlx::query_as(
+        let rows: Vec<(String, i32, String, i64)> = sqlx::query_as(
             r#"SELECT i.tx_id
                ,      i.output_index
                ,      i.spending_tx_id
                ,      b.height
-               INNER JOIN UNNEST($1::text[], $2::bigint[]) AS o(tx_id, output_index)
                FROM brz_ssp_chain_tx_inputs i
                INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = i.spending_tx_id
                INNER JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
+               INNER JOIN UNNEST($1::text[], $2::int[]) AS o(tx_id, output_index)
                    ON o.tx_id = i.tx_id AND o.output_index = i.output_index"#,
         )
         .bind(&tx_ids)
@@ -322,10 +323,7 @@ impl chain::ChainRepository for ChainRepository {
         rows.into_iter()
             .map(|(tx_id, output_index, spending_tx_id, height)| {
                 Ok(chain::Spender {
-                    outpoint: OutPoint::new(
-                        tx_id.parse()?,
-                        u32::try_from(output_index).unwrap_or(0),
-                    ),
+                    outpoint: OutPoint::new(tx_id.parse()?, output_index.cast_unsigned()),
                     txid: spending_tx_id.parse()?,
                     block_height: height.cast_unsigned(),
                 })
