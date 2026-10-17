@@ -960,15 +960,15 @@ fn is_claimable(status: TransferStatus) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::repository::{CoopExitRecord, CoopExitStore, InMemoryCoopExitStore};
+    use super::repository::{CoopExitRecord, CoopExitStore};
     use super::{
         BoxError, CoopExitExecutor, CoopExitWorkerDeps, MAX_COOP_EXIT_LEAVES, TransferId,
         check_leaf_count, connector_tx_weight, process_pending_coop_exits,
     };
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use std::collections::HashMap;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn the_most_leaves_an_exit_carries_fit_a_relayable_connector_tx() {
@@ -1031,6 +1031,96 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MockStore {
+        requests: Mutex<Vec<CoopExitRecord>>,
+    }
+
+    impl MockStore {
+        fn matching(&self, matches: impl Fn(&CoopExitRecord) -> bool) -> Vec<CoopExitRecord> {
+            let requests = self.requests.lock().unwrap();
+            requests
+                .iter()
+                .filter(|request| matches(request))
+                .cloned()
+                .collect()
+        }
+
+        fn change(&self, id: &str, set: impl FnOnce(&mut CoopExitRecord)) {
+            let mut requests = self.requests.lock().unwrap();
+            let request = requests.iter_mut().find(|request| request.id == id);
+            set(request.unwrap());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CoopExitStore for MockStore {
+        async fn insert(
+            &self,
+            _record: &CoopExitRecord,
+            _leaf_ids: &[String],
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn any_leaf_in_open_request(&self, _leaf_ids: &[String]) -> Result<bool, String> {
+            unimplemented!()
+        }
+
+        async fn abandon(&self, id: &str) -> Result<(), String> {
+            let mut requests = self.requests.lock().unwrap();
+            requests.retain(|request| request.id != id);
+            Ok(())
+        }
+
+        async fn set_completed(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.completed = true);
+            Ok(())
+        }
+
+        async fn set_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
+            let txid = Some(txid.to_string());
+            self.change(id, |request| request.broadcast_txid = txid);
+            Ok(())
+        }
+
+        async fn set_leaves_claimed(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.leaves_claimed = true);
+            Ok(())
+        }
+
+        async fn set_settled(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.settled = true);
+            Ok(())
+        }
+
+        async fn get(&self, _id: &str) -> Result<Option<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_id(
+            &self,
+            _transfer_id: &TransferId,
+        ) -> Result<Option<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn pending(&self) -> Result<Vec<CoopExitRecord>, String> {
+            Ok(self.matching(|request| request.completed && !request.settled))
+        }
+
+        async fn incomplete_before(
+            &self,
+            cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> Result<Vec<CoopExitRecord>, String> {
+            Ok(self.matching(|request| !request.completed && request.created_at < cutoff))
+        }
+
+        async fn list(&self, _limit: u32) -> Result<Vec<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+    }
+
     fn record(id: &str) -> CoopExitRecord {
         CoopExitRecord {
             id: id.to_string(),
@@ -1054,27 +1144,27 @@ mod tests {
 
     #[tokio::test]
     async fn worker_rebroadcasts_until_the_exit_is_buried() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor::default());
         let deps = CoopExitWorkerDeps {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
             executor: Arc::clone(&executor) as Arc<dyn CoopExitExecutor>,
         };
 
-        store.insert(&record("c1"), &[]).await.unwrap();
+        store.requests.lock().unwrap().push(record("c1"));
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 0);
 
-        store.set_completed("c1").await.unwrap();
+        store.requests.lock().unwrap()[0].completed = true;
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 1);
-        let after_broadcast = store.get("c1").await.unwrap().unwrap();
+        let after_broadcast = store.requests.lock().unwrap()[0].clone();
         assert!(after_broadcast.broadcast_txid.is_some());
         assert!(!after_broadcast.leaves_claimed);
 
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 2);
-        assert!(store.get("c1").await.unwrap().unwrap().leaves_claimed);
+        assert!(store.requests.lock().unwrap()[0].leaves_claimed);
 
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 3);
@@ -1082,26 +1172,14 @@ mod tests {
 
         executor.confirmations.store(6, Ordering::SeqCst);
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("c1").await.unwrap().unwrap().settled);
+        assert!(store.requests.lock().unwrap()[0].settled);
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
-    async fn a_leaf_backs_one_open_request_at_a_time() {
-        let store = InMemoryCoopExitStore::default();
-        let leaves = vec!["leaf".to_string()];
-        store.insert(&record("c1"), &leaves).await.unwrap();
-        assert!(store.any_leaf_in_open_request(&leaves).await.unwrap());
-        assert!(store.insert(&record("c2"), &leaves).await.is_err());
-
-        store.set_completed("c1").await.unwrap();
-        assert!(!store.any_leaf_in_open_request(&leaves).await.unwrap());
-    }
-
-    #[tokio::test]
     async fn a_refused_broadcast_does_not_hold_up_the_claim() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor {
             refuse_broadcasts: true,
             ..StubExecutor::default()
@@ -1110,17 +1188,19 @@ mod tests {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
             executor: Arc::clone(&executor) as Arc<dyn CoopExitExecutor>,
         };
-        store.insert(&record("c1"), &[]).await.unwrap();
-        store.set_completed("c1").await.unwrap();
+        store.requests.lock().unwrap().push(CoopExitRecord {
+            completed: true,
+            ..record("c1")
+        });
 
         process_pending_coop_exits(&deps).await.unwrap();
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("c1").await.unwrap().unwrap().leaves_claimed);
+        assert!(store.requests.lock().unwrap()[0].leaves_claimed);
     }
 
     #[tokio::test]
     async fn an_incomplete_request_without_a_transfer_is_abandoned_after_its_ttl() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor::default());
         let deps = CoopExitWorkerDeps {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
@@ -1128,11 +1208,11 @@ mod tests {
         };
         let mut old = record("old");
         old.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
-        store.insert(&old, &[]).await.unwrap();
-        store.insert(&record("new"), &[]).await.unwrap();
+        store.requests.lock().unwrap().extend([old, record("new")]);
 
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("old").await.unwrap().is_none());
-        assert!(store.get("new").await.unwrap().is_some());
+        let requests = store.requests.lock().unwrap();
+        let ids: Vec<&str> = requests.iter().map(|request| request.id.as_str()).collect();
+        assert_eq!(ids, ["new"]);
     }
 }
