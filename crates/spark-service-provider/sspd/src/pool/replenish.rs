@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::{Address, OutPoint, Transaction};
+use bitcoin::{Address, FeeRate, OutPoint, Transaction};
 use futures::{StreamExt, TryStreamExt};
 use spark::tree::TreeNodeId;
 use tokio_util::sync::CancellationToken;
@@ -153,7 +153,7 @@ async fn attend_deposit<C, R>(
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<bool, BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
@@ -202,7 +202,7 @@ where
         .get_tip()
         .await?
         .map_or(0, |tip| tip.height);
-    let fee_rate = fee_rates.sat_per_kw().await?;
+    let fee_rate = fee_rates.fee_rate().await?;
 
     let mut pending: HashMap<u64, u32> = HashMap::new();
     for deposit in pool_repo.open_deposits().await? {
@@ -284,7 +284,7 @@ async fn keep_confirming<C, R>(
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<(), BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
@@ -352,7 +352,7 @@ where
     Ok(())
 }
 
-fn bump_due(deposit: &DepositTx, height: u64, fee_rate: u64) -> bool {
+fn bump_due(deposit: &DepositTx, height: u64, fee_rate: FeeRate) -> bool {
     let weight = deposit.tx.weight().to_wu();
     let (waited_from, paid_sats, paid_weight) = match &deposit.latest_bump {
         Some(bump) => (
@@ -374,7 +374,7 @@ async fn bump_funding<R>(
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<FundingBump, BoxError>
 where
     R: ChainRepository + Send + Sync + 'static,
@@ -487,7 +487,7 @@ async fn fund_trees<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &C,
     pool_repo: &PoolRepository,
-    fee_rate: u64,
+    fee_rate: FeeRate,
     height: u64,
     specs: &[TreeSpec],
     restock: &RestockService,

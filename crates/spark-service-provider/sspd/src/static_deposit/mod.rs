@@ -13,8 +13,8 @@ use crate::frost::{SignedShare, operator_commitments, sign_share};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, XOnlyPublicKey, ecdsa::Signature};
 use bitcoin::{
-    Address, Amount, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
-    Witness, taproot,
+    Address, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut,
+    Txid, Witness, taproot,
 };
 use spark::bitcoin::sighash_from_tx;
 use spark::operator::OperatorPool;
@@ -67,13 +67,13 @@ const SPEND_TX_WEIGHT_WU: u64 = fees::TX_OVERHEAD_WU + fees::P2TR_INPUT_WU + fee
 const QUOTE_FEE_MARGIN_PERCENT: u64 = 20;
 
 #[must_use]
-pub fn spend_tx_fee_sats(sat_per_kw: u64) -> u64 {
-    fees::fee_sats(sat_per_kw, SPEND_TX_WEIGHT_WU)
+pub fn spend_tx_fee_sats(fee_rate: FeeRate) -> u64 {
+    fees::fee_sats(fee_rate, SPEND_TX_WEIGHT_WU)
 }
 
 #[must_use]
-pub fn claim_fee_sats(sat_per_kw: u64) -> u64 {
-    let spend_cost = spend_tx_fee_sats(sat_per_kw);
+pub fn claim_fee_sats(fee_rate: FeeRate) -> u64 {
+    let spend_cost = spend_tx_fee_sats(fee_rate);
     spend_cost.saturating_add(
         spend_cost
             .saturating_mul(QUOTE_FEE_MARGIN_PERCENT)
@@ -87,8 +87,8 @@ pub fn claim_fee_sats(sat_per_kw: u64) -> u64 {
 const INSTANT_CLAIM_PREMIUM_BASIS_POINTS: u64 = 10;
 
 #[must_use]
-pub fn instant_claim_fee_sats(sat_per_kw: u64, deposit_sats: u64) -> u64 {
-    claim_fee_sats(sat_per_kw).saturating_add(
+pub fn instant_claim_fee_sats(fee_rate: FeeRate, deposit_sats: u64) -> u64 {
+    claim_fee_sats(fee_rate).saturating_add(
         deposit_sats
             .saturating_mul(INSTANT_CLAIM_PREMIUM_BASIS_POINTS)
             .div_ceil(10_000),
@@ -1096,9 +1096,9 @@ impl StaticDepositService {
         Ok(claim_fee_sats(self.fee_rate().await?))
     }
 
-    async fn fee_rate(&self) -> Result<u64, StaticDepositError> {
+    async fn fee_rate(&self) -> Result<FeeRate, StaticDepositError> {
         self.fee_rates
-            .sat_per_kw()
+            .fee_rate()
             .await
             .map_err(|e| StaticDepositError::Chain(e.to_string()))
     }

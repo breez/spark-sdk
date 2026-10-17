@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::fees::{self, FeeRateSource};
 use crate::wallet::onchain::{HeldCoins, Utxo};
+use bitcoin::FeeRate;
 use bitcoin::secp256k1::PublicKey;
 use spark::operator::OperatorPool;
 use spark::services::{
@@ -82,18 +83,15 @@ fn coop_exit_tx_weight_wu(num_inputs: u64, num_outputs: u64) -> u64 {
 
 /// A leaf's refund spends its connector output, and the operators fix the refund's
 /// outputs, so the connector's value goes to the refund's fee.
-fn per_leaf_connector_sats(sat_per_kw: u64) -> u64 {
-    fees::fee_sats(sat_per_kw, REFUND_TX_WEIGHT_WU).max(fees::P2TR_DUST_SATS)
+fn per_leaf_connector_sats(fee_rate: FeeRate) -> u64 {
+    fees::fee_sats(fee_rate, REFUND_TX_WEIGHT_WU).max(fees::P2TR_DUST_SATS)
 }
 
-fn connector_funding_sats(num_leaves: u64, sat_per_kw: u64) -> u64 {
+fn connector_funding_sats(num_leaves: u64, fee_rate: FeeRate) -> u64 {
     num_leaves
-        .saturating_mul(per_leaf_connector_sats(sat_per_kw))
+        .saturating_mul(per_leaf_connector_sats(fee_rate))
         .saturating_add(fees::P2TR_DUST_SATS)
-        .saturating_add(fees::fee_sats(
-            sat_per_kw,
-            connector_tx_weight_wu(num_leaves),
-        ))
+        .saturating_add(fees::fee_sats(fee_rate, connector_tx_weight_wu(num_leaves)))
 }
 
 fn miner_fees_sats(
@@ -122,14 +120,11 @@ pub struct CoopExitFees {
 }
 
 #[must_use]
-pub fn coop_exit_fees(num_leaves: u64, sat_per_kw: u64) -> CoopExitFees {
-    let exit_tx_fee = fees::fee_sats(
-        sat_per_kw,
-        coop_exit_tx_weight_wu(QUOTED_COOP_EXIT_INPUTS, 3),
-    );
+pub fn coop_exit_fees(num_leaves: u64, fee_rate: FeeRate) -> CoopExitFees {
+    let exit_tx_fee = fees::fee_sats(fee_rate, coop_exit_tx_weight_wu(QUOTED_COOP_EXIT_INPUTS, 3));
     CoopExitFees {
         l1_broadcast_fee_sats: with_margin(
-            connector_funding_sats(num_leaves, sat_per_kw).saturating_add(exit_tx_fee),
+            connector_funding_sats(num_leaves, fee_rate).saturating_add(exit_tx_fee),
         ),
         user_fee_sats: 0,
     }
@@ -360,9 +355,9 @@ impl CoopExitService {
             .filter(|record| record.user_identity_public_key == *caller))
     }
 
-    async fn fee_rate(&self) -> Result<u64, CoopExitError> {
+    async fn fee_rate(&self) -> Result<FeeRate, CoopExitError> {
         self.fee_rates
-            .sat_per_kw()
+            .fee_rate()
             .await
             .map_err(|e| CoopExitError::Wallet(format!("fee rate unavailable: {e}")))
     }

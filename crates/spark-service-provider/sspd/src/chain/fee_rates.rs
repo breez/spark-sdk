@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bitcoin::FeeRate;
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::fees::{FeeRateSource, MIN_FEE_RATE_SAT_PER_KW};
+use crate::fees::{FeeRateSource, MIN_FEE_RATE};
 
 use super::ChainClient;
 
@@ -24,7 +25,7 @@ pub struct CachedFeeRates {
     chain: Arc<dyn ChainClient + Send + Sync>,
     conf_target: u32,
     ttl: Duration,
-    cached: Mutex<Option<(Instant, u64)>>,
+    cached: Mutex<Option<(Instant, FeeRate)>>,
 }
 
 impl CachedFeeRates {
@@ -40,7 +41,7 @@ impl CachedFeeRates {
 
 #[async_trait::async_trait]
 impl FeeRateSource for CachedFeeRates {
-    async fn sat_per_kw(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn fee_rate(&self) -> Result<FeeRate, Box<dyn std::error::Error + Send + Sync>> {
         let mut cached = self.cached.lock().await;
         if let Some((fetched_at, rate)) = *cached
             && fetched_at.elapsed() < self.ttl
@@ -49,7 +50,7 @@ impl FeeRateSource for CachedFeeRates {
         }
         match self.chain.estimate_fee_rate(self.conf_target).await {
             Ok(rate) => {
-                let rate = rate.max(MIN_FEE_RATE_SAT_PER_KW);
+                let rate = rate.max(MIN_FEE_RATE);
                 *cached = Some((Instant::now(), rate));
                 Ok(rate)
             }

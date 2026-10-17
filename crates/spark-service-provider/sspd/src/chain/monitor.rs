@@ -231,8 +231,8 @@ mod tests {
     use std::sync::Mutex;
 
     use bitcoin::{
-        BlockHash, CompactTarget, Transaction, TxIn, TxMerkleNode, absolute::LockTime, block,
-        hashes::Hash, script::Builder, transaction,
+        BlockHash, CompactTarget, FeeRate, Transaction, TxIn, TxMerkleNode, absolute::LockTime,
+        block, hashes::Hash, script::Builder, transaction,
     };
 
     use super::*;
@@ -321,7 +321,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn estimate_fee_rate(&self, _conf_target: u32) -> Result<u64, ChainError> {
+        async fn estimate_fee_rate(&self, _conf_target: u32) -> Result<FeeRate, ChainError> {
             unimplemented!()
         }
 

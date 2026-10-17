@@ -1,26 +1,27 @@
 use std::error::Error;
 
+use bitcoin::{Amount, FeeRate, Weight};
+
 type BoxError = Box<dyn Error + Send + Sync>;
 
 /// Floor for any fee rate the SSP works from: the conventional 253 sat/kw, just
 /// above 1 sat/vByte (250 sat/kw).
-pub const MIN_FEE_RATE_SAT_PER_KW: u64 = 253;
+pub const MIN_FEE_RATE: FeeRate = FeeRate::from_sat_per_kwu(253);
 
 #[async_trait::async_trait]
 pub trait FeeRateSource: Send + Sync {
-    /// Never below [`MIN_FEE_RATE_SAT_PER_KW`].
-    async fn sat_per_kw(&self) -> Result<u64, BoxError>;
+    /// The returned rate is never below [`MIN_FEE_RATE`].
+    async fn fee_rate(&self) -> Result<FeeRate, BoxError>;
 }
 
 /// Rounded up, since a fee rounded down can leave the transaction below the rate
-/// it was sized for. A rate under [`MIN_FEE_RATE_SAT_PER_KW`] is raised to it.
+/// it was calculated at.
 #[must_use]
-pub fn fee_sats(sat_per_kw: u64, weight_wu: u64) -> u64 {
-    let rate = sat_per_kw.max(MIN_FEE_RATE_SAT_PER_KW);
-    weight_wu
-        .saturating_mul(rate)
-        .saturating_add(999)
-        .saturating_div(1000)
+pub fn fee_sats(fee_rate: FeeRate, weight_wu: u64) -> u64 {
+    fee_rate
+        .max(MIN_FEE_RATE)
+        .fee_wu(Weight::from_wu(weight_wu))
+        .map_or(u64::MAX, Amount::to_sat)
 }
 
 /// Element count, length byte and 64-byte Schnorr signature, at 1 WU per
@@ -50,9 +51,9 @@ mod tests {
 
     #[test]
     fn fee_rounds_up_and_respects_the_floor() {
-        assert_eq!(fee_sats(MIN_FEE_RATE_SAT_PER_KW, 1000), 253);
-        assert_eq!(fee_sats(0, 1000), 253);
+        assert_eq!(fee_sats(MIN_FEE_RATE, 1000), 253);
+        assert_eq!(fee_sats(FeeRate::ZERO, 1000), 253);
         // 444 x 253 / 1000 = 112.332, rounded up.
-        assert_eq!(fee_sats(253, 444), 113);
+        assert_eq!(fee_sats(FeeRate::from_sat_per_kwu(253), 444), 113);
     }
 }

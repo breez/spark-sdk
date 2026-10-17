@@ -32,7 +32,7 @@ impl QueryRoot {
         let network = *ctx.data::<BitcoinNetwork>()?;
         let fee_rates = ctx.data::<Arc<dyn crate::fees::FeeRateSource>>()?;
         let rate = fee_rates
-            .sat_per_kw()
+            .fee_rate()
             .await
             .map_err(|e| Error::new(format!("fee rate unavailable: {e}")))?;
         let fees = coop_exit_fees(input.leaf_external_ids.len() as u64, rate);
