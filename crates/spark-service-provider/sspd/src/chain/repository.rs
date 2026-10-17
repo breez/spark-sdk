@@ -43,7 +43,7 @@ pub trait ChainRepository {
     async fn get_block_hashes(&self, height: u64) -> Result<Vec<BlockHash>, ChainRepositoryError>;
     async fn get_tip(&self) -> Result<Option<BlockHeader>, ChainRepositoryError>;
     async fn get_base(&self) -> Result<Option<BlockHeader>, ChainRepositoryError>;
-    async fn add_watch_address(&self, address: &Address) -> Result<(), ChainRepositoryError>;
+    async fn add_watch_addresses(&self, addresses: &[Address]) -> Result<(), ChainRepositoryError>;
     async fn filter_watch_addresses(
         &self,
         addresses: &[Address],

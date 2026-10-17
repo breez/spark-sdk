@@ -59,22 +59,42 @@ impl PoolRepository {
         .bind(deposit.stored_height.cast_signed())
         .execute(&mut *db)
         .await?;
-        for (tree, nodes) in deposit.trees.iter().zip(nodes) {
-            sqlx::query(
-                r#"INSERT INTO brz_ssp_spark_pool_deposit_trees
-                   (txid, vout, deposit_address, denomination, leaf_count, leaves, branches)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
-            )
-            .bind(txid.to_string())
-            .bind(tree.outpoint.vout.cast_signed())
-            .bind(&tree.deposit_address)
-            .bind(tree.denomination.cast_signed())
-            .bind(tree.leaf_count.cast_signed())
-            .bind(Json(&nodes.leaves))
-            .bind(Json(&nodes.branches))
-            .execute(&mut *db)
-            .await?;
-        }
+        let trees: Vec<_> = deposit.trees.iter().zip(nodes).collect();
+        let vouts: Vec<i32> = trees
+            .iter()
+            .map(|(tree, _)| tree.outpoint.vout.cast_signed())
+            .collect();
+        let addresses: Vec<&str> = trees
+            .iter()
+            .map(|(tree, _)| tree.deposit_address.as_str())
+            .collect();
+        let denominations: Vec<i64> = trees
+            .iter()
+            .map(|(tree, _)| tree.denomination.cast_signed())
+            .collect();
+        let leaf_counts: Vec<i32> = trees
+            .iter()
+            .map(|(tree, _)| tree.leaf_count.cast_signed())
+            .collect();
+        let leaves: Vec<_> = trees.iter().map(|(_, n)| Json(&n.leaves)).collect();
+        let branches: Vec<_> = trees.iter().map(|(_, n)| Json(&n.branches)).collect();
+        sqlx::query(
+            r#"INSERT INTO brz_ssp_spark_pool_deposit_trees
+               (txid, vout, deposit_address, denomination, leaf_count, leaves, branches)
+               SELECT $1, tree.*
+               FROM UNNEST($2::int[], $3::text[], $4::bigint[], $5::int[], $6::jsonb[],
+                           $7::jsonb[])
+                    AS tree (vout, deposit_address, denomination, leaf_count, leaves, branches)"#,
+        )
+        .bind(txid.to_string())
+        .bind(&vouts)
+        .bind(&addresses)
+        .bind(&denominations)
+        .bind(&leaf_counts)
+        .bind(&leaves)
+        .bind(&branches)
+        .execute(&mut *db)
+        .await?;
         let (node_ids, deposit_leaf_ids): (Vec<String>, Vec<String>) = signing_leaf_ids
             .iter()
             .map(|(node_id, leaf_id)| (node_id.to_string(), leaf_id.to_string()))

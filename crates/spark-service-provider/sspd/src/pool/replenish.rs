@@ -506,9 +506,11 @@ where
     );
 
     // The chain monitor has to see the outputs to tell when the trees confirm.
-    for tree in &planned {
-        wallet.onchain.register_watch_address(&tree.address).await?;
-    }
+    let tree_addresses: Vec<Address> = planned.iter().map(|tree| tree.address.clone()).collect();
+    wallet
+        .onchain
+        .register_watch_addresses(&tree_addresses)
+        .await?;
 
     let created = create_trees(wallet, &planned, &tx).await?;
 
