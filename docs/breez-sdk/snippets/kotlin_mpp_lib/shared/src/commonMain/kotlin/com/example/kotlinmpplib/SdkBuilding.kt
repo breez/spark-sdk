@@ -81,12 +81,12 @@ class SdkBuilding {
     ) : SessionStore {
         override suspend fun getSession(serviceIdentityKey: String): Session {
             val session = inner.getSession(serviceIdentityKey)
-            // Decrypt session.token here before returning it.
+            // Decrypt session.token and session.refreshToken here before returning it.
             return session
         }
 
         override suspend fun setSession(serviceIdentityKey: String, session: Session) {
-            // Encrypt session.token here before persisting it.
+            // Encrypt session.token and session.refreshToken here before persisting it.
             inner.setSession(serviceIdentityKey, session)
         }
     }

@@ -587,6 +587,20 @@ fn wasm_test_cmd(
                 sh.change_dir(&current_dir);
             }
 
+            let pg_session_store_path =
+                Path::new("crates/breez-sdk/wasm/js/postgres-session-store");
+            if pg_session_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    pg_session_store_path.display()
+                );
+                sh.change_dir(pg_session_store_path);
+                cmd!(sh, "npm install").run().with_context(
+                    || "Failed to install postgres-session-store npm dependencies.",
+                )?;
+                sh.change_dir(&current_dir);
+            }
+
             // Install mysql-storage dependencies
             let my_storage_path = Path::new("crates/breez-sdk/wasm/js/mysql-storage");
             if my_storage_path.exists() {
@@ -626,6 +640,19 @@ fn wasm_test_cmd(
                 cmd!(sh, "npm install")
                     .run()
                     .with_context(|| "Failed to install mysql-token-store npm dependencies.")?;
+                sh.change_dir(&current_dir);
+            }
+
+            let my_session_store_path = Path::new("crates/breez-sdk/wasm/js/mysql-session-store");
+            if my_session_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    my_session_store_path.display()
+                );
+                sh.change_dir(my_session_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install mysql-session-store npm dependencies.")?;
                 sh.change_dir(&current_dir);
             }
         }

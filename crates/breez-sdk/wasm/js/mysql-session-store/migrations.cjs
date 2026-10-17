@@ -129,6 +129,12 @@ class MysqlSessionStoreMigrationManager {
           `ALTER TABLE \`${SESSION_MIGRATIONS_TABLE}\` MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        name: "Add refresh token columns to brz_sessions",
+        sql: [
+          `ALTER TABLE brz_sessions ADD COLUMN refresh_token TEXT NULL, ADD COLUMN refresh_token_expiration BIGINT NULL`,
+        ],
+      },
     ];
   }
 }

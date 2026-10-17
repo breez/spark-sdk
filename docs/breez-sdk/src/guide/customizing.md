@@ -112,9 +112,9 @@ By implementing the Payment Observer interface you can be notified before a paym
 
 The SDK caches the auth tokens it obtains from the Spark operators and the SSP in a session store, keyed by each service's identity. By default the store is provided by the storage backend (a `brz_`-prefixed table on the PostgreSQL/MySQL backends, an in-memory store otherwise), and tokens are stored as-is.
 
-Use {{#name with_session_store}} to provide your own {{#name SessionStore}}. This can be a completely different persistence layer, or a decorator that wraps the backend's own store to transform tokens on read and write while keeping its persistence: fetch the backend's store with {{#name default_session_store}}, then intercept {{#name get_session}} and {{#name set_session}}.
+Use {{#name with_session_store}} to provide your own {{#name SessionStore}}. This can be a completely different persistence layer, or a decorator that wraps the backend's own store to transform tokens on read and write while keeping its persistence: fetch the backend's store with {{#name default_session_store}}, then intercept {{#name get_session}} and {{#name set_session}}. A store with its own persistence must persist both {{#name refresh_token}} and {{#name refresh_token_expiration}}, or the SDK signs a new challenge every time a session expires.
 
-At-rest encryption is one such transform (the SDK does not encrypt tokens itself), shown below: encrypt the token in {{#name set_session}} and decrypt it in {{#name get_session}}.
+At-rest encryption is one such transform (the SDK does not encrypt tokens itself), shown below: encrypt the tokens in {{#name set_session}} and decrypt them in {{#name get_session}}. A session for a Spark operator can carry a {{#name refresh_token}} next to its {{#name token}}. The SDK uses it to renew the session without a new signature, and it stays valid for much longer, so encrypt both.
 
 {{#tabs sdk_building:with-session-store}}
 

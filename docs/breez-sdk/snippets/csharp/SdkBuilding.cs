@@ -95,13 +95,13 @@ namespace BreezSdkSnippets
             public async Task<Session> GetSession(string serviceIdentityKey)
             {
                 var session = await inner.GetSession(serviceIdentityKey);
-                // Decrypt session.token here before returning it.
+                // Decrypt session.token and session.refreshToken here before returning it.
                 return session;
             }
 
             public async Task SetSession(string serviceIdentityKey, Session session)
             {
-                // Encrypt session.token here before persisting it.
+                // Encrypt session.token and session.refreshToken here before persisting it.
                 await inner.SetSession(serviceIdentityKey, session);
             }
         }

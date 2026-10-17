@@ -51,3 +51,4 @@ web-sys.workspace = true
 wasm-bindgen-test.workspace = true
 syn = { workspace = true, features = ["full", "visit"] }
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+spark-wallet = { workspace = true, features = ["test-utils"] }

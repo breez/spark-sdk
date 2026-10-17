@@ -102,11 +102,11 @@ class EncryptingSessionStore(SessionStore):
 
     async def get_session(self, service_identity_key: str) -> Session:
         session = await self.inner.get_session(service_identity_key)
-        # Decrypt session.token here before returning it.
+        # Decrypt session.token and session.refresh_token here before returning it.
         return session
 
     async def set_session(self, service_identity_key: str, session: Session) -> None:
-        # Encrypt session.token here before persisting it.
+        # Encrypt session.token and session.refresh_token here before persisting it.
         await self.inner.set_session(service_identity_key, session)
 
 
