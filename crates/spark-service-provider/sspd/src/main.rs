@@ -266,6 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let chain_tip = chain::ChainTip::load(chain_repository.as_ref()).await?;
+    let synced = chain::Synced::new();
     spawn_chain_monitor(
         &tracker,
         args.network,
@@ -273,6 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &chain_client,
         &chain_repository,
         chain_tip.clone(),
+        synced.clone(),
         vec![
             replenish_wakeup.clone(),
             pooling_wakeup.clone(),
@@ -554,6 +556,7 @@ fn spawn_chain_monitor(
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
     chain_tip: chain::ChainTip,
+    synced: chain::Synced,
     chain_advanced: Vec<wakeup::Wakeup>,
     token: &CancellationToken,
 ) {
@@ -565,6 +568,7 @@ fn spawn_chain_monitor(
         poll_interval,
         chain_advanced,
         chain_tip,
+        synced,
     ));
     tracker.spawn(async move {
         info!("Starting chain monitor");
