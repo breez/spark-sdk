@@ -323,11 +323,11 @@ impl StaticDepositService {
         }
     }
 
-    pub async fn claim_by_transfer_id(
+    pub async fn claims_by_transfer_ids(
         &self,
-        transfer_id: &str,
-    ) -> Result<Option<StaticDepositClaimRecord>, String> {
-        self.store.get_by_transfer_id(transfer_id).await
+        transfer_ids: &[String],
+    ) -> Result<Vec<StaticDepositClaimRecord>, String> {
+        self.store.get_by_transfer_ids(transfer_ids).await
     }
 
     pub async fn quote(
@@ -1859,10 +1859,10 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_by_transfer_id(
+        async fn get_by_transfer_ids(
             &self,
-            _transfer_id: &str,
-        ) -> Result<Option<StaticDepositClaimRecord>, String> {
+            _transfer_ids: &[String],
+        ) -> Result<Vec<StaticDepositClaimRecord>, String> {
             unimplemented!()
         }
 
