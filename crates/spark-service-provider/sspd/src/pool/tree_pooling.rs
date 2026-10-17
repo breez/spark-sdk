@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 use crate::wakeup::Wakeup;
 use crate::{
-    chain::ChainRepository,
+    chain::{ChainRepository, ChainTip},
     pool::{
         repository::{DepositTree, DepositTx},
         restock::{PoolEvent, RestockService},
@@ -28,23 +28,37 @@ const OPERATOR_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// The operators refuse a node query by more ids than this.
 pub(crate) const MAX_NODE_IDS_PER_QUERY: usize = 1000;
 
+pub struct TreePoolingDeps<R: ChainRepository> {
+    pub wallet: Arc<SspWallet<R>>,
+    pub chain_repository: Arc<R>,
+    pub chain_tip: ChainTip,
+    pub pool_repo: Arc<PoolRepository>,
+    pub restock: Arc<RestockService>,
+    pub confirmations: u64,
+}
+
 pub async fn run_tree_pooling_loop<R>(
-    wallet: Arc<SspWallet<R>>,
-    chain_repository: Arc<R>,
-    pool_repo: Arc<PoolRepository>,
-    restock: Arc<RestockService>,
-    confirmations: u64,
+    deps: TreePoolingDeps<R>,
     chain_advanced: Wakeup,
     token: CancellationToken,
 ) where
     R: ChainRepository + Send + Sync + 'static,
 {
+    let TreePoolingDeps {
+        wallet,
+        chain_repository,
+        chain_tip,
+        pool_repo,
+        restock,
+        confirmations,
+    } = deps;
     info!("Starting tree pooling loop");
 
     loop {
         let retry_in = match pool_confirmed_trees(
             &wallet,
             &chain_repository,
+            &chain_tip,
             &pool_repo,
             &restock,
             confirmations,
@@ -74,6 +88,7 @@ pub async fn run_tree_pooling_loop<R>(
 async fn pool_confirmed_trees<R>(
     wallet: &SspWallet<R>,
     chain_repository: &Arc<R>,
+    chain_tip: &ChainTip,
     pool_repo: &PoolRepository,
     restock: &RestockService,
     confirmations: u64,
@@ -81,10 +96,7 @@ async fn pool_confirmed_trees<R>(
 where
     R: ChainRepository + Send + Sync + 'static,
 {
-    let height = chain_repository
-        .get_tip()
-        .await?
-        .map_or(0, |tip| tip.height);
+    let height = chain_tip.record().map_or(0, |tip| tip.height);
     let deposits = pool_repo.open_deposits().await?;
     let txos = tree_txos(chain_repository.as_ref(), &deposits).await?;
     let mut waiting = false;

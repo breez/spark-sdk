@@ -13,7 +13,7 @@ use crate::tree::builder::{TreeBlueprint, build_tree_blueprint};
 use crate::tree::deposit::CreatedTree;
 use crate::wakeup::Wakeup;
 use crate::{
-    chain::{BroadcastError, ChainClient, ChainRepository},
+    chain::{BroadcastError, ChainClient, ChainRepository, ChainTip},
     fees::{self, FeeRateSource},
     pool::{
         config::{BRANCH_FACTOR, PoolConfig},
@@ -58,6 +58,7 @@ pub async fn run_replenish_loop<C, R>(
     wallet: Arc<SspWallet<R>>,
     chain_client: Arc<C>,
     chain_repository: Arc<R>,
+    chain_tip: ChainTip,
     pool_repo: Arc<PoolRepository>,
     fee_rates: Arc<dyn FeeRateSource>,
     restock: Arc<RestockService>,
@@ -76,6 +77,7 @@ pub async fn run_replenish_loop<C, R>(
             &wallet,
             &chain_client,
             &chain_repository,
+            &chain_tip,
             &pool_repo,
             &fee_rates,
             &restock,
@@ -222,6 +224,7 @@ async fn replenish_once<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &Arc<C>,
     chain_repository: &Arc<R>,
+    chain_tip: &ChainTip,
     pool_repo: &PoolRepository,
     fee_rates: &Arc<dyn FeeRateSource>,
     restock: &RestockService,
@@ -230,10 +233,7 @@ where
     C: ChainClient + Send + Sync + 'static,
     R: ChainRepository + Send + Sync + 'static,
 {
-    let height = chain_repository
-        .get_tip()
-        .await?
-        .map_or(0, |tip| tip.height);
+    let height = chain_tip.record().map_or(0, |tip| tip.height);
     let fee_rate = fee_rates.fee_rate().await?;
 
     let mut pending: HashMap<u64, u32> = HashMap::new();
