@@ -1,5 +1,6 @@
 #![allow(clippy::needless_raw_string_hashes)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use spark::services::TransferId;
@@ -70,39 +71,49 @@ fn swap_record(row: SwapRow) -> SwapRecord {
     }
 }
 
+fn leaf_columns(leaves: &[SwapLeaf]) -> (Vec<&str>, Vec<i64>) {
+    leaves
+        .iter()
+        .map(|leaf| (leaf.leaf_id.as_str(), leaf.value_sats))
+        .unzip()
+}
+
 impl SwapRepository {
     async fn with_leaves(&self, swaps: Vec<SwapRecord>) -> Result<Vec<SwapDetail>, String> {
-        let mut details = Vec::with_capacity(swaps.len());
-        for swap in swaps {
-            let leaves: Vec<(String, String, i64)> = sqlx::query_as(
-                r#"SELECT direction, leaf_id, value_sats FROM brz_ssp_swap_leaves
-                   WHERE swap_id = $1
-                   ORDER BY direction, leaf_id"#,
-            )
-            .bind(&swap.id)
-            .fetch_all(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
-
-            let (mut outbound, mut inbound) = (Vec::new(), Vec::new());
-            for (direction, leaf_id, value_sats) in leaves {
-                let leaf = SwapLeaf {
-                    leaf_id,
-                    value_sats,
-                };
-                if direction == DIRECTION_INBOUND {
-                    inbound.push(leaf);
-                } else {
-                    outbound.push(leaf);
-                }
+        let ids: Vec<&str> = swaps.iter().map(|swap| swap.id.as_str()).collect();
+        let leaves: Vec<(String, String, String, i64)> = sqlx::query_as(
+            r#"SELECT swap_id, direction, leaf_id, value_sats FROM brz_ssp_swap_leaves
+               WHERE swap_id = ANY($1)
+               ORDER BY swap_id, direction, leaf_id"#,
+        )
+        .bind(&ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        let mut by_swap: HashMap<String, (Vec<SwapLeaf>, Vec<SwapLeaf>)> = HashMap::new();
+        for (swap_id, direction, leaf_id, value_sats) in leaves {
+            let (outbound, inbound) = by_swap.entry(swap_id).or_default();
+            let leaf = SwapLeaf {
+                leaf_id,
+                value_sats,
+            };
+            if direction == DIRECTION_INBOUND {
+                inbound.push(leaf);
+            } else {
+                outbound.push(leaf);
             }
-            details.push(SwapDetail {
-                swap,
-                outbound,
-                inbound,
-            });
         }
-        Ok(details)
+        Ok(swaps
+            .into_iter()
+            .map(|swap| {
+                let (outbound, inbound) = by_swap.remove(&swap.id).unwrap_or_default();
+                SwapDetail {
+                    swap,
+                    outbound,
+                    inbound,
+                }
+            })
+            .collect())
     }
 }
 
@@ -190,17 +201,25 @@ impl SwapStore for SwapRepository {
         swap_id: &str,
         inbound_leaves: &[SwapLeaf],
     ) -> Result<(), String> {
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
-        for leaf in inbound_leaves {
-            Self::insert_leaf(&mut db, swap_id, DIRECTION_INBOUND, leaf)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        sqlx::query(r#"UPDATE brz_ssp_swaps SET claimed = TRUE WHERE id = $1"#)
-            .bind(swap_id)
-            .execute(&mut *db)
-            .await
-            .map_err(|e| e.to_string())?;
-        db.commit().await.map_err(|e| e.to_string())
+        let (leaf_ids, values) = leaf_columns(inbound_leaves);
+        // Postgres stores the leaves and marks the swap claimed in one
+        // statement, so it does both or neither.
+        sqlx::query(
+            r#"WITH stored AS (
+                   INSERT INTO brz_ssp_swap_leaves (swap_id, direction, leaf_id, value_sats)
+                   SELECT $1, $2, leaf.leaf_id, leaf.value_sats
+                   FROM UNNEST($3::text[], $4::bigint[]) AS leaf (leaf_id, value_sats)
+                   ON CONFLICT (swap_id, direction, leaf_id) DO NOTHING
+               )
+               UPDATE brz_ssp_swaps SET claimed = TRUE WHERE id = $1"#,
+        )
+        .bind(swap_id)
+        .bind(DIRECTION_INBOUND)
+        .bind(&leaf_ids)
+        .bind(&values)
+        .execute(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
