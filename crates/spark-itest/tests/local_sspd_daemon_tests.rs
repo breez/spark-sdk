@@ -122,3 +122,39 @@ async fn test_claimed_leaves_gain_their_exit_chains() -> Result<()> {
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
+
+#[tokio::test]
+#[test_log::test]
+async fn test_sspd_reports_that_it_is_synced_at_bitcoinds_tip() -> Result<()> {
+    use spark_itest::fixtures::sspd::internal_api::GetInfoRequest;
+
+    let fixtures = TestFixtures::new().await?;
+    let sspd = SspdFixture::start(
+        &fixtures.fixture_id,
+        &fixtures.bitcoind,
+        &fixtures.spark_so.operators,
+        WALLET_SEED,
+        None,
+    )
+    .await?;
+    let mut manager = sspd.manager_client().await?;
+
+    fixtures.bitcoind.generate_blocks(1).await?;
+    let height: u64 = fixtures.bitcoind.rpc("getblockcount", &[]).await?;
+    let hash: String = fixtures.bitcoind.rpc("getbestblockhash", &[]).await?;
+
+    // Until sspd has read the new block, it reports the chain as it was before.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let info = manager.get_info(GetInfoRequest {}).await?.into_inner();
+        assert_eq!(info.network, "regtest");
+        if info.synced && info.block_height == Some(height) {
+            assert_eq!(info.block_hash, Some(hash));
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("sspd is not synced at block {height}: {info:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}

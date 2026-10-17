@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
-use crate::chain::{ChainClient, ChainError, ChainRepository};
+use crate::chain::{ChainRepository, ChainSync, ChainTip, Synced};
 use crate::coop_exit::repository::{CoopExitRecord, CoopExitStore};
 use crate::lightning::repository::{
     HoldInvoiceStatus, LightningReceiveRecord, LightningSendRecord, LightningStore,
@@ -148,12 +148,12 @@ fn receive_to_proto(record: &LightningReceiveRecord) -> LightningReceive {
     }
 }
 
-pub struct ServerParams<C, R>
+pub struct ServerParams<R>
 where
-    C: ChainClient,
     R: ChainRepository,
 {
-    pub chain_client: Arc<C>,
+    pub chain_tip: ChainTip,
+    pub synced: Synced,
     pub network: Network,
     pub token: CancellationToken,
     pub wallet: Arc<SspWallet<R>>,
@@ -163,11 +163,9 @@ where
     pub swap_store: Arc<dyn SwapStore>,
 }
 
-pub struct Server<C>
-where
-    C: ChainClient,
-{
-    chain_client: Arc<C>,
+pub struct Server {
+    chain_tip: ChainTip,
+    synced: Synced,
     network: Network,
     token: CancellationToken,
     lightning_store: Arc<dyn LightningStore>,
@@ -176,13 +174,11 @@ where
     swap_store: Arc<dyn SwapStore>,
 }
 
-impl<C> Server<C>
-where
-    C: ChainClient,
-{
-    pub fn new<R: ChainRepository>(params: &ServerParams<C, R>) -> Self {
+impl Server {
+    pub fn new<R: ChainRepository>(params: &ServerParams<R>) -> Self {
         Self {
-            chain_client: Arc::clone(&params.chain_client),
+            chain_tip: params.chain_tip.clone(),
+            synced: params.synced.clone(),
             network: params.network,
             token: params.token.clone(),
             lightning_store: Arc::clone(&params.lightning_store),
@@ -198,7 +194,7 @@ pub struct WalletServer<R: ChainRepository> {
 }
 
 impl<R: ChainRepository> WalletServer<R> {
-    pub fn new<C: ChainClient>(params: &ServerParams<C, R>) -> Self {
+    pub fn new(params: &ServerParams<R>) -> Self {
         Self {
             wallet: Arc::clone(&params.wallet),
         }
@@ -206,22 +202,22 @@ impl<R: ChainRepository> WalletServer<R> {
 }
 
 #[tonic::async_trait]
-impl<C> SspManager for Server<C>
-where
-    C: ChainClient + Send + Sync + 'static,
-{
+impl SspManager for Server {
     async fn get_info(
         &self,
         _request: tonic::Request<GetInfoRequest>,
     ) -> Result<tonic::Response<GetInfoResponse>, tonic::Status> {
-        let block_height = self
-            .chain_client
-            .get_blockheight()
-            .await
-            .map_err(|e: ChainError| tonic::Status::internal(e.to_string()))?;
+        let (tip, synced, bitcoind) = match self.synced.chain_sync(&self.chain_tip) {
+            ChainSync::Synced { tip } => (Some(tip), true, None),
+            ChainSync::NotSynced { record, bitcoind } => (record, false, bitcoind),
+        };
         Ok(tonic::Response::new(GetInfoResponse {
-            block_height,
             network: self.network.to_string(),
+            block_height: tip.as_ref().map(|tip| tip.height),
+            block_hash: tip.map(|tip| tip.hash.to_string()),
+            synced,
+            bitcoind_block_height: bitcoind.map(|bitcoind| bitcoind.height),
+            bitcoind_synced: bitcoind.map(|bitcoind| bitcoind.synced),
         }))
     }
 

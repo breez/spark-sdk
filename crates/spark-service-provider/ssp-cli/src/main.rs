@@ -275,3 +275,54 @@ impl LightningHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ssp_internal_api::GetInfoResponse;
+
+    const TIP: &str = "5b2a796358296bfc94e7dc9376bbf1016b0588e93f41867c40e2101b3cd8082c";
+
+    #[test]
+    fn get_info_prints_the_block_sspd_is_at_and_whether_it_is_synced() {
+        let synced = GetInfoResponse {
+            network: "regtest".to_string(),
+            block_height: Some(192),
+            block_hash: Some(TIP.to_string()),
+            synced: true,
+            bitcoind_block_height: None,
+            bitcoind_synced: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&synced).unwrap(),
+            json!({
+                "network": "regtest",
+                "block_height": 192,
+                "block_hash": TIP,
+                "synced": true,
+                "bitcoind_block_height": null,
+                "bitcoind_synced": null,
+            })
+        );
+
+        let behind = GetInfoResponse {
+            block_height: Some(190),
+            synced: false,
+            bitcoind_block_height: Some(192),
+            bitcoind_synced: Some(true),
+            ..synced
+        };
+        assert_eq!(
+            serde_json::to_value(&behind).unwrap(),
+            json!({
+                "network": "regtest",
+                "block_height": 190,
+                "block_hash": TIP,
+                "synced": false,
+                "bitcoind_block_height": 192,
+                "bitcoind_synced": true,
+            })
+        );
+    }
+}
