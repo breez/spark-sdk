@@ -15,6 +15,7 @@
     )
 )]
 
+use std::collections::{HashMap, HashSet};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use bitcoin::Network;
@@ -702,28 +703,58 @@ impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
 
     async fn exit_confirmations(
         &self,
-        record: &coop_exit::repository::CoopExitRecord,
-    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        records: &[coop_exit::repository::CoopExitRecord],
+    ) -> Result<HashMap<String, u64>, Box<dyn std::error::Error + Send + Sync>> {
         use chain::ChainRepository as _;
-        let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&record.raw_coop_exit_tx)?;
-        let txid = tx.compute_txid();
-        // The exit's second output funds the connector and pays a watched address.
-        let output = tx
-            .output
-            .get(1)
-            .ok_or("the exit tx has no connector funding output")?;
-        let address = bitcoin::Address::from_script(&output.script_pubkey, self.service.network())?;
-        let Some(tip) = self.chain_repository.get_tip().await? else {
-            return Ok(0);
-        };
-        Ok(self
-            .chain_repository
-            .get_txos_for_address(&address)
-            .await?
+        let mut connectors = Vec::with_capacity(records.len());
+        for record in records {
+            match connector_funding_output(record, self.service.network()) {
+                Ok((outpoint, address)) => connectors.push((&record.id, outpoint, address)),
+                Err(e) => warn!(coop_exit_id = %record.id, "invalid exit transaction: {e}"),
+            }
+        }
+        if connectors.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let addresses: Vec<bitcoin::Address> = connectors
             .iter()
-            .find(|txo| txo.outpoint == bitcoin::OutPoint { txid, vout: 1 })
-            .map_or(0, |txo| txo.confirmations(tip.height)))
+            .map(|(_, _, address)| address.clone())
+            .collect();
+        let Some(tip) = self.chain_repository.get_tip().await? else {
+            return Ok(HashMap::new());
+        };
+        let txos = self
+            .chain_repository
+            .get_txos_for_addresses(&addresses)
+            .await?;
+        Ok(connectors
+            .iter()
+            .filter_map(|(id, outpoint, _)| {
+                let txo = txos.iter().find(|txo| txo.outpoint == *outpoint)?;
+                Some(((*id).clone(), txo.confirmations(tip.height)))
+            })
+            .collect())
     }
+}
+
+/// The exit transaction's output that is the input of the connector tx. The
+/// output's address is an on-chain wallet address, so the chain monitor
+/// records the output.
+fn connector_funding_output(
+    record: &coop_exit::repository::CoopExitRecord,
+    network: Network,
+) -> Result<(bitcoin::OutPoint, bitcoin::Address), Box<dyn std::error::Error + Send + Sync>> {
+    let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&record.raw_coop_exit_tx)?;
+    let output = tx
+        .output
+        .get(1)
+        .ok_or("the exit tx has no connector funding output")?;
+    let address = bitcoin::Address::from_script(&output.script_pubkey, network)?;
+    let outpoint = bitcoin::OutPoint {
+        txid: tx.compute_txid(),
+        vout: 1,
+    };
+    Ok((outpoint, address))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -792,25 +823,37 @@ impl static_deposit::StaticDepositChain for BitcoindStaticDepositChain {
         Ok(self.onchain.next_address().await?.0)
     }
 
-    async fn is_confirmed(
+    async fn confirmed_among(
         &self,
-        tx: &bitcoin::Transaction,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        txs: &[bitcoin::Transaction],
+    ) -> Result<HashSet<bitcoin::Txid>, Box<dyn std::error::Error + Send + Sync>> {
         use chain::ChainRepository as _;
         // The chain monitor records the outputs paying the wallet's addresses as
         // their blocks are applied.
-        let output = tx.output.first().ok_or("transaction has no output")?;
-        let address = bitcoin::Address::from_script(&output.script_pubkey, self.network)?;
-        let outpoint = bitcoin::OutPoint {
-            txid: tx.compute_txid(),
-            vout: 0,
-        };
-        Ok(self
-            .chain_repository
-            .get_txos_for_address(&address)
-            .await?
+        // The function reports a spend as unconfirmed when its first output has
+        // no address, since the chain monitor records no such output.
+        let addresses: Vec<bitcoin::Address> = txs
             .iter()
-            .any(|txo| txo.outpoint == outpoint))
+            .filter_map(|tx| tx.output.first())
+            .filter_map(|output| {
+                bitcoin::Address::from_script(&output.script_pubkey, self.network).ok()
+            })
+            .collect();
+        let txos = self
+            .chain_repository
+            .get_txos_for_addresses(&addresses)
+            .await?;
+        Ok(txs
+            .iter()
+            .map(bitcoin::Transaction::compute_txid)
+            .filter(|txid| {
+                let outpoint = bitcoin::OutPoint {
+                    txid: *txid,
+                    vout: 0,
+                };
+                txos.iter().any(|txo| txo.outpoint == outpoint)
+            })
+            .collect())
     }
 
     async fn broadcast(

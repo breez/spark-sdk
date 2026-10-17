@@ -1,5 +1,6 @@
 #![allow(clippy::needless_raw_string_hashes)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::{Address, Amount, BlockHash, Network, OutPoint, TxOut, address::NetworkUnchecked};
@@ -268,28 +269,36 @@ impl chain::ChainRepository for ChainRepository {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn get_txos_for_address(
+    async fn get_txos_for_addresses(
         &self,
-        address: &Address,
+        addresses: &[Address],
     ) -> Result<Vec<Txo>, ChainRepositoryError> {
+        let by_text: HashMap<String, &Address> = addresses
+            .iter()
+            .map(|address| (address.to_string(), address))
+            .collect();
+        let texts: Vec<&str> = by_text.keys().map(String::as_str).collect();
         let mut rows = sqlx::query(
-            r#"SELECT o.tx_id
+            r#"SELECT o.address
+            ,         o.tx_id
             ,         o.output_index
             ,         o.amount
             ,         b.height
             FROM brz_ssp_chain_tx_outputs o
             INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
             INNER JOIN brz_ssp_chain_blocks b ON tb.block_hash = b.block_hash
-            WHERE o.address = $1
+            WHERE o.address = ANY($1)
             ORDER BY b.height, o.tx_id, o.output_index"#,
         )
-        .bind(address.to_string())
+        .bind(&texts)
         .fetch(&*self.pool);
 
         let mut result: Vec<Txo> = Vec::new();
         while let Some(row) = rows.try_next().await? {
-            let txo = Self::map_txo(address, &row)?;
-            result.push(txo);
+            let address: String = row.try_get("address")?;
+            if let Some(address) = by_text.get(&address) {
+                result.push(Self::map_txo(address, &row)?);
+            }
         }
         Ok(result)
     }

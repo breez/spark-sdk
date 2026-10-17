@@ -144,7 +144,9 @@ pub trait StaticDepositChain: Send + Sync {
         vout: u32,
     ) -> Result<Option<DepositOutput>, BoxError>;
     async fn new_address(&self) -> Result<Address, BoxError>;
-    async fn is_confirmed(&self, tx: &Transaction) -> Result<bool, BoxError>;
+    /// The ids of the transactions among `txs` that are in a block of the chain
+    /// record.
+    async fn confirmed_among(&self, txs: &[Transaction]) -> Result<HashSet<Txid>, BoxError>;
     /// A transaction the node already has is not an error.
     async fn broadcast(&self, tx: &Transaction) -> Result<(), BoxError>;
 }
@@ -1667,8 +1669,29 @@ pub async fn process_pending_static_deposit_claims(
     {
         deps.quotes.delete_created_before(expired).await?;
     }
-    for record in deps.store.pending().await? {
-        if let Err(e) = process_static_deposit_claim(deps, &record, new_block).await {
+    let pending = deps.store.pending().await?;
+    // When the worker cannot read which spends confirmed, it broadcasts them
+    // again and checks in a later pass.
+    let spends: Vec<Transaction> = pending
+        .iter()
+        .filter(|record| record.pending_credit.is_none())
+        .filter(|record| new_block || record.spend_broadcast_txid.is_none())
+        .filter_map(|record| record.signed_spend_transaction.clone())
+        .collect();
+    let confirmed = if spends.is_empty() {
+        HashSet::new()
+    } else {
+        deps.chain
+            .confirmed_among(&spends)
+            .await
+            .unwrap_or_else(|e| {
+                error!("could not read which deposit spends confirmed: {e}");
+                HashSet::new()
+            })
+    };
+    for record in pending {
+        let advanced = process_static_deposit_claim(deps, &record, new_block, &confirmed);
+        if let Err(e) = advanced.await {
             error!(claim_id = %record.id, "failed to advance static deposit claim: {e}");
         }
     }
@@ -1679,6 +1702,7 @@ async fn process_static_deposit_claim(
     deps: &StaticDepositWorkerDeps,
     record: &StaticDepositClaimRecord,
     new_block: bool,
+    confirmed: &HashSet<Txid>,
 ) -> Result<(), BoxError> {
     if let Some(credit) = &record.pending_credit {
         return deps.credit_settler.settle(record, credit).await;
@@ -1702,7 +1726,7 @@ async fn process_static_deposit_claim(
     let Some(spend_tx) = &record.signed_spend_transaction else {
         return Err(format!("static deposit claim {} has no signed spend", record.id).into());
     };
-    if deps.chain.is_confirmed(spend_tx).await? {
+    if confirmed.contains(&spend_tx.compute_txid()) {
         deps.store.set_spend_confirmed(&record.id).await?;
         info!(claim_id = %record.id, "static deposit: deposit-spend confirmed");
         return Ok(());
@@ -1739,6 +1763,7 @@ mod tests {
     use spark::bitcoin::sighash_from_tx;
     use spark::operator::rpc::OperatorRpcError;
     use spark::signer::{DefaultSigner, SecretSource, Signer};
+    use std::collections::HashSet;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1805,8 +1830,11 @@ mod tests {
             Ok(address(3))
         }
 
-        async fn is_confirmed(&self, _tx: &Transaction) -> Result<bool, BoxError> {
-            Ok(self.confirmed.load(Ordering::SeqCst))
+        async fn confirmed_among(&self, txs: &[Transaction]) -> Result<HashSet<Txid>, BoxError> {
+            if !self.confirmed.load(Ordering::SeqCst) {
+                return Ok(HashSet::new());
+            }
+            Ok(txs.iter().map(Transaction::compute_txid).collect())
         }
 
         async fn broadcast(&self, _tx: &Transaction) -> Result<(), BoxError> {

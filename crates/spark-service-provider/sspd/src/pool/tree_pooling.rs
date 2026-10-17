@@ -9,7 +9,7 @@ use crate::wakeup::Wakeup;
 use crate::{
     chain::ChainRepository,
     pool::{
-        repository::DepositTree,
+        repository::{DepositTree, DepositTx},
         restock::{PoolEvent, RestockService},
     },
     postgresql::PoolRepository,
@@ -78,10 +78,12 @@ where
         .get_tip()
         .await?
         .map_or(0, |tip| tip.height);
+    let deposits = pool_repo.open_deposits().await?;
+    let txos = tree_txos(chain_repository.as_ref(), &deposits).await?;
     let mut waiting = false;
-    for deposit in pool_repo.open_deposits().await? {
+    for deposit in deposits {
         for tree in &deposit.trees {
-            match pool_tree(wallet, chain_repository.as_ref(), pool_repo, tree, height).await {
+            match pool_tree(wallet, &txos, pool_repo, tree, height).await {
                 Ok(Pooling::Pooled(values)) => restock.publish(PoolEvent::LeavesAvailable {
                     deposit_address: tree.deposit_address.clone(),
                     denominations: values,
@@ -98,6 +100,23 @@ where
     Ok(waiting)
 }
 
+async fn tree_txos<R: ChainRepository>(
+    chain_repository: &R,
+    deposits: &[DepositTx],
+) -> Result<Vec<crate::chain::Txo>, BoxError> {
+    let mut addresses = Vec::new();
+    for tree in deposits.iter().flat_map(|deposit| &deposit.trees) {
+        match tree.deposit_address.parse::<bitcoin::Address<_>>() {
+            Ok(address) => addresses.push(address.assume_checked()),
+            Err(e) => warn!("the tree on {} has an invalid address: {e}", tree.outpoint),
+        }
+    }
+    if addresses.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(chain_repository.get_txos_for_addresses(&addresses).await?)
+}
+
 enum Pooling {
     /// The values of the leaves that joined the pool.
     Pooled(Vec<u64>),
@@ -109,7 +128,7 @@ enum Pooling {
 /// confirmations and the operators report the leaves available.
 async fn pool_tree<R>(
     wallet: &SspWallet<R>,
-    chain_repository: &R,
+    txos: &[crate::chain::Txo],
     pool_repo: &PoolRepository,
     tree: &DepositTree,
     height: u64,
@@ -117,17 +136,9 @@ async fn pool_tree<R>(
 where
     R: ChainRepository + Send + Sync + 'static,
 {
-    let address = tree
-        .deposit_address
-        .parse::<bitcoin::Address<_>>()?
-        .assume_checked();
-    let confirmed = chain_repository
-        .get_txos_for_address(&address)
-        .await?
-        .into_iter()
-        .any(|txo| {
-            txo.outpoint == tree.outpoint && txo.confirmations(height) >= REQUIRED_CONFIRMATIONS
-        });
+    let confirmed = txos.iter().any(|txo| {
+        txo.outpoint == tree.outpoint && txo.confirmations(height) >= REQUIRED_CONFIRMATIONS
+    });
     if !confirmed {
         return Ok(Pooling::Unconfirmed);
     }

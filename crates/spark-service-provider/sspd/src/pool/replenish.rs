@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -129,31 +129,61 @@ fn change_output(deposit: &DepositTx) -> Result<(OutPoint, &bitcoin::TxOut), Box
     Ok((OutPoint { txid, vout }, output))
 }
 
-async fn funding_state<R: ChainRepository>(
-    chain_repository: &R,
-    network: bitcoin::Network,
-    deposit: &DepositTx,
-) -> Result<Funding, BoxError> {
-    let txid = deposit.tx.compute_txid();
-    let (change, output) = change_output(deposit)?;
-    let address = Address::from_script(&output.script_pubkey, network)?;
-    let txos = chain_repository.get_txos_for_address(&address).await?;
-    if txos.iter().any(|txo| txo.outpoint == change) {
-        return Ok(Funding::Confirmed);
+struct FundingRecord {
+    confirmed: HashSet<OutPoint>,
+    spenders: Vec<crate::chain::Spender>,
+}
+
+impl FundingRecord {
+    async fn read<R: ChainRepository>(
+        chain_repository: &R,
+        network: bitcoin::Network,
+        deposits: &[DepositTx],
+    ) -> Result<Self, BoxError> {
+        let mut addresses = Vec::with_capacity(deposits.len());
+        let mut outpoints = Vec::new();
+        for deposit in deposits {
+            let (change, output) = change_output(deposit)?;
+            addresses.push(Address::from_script(&output.script_pubkey, network)?);
+            outpoints.push(change);
+            outpoints.extend(deposit.tx.input.iter().map(|i| i.previous_output));
+        }
+        if deposits.is_empty() {
+            return Ok(Self {
+                confirmed: HashSet::new(),
+                spenders: Vec::new(),
+            });
+        }
+        let txos = chain_repository.get_txos_for_addresses(&addresses).await?;
+        Ok(Self {
+            confirmed: txos.iter().map(|txo| txo.outpoint).collect(),
+            spenders: chain_repository.get_spenders(&outpoints).await?,
+        })
     }
-    let inputs: Vec<OutPoint> = deposit.tx.input.iter().map(|i| i.previous_output).collect();
-    let spenders = chain_repository.get_spenders(&inputs).await?;
-    if spenders.iter().any(|spender| spender.txid != txid) {
-        return Ok(Funding::Replaced);
+
+    fn funding_state(&self, deposit: &DepositTx) -> Result<Funding, BoxError> {
+        let txid = deposit.tx.compute_txid();
+        let (change, _) = change_output(deposit)?;
+        if self.confirmed.contains(&change) {
+            return Ok(Funding::Confirmed);
+        }
+        let replaced = deposit.tx.input.iter().any(|input| {
+            self.spenders
+                .iter()
+                .any(|spender| spender.outpoint == input.previous_output && spender.txid != txid)
+        });
+        if replaced {
+            return Ok(Funding::Replaced);
+        }
+        Ok(Funding::Unconfirmed)
     }
-    Ok(Funding::Unconfirmed)
 }
 
 /// Returns whether the deposit's trees can still reach the pool.
 async fn attend_deposit<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &C,
-    chain_repository: &R,
+    record: &FundingRecord,
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
@@ -164,7 +194,7 @@ where
     R: ChainRepository + Send + Sync + 'static,
 {
     let txid = deposit.tx.compute_txid();
-    match funding_state(chain_repository, wallet.onchain.network(), deposit).await? {
+    match record.funding_state(deposit)? {
         Funding::Replaced => {
             pool_repo.retire_deposit(deposit).await?;
             warn!("funding tx {txid} can no longer confirm: one of its coins was spent elsewhere");
@@ -178,9 +208,7 @@ where
             }
         }
         Funding::Confirmed => {
-            if let Err(e) =
-                settle_bumps(chain_client, chain_repository, pool_repo, deposit, height).await
-            {
+            if let Err(e) = settle_bumps(chain_client, record, pool_repo, deposit, height).await {
                 warn!("could not settle the fee bumps of funding tx {txid}: {e}");
             }
         }
@@ -209,11 +237,18 @@ where
     let fee_rate = fee_rates.fee_rate().await?;
 
     let mut pending: HashMap<u64, u32> = HashMap::new();
-    for deposit in pool_repo.open_deposits().await? {
+    let deposits = pool_repo.open_deposits().await?;
+    let record = FundingRecord::read(
+        chain_repository.as_ref(),
+        wallet.onchain.network(),
+        &deposits,
+    )
+    .await?;
+    for deposit in deposits {
         if attend_deposit(
             wallet,
             chain_client.as_ref(),
-            chain_repository.as_ref(),
+            &record,
             pool_repo,
             &deposit,
             height,
@@ -322,22 +357,25 @@ where
 /// Keeps a confirmed funding transaction's latest child broadcast until one of its
 /// children confirms, and drops the others once that child is deep enough that they
 /// can no longer confirm.
-async fn settle_bumps<C, R>(
+async fn settle_bumps<C>(
     chain_client: &C,
-    chain_repository: &R,
+    record: &FundingRecord,
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
 ) -> Result<(), BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
-    R: ChainRepository + Send + Sync + 'static,
 {
     let Some(latest) = &deposit.latest_bump else {
         return Ok(());
     };
     let (change, _) = change_output(deposit)?;
-    match chain_repository.get_spenders(&[change]).await?.first() {
+    let spender = record
+        .spenders
+        .iter()
+        .find(|spender| spender.outpoint == change);
+    match spender {
         None => rebroadcast(chain_client, &latest.tx).await,
         Some(spender) => {
             let confirmations = height
