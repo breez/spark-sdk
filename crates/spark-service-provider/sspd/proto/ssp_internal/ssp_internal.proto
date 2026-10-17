@@ -31,6 +31,7 @@ service Pool {
     rpc SweepRefundOutputs(SweepRefundOutputsRequest) returns (SweepRefundOutputsResponse);
     // The unreserved leaves that only one of the SSP and the operators would use.
     rpc ListDisputes(ListDisputesRequest) returns (ListDisputesResponse);
+    rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
 }
 
 service OnchainWallet {
@@ -329,4 +330,23 @@ message ListDisputesRequest {}
 
 message ListDisputesResponse {
     repeated Dispute disputes = 1;
+}
+
+message Reservation {
+    string transfer_id = 1;
+    uint32 leaf_count = 2;
+    uint64 value_sats = 3;
+    string reserved_at = 4;
+    // The kind of record that has the transfer id: `swap`,
+    // `lightning_receive` or `static_deposit`. Unset when no record has it.
+    optional string record = 5;
+}
+
+message ListReservationsRequest {
+    // Only the reservations that belong to no record.
+    bool orphaned_only = 1;
+}
+
+message ListReservationsResponse {
+    repeated Reservation reservations = 1;
 }

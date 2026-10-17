@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bitcoin::hashes::Hash;
 use bitcoin::{FeeRate, Network};
+use spark::services::TransferId;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,7 @@ use ssp_internal_api::{
     ssp_manager_server::SspManager,
 };
 use ssp_internal_api::{Dispute, ListDisputesRequest, ListDisputesResponse};
+use ssp_internal_api::{ListReservationsRequest, ListReservationsResponse, Reservation};
 
 const DEFAULT_COOP_EXIT_LIMIT: u32 = 100;
 const DEFAULT_SWAP_LIMIT: u32 = 100;
@@ -400,10 +402,50 @@ where
     }
 }
 
+/// The stores of the records the SSP reserves pool leaves for.
+pub struct ReservingStores {
+    pub swaps: Arc<dyn SwapStore>,
+    pub lightning: Arc<dyn LightningStore>,
+    pub static_deposits: Arc<dyn StaticDepositClaimStore>,
+}
+
+impl ReservingStores {
+    async fn records_of(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<HashMap<TransferId, &'static str>, String> {
+        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
+        let swaps = self.swaps.counter_transfers_among(&ids).await?;
+        let paid_out: HashSet<TransferId> = self
+            .lightning
+            .get_receives_by_transfer_ids(transfer_ids)
+            .await?
+            .into_iter()
+            .filter_map(|receive| receive.transfer_id)
+            .collect();
+        let claims = self.static_deposits.transfers_among(&ids).await?;
+        let mut records = HashMap::new();
+        for (transfer_id, id) in transfer_ids.iter().zip(&ids) {
+            let record = if swaps.contains(id) {
+                "swap"
+            } else if paid_out.contains(transfer_id) {
+                "lightning_receive"
+            } else if claims.contains(id) {
+                "static_deposit"
+            } else {
+                continue;
+            };
+            records.insert(transfer_id.clone(), record);
+        }
+        Ok(records)
+    }
+}
+
 pub struct PoolServer {
     restock: Arc<RestockService>,
     leaf_store: Arc<PostgresLeafStore>,
     refund_outputs: RefundOutputs,
+    reserving: ReservingStores,
     denominations: Vec<u64>,
     /// Ends the event streams at shutdown: the server does not stop while a
     /// stream is open.
@@ -415,6 +457,7 @@ impl PoolServer {
         restock: Arc<RestockService>,
         leaf_store: Arc<PostgresLeafStore>,
         refund_outputs: RefundOutputs,
+        reserving: ReservingStores,
         denominations: Vec<u64>,
         token: CancellationToken,
     ) -> Self {
@@ -422,6 +465,7 @@ impl PoolServer {
             restock,
             leaf_store,
             refund_outputs,
+            reserving,
             denominations,
             token,
         }
@@ -580,6 +624,42 @@ impl Pool for PoolServer {
             .map_err(|e| Status::internal(format!("could not list the disputes: {e}")))?;
         let disputes = disputes.into_iter().map(dispute_to_proto).collect();
         Ok(Response::new(ListDisputesResponse { disputes }))
+    }
+
+    async fn list_reservations(
+        &self,
+        request: Request<ListReservationsRequest>,
+    ) -> Result<Response<ListReservationsResponse>, Status> {
+        let orphaned_only = request.into_inner().orphaned_only;
+        let stored = self
+            .leaf_store
+            .reservations()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the reservations: {e}")))?;
+        let transfer_ids: Vec<TransferId> = stored
+            .iter()
+            .map(|reservation| reservation.transfer_id.clone())
+            .collect();
+        let records = self
+            .reserving
+            .records_of(&transfer_ids)
+            .await
+            .map_err(|e| Status::internal(format!("could not look the transfers up: {e}")))?;
+        let mut reservations = Vec::with_capacity(stored.len());
+        for reservation in stored {
+            let record = records.get(&reservation.transfer_id).copied();
+            if orphaned_only && record.is_some() {
+                continue;
+            }
+            reservations.push(Reservation {
+                transfer_id: reservation.transfer_id.to_string(),
+                leaf_count: reservation.leaves,
+                value_sats: reservation.value,
+                reserved_at: reservation.reserved_at.to_rfc3339(),
+                record: record.map(str::to_string),
+            });
+        }
+        Ok(Response::new(ListReservationsResponse { reservations }))
     }
 }
 
