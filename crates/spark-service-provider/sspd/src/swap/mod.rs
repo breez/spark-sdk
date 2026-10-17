@@ -19,6 +19,7 @@ use tracing::{error, info};
 
 use crate::graphql::types::RequestSwapInput;
 use crate::in_flight::InFlight;
+use crate::incoming_leaves::{IncomingLeafCheck, IncomingLeafError};
 use crate::leaves::{self, IncomingTransfer, LeafSigningKeys};
 use crate::pool::operator_view;
 use crate::postgresql::{LeafStoreError, PostgresLeafStore};
@@ -89,6 +90,9 @@ pub enum SwapError {
     #[error("refused: {0}")]
     Refused(String),
 
+    #[error(transparent)]
+    IncomingLeaf(#[from] IncomingLeafError),
+
     #[error("persistence error: {0}")]
     Persistence(String),
 }
@@ -101,6 +105,7 @@ pub struct SwapService {
     network: spark::Network,
     key_resolver: Arc<dyn LeafSigningKeys>,
     swap_repo: Arc<dyn SwapStore>,
+    incoming_leaves: Arc<IncomingLeafCheck>,
     requests: Arc<InFlight>,
     claim_wakeup: Wakeup,
     largest_denomination: u64,
@@ -124,6 +129,7 @@ impl SwapService {
         network: spark::Network,
         key_resolver: Arc<dyn LeafSigningKeys>,
         swap_repo: Arc<dyn SwapStore>,
+        incoming_leaves: Arc<IncomingLeafCheck>,
         requests: Arc<InFlight>,
         claim_wakeup: Wakeup,
         largest_denomination: u64,
@@ -136,6 +142,7 @@ impl SwapService {
             network,
             key_resolver,
             swap_repo,
+            incoming_leaves,
             requests,
             claim_wakeup,
             largest_denomination,
@@ -222,6 +229,7 @@ impl SwapService {
                 "the SSP could not claim the transfer's leaves".to_string(),
             ));
         }
+        self.incoming_leaves.check(user_transfer).await?;
 
         info!(
             sender = %caller,
