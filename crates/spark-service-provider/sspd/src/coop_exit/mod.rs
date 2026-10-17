@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::chain::Synced;
 use crate::fees::{self, FeeRateSource};
 use crate::wallet::onchain::{HeldCoins, Utxo};
 use bitcoin::secp256k1::PublicKey;
@@ -162,6 +163,9 @@ pub enum CoopExitError {
     NotFound(String),
     #[error(transparent)]
     LeafCheck(IncomingLeafError),
+    /// The SSP's log has the reason.
+    #[error("the SSP could not serve the request")]
+    Unavailable,
 }
 
 pub struct BuiltCoopExitTxs {
@@ -181,6 +185,7 @@ pub struct CoopExitService {
     wallet: Arc<dyn CoopExitOnchainWallet>,
     fee_rates: Arc<dyn FeeRateSource>,
     incoming_leaves: Arc<IncomingLeafCheck>,
+    synced: Synced,
     network: spark::Network,
     worker: Wakeup,
 }
@@ -195,6 +200,7 @@ impl CoopExitService {
         wallet: Arc<dyn CoopExitOnchainWallet>,
         fee_rates: Arc<dyn FeeRateSource>,
         incoming_leaves: Arc<IncomingLeafCheck>,
+        synced: Synced,
         network: spark::Network,
         worker: Wakeup,
     ) -> Self {
@@ -206,6 +212,7 @@ impl CoopExitService {
             wallet,
             fee_rates,
             incoming_leaves,
+            synced,
             network,
             worker,
         }
@@ -229,6 +236,11 @@ impl CoopExitService {
         })?;
         let transfer_id = TransferId::from_str(&transfer_uuid.to_string())
             .map_err(|e| CoopExitError::InvalidInput(format!("invalid transfer id: {e}")))?;
+        // The SSP builds the exit transaction from the coins the chain record has.
+        if !self.synced.is_synced() {
+            warn!("refusing a coop exit request: the chain record is not at bitcoind's tip");
+            return Err(CoopExitError::Unavailable);
+        }
 
         if let Some(existing) = self
             .store

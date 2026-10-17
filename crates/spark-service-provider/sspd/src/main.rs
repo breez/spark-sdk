@@ -350,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&ssp_wallet.onchain) as Arc<dyn coop_exit::CoopExitOnchainWallet>,
         Arc::clone(&fee_rates),
         Arc::clone(&incoming_leaves),
+        synced.clone(),
         ssp_wallet.spark.network,
         coop_exit_wakeup.clone(),
     ));
