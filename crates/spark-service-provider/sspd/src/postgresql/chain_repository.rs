@@ -40,7 +40,7 @@ impl ChainRepository {
             .map(|u| u.utxo.tx_out.value.to_sat().cast_signed())
             .collect();
         sqlx::query(
-            r#"INSERT INTO brz_ssp_tx_outputs (
+            r#"INSERT INTO brz_ssp_chain_tx_outputs (
                    tx_id
                ,   output_index
                ,   address
@@ -108,7 +108,7 @@ impl ChainRepository {
             .collect();
 
         sqlx::query(
-            r#"INSERT INTO brz_ssp_tx_inputs (
+            r#"INSERT INTO brz_ssp_chain_tx_inputs (
                    tx_id
                ,   output_index
                ,   spending_tx_id
@@ -127,7 +127,7 @@ impl ChainRepository {
                ,   output_index
                ,   spending_tx_id
                ,   spending_input_index)
-               INNER JOIN brz_ssp_tx_outputs o
+               INNER JOIN brz_ssp_chain_tx_outputs o
                    ON i.tx_id = o.tx_id AND i.output_index = o.output_index
                ON CONFLICT DO NOTHING"#,
         )
@@ -154,7 +154,7 @@ impl chain::ChainRepository for ChainRepository {
     ) -> Result<(), ChainRepositoryError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            r#"INSERT INTO brz_ssp_blocks (block_hash, height)
+            r#"INSERT INTO brz_ssp_chain_blocks (block_hash, height)
                VALUES ($1, $2)
                ON CONFLICT DO NOTHING"#,
         )
@@ -174,7 +174,7 @@ impl chain::ChainRepository for ChainRepository {
             .collect();
         let block_hashes: Vec<_> = txns.iter().map(|_| block.hash.to_string()).collect();
         sqlx::query(
-            r#"INSERT INTO brz_ssp_tx_blocks
+            r#"INSERT INTO brz_ssp_chain_tx_blocks
                SELECT i.tx_id
                ,      i.block_hash
                FROM UNNEST(
@@ -184,10 +184,10 @@ impl chain::ChainRepository for ChainRepository {
                    tx_id
                ,   block_hash)
                WHERE EXISTS (SELECT 1
-                             FROM brz_ssp_tx_outputs o
+                             FROM brz_ssp_chain_tx_outputs o
                              WHERE o.tx_id = i.tx_id)
                    OR EXISTS (SELECT 1
-                              FROM brz_ssp_tx_inputs ti
+                              FROM brz_ssp_chain_tx_inputs ti
                               WHERE ti.spending_tx_id = i.tx_id)
                ON CONFLICT DO NOTHING"#,
         )
@@ -203,7 +203,7 @@ impl chain::ChainRepository for ChainRepository {
     #[instrument(level = "trace", skip(self))]
     async fn add_watch_address(&self, address: &Address) -> Result<(), ChainRepositoryError> {
         sqlx::query(
-            r#"INSERT INTO brz_ssp_watch_addresses (address)
+            r#"INSERT INTO brz_ssp_chain_watch_addresses (address)
                VALUES ($1)
                ON CONFLICT DO NOTHING"#,
         )
@@ -222,7 +222,7 @@ impl chain::ChainRepository for ChainRepository {
         let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
         let mut rows = sqlx::query(
             r#"SELECT address
-               FROM brz_ssp_watch_addresses
+               FROM brz_ssp_chain_watch_addresses
                WHERE address = ANY($1)"#,
         )
         .bind(addresses)
@@ -242,7 +242,7 @@ impl chain::ChainRepository for ChainRepository {
     #[instrument(level = "trace", skip(self))]
     async fn get_block_hashes(&self, height: u64) -> Result<Vec<BlockHash>, ChainRepositoryError> {
         let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT block_hash FROM brz_ssp_blocks WHERE height = $1")
+            sqlx::query_as("SELECT block_hash FROM brz_ssp_chain_blocks WHERE height = $1")
                 .bind(height.cast_signed())
                 .fetch_all(&*self.pool)
                 .await?;
@@ -252,15 +252,17 @@ impl chain::ChainRepository for ChainRepository {
     #[instrument(level = "trace", skip(self))]
     async fn get_tip(&self) -> Result<Option<BlockHeader>, ChainRepositoryError> {
         self.first_block(
-            "SELECT block_hash, height FROM brz_ssp_blocks ORDER BY height DESC LIMIT 1",
+            "SELECT block_hash, height FROM brz_ssp_chain_blocks ORDER BY height DESC LIMIT 1",
         )
         .await
     }
 
     #[instrument(level = "trace", skip(self))]
     async fn get_base(&self) -> Result<Option<BlockHeader>, ChainRepositoryError> {
-        self.first_block("SELECT block_hash, height FROM brz_ssp_blocks ORDER BY height LIMIT 1")
-            .await
+        self.first_block(
+            "SELECT block_hash, height FROM brz_ssp_chain_blocks ORDER BY height LIMIT 1",
+        )
+        .await
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -273,9 +275,9 @@ impl chain::ChainRepository for ChainRepository {
             ,         o.output_index
             ,         o.amount
             ,         b.height
-            FROM brz_ssp_tx_outputs o
-            INNER JOIN brz_ssp_tx_blocks tb ON tb.tx_id = o.tx_id
-            INNER JOIN brz_ssp_blocks b ON tb.block_hash = b.block_hash
+            FROM brz_ssp_chain_tx_outputs o
+            INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
+            INNER JOIN brz_ssp_chain_blocks b ON tb.block_hash = b.block_hash
             WHERE o.address = $1
             ORDER BY b.height, o.tx_id, o.output_index"#,
         )
@@ -306,10 +308,10 @@ impl chain::ChainRepository for ChainRepository {
                ,      i.output_index
                ,      i.spending_tx_id
                ,      b.height
-               FROM brz_ssp_tx_inputs i
-               INNER JOIN brz_ssp_tx_blocks tb ON tb.tx_id = i.spending_tx_id
-               INNER JOIN brz_ssp_blocks b ON b.block_hash = tb.block_hash
                INNER JOIN UNNEST($1::text[], $2::bigint[]) AS o(tx_id, output_index)
+               FROM brz_ssp_chain_tx_inputs i
+               INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = i.spending_tx_id
+               INNER JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
                    ON o.tx_id = i.tx_id AND o.output_index = i.output_index"#,
         )
         .bind(&tx_ids)
@@ -333,7 +335,7 @@ impl chain::ChainRepository for ChainRepository {
 
     #[instrument(level = "trace", skip(self))]
     async fn undo_block(&self, hash: BlockHash) -> Result<(), ChainRepositoryError> {
-        sqlx::query("DELETE FROM brz_ssp_blocks WHERE block_hash = $1")
+        sqlx::query("DELETE FROM brz_ssp_chain_blocks WHERE block_hash = $1")
             .bind(hash.to_string())
             .execute(&*self.pool)
             .await?;

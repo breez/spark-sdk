@@ -209,7 +209,7 @@ impl LightningStore for PostgresLightningStore {
         .await
         .map_err(|e| e.to_string())?;
         sqlx::query(
-            r#"INSERT INTO brz_ssp_watch_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING"#,
+            r#"INSERT INTO brz_ssp_chain_watch_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING"#,
         )
         .bind(&record.htlc_address)
         .execute(&mut *tx)
@@ -223,14 +223,14 @@ impl LightningStore for PostgresLightningStore {
             sqlx::query_as(
                 r#"SELECT s.id, s.user_identity_public_key, s.preimage, s.htlc_sweep_address,
                           o.tx_id, o.output_index, o.amount
-                   FROM brz_ssp_tx_outputs o
+                   FROM brz_ssp_chain_tx_outputs o
                    INNER JOIN brz_ssp_lightning_send_requests s ON s.htlc_address = o.address
-                   INNER JOIN brz_ssp_tx_blocks tb ON tb.tx_id = o.tx_id
+                   INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
                    WHERE s.preimage IS NOT NULL
                    AND NOT EXISTS (
                        SELECT 1
-                       FROM brz_ssp_tx_inputs i
-                       INNER JOIN brz_ssp_tx_blocks itb ON itb.tx_id = i.spending_tx_id
+                       FROM brz_ssp_chain_tx_inputs i
+                       INNER JOIN brz_ssp_chain_tx_blocks itb ON itb.tx_id = i.spending_tx_id
                        WHERE i.tx_id = o.tx_id AND i.output_index = o.output_index)"#,
             )
             .fetch_all(self.pool.as_ref())

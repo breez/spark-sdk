@@ -125,30 +125,30 @@ impl<R: ChainRepository> OnchainWallet<R> {
             .clone();
         let rows: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(
             r"SELECT o.address, o.tx_id, o.output_index, o.amount, b.height
-               FROM brz_ssp_tx_outputs o
+               FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
-               INNER JOIN brz_ssp_tx_blocks tb ON tb.tx_id = o.tx_id
-               INNER JOIN brz_ssp_blocks b ON b.block_hash = tb.block_hash
+               INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
+               INNER JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
                WHERE NOT EXISTS (
                    SELECT 1
-                   FROM brz_ssp_tx_inputs i
-                   INNER JOIN brz_ssp_tx_blocks itb ON itb.tx_id = i.spending_tx_id
+                   FROM brz_ssp_chain_tx_inputs i
+                   INNER JOIN brz_ssp_chain_tx_blocks itb ON itb.tx_id = i.spending_tx_id
                    WHERE i.tx_id = o.tx_id AND i.output_index = o.output_index)
                AND NOT EXISTS (
                    SELECT 1
-                   FROM brz_ssp_wallet_spends s
+                   FROM brz_ssp_onchain_wallet_spends s
                    WHERE s.tx_id = o.tx_id AND s.output_index = o.output_index
                    AND NOT EXISTS (
                        SELECT 1
-                       FROM brz_ssp_wallet_spends lost
-                       INNER JOIN brz_ssp_tx_inputs ci
+                       FROM brz_ssp_onchain_wallet_spends lost
+                       INNER JOIN brz_ssp_chain_tx_inputs ci
                            ON ci.tx_id = lost.tx_id
                            AND ci.output_index = lost.output_index
                            AND ci.spending_tx_id <> lost.spending_txid
-                       INNER JOIN brz_ssp_tx_blocks ctb ON ctb.tx_id = ci.spending_tx_id
-                       INNER JOIN brz_ssp_blocks cb ON cb.block_hash = ctb.block_hash
+                       INNER JOIN brz_ssp_chain_tx_blocks ctb ON ctb.tx_id = ci.spending_tx_id
+                       INNER JOIN brz_ssp_chain_blocks cb ON cb.block_hash = ctb.block_hash
                        WHERE lost.spending_txid = s.spending_txid
-                       AND (SELECT MAX(height) FROM brz_ssp_blocks) - cb.height + 1 >= $1))",
+                       AND (SELECT MAX(height) FROM brz_ssp_chain_blocks) - cb.height + 1 >= $1))",
         )
         .bind(CONFLICT_CONFIRMATIONS)
         .fetch_all(self.pgpool.as_ref())
@@ -179,7 +179,7 @@ impl<R: ChainRepository> OnchainWallet<R> {
         let indices: Vec<i64> = outpoints.iter().map(|o| i64::from(o.vout)).collect();
         let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
             r"SELECT o.address, o.tx_id, o.output_index, o.amount
-               FROM brz_ssp_tx_outputs o
+               FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
                INNER JOIN UNNEST($1::text[], $2::bigint[]) AS p(tx_id, output_index)
                    ON p.tx_id = o.tx_id AND p.output_index = o.output_index",
@@ -332,7 +332,7 @@ pub async fn record_spends(
     let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
     let indices: Vec<i64> = outpoints.iter().map(|o| i64::from(o.vout)).collect();
     sqlx::query(
-        "INSERT INTO brz_ssp_wallet_spends (tx_id, output_index, spending_txid)
+        "INSERT INTO brz_ssp_onchain_wallet_spends (tx_id, output_index, spending_txid)
          SELECT p.tx_id, p.output_index, $3
          FROM UNNEST($1::text[], $2::bigint[]) AS p(tx_id, output_index)
          ON CONFLICT DO NOTHING",

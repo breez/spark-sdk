@@ -165,11 +165,13 @@ impl CoopExitStore for PostgresCoopExitStore {
         .map_err(|e| e.to_string())?;
         if let Some((txid, raw_connector_tx)) = abandoned {
             let connector_txid = connector_tx(&raw_connector_tx)?.compute_txid().to_string();
-            sqlx::query(r#"DELETE FROM brz_ssp_wallet_spends WHERE spending_txid = ANY($1)"#)
-                .bind(vec![txid, connector_txid])
-                .execute(&mut *db)
-                .await
-                .map_err(|e| e.to_string())?;
+            sqlx::query(
+                r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)"#,
+            )
+            .bind(vec![txid, connector_txid])
+            .execute(&mut *db)
+            .await
+            .map_err(|e| e.to_string())?;
         }
         db.commit().await.map_err(|e| e.to_string())
     }
@@ -258,7 +260,7 @@ impl CoopExitStore for PostgresCoopExitStore {
         .await
         .map_err(|e| e.to_string())?;
         if let Some(raw_connector_tx) = raw_connector_tx {
-            sqlx::query(r#"DELETE FROM brz_ssp_wallet_spends WHERE spending_txid = $1"#)
+            sqlx::query(r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = $1"#)
                 .bind(connector_tx(&raw_connector_tx)?.compute_txid().to_string())
                 .execute(&mut *db)
                 .await
