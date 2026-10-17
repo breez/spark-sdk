@@ -25,6 +25,20 @@ pub struct GetBlockchainInfoResponse {
 }
 
 #[derive(Deserialize)]
+pub struct GetBlockHeaderResponse {
+    pub height: u64,
+}
+
+#[derive(Deserialize)]
+pub struct GetTxSpendingPrevoutResponse {
+    pub txid: String,
+    pub vout: u32,
+    pub spendingtxid: Option<String>,
+    /// Absent while the spending transaction is unconfirmed.
+    pub blockhash: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct SubmitPackageResponse {
     /// "success" once every transaction of the package is in the mempool, whether
     /// or not it was already, otherwise the package's reject reason.

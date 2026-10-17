@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bitcoin::{
@@ -12,12 +13,17 @@ use thiserror::Error;
 use tracing::trace;
 
 use crate::chain::SyncState;
-use crate::chain::{BroadcastError, ChainClient, ChainError};
+use crate::chain::{BlockHeader, BroadcastError, ChainClient, ChainError, OutputSpend};
 
 use super::{
-    EstimateSmartFeeResponse, GetBlockchainInfoResponse, GetMempoolInfoResponse, GetTxOutResponse,
-    RpcError, RpcReply, RpcRequest, SubmitPackageResponse,
+    EstimateSmartFeeResponse, GetBlockHeaderResponse, GetBlockchainInfoResponse,
+    GetMempoolInfoResponse, GetTxOutResponse, GetTxSpendingPrevoutResponse, RpcError, RpcReply,
+    RpcRequest, SubmitPackageResponse,
 };
+
+/// The index from which bitcoind reads a confirmed spend for
+/// `gettxspendingprevout`, as `getindexinfo` names it.
+const SPENDER_INDEX: &str = "txospenderindex";
 
 /// Bitcoin Core's error for broadcasting a transaction that has an output in the
 /// UTXO set. Matched by code, since the message has changed between versions.
@@ -38,6 +44,8 @@ pub struct UnspentOutput {
 pub struct ChainInfo {
     pub network: bitcoin::Network,
     pub pruned: bool,
+    /// Whether bitcoind runs with `-txospenderindex`.
+    pub spender_index: bool,
 }
 
 #[derive(Debug)]
@@ -131,9 +139,11 @@ impl BitcoindClient {
         let network = bitcoin::Network::from_core_arg(&info.chain).map_err(|e| {
             ChainError::General(format!("unknown chain {}: {e}", info.chain).into())
         })?;
+        let indexes: HashMap<String, Value> = self.call("getindexinfo", json!([])).await?;
         Ok(ChainInfo {
             network,
             pruned: info.pruned,
+            spender_index: indexes.contains_key(SPENDER_INDEX),
         })
     }
 
@@ -221,6 +231,11 @@ impl ChainClient for BitcoindClient {
         })
     }
 
+    async fn get_best_block_hash(&self) -> Result<BlockHash, ChainError> {
+        let hash: String = self.call("getbestblockhash", json!([])).await?;
+        Ok(hash.parse()?)
+    }
+
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {
         match self
             .call::<_, String>("getblockhash", json!([height]))
@@ -236,6 +251,53 @@ impl ChainClient for BitcoindClient {
         let hex: String = self.call("getblock", json!([hash.to_string(), 0])).await?;
         let raw: Vec<u8> = FromHex::from_hex(&hex)?;
         Ok(deserialize(&raw)?)
+    }
+
+    async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
+        if outpoints.is_empty() {
+            return Ok(Vec::new());
+        }
+        let outputs: Vec<Value> = outpoints
+            .iter()
+            .map(|outpoint| json!({"txid": outpoint.txid.to_string(), "vout": outpoint.vout}))
+            .collect();
+        // `mempool_only` is off explicitly. With the default, bitcoind without the
+        // index reports only the spends in its mempool.
+        let found: Vec<GetTxSpendingPrevoutResponse> = self
+            .call(
+                "gettxspendingprevout",
+                json!([outputs, {"mempool_only": false}]),
+            )
+            .await?;
+        let mut heights: HashMap<BlockHash, u64> = HashMap::new();
+        let mut spends = Vec::new();
+        for output in found {
+            let Some(spender) = output.spendingtxid else {
+                continue;
+            };
+            let block = match output.blockhash {
+                None => None,
+                Some(hash) => {
+                    let hash: BlockHash = hash.parse()?;
+                    let height = if let Some(height) = heights.get(&hash) {
+                        *height
+                    } else {
+                        let header: GetBlockHeaderResponse = self
+                            .call("getblockheader", json!([hash.to_string()]))
+                            .await?;
+                        heights.insert(hash, header.height);
+                        header.height
+                    };
+                    Some(BlockHeader { hash, height })
+                }
+            };
+            spends.push(OutputSpend {
+                outpoint: OutPoint::new(output.txid.parse()?, output.vout),
+                spender: spender.parse()?,
+                block,
+            });
+        }
+        Ok(spends)
     }
 
     async fn wait_for_block_height(

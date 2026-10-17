@@ -119,6 +119,7 @@ services:
       - -regtest
       - -server
       - -txindex
+      - -txospenderindex
       - -addresstype=bech32
       - -fallbackfee=0.00000253
       - -rpcport=18443
