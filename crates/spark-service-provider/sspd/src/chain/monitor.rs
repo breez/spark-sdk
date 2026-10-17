@@ -304,7 +304,7 @@ mod tests {
 
     use super::*;
     use crate::chain::SyncState;
-    use crate::chain::{BroadcastError, ChainRepositoryError};
+    use crate::chain::{BroadcastError, ChainRepositoryError, OutputSpend};
 
     #[derive(Default)]
     struct Node {
@@ -401,6 +401,10 @@ mod tests {
             })
         }
 
+        async fn get_best_block_hash(&self) -> Result<BlockHash, ChainError> {
+            unimplemented!()
+        }
+
         async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {
             Ok(self.active.lock().unwrap().get(&height).copied())
         }
@@ -410,6 +414,13 @@ mod tests {
                 return Err(ChainError::General("block unavailable".into()));
             }
             Ok(self.blocks.lock().unwrap()[hash].0.clone())
+        }
+
+        async fn get_spends(
+            &self,
+            _outpoints: &[OutPoint],
+        ) -> Result<Vec<OutputSpend>, ChainError> {
+            unimplemented!()
         }
 
         async fn wait_for_block_height(

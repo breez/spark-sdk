@@ -261,7 +261,8 @@ let
           ${words [
             "exec bitcoind -regtest"
             ''-datadir="$SPARK_LOCAL_DIR/bitcoind"''
-            "-printtoconsole -server -txindex -addresstype=bech32 -fallbackfee=0.00000253"
+            "-printtoconsole -server -txindex -txospenderindex -addresstype=bech32"
+            "-fallbackfee=0.00000253"
             ''-bind=127.0.0.1 -port="$BITCOIND_P2P_PORT" -rpcport="$BITCOIND_RPC_PORT"''
             ''-rpcuser="$BITCOIND_RPC_USER" -rpcpassword="$BITCOIND_RPC_PASSWORD"''
             "-rpcbind=127.0.0.1 -rpcallowip=127.0.0.1"

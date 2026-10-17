@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use bitcoin::{Block, BlockHash, FeeRate, Transaction};
+use bitcoin::{Block, BlockHash, FeeRate, OutPoint, Transaction, Txid};
 use thiserror::Error;
 
-use super::ChainRepositoryError;
+use super::{BlockHeader, ChainRepositoryError};
 
 #[derive(Debug, Error)]
 pub enum BroadcastError {
@@ -24,6 +24,14 @@ pub enum ChainError {
     General(Box<dyn std::error::Error + Sync + Send>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputSpend {
+    pub outpoint: OutPoint,
+    pub spender: Txid,
+    /// `None` while the spending transaction is in the mempool.
+    pub block: Option<BlockHeader>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncState {
     pub height: u64,
@@ -40,9 +48,13 @@ pub trait ChainClient {
     /// Estimates the fee rate for confirmation within `conf_target` blocks.
     async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError>;
     async fn sync_state(&self) -> Result<SyncState, ChainError>;
+    async fn get_best_block_hash(&self) -> Result<BlockHash, ChainError>;
     /// `None` above the node's tip.
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError>;
     async fn get_block(&self, hash: &BlockHash) -> Result<Block, ChainError>;
+    /// Returns the spend of each of `outpoints` that is an input of a
+    /// transaction in the chain or in the mempool.
+    async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError>;
     /// Returns once the node's tip is at `height` or higher, or after `timeout`.
     async fn wait_for_block_height(&self, height: u64, timeout: Duration)
     -> Result<(), ChainError>;

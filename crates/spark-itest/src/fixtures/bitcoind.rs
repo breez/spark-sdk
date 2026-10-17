@@ -110,6 +110,7 @@ impl BitcoindFixture {
                 "-nolisten",
                 "-addresstype=bech32",
                 "-txindex",
+                "-txospenderindex",
                 "-fallbackfee=0.00000253",
                 "-debug=mempool",
                 "-debug=rpc",

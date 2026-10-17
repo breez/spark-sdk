@@ -88,7 +88,7 @@ struct Args {
     #[arg(long, default_value = "10")]
     pub db_max_connections: u32,
 
-    /// Address to the bitcoind rpc.
+    /// Address to the bitcoind rpc. bitcoind has to run with `-txospenderindex`.
     #[arg(long, default_value = "http://localhost:8332")]
     pub bitcoind_rpc_address: String,
 
@@ -263,6 +263,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if chain_info.pruned {
         return Err("bitcoind is pruned, but the daemon reads every block since it started".into());
+    }
+    if !chain_info.spender_index {
+        return Err(
+            "bitcoind runs without -txospenderindex, which finds the spend of an output".into(),
+        );
     }
 
     let chain_tip = chain::ChainTip::load(chain_repository.as_ref()).await?;
