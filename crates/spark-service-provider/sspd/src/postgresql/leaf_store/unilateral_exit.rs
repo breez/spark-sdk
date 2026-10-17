@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bitcoin::Transaction;
+use bitcoin::{OutPoint, TxOut};
 use spark::tree::TreeNodeId;
 use sqlx::Row;
 use uuid::Uuid;
@@ -23,6 +24,14 @@ pub struct MatureTransaction {
     /// The transactions for `leaves` that have yet to confirm, `transaction`
     /// included.
     pub remaining: Vec<Transaction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RefundOutput {
+    pub node_id: TreeNodeId,
+    pub outpoint: OutPoint,
+    pub output: TxOut,
+    pub height: u64,
 }
 
 fn arrays(outputs: &[ConfirmedOutput]) -> (Vec<String>, Vec<i32>, Vec<i64>) {
@@ -243,6 +252,93 @@ impl PostgresLeafStore {
                 .push((leaf, value.cast_unsigned()));
         }
         Ok(conflicted)
+    }
+
+    /// The outputs among `unspent` that are the SSP's for a leaf it owns: the
+    /// first output of the leaf's refund, of one of the leaf's direct refunds,
+    /// or of an old refund that confirmed below an old node transaction of the
+    /// leaf.
+    pub async fn refund_outputs(
+        &self,
+        unspent: &[ConfirmedOutput],
+    ) -> Result<Vec<RefundOutput>, LeafStoreError> {
+        if unspent.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (tx_ids, indices, heights) = arrays(unspent);
+        // In the last branch, an old refund is a stored cpfp transaction that
+        // is neither the refund of one of the SSP's leaves nor the refund of a
+        // leaf it transferred, and that is the parent of no stored transaction.
+        let rows = sqlx::query(
+            r"WITH unspent (tx_id, height) AS (
+                   SELECT tx_id, height
+                   FROM UNNEST($1::text[], $2::int[], $3::bigint[])
+                        AS unspent (tx_id, output_index, height)
+                   WHERE output_index = 0
+               )
+               SELECT l.node_id, refund.raw, unspent.height, NULL AS old_refund_tx_id
+               FROM unspent
+               JOIN brz_ssp_spark_leaves l ON l.refund_tx_id = unspent.tx_id
+               JOIN brz_ssp_spark_txs refund ON refund.tx_id = unspent.tx_id
+             UNION ALL
+               SELECT l.node_id, direct.raw, unspent.height, NULL
+               FROM unspent
+               JOIN brz_ssp_spark_direct_txs direct ON direct.tx_id = unspent.tx_id
+               JOIN brz_ssp_spark_leaves l ON l.refund_tx_id = direct.cpfp_tx_id
+             UNION ALL
+               SELECT NULL, old_refund.raw, unspent.height, old_refund.tx_id
+               FROM unspent
+               JOIN brz_ssp_spark_txs old_refund ON old_refund.tx_id = unspent.tx_id
+               WHERE NOT EXISTS (SELECT 1 FROM brz_ssp_spark_leaves l
+                                 WHERE l.refund_tx_id = old_refund.tx_id)
+                 AND NOT EXISTS (SELECT 1 FROM brz_ssp_spark_transferred_leaves transferred
+                                 WHERE transferred.refund_tx_id = old_refund.tx_id)
+                 AND NOT EXISTS (SELECT 1 FROM brz_ssp_spark_txs child
+                                 WHERE child.previous_tx_id = old_refund.tx_id)",
+        )
+        .bind(&tx_ids)
+        .bind(&indices)
+        .bind(&heights)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        let old_refunds: Vec<String> = rows
+            .iter()
+            .filter_map(|row| {
+                row.try_get::<Option<String>, _>("old_refund_tx_id")
+                    .transpose()
+            })
+            .collect::<Result<_, _>>()?;
+        let conflicted = self.leaves_below_conflict(&old_refunds).await?;
+        let mut outputs = Vec::new();
+        for row in &rows {
+            let owned: Option<Uuid> = row.try_get("node_id")?;
+            let old_refund: Option<String> = row.try_get("old_refund_tx_id")?;
+            let leaf = match old_refund {
+                None => owned,
+                Some(id) => conflicted
+                    .get(&id)
+                    .and_then(|leaves| leaves.first())
+                    .map(|(leaf, _)| *leaf),
+            };
+            let Some(leaf) = leaf else {
+                continue;
+            };
+            let refund = transaction(row, "raw")?;
+            let output = refund
+                .output
+                .first()
+                .ok_or_else(|| invalid("a stored refund has no output"))?
+                .clone();
+            outputs.push(RefundOutput {
+                node_id: node_id(leaf)?,
+                outpoint: OutPoint::new(refund.compute_txid(), 0),
+                output,
+                height: row.try_get::<i64, _>("height")?.cast_unsigned(),
+            });
+        }
+        outputs.sort_by_key(|output| (output.height, output.outpoint));
+        Ok(outputs)
     }
 }
 
