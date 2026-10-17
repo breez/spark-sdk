@@ -1835,3 +1835,65 @@ async fn a_node_reported_as_before_is_not_written_again() {
 
     assert_eq!(xmin().await, before);
 }
+
+#[tokio::test]
+async fn node_transactions_are_stored_without_the_leaf_below_them() {
+    let fixture = Fixture::new().await;
+    let tree = tree_id();
+    let other_tree = tree_id();
+    let other_funding = funding();
+    let funding = funding();
+    let root = node(&tree, None, funding, &[1000, 1000]);
+    let below = leaf(&tree, Some(&root), output(&root.node_tx, 0), 1000, 2000);
+    let pedigree = LeafPedigree {
+        leaf: below.clone(),
+        ancestors: vec![root.clone()],
+    };
+    let parent = node(&other_tree, None, other_funding, &[1000]);
+    let without_parent = leaf(
+        &other_tree,
+        Some(&parent),
+        output(&parent.node_tx, 0),
+        1000,
+        2000,
+    );
+    fixture
+        .store
+        .store_nodes(&[pedigree.clone(), alone(&without_parent)])
+        .await
+        .unwrap();
+    assert_eq!(fixture.count("brz_ssp_spark_leaves").await, 0);
+
+    let below_txid = below.node_tx.compute_txid();
+    let root_txid = root.node_tx.compute_txid();
+    let without_parent_txid = without_parent.node_tx.compute_txid();
+    let stored = fixture
+        .store
+        .stored_chains(&[below_txid, without_parent_txid])
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.chains.len(),
+        1,
+        "an exit chain that does not reach a root"
+    );
+    let chain = &stored.chains[&below_txid];
+    let txids: Vec<Txid> = chain.iter().map(|transaction| transaction.txid).collect();
+    assert_eq!(txids, [below_txid, root_txid]);
+    let steps: Vec<_> = chain.iter().map(|transaction| transaction.step).collect();
+    assert_eq!(steps[..], exit_chain(&pedigree)[1..]);
+    assert!(stored.states.unchecked.contains(&funding));
+
+    fixture.unspent().await;
+    let stored = fixture.store.stored_chains(&[below_txid]).await.unwrap();
+    assert!(stored.states.unchecked.is_empty());
+    assert!(stored.states.spent.is_empty());
+
+    let not_stored = Txid::from_byte_array([0xee; 32]);
+    let stored_txids = fixture
+        .store
+        .stored_transactions(&[below_txid, not_stored])
+        .await
+        .unwrap();
+    assert_eq!(stored_txids, HashSet::from([below_txid]));
+}

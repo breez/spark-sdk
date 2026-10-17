@@ -16,6 +16,7 @@ pub use coop_exit_store::PostgresCoopExitStore;
 pub use instant_quote_store::PostgresInstantStaticDepositQuoteStore;
 pub use leaf_store::MatureTransaction;
 pub use leaf_store::RefundOutput;
+pub use leaf_store::{ChainTransaction, StoredChains};
 pub use leaf_store::{
     Dispute, DisputeDetails, ExitChainStep, LeafStoreError, PoolCounts, PostgresLeafStore,
     RenewalCursor, Reported, Reservation, exit_chain, exiting_steps, refund_step,
