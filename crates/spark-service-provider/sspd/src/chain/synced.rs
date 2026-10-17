@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::{BlockHeader, ChainTip, SyncState};
+
 /// How long sspd still counts as synced after the chain monitor stopped
 /// waiting for bitcoind's next block. The monitor does not wait while it stores
 /// new blocks or while bitcoind returns errors. So sspd stays synced through a
@@ -58,6 +60,30 @@ impl Synced {
             Waiting::Stopped(at) => at.elapsed() < GRACE,
         }
     }
+
+    pub fn chain_sync(&self, chain_tip: &ChainTip) -> ChainSync {
+        match chain_tip.record() {
+            Some(tip) if self.is_synced() => ChainSync::Synced { tip },
+            record => ChainSync::NotSynced {
+                record,
+                bitcoind: chain_tip.bitcoind_sync_state(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChainSync {
+    Synced {
+        tip: BlockHeader,
+    },
+    NotSynced {
+        /// The chain record's tip. `None` while the record has no block.
+        record: Option<BlockHeader>,
+        /// bitcoind's sync state at the start of the chain monitor's last sync.
+        /// `None` until the monitor has fetched it since sspd started.
+        bitcoind: Option<SyncState>,
+    },
 }
 
 #[cfg(test)]
@@ -81,6 +107,66 @@ mod tests {
 
         synced.waiting();
         assert!(synced.is_synced());
+    }
+
+    fn block(height: u64) -> BlockHeader {
+        BlockHeader {
+            hash: bitcoin::hashes::Hash::from_byte_array([7; 32]),
+            height,
+        }
+    }
+
+    #[test]
+    fn before_the_monitor_has_reached_bitcoind_sspd_reports_what_it_has() {
+        let synced = Synced::new();
+        let nothing = ChainSync::NotSynced {
+            record: None,
+            bitcoind: None,
+        };
+        assert_eq!(synced.chain_sync(&ChainTip::default()), nothing);
+
+        // After a restart, sspd has the stored tip before it has bitcoind's sync
+        // state.
+        let chain_tip = ChainTip::at(block(100));
+        let stored = ChainSync::NotSynced {
+            record: Some(block(100)),
+            bitcoind: None,
+        };
+        assert_eq!(synced.chain_sync(&chain_tip), stored);
+
+        let bitcoind = SyncState {
+            height: 250,
+            synced: false,
+        };
+        chain_tip.set_bitcoind_sync_state(bitcoind);
+        let behind = ChainSync::NotSynced {
+            record: Some(block(100)),
+            bitcoind: Some(bitcoind),
+        };
+        assert_eq!(synced.chain_sync(&chain_tip), behind);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_synced_sspd_reports_the_chain_records_tip_until_it_is_no_longer_synced() {
+        let synced = Synced::new();
+        let chain_tip = ChainTip::at(block(100));
+        let bitcoind = SyncState {
+            height: 100,
+            synced: true,
+        };
+        chain_tip.set_bitcoind_sync_state(bitcoind);
+
+        synced.waiting();
+        let at_tip = ChainSync::Synced { tip: block(100) };
+        assert_eq!(synced.chain_sync(&chain_tip), at_tip);
+
+        synced.stopped();
+        tokio::time::advance(GRACE).await;
+        let lost = ChainSync::NotSynced {
+            record: Some(block(100)),
+            bitcoind: Some(bitcoind),
+        };
+        assert_eq!(synced.chain_sync(&chain_tip), lost);
     }
 
     #[tokio::test(start_paused = true)]

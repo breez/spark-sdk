@@ -123,6 +123,7 @@ where
     ) -> Result<StoredTip, ChainError> {
         let bitcoind = self.chain_client.sync_state().await?;
         let node_height = bitcoind.height;
+        self.chain_tip.set_bitcoind_sync_state(bitcoind);
         let stored_tip = if let Some(tip) = self.chain_repository.get_tip().await? {
             tip
         } else {
@@ -642,6 +643,8 @@ mod tests {
         sync(&monitor).await.unwrap();
         assert_eq!(monitor.chain_tip.record().unwrap().hash, a[29]);
         assert_eq!(monitor.chain_tip.stored(), monitor.chain_tip.record());
+        let reported = monitor.chain_tip.bitcoind_sync_state().unwrap();
+        assert_eq!((reported.height, reported.synced), (129, true));
 
         // A reorg: the monitor stores two blocks of the new chain, then fails to
         // get the third.
