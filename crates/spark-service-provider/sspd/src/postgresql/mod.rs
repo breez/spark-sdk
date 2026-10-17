@@ -5,6 +5,7 @@ mod instant_quote_store;
 mod leaf_store;
 mod lightning_store;
 mod pool_store;
+mod static_deposit_address_store;
 mod static_deposit_store;
 mod swap_store;
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub use leaf_store::{
 pub use lightning_store::PostgresLightningStore;
 pub use pool_store::PoolRepository;
 use sqlx::{Pool, Postgres};
+pub use static_deposit_address_store::PostgresStaticDepositAddressStore;
 pub use static_deposit_store::PostgresStaticDepositClaimStore;
 pub use swap_store::SwapRepository;
 pub use unilateral_exit_store::{

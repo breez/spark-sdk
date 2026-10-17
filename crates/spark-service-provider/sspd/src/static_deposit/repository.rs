@@ -40,6 +40,25 @@ pub struct StaticDepositClaimRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticDepositAddress {
+    pub address: String,
+    pub user_identity_public_key: PublicKey,
+    pub user_signing_public_key: PublicKey,
+    pub verifying_public_key: PublicKey,
+}
+
+/// Static deposit addresses as the coordinator confirmed them. sspd records an
+/// address's user and keys so that it does not query the coordinator for them
+/// again.
+#[async_trait::async_trait]
+pub trait StaticDepositAddressStore: Send + Sync {
+    async fn get(&self, address: &str) -> Result<Option<StaticDepositAddress>, String>;
+
+    /// Leaves an address the store already has unchanged.
+    async fn insert(&self, address: &StaticDepositAddress) -> Result<(), String>;
+}
+
 impl StaticDepositClaimRecord {
     pub fn is_pending(&self) -> bool {
         self.pending_credit.is_some()
