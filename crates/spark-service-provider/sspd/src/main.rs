@@ -339,9 +339,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         as Arc<dyn lightning::repository::LightningStore>;
     let coop_exit_store = Arc::new(postgresql::PostgresCoopExitStore::new(Arc::clone(&pgpool)))
         as Arc<dyn coop_exit::repository::CoopExitStore>;
-    let fee_rates = Arc::new(chain::CachedFeeRates::new(
+    let cached_fee_rates = Arc::new(chain::CachedFeeRates::new(
         Arc::clone(&chain_client) as Arc<_>
-    )) as Arc<dyn fees::FeeRateSource>;
+    ));
+    if let Err(e) = cached_fee_rates.refresh().await {
+        warn!("bitcoind returned no fee rate estimate at startup: {e}");
+    }
+    let fee_rate_token = token.clone();
+    tracker.spawn(Arc::clone(&cached_fee_rates).run(fee_rate_token));
+    let fee_rates = cached_fee_rates as Arc<dyn fees::FeeRateSource>;
     let coop_exit_service = Arc::new(coop_exit::CoopExitService::new(
         Arc::clone(&coop_exit_store),
         Arc::clone(&ssp_wallet.spark.operator_pool),
