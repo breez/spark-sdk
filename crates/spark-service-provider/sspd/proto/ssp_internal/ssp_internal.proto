@@ -24,6 +24,11 @@ service Pool {
     rpc RequestRestock(RequestRestockRequest) returns (RequestRestockResponse);
     rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
     rpc SubscribePoolEvents(SubscribePoolEventsRequest) returns (stream PoolEvent);
+    // The refund outputs of the leaves the SSP exited unilaterally, while they
+    // are unspent on chain.
+    rpc ListRefundOutputs(ListRefundOutputsRequest) returns (ListRefundOutputsResponse);
+    // Sweeps those outputs into the onchain wallet.
+    rpc SweepRefundOutputs(SweepRefundOutputsRequest) returns (SweepRefundOutputsResponse);
 }
 
 service OnchainWallet {
@@ -262,4 +267,38 @@ message LeavesAvailable {
     string deposit_address = 1;
     // The value of each leaf added, one entry per leaf.
     repeated uint64 denominations = 2;
+}
+
+message RefundOutput {
+    string leaf_id = 1;
+    string txid = 2;
+    uint32 vout = 3;
+    uint64 value_sats = 4;
+    // The height the leaf's refund confirmed at.
+    uint64 block_height = 5;
+    // The unconfirmed transaction with the output as an input.
+    optional string spending_txid = 6;
+}
+
+message ListRefundOutputsRequest {}
+
+message ListRefundOutputsResponse {
+    repeated RefundOutput outputs = 1;
+}
+
+message SweepRefundOutputsRequest {
+    // Without it, the daemon uses its own estimate.
+    optional uint64 fee_rate_sat_per_vbyte = 1;
+    // Also sweeps the outputs that are inputs of an unconfirmed transaction.
+    // Bitcoin Core accepts the new transaction only at a higher fee rate than
+    // the unconfirmed transaction's.
+    bool replace_unconfirmed = 2;
+}
+
+message SweepRefundOutputsResponse {
+    repeated string txids = 1;
+    uint32 output_count = 2;
+    // The value of the transactions' outputs, which are the onchain wallet's.
+    uint64 value_sats = 3;
+    uint64 fee_sats = 4;
 }
