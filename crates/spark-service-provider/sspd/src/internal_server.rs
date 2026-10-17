@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bitcoin::Network;
 use bitcoin::hashes::Hash;
+use bitcoin::{FeeRate, Network};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -15,6 +15,7 @@ use crate::lightning::repository::{
     HoldInvoiceStatus, LightningReceiveRecord, LightningSendRecord, LightningStore,
     SendPaymentStatus,
 };
+use crate::pool::refund_outputs::RefundOutputs;
 use crate::pool::restock::{PoolEvent, RestockService};
 use crate::postgresql::PostgresLeafStore;
 use crate::static_deposit::repository::{StaticDepositClaimRecord, StaticDepositClaimStore};
@@ -32,12 +33,14 @@ use ssp_internal_api::{
     GetLightningRequestRequest, GetLightningRequestResponse, GetStaticDepositClaimRequest,
     GetStaticDepositClaimResponse, LeavesAvailable, LightningReceive, LightningSend,
     ListCoopExitsRequest, ListCoopExitsResponse, ListPendingLightningRequest,
-    ListPendingLightningResponse, ListSwapsRequest, ListSwapsResponse, NewAddressRequest,
-    NewAddressResponse, PoolEvent as ApiPoolEvent, PoolLeafCount, PoolStatusRequest,
-    PoolStatusResponse, RequestRestockRequest, RequestRestockResponse, RestockDenomination,
-    StaticDepositClaim, StopRequest, StopResponse, SubscribePoolEventsRequest, Swap, SwapLeaf,
-    Utxo, UtxosRequest, UtxosResponse, onchain_wallet_server::OnchainWallet, pool_event,
-    pool_server::Pool, ssp_manager_server::SspManager,
+    ListPendingLightningResponse, ListRefundOutputsRequest, ListRefundOutputsResponse,
+    ListSwapsRequest, ListSwapsResponse, NewAddressRequest, NewAddressResponse,
+    PoolEvent as ApiPoolEvent, PoolLeafCount, PoolStatusRequest, PoolStatusResponse, RefundOutput,
+    RequestRestockRequest, RequestRestockResponse, RestockDenomination, StaticDepositClaim,
+    StopRequest, StopResponse, SubscribePoolEventsRequest, Swap, SwapLeaf,
+    SweepRefundOutputsRequest, SweepRefundOutputsResponse, Utxo, UtxosRequest, UtxosResponse,
+    onchain_wallet_server::OnchainWallet, pool_event, pool_server::Pool,
+    ssp_manager_server::SspManager,
 };
 
 const DEFAULT_COOP_EXIT_LIMIT: u32 = 100;
@@ -398,6 +401,7 @@ where
 pub struct PoolServer {
     restock: Arc<RestockService>,
     leaf_store: Arc<PostgresLeafStore>,
+    refund_outputs: RefundOutputs,
     denominations: Vec<u64>,
     /// Ends the event streams at shutdown: the server does not stop while a
     /// stream is open.
@@ -408,12 +412,14 @@ impl PoolServer {
     pub fn new(
         restock: Arc<RestockService>,
         leaf_store: Arc<PostgresLeafStore>,
+        refund_outputs: RefundOutputs,
         denominations: Vec<u64>,
         token: CancellationToken,
     ) -> Self {
         Self {
             restock,
             leaf_store,
+            refund_outputs,
             denominations,
             token,
         }
@@ -515,6 +521,50 @@ impl Pool for PoolServer {
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn list_refund_outputs(
+        &self,
+        _request: Request<ListRefundOutputsRequest>,
+    ) -> Result<Response<ListRefundOutputsResponse>, Status> {
+        let unswept = self
+            .refund_outputs
+            .unswept()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the refund outputs: {e}")))?;
+        let outputs = unswept
+            .into_iter()
+            .map(|unswept| RefundOutput {
+                leaf_id: unswept.output.node_id.to_string(),
+                txid: unswept.output.outpoint.txid.to_string(),
+                vout: unswept.output.outpoint.vout,
+                value_sats: unswept.output.output.value.to_sat(),
+                block_height: unswept.output.height,
+                spending_txid: unswept.spender.map(|txid| txid.to_string()),
+            })
+            .collect();
+        Ok(Response::new(ListRefundOutputsResponse { outputs }))
+    }
+
+    async fn sweep_refund_outputs(
+        &self,
+        request: Request<SweepRefundOutputsRequest>,
+    ) -> Result<Response<SweepRefundOutputsResponse>, Status> {
+        let request = request.into_inner();
+        let rate = request
+            .fee_rate_sat_per_vbyte
+            .map(|sat_per_vbyte| FeeRate::from_sat_per_vb(sat_per_vbyte).unwrap_or(FeeRate::MAX));
+        let sweep = self
+            .refund_outputs
+            .sweep(rate, request.replace_unconfirmed)
+            .await
+            .map_err(|e| Status::internal(format!("could not sweep the refund outputs: {e}")))?;
+        Ok(Response::new(SweepRefundOutputsResponse {
+            txids: sweep.transactions.iter().map(ToString::to_string).collect(),
+            output_count: u32::try_from(sweep.outputs).unwrap_or(u32::MAX),
+            value_sats: sweep.value_sats,
+            fee_sats: sweep.fee_sats,
+        }))
     }
 }
 

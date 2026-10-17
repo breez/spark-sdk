@@ -15,9 +15,10 @@
 use clap::{Parser, Subcommand};
 use ssp_internal_api::{
     BalanceRequest, GetInfoRequest, GetLightningRequestRequest, ListPendingLightningRequest,
-    NewAddressRequest, PoolStatusRequest, RequestRestockRequest, RestockDenomination, StopRequest,
-    SubscribePoolEventsRequest, UtxosRequest, onchain_wallet_client::OnchainWalletClient,
-    pool_client::PoolClient, pool_event, ssp_manager_client::SspManagerClient,
+    ListRefundOutputsRequest, NewAddressRequest, PoolStatusRequest, RequestRestockRequest,
+    RestockDenomination, StopRequest, SubscribePoolEventsRequest, SweepRefundOutputsRequest,
+    UtxosRequest, onchain_wallet_client::OnchainWalletClient, pool_client::PoolClient, pool_event,
+    ssp_manager_client::SspManagerClient,
 };
 use tonic::{
     Request,
@@ -78,6 +79,18 @@ enum PoolCommand {
     },
     /// Follow what the pool service does as it stocks, until interrupted or the daemon stops
     Events,
+    /// List the unspent refund outputs of the leaves the SSP exited unilaterally
+    Exits,
+    /// Sweep those refund outputs into the onchain wallet
+    SweepExits {
+        /// Fee rate in sat/vB. Without it, the daemon uses its own estimate.
+        #[arg(long)]
+        fee_rate: Option<u64>,
+        /// Also sweep the outputs that are inputs of an unconfirmed sweep, to replace it.
+        /// Bitcoin Core accepts the new sweep only at a higher fee rate.
+        #[arg(long)]
+        replace: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,10 +201,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                PoolCommand::Exits => list_refund_outputs(&mut client).await?,
+                PoolCommand::SweepExits { fee_rate, replace } => {
+                    sweep_refund_outputs(&mut client, fee_rate, replace).await?;
+                }
             }
         }
     }
 
+    Ok(())
+}
+
+async fn list_refund_outputs(
+    client: &mut PoolClient<Channel>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let outputs = client
+        .list_refund_outputs(Request::new(ListRefundOutputsRequest {}))
+        .await?
+        .into_inner()
+        .outputs;
+    let total: u64 = outputs.iter().map(|output| output.value_sats).sum();
+    for output in &outputs {
+        let spender = output
+            .spending_txid
+            .as_ref()
+            .map(|txid| format!(", an input of unconfirmed {txid}"))
+            .unwrap_or_default();
+        println!(
+            "{:>8} sats  {}:{}  leaf {}, confirmed at {}{spender}",
+            output.value_sats, output.txid, output.vout, output.leaf_id, output.block_height
+        );
+    }
+    println!("{} outputs, {total} sats", outputs.len());
+    Ok(())
+}
+
+async fn sweep_refund_outputs(
+    client: &mut PoolClient<Channel>,
+    fee_rate: Option<u64>,
+    replace: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sweep = client
+        .sweep_refund_outputs(Request::new(SweepRefundOutputsRequest {
+            fee_rate_sat_per_vbyte: fee_rate,
+            replace_unconfirmed: replace,
+        }))
+        .await?
+        .into_inner();
+    for txid in &sweep.txids {
+        println!("{txid}");
+    }
+    println!(
+        "swept {} outputs: {} sats to the wallet, {} sats in fees",
+        sweep.output_count, sweep.value_sats, sweep.fee_sats
+    );
     Ok(())
 }
 
