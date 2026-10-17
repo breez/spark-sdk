@@ -9,7 +9,7 @@ use crate::in_flight::InFlight;
 use crate::leaves::{ClaimDeps, claim_into_pool};
 use crate::pool::operator_view;
 use crate::swap::SwapStore;
-use crate::swap::repository::{SwapDetail, SwapLeaf};
+use crate::swap::repository::{SwapLeaf, SwapRecord};
 use crate::wakeup::Wakeup;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -59,17 +59,16 @@ pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<bool, BoxError>
         return Ok(false);
     }
 
-    let futures = swaps.into_iter().map(|swap| claim_one_swap(deps, swap));
+    let futures = swaps.iter().map(|swap| claim_one_swap(deps, swap));
     for result in futures::future::join_all(futures).await {
         if let Err(e) = result {
             error!("failed to claim swap: {e}");
         }
     }
-    Ok(!deps.swap_repo.get_unclaimed_swaps().await?.is_empty())
+    Ok(deps.swap_repo.has_unclaimed_swaps().await?)
 }
 
-async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), BoxError> {
-    let swap = &detail.swap;
+async fn claim_one_swap(deps: &SwapClaimDeps, swap: &SwapRecord) -> Result<(), BoxError> {
     // While the swap service serves the request for this swap, it may be
     // creating the counter transfer with the leaves that the claim loop would
     // release here.
