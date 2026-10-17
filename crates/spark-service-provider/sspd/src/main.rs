@@ -361,6 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &ssp_wallet,
         &chain_client,
         &chain_repository,
+        &chain_tip,
         &pool_repo,
         &fee_rates,
         args.deposit_confirmations,
@@ -386,6 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &ssp_wallet,
         &chain_client,
         &chain_repository,
+        &chain_tip,
         &coop_exit_service,
         &coop_exit_store,
         &pool_repo,
@@ -578,6 +580,7 @@ fn spawn_pool_loops(
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
+    chain_tip: &chain::ChainTip,
     pool_repo: &Arc<postgresql::PoolRepository>,
     fee_rates: &Arc<dyn fees::FeeRateSource>,
     deposit_confirmations: u64,
@@ -588,6 +591,7 @@ fn spawn_pool_loops(
     let replenish_wallet = Arc::clone(ssp_wallet);
     let replenish_client = Arc::clone(chain_client);
     let replenish_chain_repo = Arc::clone(chain_repository);
+    let replenish_chain_tip = chain_tip.clone();
     let replenish_repo = Arc::clone(pool_repo);
     let replenish_fee_rates = Arc::clone(fee_rates);
     let replenish_config = pool_config.clone();
@@ -599,6 +603,7 @@ fn spawn_pool_loops(
             replenish_wallet,
             replenish_client,
             replenish_chain_repo,
+            replenish_chain_tip,
             replenish_repo,
             replenish_fee_rates,
             replenish_restock,
@@ -610,20 +615,20 @@ fn spawn_pool_loops(
 
     let pooling_wallet = Arc::clone(ssp_wallet);
     let pooling_chain_repo = Arc::clone(chain_repository);
+    let pooling_chain_tip = chain_tip.clone();
     let pooling_repo = Arc::clone(pool_repo);
     let pooling_restock = Arc::clone(restock);
     let pooling_token = token.clone();
     tracker.spawn(async move {
-        pool::tree_pooling::run_tree_pooling_loop(
-            pooling_wallet,
-            pooling_chain_repo,
-            pooling_repo,
-            pooling_restock,
-            deposit_confirmations,
-            pooling_wakeup,
-            pooling_token,
-        )
-        .await;
+        let deps = pool::tree_pooling::TreePoolingDeps {
+            wallet: pooling_wallet,
+            chain_repository: pooling_chain_repo,
+            chain_tip: pooling_chain_tip,
+            pool_repo: pooling_repo,
+            restock: pooling_restock,
+            confirmations: deposit_confirmations,
+        };
+        pool::tree_pooling::run_tree_pooling_loop(deps, pooling_wakeup, pooling_token).await;
     });
 }
 
@@ -666,6 +671,7 @@ struct SparkCoopExitExecutor {
     service: Arc<coop_exit::CoopExitService>,
     chain_client: Arc<BitcoindClient>,
     chain_repository: Arc<postgresql::ChainRepository>,
+    chain_tip: chain::ChainTip,
     transfer_service: Arc<spark::services::TransferService>,
     incoming: Arc<dyn leaves::IncomingLeafStore>,
     admission: wakeup::Wakeup,
@@ -734,7 +740,7 @@ impl coop_exit::CoopExitExecutor for SparkCoopExitExecutor {
             .iter()
             .map(|(_, _, address)| address.clone())
             .collect();
-        let Some(tip) = self.chain_repository.get_tip().await? else {
+        let Some(tip) = self.chain_tip.record() else {
             return Ok(HashMap::new());
         };
         let txos = self
@@ -779,6 +785,7 @@ fn spawn_coop_exit_worker(
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     chain_client: &Arc<BitcoindClient>,
     chain_repository: &Arc<postgresql::ChainRepository>,
+    chain_tip: &chain::ChainTip,
     coop_exit_service: &Arc<coop_exit::CoopExitService>,
     coop_exit_store: &Arc<dyn coop_exit::repository::CoopExitStore>,
     pool_repo: &Arc<postgresql::PoolRepository>,
@@ -789,6 +796,7 @@ fn spawn_coop_exit_worker(
         service: Arc::clone(coop_exit_service),
         chain_client: Arc::clone(chain_client),
         chain_repository: Arc::clone(chain_repository),
+        chain_tip: chain_tip.clone(),
         transfer_service: Arc::clone(&ssp_wallet.spark.transfer_service),
         incoming: Arc::clone(incoming),
         admission: admission.clone(),
