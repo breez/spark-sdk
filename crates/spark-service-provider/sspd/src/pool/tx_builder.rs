@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::hash::BuildHasher;
+
 use bitcoin::{
     Address, Amount, FeeRate, Sequence, Transaction, TxIn, TxOut, Weight, Witness,
     absolute::LockTime,
@@ -22,6 +25,15 @@ pub enum TxBuildError {
 
     #[error("sighash error: {0}")]
     Sighash(String),
+}
+
+pub fn key_for<S: BuildHasher>(
+    keys: &HashMap<Address, SecretKey, S>,
+    address: &Address,
+) -> Result<SecretKey, TxBuildError> {
+    keys.get(address)
+        .copied()
+        .ok_or_else(|| TxBuildError::Signing(format!("no key for {address}")))
 }
 
 pub struct DepositOutput {
@@ -64,7 +76,6 @@ pub struct ReplacedChild {
     pub weight: Weight,
 }
 
-/// The fee a child with `inputs` inputs pays so it and its parent together pay at least
 /// The fee for a CPFP child of `weight` at which it and its parent together have a fee rate
 /// of at least `fee_rate`. The replacement for `replaces` has a fee of at least that child's
 /// fee plus the relay fee for its own weight, at a higher fee rate, as a node requires.
@@ -72,10 +83,9 @@ pub fn bump_fee(
     fee_rate: FeeRate,
     parent_weight: Weight,
     parent_fee_sats: u64,
-    inputs: usize,
+    weight: Weight,
     replaces: Option<ReplacedChild>,
 ) -> u64 {
-    let weight = bump_tx_weight(inputs);
     let relay = fees::fee_sats(fees::MIN_FEE_RATE, weight);
     let package = fees::fee_sats(
         fee_rate,
@@ -343,7 +353,7 @@ mod tests {
         let parent_weight = fees::p2tr_tx_weight(1, 2);
         let parent_fee = fees::fee_sats(ONE_SAT_PER_VB, parent_weight);
 
-        let fee = bump_fee(rate, parent_weight, parent_fee, 1, None);
+        let fee = bump_fee(rate, parent_weight, parent_fee, bump_tx_weight(1), None);
 
         assert_eq!(
             parent_fee + fee,
@@ -370,7 +380,7 @@ mod tests {
                 FeeRate::from_sat_per_vb_u32(10),
                 parent_weight,
                 parent_fee,
-                1,
+                bump_tx_weight(1),
                 None,
             ),
             weight: bump_tx_weight(1),
@@ -380,7 +390,7 @@ mod tests {
             FeeRate::from_sat_per_vb_u32(10),
             parent_weight,
             parent_fee,
-            1,
+            bump_tx_weight(1),
             Some(earlier),
         );
 
@@ -396,7 +406,7 @@ mod tests {
                 FeeRate::from_sat_per_vb_u32(200),
                 parent_weight,
                 parent_fee,
-                1,
+                bump_tx_weight(1),
                 None,
             ),
             weight: bump_tx_weight(1),
@@ -407,7 +417,7 @@ mod tests {
             FeeRate::from_sat_per_vb_u32(20),
             parent_weight,
             parent_fee,
-            5,
+            weight,
             Some(earlier),
         );
 

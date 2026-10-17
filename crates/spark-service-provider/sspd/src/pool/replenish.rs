@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitcoin::secp256k1::{PublicKey, SecretKey};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Address, FeeRate, OutPoint, Transaction, Weight};
 use futures::{StreamExt, TryStreamExt};
 use spark::tree::TreeNodeId;
@@ -411,8 +411,10 @@ where
         weight: bump.tx.weight(),
     });
     let base_inputs = reused.len().saturating_add(1);
-    let fee =
-        |inputs: usize| tx_builder::bump_fee(fee_rate, weight, deposit.fee_sats, inputs, replaces);
+    let fee = |inputs: usize| {
+        let bump_weight = tx_builder::bump_tx_weight(inputs);
+        tx_builder::bump_fee(fee_rate, weight, deposit.fee_sats, bump_weight, replaces)
+    };
     let short = |extra: usize| {
         fee(base_inputs.saturating_add(extra))
             .saturating_add(fees::P2TR_DUST_SATS)
@@ -427,11 +429,13 @@ where
     let fee_sats = fee(base_inputs.saturating_add(extra.len()));
 
     let others: Vec<Utxo> = reused.into_iter().chain(extra).collect();
-    let coins: Vec<&Utxo> = std::iter::once(&change).chain(&others).collect();
-    let keys = keys_for(wallet, &coins).await?;
+    let coins: Vec<Utxo> = std::iter::once(change.clone())
+        .chain(others.iter().cloned())
+        .collect();
+    let keys = wallet.onchain.keys_for(&coins).await?;
     // Paid to the change address, so a child the node refuses uses up no address.
     let tx = tx_builder::build_bump_tx(&change, &others, &change.address, fee_sats, &|a| {
-        key_for(&keys, a)
+        tx_builder::key_for(&keys, a)
     })?;
     let bump = FundingBump {
         tx,
@@ -445,35 +449,6 @@ where
         bump.tx.compute_txid()
     );
     Ok(bump)
-}
-
-async fn keys_for<R>(
-    wallet: &SspWallet<R>,
-    coins: &[&Utxo],
-) -> Result<HashMap<Address, SecretKey>, BoxError>
-where
-    R: ChainRepository + Send + Sync + 'static,
-{
-    let mut keys = HashMap::new();
-    for coin in coins {
-        if !keys.contains_key(&coin.address) {
-            let key = wallet
-                .onchain
-                .derive_keypair_for_address(&coin.address)
-                .await?;
-            keys.insert(coin.address.clone(), key);
-        }
-    }
-    Ok(keys)
-}
-
-fn key_for(
-    keys: &HashMap<Address, SecretKey>,
-    address: &Address,
-) -> Result<SecretKey, tx_builder::TxBuildError> {
-    keys.get(address)
-        .copied()
-        .ok_or_else(|| tx_builder::TxBuildError::Signing(format!("no key for {address}")))
 }
 
 struct PlannedTree {
@@ -514,10 +489,10 @@ where
     let need = |inputs: usize| tx_builder::funding_need(&destinations, inputs, fee_rate);
     let (inputs, held) = wallet.onchain.select_coins(&need).await?;
     let (change_address, _) = wallet.onchain.next_address().await?;
-    let keys = keys_for(wallet, &inputs.iter().collect::<Vec<_>>()).await?;
+    let keys = wallet.onchain.keys_for(&inputs).await?;
     let tx =
         tx_builder::build_funding_tx(&inputs, &destinations, &change_address, fee_rate, &|a| {
-            key_for(&keys, a)
+            tx_builder::key_for(&keys, a)
         })?;
     let txid = tx.compute_txid();
     let total_sats: u64 = destinations.iter().map(|d| d.amount).sum();
