@@ -122,6 +122,9 @@ pub enum StaticDepositError {
     InvalidUserSignature,
     #[error("an earlier claim of this deposit is still settling; retry later")]
     ClaimSettling,
+    /// The SSP could not fetch the deposit output. Its log has the reason.
+    #[error("the SSP could not serve the request")]
+    Unavailable,
 }
 
 pub struct StaticDepositQuote {
@@ -140,6 +143,14 @@ pub struct DepositOutput {
 pub trait StaticDepositChain: Send + Sync {
     /// The unspent output at `txid:vout`, counting the mempool.
     async fn deposit_output(
+        &self,
+        txid: &Txid,
+        vout: u32,
+    ) -> Result<Option<DepositOutput>, BoxError>;
+    /// As [`Self::deposit_output`], for a user's request. sspd makes this call
+    /// through the call queue, and fails it when sspd is not synced with bitcoind
+    /// or bitcoind returns no result in time.
+    async fn requested_deposit_output(
         &self,
         txid: &Txid,
         vout: u32,
@@ -1006,9 +1017,12 @@ impl StaticDepositService {
         vout: u32,
     ) -> Result<DepositOutput, StaticDepositError> {
         self.chain
-            .deposit_output(txid, vout)
+            .requested_deposit_output(txid, vout)
             .await
-            .map_err(|e| StaticDepositError::Chain(e.to_string()))?
+            .map_err(|e| {
+                warn!(%txid, vout, "could not fetch the deposit output for a request: {e}");
+                StaticDepositError::Unavailable
+            })?
             .ok_or_else(|| {
                 StaticDepositError::InvalidInput(format!("{txid}:{vout} is not an unspent output"))
             })
@@ -1765,6 +1779,14 @@ mod tests {
             _vout: u32,
         ) -> Result<Option<DepositOutput>, BoxError> {
             Ok(None)
+        }
+
+        async fn requested_deposit_output(
+            &self,
+            txid: &Txid,
+            vout: u32,
+        ) -> Result<Option<DepositOutput>, BoxError> {
+            self.deposit_output(txid, vout).await
         }
 
         async fn new_address(&self) -> Result<Address, BoxError> {
