@@ -123,7 +123,7 @@ impl<R: ChainRepository> OnchainWallet<R> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let rows: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(
+        let rows: Vec<(String, String, i32, i64, i64)> = sqlx::query_as(
             r"SELECT o.address, o.tx_id, o.output_index, o.amount, b.height
                FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
@@ -176,12 +176,12 @@ impl<R: ChainRepository> OnchainWallet<R> {
         outpoints: &[OutPoint],
     ) -> Result<Vec<Utxo>, OnchainWalletError> {
         let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
-        let indices: Vec<i64> = outpoints.iter().map(|o| i64::from(o.vout)).collect();
-        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+        let indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
+        let rows: Vec<(String, String, i32, i64)> = sqlx::query_as(
             r"SELECT o.address, o.tx_id, o.output_index, o.amount
                FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
-               INNER JOIN UNNEST($1::text[], $2::bigint[]) AS p(tx_id, output_index)
+               INNER JOIN UNNEST($1::text[], $2::int[]) AS p(tx_id, output_index)
                    ON p.tx_id = o.tx_id AND p.output_index = o.output_index",
         )
         .bind(&tx_ids)
@@ -330,11 +330,11 @@ pub async fn record_spends(
     outpoints: &[OutPoint],
 ) -> Result<(), sqlx::Error> {
     let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
-    let indices: Vec<i64> = outpoints.iter().map(|o| i64::from(o.vout)).collect();
+    let indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
     sqlx::query(
         "INSERT INTO brz_ssp_onchain_wallet_spends (tx_id, output_index, spending_txid)
          SELECT p.tx_id, p.output_index, $3
-         FROM UNNEST($1::text[], $2::bigint[]) AS p(tx_id, output_index)
+         FROM UNNEST($1::text[], $2::int[]) AS p(tx_id, output_index)
          ON CONFLICT DO NOTHING",
     )
     .bind(&tx_ids)
@@ -345,14 +345,12 @@ pub async fn record_spends(
     Ok(())
 }
 
-fn outpoint(tx_id: &str, output_index: i64) -> Result<OutPoint, OnchainWalletError> {
+fn outpoint(tx_id: &str, output_index: i32) -> Result<OutPoint, OnchainWalletError> {
     Ok(OutPoint {
         txid: tx_id
             .parse()
             .map_err(|e| OnchainWalletError::Persistence(format!("bad txid {tx_id}: {e}")))?,
-        vout: u32::try_from(output_index).map_err(|e| {
-            OnchainWalletError::Persistence(format!("bad output index {output_index}: {e}"))
-        })?,
+        vout: output_index.cast_unsigned(),
     })
 }
 

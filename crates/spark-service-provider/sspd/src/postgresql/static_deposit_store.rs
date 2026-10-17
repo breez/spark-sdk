@@ -20,7 +20,7 @@ struct StaticDepositClaimRow {
     id: String,
     user_identity_public_key: Vec<u8>,
     txid: String,
-    vout: i64,
+    vout: i32,
     network: String,
     deposit_address: String,
     credit_amount_sats: i64,
@@ -83,7 +83,7 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             user_identity_public_key: PublicKey::from_slice(&row.user_identity_public_key)
                 .map_err(|e| format!("invalid user public key: {e}"))?,
             txid: row.txid,
-            vout: u32::try_from(row.vout).map_err(|e| format!("invalid vout: {e}"))?,
+            vout: row.vout.cast_unsigned(),
             network: spark::Network::from_str(&row.network)
                 .map_err(|e| format!("invalid network: {e}"))?,
             deposit_address: row.deposit_address,
@@ -139,7 +139,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
         .bind(&record.txid)
-        .bind(i64::from(record.vout))
+        .bind(record.vout.cast_signed())
         .bind(record.network.to_string())
         .bind(&record.deposit_address)
         .bind(sats_to_i64(record.credit_amount_sats)?)
@@ -186,7 +186,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
             r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE txid = $1 AND vout = $2"#,
         )
         .bind(txid)
-        .bind(i64::from(vout))
+        .bind(vout.cast_signed())
         .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?

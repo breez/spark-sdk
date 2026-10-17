@@ -14,7 +14,7 @@ use crate::static_deposit::repository::{
 struct InstantQuoteRow {
     id: String,
     txid: String,
-    vout: i64,
+    vout: i32,
     network: String,
     deposit_amount_sats: i64,
     credit_amount_sats: i64,
@@ -31,7 +31,7 @@ impl TryFrom<InstantQuoteRow> for InstantStaticDepositQuoteRecord {
         Ok(InstantStaticDepositQuoteRecord {
             id: row.id,
             txid: row.txid,
-            vout: u32::try_from(row.vout).map_err(|e| format!("invalid vout: {e}"))?,
+            vout: row.vout.cast_unsigned(),
             network: spark::Network::from_str(&row.network)
                 .map_err(|e| format!("invalid network: {e}"))?,
             deposit_amount_sats: u64::try_from(row.deposit_amount_sats)
@@ -71,7 +71,7 @@ impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
         )
         .bind(&record.id)
         .bind(&record.txid)
-        .bind(i64::from(record.vout))
+        .bind(record.vout.cast_signed())
         .bind(record.network.to_string())
         .bind(sats_to_i64(record.deposit_amount_sats)?)
         .bind(sats_to_i64(record.credit_amount_sats)?)
