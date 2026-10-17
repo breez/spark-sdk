@@ -171,19 +171,6 @@ impl BitcoindClient {
 }
 
 #[async_trait::async_trait]
-impl crate::graphql::RegtestFunder for BitcoindClient {
-    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, String> {
-        // bitcoind's sendtoaddress takes BTC. Any amount up to the 21e14 sat supply
-        // converts to f64 exactly.
-        #[allow(clippy::cast_precision_loss)]
-        let amount_btc = amount_sats as f64 / 100_000_000.0;
-        self.call::<_, String>("sendtoaddress", json!([address, amount_btc]))
-            .await
-            .map_err(|e| e.to_string())
-    }
-}
-
-#[async_trait::async_trait]
 impl ChainClient for BitcoindClient {
     async fn broadcast_tx(&self, tx: Transaction) -> Result<(), BroadcastError> {
         let hex = serialize_hex(&tx);
@@ -332,6 +319,13 @@ impl RequestChainClient for BitcoindClient {
 
     async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
         ChainClient::get_spends(self, outpoints).await
+    }
+
+    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, ChainError> {
+        let amount_btc = Amount::from_sat(amount_sats).to_btc();
+        Ok(self
+            .call::<_, String>("sendtoaddress", json!([address, amount_btc]))
+            .await?)
     }
 }
 

@@ -28,6 +28,10 @@ pub trait RequestChainClient: Send + Sync {
     /// Returns the spend of each of `outpoints` that is an input of a
     /// transaction in the chain or in the mempool.
     async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError>;
+
+    /// Pays `amount_sats` to `address` from bitcoind's own wallet. Returns the
+    /// id of the payment transaction.
+    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, ChainError>;
 }
 
 /// The call queue makes each call once one of its slots is free, in the order
@@ -63,6 +67,15 @@ impl CallQueue {
     pub async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
         let _slot = self.slot().await?;
         self.bitcoind.get_spends(outpoints).await
+    }
+
+    pub async fn send_to_address(
+        &self,
+        address: &str,
+        amount_sats: u64,
+    ) -> Result<String, ChainError> {
+        let _slot = self.slot().await?;
+        self.bitcoind.send_to_address(address, amount_sats).await
     }
 }
 
@@ -106,6 +119,14 @@ mod tests {
             &self,
             _outpoints: &[OutPoint],
         ) -> Result<Vec<OutputSpend>, ChainError> {
+            unimplemented!()
+        }
+
+        async fn send_to_address(
+            &self,
+            _address: &str,
+            _amount_sats: u64,
+        ) -> Result<String, ChainError> {
             unimplemented!()
         }
     }

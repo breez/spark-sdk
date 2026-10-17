@@ -269,6 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let chain_tip = chain::ChainTip::load(chain_repository.as_ref()).await?;
+    let call_queue = Arc::new(chain::CallQueue::new(
+        Arc::clone(&chain_client) as Arc<dyn chain::RequestChainClient>
+    ));
     let synced = chain::Synced::new();
     spawn_chain_monitor(
         &tracker,
@@ -481,6 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.network,
         &ssp_wallet,
         &chain_client,
+        &call_queue,
         &chain_repository,
         &chain_tip,
         &synced,
@@ -815,6 +819,28 @@ fn spawn_coop_exit_worker(
     tracker.spawn(async move {
         coop_exit::run_coop_exit_loop(deps, wakeup, worker_token).await;
     });
+}
+
+/// bitcoind pays the faucet's coins from its own wallet. A user requests the
+/// coins, so sspd sends the payment call to bitcoind through the call queue.
+struct Faucet {
+    call_queue: Arc<chain::CallQueue>,
+}
+
+#[async_trait::async_trait]
+impl graphql::RegtestFunder for Faucet {
+    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, String> {
+        let Ok(sent) = tokio::time::timeout(
+            chain::call_queue::TIMEOUT,
+            self.call_queue.send_to_address(address, amount_sats),
+        )
+        .await
+        else {
+            warn!("bitcoind did not make a faucet payment in time");
+            return Err("the SSP could not serve the request".to_string());
+        };
+        sent.map_err(|e| e.to_string())
+    }
 }
 
 struct BitcoindStaticDepositChain {
@@ -1177,6 +1203,7 @@ fn spawn_servers(
     network: Network,
     ssp_wallet: &Arc<wallet::SspWallet<postgresql::ChainRepository>>,
     chain_client: &Arc<BitcoindClient>,
+    call_queue: &Arc<chain::CallQueue>,
     chain_repository: &Arc<postgresql::ChainRepository>,
     chain_tip: &chain::ChainTip,
     synced: &chain::Synced,
@@ -1197,8 +1224,11 @@ fn spawn_servers(
     token: &CancellationToken,
     shutdown: &Arc<shutdown::Shutdown>,
 ) {
-    let regtest_funder = matches!(network, Network::Regtest)
-        .then(|| Arc::clone(chain_client) as Arc<dyn graphql::RegtestFunder>);
+    let regtest_funder = matches!(network, Network::Regtest).then(|| {
+        Arc::new(Faucet {
+            call_queue: Arc::clone(call_queue),
+        }) as Arc<dyn graphql::RegtestFunder>
+    });
     spawn_graphql_server(
         tracker,
         graphql_address,
