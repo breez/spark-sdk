@@ -107,3 +107,75 @@ impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::PostgresInstantStaticDepositQuoteStore;
+    use crate::postgresql::testing::TestDatabase;
+    use crate::static_deposit::repository::scenarios::quotes as scenarios;
+
+    struct Fixture {
+        store: PostgresInstantStaticDepositQuoteStore,
+        _database: TestDatabase,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            let database = TestDatabase::new().await;
+            Self {
+                store: PostgresInstantStaticDepositQuoteStore::new(Arc::clone(&database.pool)),
+                _database: database,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_quote_reads_back_as_it_was_stored() {
+        let fixture = Fixture::new().await;
+        scenarios::a_quote_reads_back_as_it_was_stored(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_quote_the_store_was_never_given_is_not_found() {
+        let fixture = Fixture::new().await;
+        scenarios::a_quote_the_store_was_never_given_is_not_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_quote_with_the_id_of_a_stored_one_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_quote_with_the_id_of_a_stored_one_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn two_quotes_of_one_deposit_output_are_both_kept() {
+        let fixture = Fixture::new().await;
+        scenarios::two_quotes_of_one_deposit_output_are_both_kept(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_store_sets_the_times_of_a_new_quote() {
+        let fixture = Fixture::new().await;
+        scenarios::the_store_sets_the_times_of_a_new_quote(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_quote_created_before_the_given_time_is_deleted() {
+        let fixture = Fixture::new().await;
+        scenarios::a_quote_created_before_the_given_time_is_deleted(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_quote_created_at_the_given_time_is_kept() {
+        let fixture = Fixture::new().await;
+        scenarios::a_quote_created_at_the_given_time_is_kept(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn only_the_quotes_created_before_the_given_time_are_deleted() {
+        let fixture = Fixture::new().await;
+        scenarios::only_the_quotes_created_before_the_given_time_are_deleted(&fixture.store).await;
+    }
+}
