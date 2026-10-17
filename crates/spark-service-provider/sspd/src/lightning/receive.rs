@@ -822,7 +822,8 @@ async fn build_leaf_key_tweaks(
 mod tests {
     use super::*;
     use crate::lightning::node::mock::MockLightningNode;
-    use crate::lightning::repository::InMemoryLightningStore;
+    use crate::postgresql::PostgresLightningStore;
+    use crate::postgresql::testing::TestDatabase;
 
     fn pubkey(byte: u8) -> PublicKey {
         use bitcoin::secp256k1::{Secp256k1, SecretKey};
@@ -866,8 +867,10 @@ mod tests {
 
     #[tokio::test]
     async fn request_creates_invoice_and_is_idempotent() {
+        let database = TestDatabase::new().await;
         let node: Arc<dyn LightningNode> = Arc::new(MockLightningNode);
-        let store: Arc<dyn LightningStore> = Arc::new(InMemoryLightningStore::default());
+        let store: Arc<dyn LightningStore> =
+            Arc::new(PostgresLightningStore::new(Arc::clone(&database.pool)));
         let service = LightningReceiveService::new(
             Arc::clone(&node),
             Arc::clone(&store),
@@ -911,8 +914,10 @@ mod tests {
 
     #[tokio::test]
     async fn request_rejects_payment_hash_taken_by_another_request() {
+        let database = TestDatabase::new().await;
         let node: Arc<dyn LightningNode> = Arc::new(MockLightningNode);
-        let store: Arc<dyn LightningStore> = Arc::new(InMemoryLightningStore::default());
+        let store: Arc<dyn LightningStore> =
+            Arc::new(PostgresLightningStore::new(Arc::clone(&database.pool)));
         let service = LightningReceiveService::new(
             Arc::clone(&node),
             Arc::clone(&store),
