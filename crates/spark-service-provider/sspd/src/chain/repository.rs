@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use bitcoin::{Address, BlockHash, OutPoint, Txid};
 use thiserror::Error;
 
@@ -15,11 +17,34 @@ pub struct AddressUtxo {
     pub utxo: Txo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Spender {
     pub outpoint: OutPoint,
     pub txid: Txid,
     pub block_height: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WatchedOutput {
+    pub outpoint: OutPoint,
+    /// The input of the transaction that has this output, when the caller has
+    /// that transaction and has registered that input too.
+    pub input: Option<OutPoint>,
+}
+
+#[derive(Debug, Default)]
+pub struct OutputStates {
+    pub spent: HashMap<OutPoint, Spender>,
+    /// The outputs that the spend check has yet to check with bitcoind.
+    pub unchecked: HashSet<OutPoint>,
+}
+
+/// A watched output that is on chain and unspent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmedOutput {
+    pub outpoint: OutPoint,
+    /// The height of the block that contains its transaction.
+    pub height: u64,
 }
 
 #[derive(Debug)]

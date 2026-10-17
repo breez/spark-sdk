@@ -1,3 +1,4 @@
+mod chain_outputs;
 mod chain_repository;
 mod coop_exit_store;
 mod incoming_leaf_store;

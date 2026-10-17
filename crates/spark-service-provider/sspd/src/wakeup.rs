@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Wakeup(Arc<Notify>);
 
 impl Wakeup {
