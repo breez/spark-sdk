@@ -162,15 +162,18 @@ where
 
         // Validate both parts are within the DNS label size limit.
         // See <https://datatracker.ietf.org/doc/html/rfc1035#section-2.3.4>
-        if local_part.len() > 63 {
+        if local_part.len() > 63 || domain.split('.').any(|label| label.len() > 63) {
             return Ok(None);
         }
 
-        // Domain can contain multiple labels - validate each one
-        if domain
-            .split('.')
-            .any(|label| label.is_empty() || label.len() > 63)
-        {
+        // Both parts can contain multiple labels - validate each one. A label
+        // may contain only the characters LDK allows in BIP-353 names.
+        if local_part.split('.').chain(domain.split('.')).any(|label| {
+            label.is_empty()
+                || !label
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ['-', '_'].contains(&c))
+        }) {
             return Ok(None);
         }
 
