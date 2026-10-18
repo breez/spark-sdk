@@ -10,8 +10,6 @@ pub enum Bip21Error {
     InvalidAmount,
     #[error("bip21 contains invalid parameter value for '{0}'")]
     InvalidParameter(String),
-    #[error("bip21 parameter missing equals character")]
-    MissingEquals,
     #[error("bip21 contains parameter '{0}' multiple times")]
     MultipleParams(String),
     #[error("bip21 contains unknown required parameter '{0}'")]

@@ -239,11 +239,84 @@ async fn test_bip21_with_missing_equals() {
 
     let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
-    // BIP21 with parameter missing equals sign
+    // BIP21 with an unknown parameter missing the equals sign
     let bip21_with_missing_equals = format!("bitcoin:{addr}?labelvalue");
     let result = input_parser.parse(&bip21_with_missing_equals).await;
 
-    assert!(matches!(result, Err(ParseError::Bip21Error(_))));
+    assert!(matches!(
+        result,
+        Ok(InputType::Bip21(Bip21Details { extras, label: None, payment_methods, .. }))
+        if extras.is_empty() && payment_methods.len() == 1
+    ));
+
+    // BIP21 with an unknown required parameter missing the equals sign
+    let bip21_with_missing_equals = format!("bitcoin:{addr}?req-labelvalue");
+    let result = input_parser.parse(&bip21_with_missing_equals).await;
+
+    assert!(matches!(
+        result,
+        Err(ParseError::Bip21Error(Bip21Error::UnknownRequiredParameter(key)))
+        if key == "labelvalue"
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_known_parameter_missing_equals() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+
+    for key in [
+        "amount",
+        "assetid",
+        "label",
+        "lightning",
+        "lno",
+        "message",
+        "sp",
+        "spark",
+    ] {
+        let result = input_parser.parse(&format!("bitcoin:{addr}?{key}")).await;
+        assert!(
+            matches!(
+                &result,
+                Err(ParseError::Bip21Error(Bip21Error::InvalidParameter(name))) if name == key
+            ),
+            "{key}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_bip21_with_empty_parameters() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+
+    for (params, expected_amount_sat, expected_label) in [
+        ("", None, None),
+        ("amount=0.001&", Some(100_000), None),
+        ("&amount=0.001", Some(100_000), None),
+        ("amount=0.001&&label=x", Some(100_000), Some("x")),
+    ] {
+        let bip21 = format!("bitcoin:{addr}?{params}");
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::Bip21(Bip21Details { amount_sat, extras, label, payment_methods, .. }))
+                if *amount_sat == expected_amount_sat
+                    && label.as_deref() == expected_label
+                    && extras.is_empty()
+                    && payment_methods.len() == 1
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
 }
 
 #[async_test_all]

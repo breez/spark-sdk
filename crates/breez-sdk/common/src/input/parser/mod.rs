@@ -586,11 +586,13 @@ fn parse_bip_21(
     }
 
     if let Some(params) = params {
-        for param in params.split('&') {
-            let pos = param.find('=').ok_or(Bip21Error::MissingEquals)?;
-            let original_key_string = param[..pos].to_lowercase();
+        for param in params.split('&').filter(|param| !param.is_empty()) {
+            let (original_key, value) = match param.split_once('=') {
+                Some((key, value)) => (key, Some(value)),
+                None => (param, None),
+            };
+            let original_key_string = original_key.to_lowercase();
             let original_key = original_key_string.as_str();
-            let value = &param[(pos.saturating_add(1))..];
             let (key, is_required) = if let Some(stripped) = original_key.strip_prefix("req-") {
                 (stripped, true)
             } else {
@@ -612,17 +614,18 @@ fn parse_bip21_key(
     source: &PaymentRequestSource,
     bip_21: &mut Bip21Details,
     original_key: &str,
-    value: &str,
+    value: Option<&str>,
     key: &str,
     is_required: bool,
 ) -> Result<(), Bip21Error> {
+    let value_or_invalid = || value.ok_or_else(|| Bip21Error::invalid_parameter(key));
     match key {
         "amount" if bip_21.amount_sat.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
         "amount" => {
             bip_21.amount_sat = Some(
-                bitcoin::Amount::from_str_in(value, Denomination::Bitcoin)
+                bitcoin::Amount::from_str_in(value_or_invalid()?, Denomination::Bitcoin)
                     .map_err(|_| Bip21Error::InvalidAmount)?
                     .to_sat(),
             );
@@ -630,26 +633,26 @@ fn parse_bip21_key(
         "assetid" if bip_21.asset_id.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
-        "assetid" => bip_21.asset_id = Some(value.to_string()),
+        "assetid" => bip_21.asset_id = Some(value_or_invalid()?.to_string()),
         "bc" => {}
         "label" if bip_21.label.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
         "label" => {
             bip_21.label = Some(
-                percent_encode::decode(value)
+                percent_encode::decode(value_or_invalid()?)
                     .map_err(Bip21Error::invalid_parameter_func("label"))?,
             );
         }
         "lightning" => {
-            let lightning = parse_lightning_payment_method(value, source);
+            let lightning = parse_lightning_payment_method(value_or_invalid()?, source);
             match lightning {
                 Some(lightning) => bip_21.payment_methods.push(lightning),
                 None => return Err(Bip21Error::invalid_parameter("lightning")),
             }
         }
         "lno" => {
-            let bolt12_offer = parse_bolt12_offer(value, source);
+            let bolt12_offer = parse_bolt12_offer(value_or_invalid()?, source);
             match bolt12_offer {
                 Some(offer) => bip_21.payment_methods.push(InputType::Bolt12Offer(offer)),
                 None => return Err(Bip21Error::invalid_parameter("lno")),
@@ -660,12 +663,12 @@ fn parse_bip21_key(
         }
         "message" => {
             bip_21.message = Some(
-                percent_encode::decode(value)
+                percent_encode::decode(value_or_invalid()?)
                     .map_err(Bip21Error::invalid_parameter_func("message"))?,
             );
         }
         "sp" => {
-            let silent_payment_address = parse_silent_payment_address(value, source);
+            let silent_payment_address = parse_silent_payment_address(value_or_invalid()?, source);
             match silent_payment_address {
                 Some(silent_payment) => bip_21
                     .payment_methods
@@ -674,7 +677,7 @@ fn parse_bip21_key(
             }
         }
         "spark" => {
-            let spark_address = parse_spark_address(value, source);
+            let spark_address = parse_spark_address(value_or_invalid()?, source);
             match spark_address {
                 Some(spark_address) => bip_21.payment_methods.push(spark_address),
                 None => return Err(Bip21Error::invalid_parameter("spark")),
@@ -685,10 +688,12 @@ fn parse_bip21_key(
                 return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
             }
 
-            bip_21.extras.push(Bip21Extra {
-                key: original_key.to_string(),
-                value: value.to_string(),
-            });
+            if let Some(value) = value {
+                bip_21.extras.push(Bip21Extra {
+                    key: original_key.to_string(),
+                    value: value.to_string(),
+                });
+            }
         }
     }
     Ok(())
