@@ -320,6 +320,107 @@ async fn test_bip21_with_empty_parameters() {
 }
 
 #[async_test_all]
+async fn test_bip21_with_segwit_parameters() {
+    use crate::network::BitcoinNetwork::{Bitcoin, Regtest, Signet};
+
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    // The addresses in the BIP-321 examples of these URIs have invalid
+    // checksums. These are BIP-173 and BIP-350 test vectors.
+    let mainnet_v0 = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    let mainnet_v1 = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0";
+    let testnet_v0 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
+    // The witness program of mainnet_v0, encoded for regtest.
+    let regtest_v0 = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+    let mainnet_v0_upper = mainnet_v0.to_uppercase();
+    let mainnet_v1_upper = mainnet_v1.to_uppercase();
+
+    for (bip21, expected_addresses) in [
+        (
+            format!("bitcoin:?bc={mainnet_v0}&bc={mainnet_v1}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        (
+            format!("BITCOIN:{mainnet_v0_upper}?BC={mainnet_v1_upper}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        (
+            format!("BITCOIN:?BC={mainnet_v0_upper}&BC={mainnet_v1_upper}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        // The parser reports signet for a tb address in the URI body too.
+        (
+            format!("bitcoin:?tb={testnet_v0}"),
+            vec![(testnet_v0, Signet)],
+        ),
+        (
+            format!("bitcoin:?bcrt={regtest_v0}"),
+            vec![(regtest_v0, Regtest)],
+        ),
+        (
+            format!("bitcoin:?req-bc={mainnet_v0}"),
+            vec![(mainnet_v0, Bitcoin)],
+        ),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        let Ok(InputType::Bip21(Bip21Details {
+            payment_methods, ..
+        })) = &result
+        else {
+            panic!("{bip21}: {result:?}");
+        };
+        let addresses: Vec<_> = payment_methods
+            .iter()
+            .map(|payment_method| match payment_method {
+                InputType::BitcoinAddress(details) => (details.address.as_str(), details.network),
+                other => panic!("{bip21}: {other:?}"),
+            })
+            .collect();
+        assert_eq!(addresses, expected_addresses, "{bip21}");
+    }
+}
+
+#[async_test_all]
+async fn test_bip21_with_invalid_segwit_parameters() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    let mainnet = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    let testnet = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
+    let regtest = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+    // rust-bitcoin accepts this base58 testnet address for regtest.
+    let testnet_base58 = "2N83imGV3gPwBzKJQvWJ7cRUY2SpUyU6A5e";
+    // An address from the BIP-321 examples. Its checksum is invalid.
+    let invalid_checksum = "bc1qufgy354j3kmvuch987xe4s40836x3h0lg8f5nq";
+
+    for (bip21, key) in [
+        (format!("bitcoin:?bc={testnet}"), "bc"),
+        (format!("bitcoin:?bc={regtest}"), "bc"),
+        (format!("bitcoin:?bc={addr}"), "bc"),
+        (format!("bitcoin:?bc={invalid_checksum}"), "bc"),
+        (format!("bitcoin:?tb={mainnet}"), "tb"),
+        (format!("bitcoin:?bcrt={mainnet}"), "bcrt"),
+        (format!("bitcoin:?bcrt={testnet_base58}"), "bcrt"),
+        (format!("bitcoin:{addr}?bc"), "bc"),
+        (format!("bitcoin:{addr}?bcrt"), "bcrt"),
+        (format!("bitcoin:{addr}?tb"), "tb"),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Err(ParseError::Bip21Error(Bip21Error::InvalidParameter(name))) if name == key
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
 async fn test_bip21_without_payment_methods() {
     let mock_dns_resolver = MockDnsResolver::new();
     let mock_rest_client = MockRestClient::new();
