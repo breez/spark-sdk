@@ -4,6 +4,7 @@ mod error;
 mod htlc;
 mod lightning;
 mod models;
+mod silent_payment;
 mod swap;
 mod timelock_manager;
 mod transfer;
@@ -20,6 +21,9 @@ pub use lightning::{
     LightningService, PayLightningResult, store_preimage_shares,
 };
 pub use models::*;
+pub use silent_payment::{
+    InputKind, SilentPaymentProof, SilentPaymentProofError, validate_silent_payment_payout,
+};
 pub use swap::*;
 pub use timelock_manager::*;
 pub use transfer::*;
