@@ -555,6 +555,50 @@ async fn test_bip21_with_at_sign_skips_bip_353() {
     assert!(names.is_empty(), "{names:?}");
 }
 
+#[async_test_all]
+async fn test_invalid_bip353_address_skips_lookup() {
+    let dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+    for input in [
+        "lightning:user@example.com",
+        "https://user:pass@example.com/",
+        "üser@example.com",
+    ] {
+        let result = input_parser.parse(input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "{input}: {result:?}"
+        );
+    }
+
+    let names = dns_resolver.queried_names();
+    assert!(names.is_empty(), "{names:?}");
+}
+
+#[async_test_all]
+async fn test_bip353_address_lookup_name() {
+    for (input, dns_name) in [
+        ("user@example.com", "user.user._bitcoin-payment.example.com"),
+        (
+            "₿a.x_domain_cname_wild@dnssec_proof_tests.bitcoin.ninja",
+            "a.x_domain_cname_wild.user._bitcoin-payment.dnssec_proof_tests.bitcoin.ninja",
+        ),
+    ] {
+        let dns_resolver = MockDnsResolver::new();
+        let mock_rest_client = MockRestClient::new();
+        let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+        let result = input_parser.parse(input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "{input}: {result:?}"
+        );
+        assert_eq!(dns_resolver.queried_names(), [dns_name]);
+    }
+}
+
 /// Integration test for BIP353 address resolution using real DNS.   
 #[async_test_all]
 async fn test_bip353_real_dns() {
