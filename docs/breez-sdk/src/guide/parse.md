@@ -8,6 +8,8 @@ Cross-chain destinations on EVM, Solana, and Tron — bare addresses or chain-pr
 
 A Cash App username prefixed with `$` (e.g. `$alice`) parses to {{#enum InputType::LightningAddress}} for the user's Lightning address, `alice@cash.app`.
 
+For a [silent payment address](./send_payment.md#silent-payment-address), {{#name parse}} returns {{#enum InputType::SilentPaymentAddress}}, which contains {{#name BitcoinAddressDetails}}, the same details as for a Bitcoin address. For a BIP21 URI with an `sp` parameter, such as `bitcoin:?sp=sp1q...`, it returns {{#enum InputType::Bip21}}, whose {{#name payment_methods}} include an {{#enum InputType::SilentPaymentAddress}} next to any fallback address or other payment methods in the URI. {{#name parse}} does the same for the URI it looks up for a BIP353 name.
+
 <div class="warning">
 <h4>Developer note</h4>
 The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL) are denominated in millisatoshi.
