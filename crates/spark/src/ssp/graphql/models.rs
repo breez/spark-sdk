@@ -26,6 +26,14 @@ use crate::ssp::graphql::queries::request_coop_exit::{
     TransferFragmentUserRequest as RequestCoopExitUserRequestFragment,
     TransferFragmentUserRequestOn as RequestCoopExitUserRequestFragmentOn,
 };
+use crate::ssp::graphql::queries::request_coop_exit_with_silent_payment_proof::{
+    CoopExitRequestFragment as RequestCoopExitWithProofCoopExitRequestFragment,
+    CurrencyAmountFragment as RequestCoopExitWithProofCurrencyAmountFragment,
+    RequestCoopExitWithSilentPaymentProofRequestCoopExitRequestSilentPaymentProof,
+    TransferFragment as RequestCoopExitWithProofTransferFragment,
+    TransferFragmentUserRequest as RequestCoopExitWithProofUserRequestFragment,
+    TransferFragmentUserRequestOn as RequestCoopExitWithProofUserRequestFragmentOn,
+};
 use crate::ssp::graphql::queries::request_lightning_receive::{
     CurrencyAmountFragment as RequestLightningReceiveCurrencyAmountFragment,
     InvoiceFragment as RequestLightningReceiveInvoiceFragment,
@@ -369,6 +377,7 @@ pub struct LightningInvoice {
 #[macros::derive_from(LeavesSwapFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(LightningSendFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(RequestCoopExitCurrencyAmountFragment)]
+#[macros::derive_from(RequestCoopExitWithProofCurrencyAmountFragment)]
 #[macros::derive_from(RequestSwapCurrencyAmountFragment)]
 #[macros::derive_from(RequestLightningReceiveCurrencyAmountFragment)]
 #[macros::derive_from(RequestLightningSendCurrencyAmountFragment)]
@@ -396,6 +405,7 @@ impl Default for CurrencyAmount {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitTransferFragment)]
 #[macros::derive_from(RequestCoopExitTransferFragment)]
+#[macros::derive_from(RequestCoopExitWithProofTransferFragment)]
 #[macros::derive_from(RequestSwapTransferFragment)]
 #[macros::derive_from(RequestLightningReceiveTransferFragment)]
 #[macros::derive_from(RequestLightningSendTransferFragment)]
@@ -411,6 +421,7 @@ pub struct Transfer {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitUserRequestFragment)]
 #[macros::derive_from(RequestCoopExitUserRequestFragment)]
+#[macros::derive_from(RequestCoopExitWithProofUserRequestFragment)]
 #[macros::derive_from(RequestSwapUserRequestFragment)]
 #[macros::derive_from(RequestLightningReceiveUserRequestFragment)]
 #[macros::derive_from(RequestLightningSendUserRequestFragment)]
@@ -447,6 +458,7 @@ macro_rules! impl_from_user_request_on {
 }
 
 impl_from_user_request_on!(RequestCoopExitUserRequestFragmentOn);
+impl_from_user_request_on!(RequestCoopExitWithProofUserRequestFragmentOn);
 impl_from_user_request_on!(RequestSwapUserRequestFragmentOn);
 impl_from_user_request_on!(RequestLightningReceiveUserRequestFragmentOn);
 impl_from_user_request_on!(RequestLightningSendUserRequestFragmentOn);
@@ -650,6 +662,7 @@ pub struct LeavesSwapRequest {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitCoopExitRequestFragment)]
 #[macros::derive_from(RequestCoopExitCoopExitRequestFragment)]
+#[macros::derive_from(RequestCoopExitWithProofCoopExitRequestFragment)]
 #[macros::derive_from(UserRequestCoopExitRequestFragment)]
 #[macros::derive_from(TransfersCoopExitRequestFragment)]
 pub struct CoopExitRequest {
@@ -665,6 +678,21 @@ pub struct CoopExitRequest {
     pub raw_coop_exit_transaction: String,
     pub coop_exit_txid: String,
     pub transfer: Option<Transfer>,
+}
+
+/// SilentPaymentProof structure
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[macros::derive_from(
+    RequestCoopExitWithSilentPaymentProofRequestCoopExitRequestSilentPaymentProof
+)]
+pub struct SilentPaymentProof {
+    pub output_index: i64,
+    pub input_public_keys: Vec<String>,
+    pub input_outpoints: Vec<String>,
+    pub input_prevout_scripts: Vec<String>,
+    pub input_prevout_transactions: Vec<String>,
+    pub ecdh_share: String,
+    pub dleq_proof: String,
 }
 
 /// CoopExitFeeQuote structure

@@ -241,6 +241,23 @@ mutation RequestCoopExit($input: RequestCoopExitInput!) {
   }
 }
 
+mutation RequestCoopExitWithSilentPaymentProof($input: RequestCoopExitInput!) {
+  request_coop_exit(input: $input) {
+    request {
+      ...CoopExitRequestFragment
+      silent_payment_proof {
+        output_index
+        input_public_keys
+        input_outpoints
+        input_prevout_scripts
+        input_prevout_transactions
+        ecdh_share
+        dleq_proof
+      }
+    }
+  }
+}
+
 mutation RequestLightningReceive($input: RequestLightningReceiveInput!) {
   request_lightning_receive(input: $input) {
     request {
