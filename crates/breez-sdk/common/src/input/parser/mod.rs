@@ -619,6 +619,11 @@ fn parse_bip21_key(
     is_required: bool,
 ) -> Result<(), Bip21Error> {
     let value_or_invalid = || value.ok_or_else(|| Bip21Error::invalid_parameter(key));
+    let segwit_address = |network| -> Result<InputType, Bip21Error> {
+        parse_segwit_address(value_or_invalid()?, network, source)
+            .map(InputType::BitcoinAddress)
+            .ok_or_else(|| Bip21Error::invalid_parameter(key))
+    };
     match key {
         "amount" if bip_21.amount_sat.is_some() => {
             return Err(Bip21Error::multiple_params(key));
@@ -634,7 +639,12 @@ fn parse_bip21_key(
             return Err(Bip21Error::multiple_params(key));
         }
         "assetid" => bip_21.asset_id = Some(value_or_invalid()?.to_string()),
-        "bc" => {}
+        "bc" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Bitcoin)?),
+        "bcrt" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Regtest)?),
         "label" if bip_21.label.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
@@ -683,6 +693,9 @@ fn parse_bip21_key(
                 None => return Err(Bip21Error::invalid_parameter("spark")),
             }
         }
+        "tb" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Testnet)?),
         extra_key => {
             if is_required {
                 return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
@@ -697,6 +710,23 @@ fn parse_bip21_key(
         }
     }
     Ok(())
+}
+
+/// Parses a segwit address that is valid for `network`.
+fn parse_segwit_address(
+    input: &str,
+    network: bitcoin::Network,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
+    let address = input
+        .parse::<Address<NetworkUnchecked>>()
+        .ok()?
+        .require_network(network)
+        .ok()?;
+    address.witness_program()?;
+    // bitcoin_address_details reports a tb address as signet, as the parser
+    // does for the address in the URI body.
+    bitcoin_address_details(address.into_unchecked(), source)
 }
 
 pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
@@ -786,7 +816,13 @@ fn parse_bitcoin_address(
         return None;
     }
 
-    let address: Address<NetworkUnchecked> = input.parse().ok()?;
+    bitcoin_address_details(input.parse().ok()?, source)
+}
+
+fn bitcoin_address_details(
+    address: Address<NetworkUnchecked>,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
     let network = match 1 {
         _ if address.is_valid_for_network(bitcoin::Network::Bitcoin) => bitcoin::Network::Bitcoin,
         _ if address.is_valid_for_network(bitcoin::Network::Regtest) => bitcoin::Network::Regtest,
