@@ -439,6 +439,10 @@ pub enum PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        /// The index of the withdrawal transaction's output that pays the
+        /// destination address.
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,

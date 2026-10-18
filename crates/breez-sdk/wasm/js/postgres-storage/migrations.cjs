@@ -612,6 +612,18 @@ class PostgresMigrationManager {
           )`,
         ],
       },
+      {
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and fills in both columns for past withdrawals.
+        name: "Add withdrawal destination address and output index",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_vout BIGINT`,
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_destination_address TEXT`,
+          `UPDATE brz_settings
+           SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
+           WHERE key = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
     ];
   }
 }

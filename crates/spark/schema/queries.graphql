@@ -32,6 +32,7 @@ fragment CoopExitRequestFragment on CoopExitRequest {
   fee {
     ...CurrencyAmountFragment
   }
+  withdrawal_address
   l1_broadcast_fee {
     ...CurrencyAmountFragment
   }

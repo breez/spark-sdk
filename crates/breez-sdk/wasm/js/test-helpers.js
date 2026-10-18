@@ -174,3 +174,29 @@ export async function createOldV10Database(dbName) {
     tx.onerror = () => { db.close(); reject(new Error(`Failed to create old v10 database: ${tx.error?.message}`)); };
   });
 }
+
+/**
+ * Creates an IndexedDB database at `version` with one withdrawal stored before
+ * the SDK kept its destination address and output index.
+ */
+export async function createOldWithdrawalDatabase(dbName, version) {
+  const db = await openDatabaseAtVersion(dbName, version);
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("payments", "readwrite");
+    tx.objectStore("payments").put({
+      id: "withdraw-legacy",
+      paymentType: "send",
+      status: "completed",
+      // Databases before version 3 stored amounts as numbers.
+      amount: version < 3 ? 10000 : BigInt(10000),
+      fees: version < 3 ? 100 : BigInt(100),
+      timestamp: 1700000004,
+      details: JSON.stringify({ type: "withdraw", txId: "withdraw_legacy_tx" }),
+      method: JSON.stringify("withdraw"),
+    });
+
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(new Error(`Failed to create old v${version} database: ${tx.error?.message}`)); };
+  });
+}

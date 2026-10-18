@@ -26,6 +26,12 @@ extern "C" {
 
     #[wasm_bindgen(js_name = "createOldV10Database", catch)]
     async fn create_old_v10_database(db_name: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_name = "createOldWithdrawalDatabase", catch)]
+    async fn create_old_withdrawal_database(
+        db_name: &str,
+        version: u32,
+    ) -> Result<JsValue, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -150,6 +156,13 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_withdraw_details() {
+    let storage = create_test_storage("withdraw_details").await;
+
+    breez_sdk_spark::storage_tests::test_withdraw_details(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_terminal_status_is_not_replaced() {
     let storage = create_test_storage("payment_terminal_guard").await;
 
@@ -226,6 +239,31 @@ async fn test_insert_boltz_conversion_info() {
 async fn test_update_boltz_status_to_completed() {
     let storage = create_test_storage("update_boltz_status_to_completed").await;
     breez_sdk_spark::storage_tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_clears_legacy_withdrawal_details() {
+    // Version 2 upgrades in one go, through the step that rewrites every
+    // payment's amounts.
+    for (db_name, version) in [("legacy_withdrawal_v23", 23), ("legacy_withdrawal_v2", 2)] {
+        create_old_withdrawal_database(db_name, version)
+            .await
+            .expect("Failed to create the old database");
+        let storage = create_test_storage(db_name).await;
+
+        let payment =
+            breez_sdk_spark::Storage::get_payment_by_id(&storage, "withdraw-legacy".to_string())
+                .await
+                .expect("Failed to get the legacy withdrawal");
+
+        assert_eq!(payment.method, breez_sdk_spark::PaymentMethod::Withdraw);
+        assert_eq!(payment.amount, 10_000, "version {version}");
+        assert!(
+            payment.details.is_none(),
+            "version {version}: {:?}",
+            payment.details
+        );
+    }
 }
 
 #[wasm_bindgen_test]

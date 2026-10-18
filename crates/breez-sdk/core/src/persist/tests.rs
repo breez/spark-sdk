@@ -607,6 +607,8 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         method: PaymentMethod::Withdraw,
         details: Some(PaymentDetails::Withdraw {
             tx_id: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12".to_string(),
+            vout: 1,
+            destination_address: "bcrt1p_withdraw_destination".to_string(),
         }),
         conversion_details: None,
     };
@@ -1025,10 +1027,20 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 }
             }
             (
-                Some(PaymentDetails::Withdraw { tx_id: r_tx_id }),
-                Some(PaymentDetails::Withdraw { tx_id: e_tx_id }),
+                Some(PaymentDetails::Withdraw {
+                    tx_id: r_tx_id,
+                    vout: r_vout,
+                    destination_address: r_destination_address,
+                }),
+                Some(PaymentDetails::Withdraw {
+                    tx_id: e_tx_id,
+                    vout: e_vout,
+                    destination_address: e_destination_address,
+                }),
             ) => {
                 assert_eq!(r_tx_id, e_tx_id);
+                assert_eq!(r_vout, e_vout);
+                assert_eq!(r_destination_address, e_destination_address);
             }
             (
                 Some(PaymentDetails::Deposit {
@@ -2282,6 +2294,8 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         method: PaymentMethod::Withdraw,
         details: Some(PaymentDetails::Withdraw {
             tx_id: "withdraw_tx_1".to_string(),
+            vout: 0,
+            destination_address: "bcrt1p_withdraw_1_destination".to_string(),
         }),
         conversion_details: None,
     };
@@ -3545,6 +3559,69 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
     assert_eq!(
         htlc_details.as_ref().unwrap().preimage.as_ref().unwrap(),
         "preimage_123"
+    );
+}
+
+fn withdraw_payment(id: &str, vout: u32, destination_address: &str) -> Payment {
+    Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 10_000,
+        fees: 100,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Withdraw,
+        details: Some(PaymentDetails::Withdraw {
+            tx_id: format!("{id}_tx"),
+            vout,
+            destination_address: destination_address.to_string(),
+        }),
+        conversion_details: None,
+    }
+}
+
+async fn stored_withdraw_details(storage: &dyn Storage, id: &str) -> (String, u32, String) {
+    let payment = storage.get_payment_by_id(id.to_string()).await.unwrap();
+    let Some(PaymentDetails::Withdraw {
+        tx_id,
+        vout,
+        destination_address,
+    }) = payment.details
+    else {
+        panic!(
+            "expected withdraw details for {id}, got {:?}",
+            payment.details
+        );
+    };
+    (tx_id, vout, destination_address)
+}
+
+pub async fn test_withdraw_details(storage: Box<dyn Storage>) {
+    storage
+        .apply_payment_update(withdraw_payment("withdraw", 1, "bcrt1p_destination"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_withdraw_details(storage.as_ref(), "withdraw").await,
+        (
+            "withdraw_tx".to_string(),
+            1,
+            "bcrt1p_destination".to_string()
+        )
+    );
+
+    // After an upgrade, the SDK rewrites past withdrawals with this kind of update.
+    storage
+        .apply_payment_update(withdraw_payment("withdraw", 0, "sprt1q_destination"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_withdraw_details(storage.as_ref(), "withdraw").await,
+        (
+            "withdraw_tx".to_string(),
+            0,
+            "sprt1q_destination".to_string()
+        )
     );
 }
 

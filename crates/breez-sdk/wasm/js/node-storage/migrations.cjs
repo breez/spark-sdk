@@ -559,6 +559,18 @@ class MigrationManager {
           )`,
         ],
       },
+      {
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and fills in both columns for past withdrawals.
+        name: "Add withdrawal destination address and output index",
+        sql: [
+          `ALTER TABLE payments ADD COLUMN withdraw_vout INTEGER`,
+          `ALTER TABLE payments ADD COLUMN withdraw_destination_address TEXT`,
+          `UPDATE settings
+           SET value = json_set(value, '$.offset', 0)
+           WHERE key = 'sync_offset' AND json_valid(value)`,
+        ],
+      },
     ];
   }
 }

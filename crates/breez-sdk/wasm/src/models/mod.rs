@@ -643,6 +643,8 @@ pub enum PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,

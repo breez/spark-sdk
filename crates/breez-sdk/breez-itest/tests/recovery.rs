@@ -135,9 +135,11 @@ fn build_expected_payments(payments: &[Payment], balance_sats: u64) -> ExpectedR
                         tx_id: tx_id.clone(),
                     })
                 }
-                Some(PaymentDetails::Withdraw { tx_id }) => Some(ExpectedPaymentDetails::OnChain {
-                    tx_id: tx_id.clone(),
-                }),
+                Some(PaymentDetails::Withdraw { tx_id, .. }) => {
+                    Some(ExpectedPaymentDetails::OnChain {
+                        tx_id: tx_id.clone(),
+                    })
+                }
                 Some(PaymentDetails::Token { metadata, .. }) => {
                     Some(ExpectedPaymentDetails::Token {
                         token_identifier: metadata.identifier.clone(),
@@ -909,7 +911,7 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
             }
             Some(ExpectedPaymentDetails::OnChain { tx_id }) => match &payment.details {
                 Some(PaymentDetails::Deposit { tx_id: t, .. })
-                | Some(PaymentDetails::Withdraw { tx_id: t }) => {
+                | Some(PaymentDetails::Withdraw { tx_id: t, .. }) => {
                     assert_eq!(t, tx_id, "OnChain tx_id mismatch for {}", expected.id);
                 }
                 _ => {
