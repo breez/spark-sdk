@@ -108,22 +108,24 @@ where
                 .map(InputType::LightningAddress));
         }
 
-        if input.contains('@') {
-            if let Some(lightning_address) = self.parse_lightning_address(input).await {
-                return Ok(Some(InputType::LightningAddress(lightning_address)));
-            }
-
-            if let Some(bip_21) = self.parse_bip_353(input).await? {
-                return Ok(Some(InputType::Bip21(bip_21)));
-            }
-        }
-
+        // A bitcoin: URI is not a lightning or BIP-353 address, even when one
+        // of its parameters contains an '@', so the parser handles it first.
         if has_bip_21_prefix(input) {
             let source = PaymentRequestSource {
                 bip_21_uri: Some(input.to_string()),
                 bip_353_address: None,
             };
             if let Some(bip_21) = parse_bip_21(input, &source)? {
+                return Ok(Some(InputType::Bip21(bip_21)));
+            }
+        }
+
+        if input.contains('@') {
+            if let Some(lightning_address) = self.parse_lightning_address(input).await {
+                return Ok(Some(InputType::LightningAddress(lightning_address)));
+            }
+
+            if let Some(bip_21) = self.parse_bip_353(input).await? {
                 return Ok(Some(InputType::Bip21(bip_21)));
             }
         }

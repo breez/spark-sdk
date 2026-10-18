@@ -529,6 +529,32 @@ async fn test_bip353_address_too_long() {
     assert!(!matches!(result, Ok(InputType::Bip21(_))));
 }
 
+#[async_test_all]
+async fn test_bip21_with_at_sign_skips_bip_353() {
+    let dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    for bip21 in [
+        format!("bitcoin:{addr}?label=alice@example.com"),
+        format!("BITCOIN:{addr}?LABEL=alice@example.com"),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::Bip21(Bip21Details { label, payment_methods, .. }))
+                if label.as_deref() == Some("alice@example.com") && payment_methods.len() == 1
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
+
+    let names = dns_resolver.queried_names();
+    assert!(names.is_empty(), "{names:?}");
+}
+
 /// Integration test for BIP353 address resolution using real DNS.   
 #[async_test_all]
 async fn test_bip353_real_dns() {
