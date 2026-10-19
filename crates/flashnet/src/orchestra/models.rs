@@ -345,8 +345,9 @@ pub enum OrderStatus {
     Completed,
     Failed,
     Refunded,
-    /// A swap into an address-named token missed its minimum output and the
-    /// quote's fallback stablecoin was delivered instead.
+    /// Final outcome: a swap into an address-named token missed its minimum
+    /// output, so the quote's fallback stablecoin was delivered instead.
+    /// `amount_out` is unset.
     FallbackDelivered,
     /// The order expired without a deposit.
     Expired,
@@ -358,6 +359,9 @@ pub enum OrderStatus {
 }
 
 impl OrderStatus {
+    /// Final statuses for the orders the SDK quotes. `FallbackDelivered` is
+    /// final too, but only follows a quote into an address-named token, which
+    /// the SDK doesn't request.
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Refunded)
     }
@@ -508,7 +512,7 @@ mod limits_response_tests {
     }
 
     #[test]
-    fn deserializes_documented_order_statuses_as_non_terminal() {
+    fn deserializes_documented_order_statuses() {
         for (wire, status) in [
             ("fallback_delivered", OrderStatus::FallbackDelivered),
             ("expired", OrderStatus::Expired),
@@ -517,7 +521,6 @@ mod limits_response_tests {
         ] {
             let parsed: OrderStatus = serde_json::from_str(&format!("\"{wire}\"")).unwrap();
             assert_eq!(parsed, status);
-            assert!(!parsed.is_terminal());
         }
     }
 

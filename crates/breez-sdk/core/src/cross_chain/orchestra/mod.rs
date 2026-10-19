@@ -2472,9 +2472,8 @@ fn with_submitted_order(
     Some(updated)
 }
 
-/// Statuses where the order is held or off the path to delivery, or that this
-/// SDK doesn't recognise. None of them is terminal here, so the order stays
-/// pending.
+/// Statuses where the order is held or off the expected path to delivery, or
+/// that this SDK doesn't recognise.
 fn is_blocking_order_status(status: OrderStatus) -> bool {
     matches!(
         status,
