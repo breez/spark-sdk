@@ -1938,7 +1938,11 @@ pub struct SyncWalletRequest {}
 /// Response from synchronizing the wallet
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SyncWalletResponse {}
+pub struct SyncWalletResponse {
+    /// Why the sync could not refresh the balances, which may then be out of
+    /// date. Unset when it succeeded.
+    pub last_sync_error: Option<SyncError>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

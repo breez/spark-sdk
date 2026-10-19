@@ -1197,7 +1197,9 @@ pub struct TokenMetadata {
 pub struct SyncWalletRequest {}
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletResponse)]
-pub struct SyncWalletResponse {}
+pub struct SyncWalletResponse {
+    pub last_sync_error: Option<SyncError>,
+}
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentMethod)]
 pub enum ReceivePaymentMethod {

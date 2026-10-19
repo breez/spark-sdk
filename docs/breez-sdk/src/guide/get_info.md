@@ -40,4 +40,4 @@ When the SDK is built with the [multi-user configuration](server_mode.md), {{#na
 
 - {{#name ensure_synced}} = **true** is rejected with an invalid-input error. The SDK has no initial-sync watcher to await; call {{#name sync_wallet}} explicitly if you need to refresh state first.
 - The returned balance reflects whatever is currently in the local tree store. If you need the freshest possible balance after an external state change (an incoming Spark transfer claimed elsewhere, an on-chain deposit confirmed, etc.), call {{#name sync_wallet}} first.
-- {{#name last_sync_error}} reflects the latest {{#name sync_wallet}} call.
+- {{#name sync_wallet}} returns {{#name last_sync_error}} when its sync fails, and {{#name get_info}} keeps reporting it until a later sync succeeds.

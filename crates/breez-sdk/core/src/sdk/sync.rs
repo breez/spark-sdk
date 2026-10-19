@@ -861,6 +861,7 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
+        let last_sync_error = self.last_sync_error.lock().await.clone();
         // Whatever `exit_chain_auto_fetch_enabled` says: that flag governs the
         // automatic collection, and an explicit sync is the way to ask for one
         // with it turned off. Awaited rather than left to the background, so a
@@ -868,7 +869,7 @@ impl BreezSdk {
         // the time this returns. After the sync, so the leaves it brought in are
         // collected for too.
         self.runtime.collect_exit_chains(self).await?;
-        Ok(SyncWalletResponse {})
+        Ok(SyncWalletResponse { last_sync_error })
     }
 }
 

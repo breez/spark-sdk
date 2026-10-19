@@ -1324,7 +1324,9 @@ pub enum _SuccessActionProcessed {
 pub struct _SyncWalletRequest {}
 
 #[frb(mirror(SyncWalletResponse))]
-pub struct _SyncWalletResponse {}
+pub struct _SyncWalletResponse {
+    pub last_sync_error: Option<SyncError>,
+}
 
 #[frb(mirror(AesSuccessActionData))]
 pub struct _AesSuccessActionData {

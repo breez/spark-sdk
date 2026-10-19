@@ -14,7 +14,7 @@
         {
           "cmd": "sync",
           "expect_json": {
-            "": {}
+            "last_sync_error": { "exists": false }
           }
         },
         {
