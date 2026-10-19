@@ -1167,6 +1167,13 @@ pub struct GetInfoResponse {
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
     pub recoverable_funds_sats: u64,
+    pub last_sync_error: Option<SyncError>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SyncError)]
+pub enum SyncError {
+    Network { message: String },
+    Generic { message: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]

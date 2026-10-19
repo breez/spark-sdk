@@ -117,6 +117,7 @@ impl RuntimeProfile for ClientRuntime {
             balance_sats: account_info.balance_sats,
             token_balances: account_info.token_balances,
             recoverable_funds_sats: sdk.recoverable_funds_sats().await?,
+            last_sync_error: sdk.last_sync_error.lock().await.clone(),
         })
     }
 

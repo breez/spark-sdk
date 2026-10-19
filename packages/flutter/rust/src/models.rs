@@ -541,6 +541,13 @@ pub struct _GetInfoResponse {
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
     pub recoverable_funds_sats: u64,
+    pub last_sync_error: Option<SyncError>,
+}
+
+#[frb(mirror(SyncError))]
+pub enum _SyncError {
+    Network { message: String },
+    Generic { message: String },
 }
 
 #[frb(mirror(TokenBalance))]

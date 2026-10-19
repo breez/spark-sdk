@@ -1865,7 +1865,9 @@ pub struct Credentials {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {
     /// When `Some(true)`, and `background_tasks_enabled` is `true`, the call
-    /// waits for the initial Full sync to complete before returning.
+    /// waits for the initial Full sync to complete before returning. The sync
+    /// can fail to reach the network: `last_sync_error` in the response says
+    /// whether it did.
     ///
     /// When `background_tasks_enabled` is `false`, setting this to `Some(true)`
     /// is rejected with an invalid-input error. There is no background sync to
@@ -1891,6 +1893,20 @@ pub struct GetInfoResponse {
     /// total includes funds too small to be worth recovering at the fee rate
     /// you choose.
     pub recoverable_funds_sats: u64,
+    /// Why the latest sync could not refresh the balances, which may then be
+    /// out of date. Unset once a sync succeeds, and before the first one ends.
+    pub last_sync_error: Option<SyncError>,
+}
+
+/// Why a sync could not refresh the balances. Each message is for logs, not
+/// for display.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SyncError {
+    /// The network could not be reached, or is temporarily too busy to answer.
+    Network { message: String },
+    /// Any other failure.
+    Generic { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

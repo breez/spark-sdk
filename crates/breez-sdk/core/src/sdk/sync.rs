@@ -13,7 +13,7 @@ use super::{
 };
 use crate::utils::time::now_secs;
 use crate::{
-    DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType, SyncError,
     chain::FeeMarket,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
@@ -168,7 +168,7 @@ impl BreezSdk {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
+            let wallet_result = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -177,19 +177,19 @@ impl BreezSdk {
                             "sync_wallet_internal: Wallet sync completed in {:?}",
                             wallet_start.elapsed()
                         );
-                        true
+                        Some(Ok(()))
                     }
                     Err(e) => {
                         error!(
                             "sync_wallet_internal: Spark wallet sync failed in {:?}: {e:?}",
                             wallet_start.elapsed()
                         );
-                        false
+                        Some(Err(e))
                     }
                 }
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
-                false
+                None
             };
 
             // Finish any Lightning send that committed leaves with the operators
@@ -229,7 +229,7 @@ impl BreezSdk {
                 self.sync_recoverable_funds().await;
             }
 
-            (wallet_synced, wallet_state_synced)
+            (wallet_result, wallet_state_synced)
         };
 
         let sync_lnurl = async {
@@ -284,8 +284,13 @@ impl BreezSdk {
             }
         };
 
-        let ((wallet, wallet_state), lnurl_metadata, deposits) =
+        let ((wallet_result, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let wallet = matches!(wallet_result, Some(Ok(())));
+        // Set after the join so the balances are already written when the error clears.
+        if let Some(result) = wallet_result {
+            *self.last_sync_error.lock().await = result.err().map(SyncError::from);
+        }
 
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {

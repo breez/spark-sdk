@@ -77,6 +77,7 @@ impl RuntimeProfile for ServerRuntime {
             balance_sats,
             token_balances,
             recoverable_funds_sats,
+            last_sync_error: sdk.last_sync_error.lock().await.clone(),
         })
     }
 
