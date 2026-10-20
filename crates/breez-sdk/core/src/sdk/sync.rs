@@ -287,7 +287,10 @@ impl BreezSdk {
         let ((wallet_result, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
         let wallet = matches!(wallet_result, Some(Ok(())));
-        // Set after the join so the balances are already written when the error clears.
+        // Set after the join so the balances are already written when these change.
+        if wallet && let Err(e) = cache.set_last_synced_at(now).await {
+            error!("sync_wallet_internal: Failed to update last synced at: {e:?}");
+        }
         if let Some(result) = wallet_result {
             *self.last_sync_error.lock().await = result.err().map(SyncError::from);
         }
@@ -862,6 +865,9 @@ impl BreezSdk {
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
         let last_sync_error = self.last_sync_error.lock().await.clone();
+        let last_synced_at = ObjectCacheRepository::new(self.storage.clone())
+            .get_last_synced_at()
+            .await?;
         // Whatever `exit_chain_auto_fetch_enabled` says: that flag governs the
         // automatic collection, and an explicit sync is the way to ask for one
         // with it turned off. Awaited rather than left to the background, so a
@@ -869,7 +875,10 @@ impl BreezSdk {
         // the time this returns. After the sync, so the leaves it brought in are
         // collected for too.
         self.runtime.collect_exit_chains(self).await?;
-        Ok(SyncWalletResponse { last_sync_error })
+        Ok(SyncWalletResponse {
+            last_sync_error,
+            last_synced_at,
+        })
     }
 }
 

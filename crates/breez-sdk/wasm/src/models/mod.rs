@@ -1168,6 +1168,7 @@ pub struct GetInfoResponse {
     pub token_balances: HashMap<String, TokenBalance>,
     pub recoverable_funds_sats: u64,
     pub last_sync_error: Option<SyncError>,
+    pub last_synced_at: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncError)]
@@ -1199,6 +1200,7 @@ pub struct SyncWalletRequest {}
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletResponse)]
 pub struct SyncWalletResponse {
     pub last_sync_error: Option<SyncError>,
+    pub last_synced_at: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentMethod)]

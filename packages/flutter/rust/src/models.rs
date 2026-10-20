@@ -542,6 +542,7 @@ pub struct _GetInfoResponse {
     pub token_balances: HashMap<String, TokenBalance>,
     pub recoverable_funds_sats: u64,
     pub last_sync_error: Option<SyncError>,
+    pub last_synced_at: Option<u64>,
 }
 
 #[frb(mirror(SyncError))]
@@ -1326,6 +1327,7 @@ pub struct _SyncWalletRequest {}
 #[frb(mirror(SyncWalletResponse))]
 pub struct _SyncWalletResponse {
     pub last_sync_error: Option<SyncError>,
+    pub last_synced_at: Option<u64>,
 }
 
 #[frb(mirror(AesSuccessActionData))]

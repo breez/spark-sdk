@@ -107,10 +107,8 @@ impl RuntimeProfile for ClientRuntime {
                 })?;
         }
 
-        let account_info = ObjectCacheRepository::new(sdk.storage.clone())
-            .fetch_account_info()
-            .await?
-            .unwrap_or_default();
+        let cache = ObjectCacheRepository::new(sdk.storage.clone());
+        let account_info = cache.fetch_account_info().await?.unwrap_or_default();
 
         Ok(GetInfoResponse {
             identity_pubkey: sdk.spark_wallet.get_identity_public_key().to_string(),
@@ -118,6 +116,7 @@ impl RuntimeProfile for ClientRuntime {
             token_balances: account_info.token_balances,
             recoverable_funds_sats: sdk.recoverable_funds_sats().await?,
             last_sync_error: sdk.last_sync_error.lock().await.clone(),
+            last_synced_at: cache.get_last_synced_at().await?,
         })
     }
 

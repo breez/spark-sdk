@@ -3,7 +3,10 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::error;
 
-use crate::{EventEmitter, GetInfoRequest, GetInfoResponse, Storage, error::SdkError};
+use crate::{
+    EventEmitter, GetInfoRequest, GetInfoResponse, Storage, error::SdkError,
+    persist::ObjectCacheRepository,
+};
 
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{BreezSdk, SyncType};
@@ -78,6 +81,9 @@ impl RuntimeProfile for ServerRuntime {
             token_balances,
             recoverable_funds_sats,
             last_sync_error: sdk.last_sync_error.lock().await.clone(),
+            last_synced_at: ObjectCacheRepository::new(sdk.storage.clone())
+                .get_last_synced_at()
+                .await?,
         })
     }
 

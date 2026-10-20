@@ -1894,8 +1894,12 @@ pub struct GetInfoResponse {
     /// you choose.
     pub recoverable_funds_sats: u64,
     /// Why the latest sync could not refresh the balances, which may then be
-    /// out of date. Unset once a sync succeeds, and before the first one ends.
+    /// out of date. Unset once a sync succeeds. It is not persisted, so it is
+    /// also unset after each `connect` until the first sync ends.
     pub last_sync_error: Option<SyncError>,
+    /// When a sync last refreshed the balances, in seconds since the Unix
+    /// epoch. Unset until a sync succeeds with this storage.
+    pub last_synced_at: Option<u64>,
 }
 
 /// Why a sync could not refresh the balances. Each message is for logs, not
@@ -1942,6 +1946,9 @@ pub struct SyncWalletResponse {
     /// Why the sync could not refresh the balances, which may then be out of
     /// date. Unset when it succeeded.
     pub last_sync_error: Option<SyncError>,
+    /// When a sync last refreshed the balances, in seconds since the Unix
+    /// epoch. Unset until a sync succeeds with this storage.
+    pub last_synced_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
