@@ -517,7 +517,8 @@ impl BreezSdk {
     async fn watchtower_exit_candidates(&self) -> Result<Vec<TreeNode>, SdkError> {
         let statuses = [
             WATCHTOWER_EXITED_STATUSES.as_slice(),
-            // Its direct tx can confirm at a fee its refunds do not spend.
+            // Its direct tx can confirm at a fee its refunds do not spend, and a
+            // leaf renewed at a zero timelock has no refund spending it at all.
             &[TreeNodeStatus::OnChain],
         ]
         .concat();

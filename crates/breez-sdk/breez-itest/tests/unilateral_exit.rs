@@ -4224,6 +4224,112 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
     Ok(())
 }
 
+/// A leaf renewed once at a zero timelock is the node with the 50-block direct
+/// tx, and has no direct refund spending it. When the owner's exit stalls, the
+/// watchtower broadcasts that direct tx, and the operators co-sign a recovery of
+/// its output. Seed only: a Turnkey signer cannot co-sign a recovery yet.
+#[test_log::test(tokio::test)]
+async fn test_a_zero_timelock_leafs_own_watchtower_exit_is_recovered() -> Result<()> {
+    let mut sdk = new_local_sdk(SignerBackend::Seed).await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let destination = p2tr_address(&fixed_key(0x42));
+
+    let partner = build_local_sdk(Arc::clone(&sdk.fixtures), SignerBackend::Seed, None).await?;
+    transfer_until_renewed(&sdk, &partner).await?;
+    let leaf_id = single_leaf_id(&sdk).await?.to_string();
+    let leaf_value = sdk.spark_wallet.get_balance().await?;
+
+    // Confirm the split node above the leaf and stop: the leaf's own node tx
+    // never goes out, so its direct tx is the one the watchtower can send.
+    let funding = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+    let started = sdk
+        .sdk
+        .recover_funds(
+            RecoverFundsRequest {
+                prepared: prepare_recovery(&sdk, &destination, FEE_RATE, ExitLeafSelection::All)
+                    .await?,
+                funding_inputs: vec![cpfp_input(&funding)],
+            },
+            Some(signer_for(&funding.secret_key.secret_bytes())?),
+        )
+        .await?;
+    let split_node = started
+        .transactions
+        .iter()
+        .find(|t| t.kind == RecoveryTxKind::Node)
+        .expect("the exit broadcasts the split node");
+    submit_package_with_csv_retry(
+        &sdk.fixtures.bitcoind,
+        &decode_tx(&split_node.tx_hex)?,
+        &decode_tx(
+            split_node
+                .cpfp_tx_hex
+                .as_deref()
+                .expect("a node has a CPFP child"),
+        )?,
+    )
+    .await?;
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    wait_for_recoverable_funds_event(&mut sdk, leaf_value).await?;
+
+    // Past the 50-block timelock, with room for the operators to see the blocks.
+    sdk.fixtures.bitcoind.generate_blocks(60).await?;
+
+    let prepared = wait_for_cooperative_funds(&sdk, &destination).await?;
+    let [leaf] = prepared.leaves.as_slice() else {
+        anyhow::bail!("expected one leaf, got {:?}", prepared.leaves);
+    };
+    assert_eq!(leaf.leaf_id, leaf_id);
+    assert_eq!(leaf.method, RecoveryMethod::Cooperative);
+    assert!(prepared.skipped.is_empty(), "{:?}", prepared.skipped);
+    assert_eq!(
+        stored_leaves(&sdk).await?.get(&leaf_id).map(String::as_str),
+        Some("OnChain"),
+        "the leaf's own direct tx took it on-chain"
+    );
+
+    let (_, recovery) = recover_single(&sdk, prepared.clone()).await?;
+    assert_eq!(recovery.kind, RecoveryTxKind::Cooperative);
+    let recovery_tx = decode_tx(&recovery.tx_hex)?;
+    assert_eq!(
+        recovery_tx.output[0].script_pubkey,
+        destination.script_pubkey()
+    );
+    assert_eq!(
+        recovery_tx.output[0].value.to_sat(),
+        leaf_value - prepared.cooperative_fee_sats,
+        "the recovery pays the quoted fee"
+    );
+
+    // The operators now report the leaf as recovered, and co-sign it again from
+    // the same output at a higher fee.
+    let bumped = prepare_recovery(
+        &sdk,
+        &destination,
+        FEE_RATE * 2,
+        ExitLeafSelection::RecoverableOnly,
+    )
+    .await?;
+    let (bumped, replacement) = recover_single(&sdk, bumped).await?;
+    assert_ne!(replacement.txid, recovery.txid);
+    let replacement_tx = decode_tx(&replacement.tx_hex)?;
+    assert_eq!(
+        replacement_tx.input[0].previous_output,
+        recovery_tx.input[0].previous_output
+    );
+    sdk.fixtures
+        .bitcoind
+        .broadcast_transaction(&replacement_tx)
+        .await?;
+    sdk.fixtures.bitcoind.generate_blocks(1).await?;
+    wait_for_verdict(&sdk, &bumped, |verdict| {
+        matches!(verdict, RecoveryVerdict::Done)
+    })
+    .await?;
+    assert_eq!(get_info(&sdk).await?.recoverable_funds_sats, 0);
+    Ok(())
+}
+
 async fn prepare_recovery(
     sdk: &LocalSdk,
     destination: &Address,

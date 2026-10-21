@@ -111,13 +111,14 @@ fn lookup_output(
     pending: &mut Vec<ChainQuery>,
 ) -> WatchtowerExitLookup {
     // The funds of a recovered leaf are in a direct tx of its nearest on-chain
-    // ancestor, or in the leaf's own direct tx at another fee. A direct tx of
-    // the ancestor and the ancestor's node tx have the same input, so when the
-    // direct tx is in a block, no transaction below the ancestor is, and the
-    // leaf's own input is unspent. The SDK therefore queries the ancestor's
-    // input first, and the leaf's own input only when the ancestor's direct tx
-    // is in no block. It does so only when that direct tx has an output to the
-    // leaf's key: without one it holds the leaf's funds at no fee.
+    // ancestor, or in the leaf's own direct tx: at another fee, or the one it
+    // holds when it has no direct refund. A direct tx of the ancestor and the
+    // ancestor's node tx have the same input, so when the direct tx is in a
+    // block, no transaction below the ancestor is, and the leaf's own input is
+    // unspent. The SDK therefore queries the ancestor's input first, and the
+    // leaf's own input only when the ancestor's direct tx is in no block. It
+    // does so only when that direct tx has an output to the leaf's key: without
+    // one it holds the leaf's funds at no fee.
     if leaf.status == TreeNodeStatus::WatchtowerExitRecovered
         && let Some(ancestor) = nearest_on_chain_ancestor(leaf, nodes)
         && let Some(direct_tx) = ancestor.direct_tx.as_ref()
@@ -162,20 +163,18 @@ fn lookup_output(
             match confirmed_spend(node, direct_tx, observed, pending) {
                 Spend::By(spender, block_height) => {
                     let held = spender.compute_txid() == direct_tx.compute_txid();
+                    // A leaf's direct refund spends the direct tx it holds and
+                    // no other. A leaf renewed at a zero timelock has none.
+                    let refunded = is_leaf && held && node.direct_refund_tx.is_some();
                     return match Spender::of(spender, node, direct_tx) {
-                        Spender::DirectTx if !(is_leaf && held) => {
-                            output_paying_leaf(leaf, spender).map_or(
-                                WatchtowerExitLookup::Unrecoverable,
-                                |output| WatchtowerExitLookup::Found {
-                                    output,
-                                    block_height,
-                                },
-                            )
-                        }
-                        // A leaf's refunds have the output of its node tx as
-                        // input, and its direct refund that of the direct tx it
-                        // holds. A leaf renewed at a zero timelock has no direct
-                        // refund.
+                        Spender::DirectTx if !refunded => output_paying_leaf(leaf, spender).map_or(
+                            WatchtowerExitLookup::Unrecoverable,
+                            |output| WatchtowerExitLookup::Found {
+                                output,
+                                block_height,
+                            },
+                        ),
+                        // A leaf's other refunds spend the output of its node tx.
                         Spender::NodeTx | Spender::DirectTx if is_leaf && on_chain => {
                             WatchtowerExitLookup::Unilateral
                         }
@@ -703,6 +702,16 @@ mod tests {
         let mut own_node_tx = own_direct.clone();
         own_node_tx.output.push(paying(0, ScriptBuf::new()));
         leaf.node_tx = own_node_tx.clone();
+        leaf.direct_refund_tx = Some(spending(
+            TxIn {
+                previous_output: OutPoint {
+                    txid: own_direct.compute_txid(),
+                    vout: 0,
+                },
+                ..Default::default()
+            },
+            vec![paying(9_700, ScriptBuf::new())],
+        ));
 
         for spender in [own_direct, own_node_tx] {
             assert_eq!(
@@ -714,6 +723,83 @@ mod tests {
                 WatchtowerExitLookup::Unilateral
             );
         }
+    }
+
+    #[test]
+    fn an_on_chain_leaf_without_a_direct_refund_is_recovered_from_the_direct_tx_it_holds() {
+        let mut leaf = node(LEAF, None, TreeNodeStatus::OnChain, None);
+        let own_direct = direct_tx(vec![paying(9_800, key_path_script(&leaf))], 3);
+        leaf.direct_tx = Some(own_direct.clone());
+        let mut own_node_tx = own_direct.clone();
+        own_node_tx.output.push(paying(0, ScriptBuf::new()));
+        leaf.node_tx = own_node_tx.clone();
+
+        assert_eq!(
+            resolve(
+                &leaf,
+                &HashMap::new(),
+                &parent_output_spent_by(&leaf, &own_direct)
+            ),
+            found(WatchtowerExitOutput {
+                leaf_id: leaf.id.clone(),
+                outpoint: OutPoint {
+                    txid: own_direct.compute_txid(),
+                    vout: 0,
+                },
+                tx_out: own_direct.output[0].clone(),
+            })
+        );
+        // The refund spends the output of its node tx.
+        assert_eq!(
+            resolve(
+                &leaf,
+                &HashMap::new(),
+                &parent_output_spent_by(&leaf, &own_node_tx)
+            ),
+            WatchtowerExitLookup::Unilateral
+        );
+    }
+
+    #[test]
+    fn a_recovered_leaf_without_a_direct_refund_finds_the_direct_tx_it_holds_again() {
+        let mut leaf = node(
+            LEAF,
+            Some(SPLIT_1),
+            TreeNodeStatus::WatchtowerExitRecovered,
+            None,
+        );
+        let own_direct = direct_tx(vec![paying(9_800, key_path_script(&leaf))], 3);
+        leaf.direct_tx = Some(own_direct.clone());
+        // The split node a zero-timelock renewal adds, on-chain through its node tx.
+        let mut split_1 = node(
+            SPLIT_1,
+            None,
+            TreeNodeStatus::OnChain,
+            Some(direct_tx(vec![paying(9_900, key_path_script(&leaf))], 1)),
+        );
+        split_1.node_tx = spending(
+            parent_output(1),
+            vec![
+                paying(10_000, key_path_script(&leaf)),
+                paying(0, ScriptBuf::new()),
+            ],
+        );
+        let node_tx = split_1.node_tx.clone();
+        let nodes = by_id(vec![leaf.clone(), split_1.clone()]);
+        let mut observed = parent_output_spent_by(&split_1, &node_tx);
+        observed.extend(parent_output_spent_by(&leaf, &own_direct));
+
+        assert_eq!(
+            resolve(&leaf, &nodes, &observed),
+            found(WatchtowerExitOutput {
+                leaf_id: leaf.id.clone(),
+                outpoint: OutPoint {
+                    txid: own_direct.compute_txid(),
+                    vout: 0,
+                },
+                tx_out: own_direct.output[0].clone(),
+            })
+        );
     }
 
     #[test]
