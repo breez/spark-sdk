@@ -345,12 +345,23 @@ pub enum OrderStatus {
     Completed,
     Failed,
     Refunded,
+    /// Final outcome: a swap into an address-named token missed its minimum
+    /// output, so the quote's fallback stablecoin was delivered instead.
+    /// `amount_out` is unset.
+    FallbackDelivered,
+    /// The order expired without a deposit.
+    Expired,
+    /// The deposit was unconfirmed or replaced. The order can resume.
+    Unfulfilled,
     /// Catch-all for any status variant Orchestra adds in the future.
     #[serde(other)]
     Unknown,
 }
 
 impl OrderStatus {
+    /// Final statuses for the orders the SDK quotes. `FallbackDelivered` is
+    /// final too, but only follows a quote into an address-named token, which
+    /// the SDK doesn't request.
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Refunded)
     }
@@ -498,6 +509,19 @@ mod limits_response_tests {
                 .and_then(|b| b.max_cents.as_deref()),
             Some("9030000")
         );
+    }
+
+    #[test]
+    fn deserializes_documented_order_statuses() {
+        for (wire, status) in [
+            ("fallback_delivered", OrderStatus::FallbackDelivered),
+            ("expired", OrderStatus::Expired),
+            ("unfulfilled", OrderStatus::Unfulfilled),
+            ("something_new", OrderStatus::Unknown),
+        ] {
+            let parsed: OrderStatus = serde_json::from_str(&format!("\"{wire}\"")).unwrap();
+            assert_eq!(parsed, status);
+        }
     }
 
     #[test]

@@ -250,7 +250,7 @@ impl BreezSdk {
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
         use crate::utils::conversions::extract_conversion_info;
-        use crate::utils::payments::build_conversions;
+        use crate::utils::payments::apply_conversion_details;
 
         let mut payments = self.storage.list_payments(request.into()).await?;
 
@@ -282,22 +282,7 @@ impl BreezSdk {
                 None
             };
 
-            let conversions = build_conversions(payment, child_payments);
-
-            if !conversions.is_empty() {
-                if let Some(ref mut cd) = payment.conversion_details {
-                    cd.conversions = conversions;
-                } else {
-                    let status = extract_conversion_info(payment.details.clone())
-                        .map_or(crate::ConversionStatus::Completed, |info| {
-                            info.status().clone()
-                        });
-                    payment.conversion_details = Some(crate::models::ConversionDetails {
-                        status,
-                        conversions,
-                    });
-                }
-            }
+            apply_conversion_details(payment, child_payments);
         }
 
         Ok(ListPaymentsResponse { payments })

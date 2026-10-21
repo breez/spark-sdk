@@ -290,7 +290,8 @@ impl Payment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionDetails {
-    /// Overall status of the conversion (persisted in storage)
+    /// Overall status of the conversion. On a send, it follows the cross-chain
+    /// step until that step finishes.
     pub status: ConversionStatus,
     /// Ordered list of conversion steps. For sends: [AMM, cross-chain].
     /// For receives: [cross-chain, AMM]. Rebuilt on retrieval, not persisted.
