@@ -1040,35 +1040,37 @@ public static class Commands
         var vout = uint.Parse(positional[1]);
         var proportionalPpm = ParseOptionalUint(proportionalPpmStr);
 
-        if (proportionalPpm != null && satPerVbyteStr == null && recFeeLeewayStr == null)
-        {
-            Console.Error.WriteLine("proportional_ppm requires sat_per_vbyte or recommended_fee_leeway");
-            return;
-        }
-
-        MaxFee? maxFee = null;
+        MaxOnchainFee? onchain = null;
         if (recFeeLeewayStr != null)
         {
             if (feeSatStr != null || satPerVbyteStr != null)
             {
-                Console.WriteLine("Cannot specify fee-sat or sat-per-vbyte when using recommended fee");
+                Console.Error.WriteLine("Cannot specify fee_sat or sat_per_vbyte when using recommended fee");
                 return;
             }
-            maxFee = new MaxFee(onchain: new MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr)), proportionalPpm: proportionalPpm);
+            onchain = new MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte: ulong.Parse(recFeeLeewayStr));
         }
         else if (feeSatStr != null && satPerVbyteStr != null)
         {
-            Console.WriteLine("Cannot specify both --fee-sat and --sat-per-vbyte");
+            Console.Error.WriteLine("Cannot specify both fee_sat and sat_per_vbyte");
             return;
         }
         else if (feeSatStr != null)
         {
-            maxFee = new MaxFee(onchain: new MaxOnchainFee.Fixed(amount: ulong.Parse(feeSatStr)), proportionalPpm: null);
+            onchain = new MaxOnchainFee.Fixed(amount: ulong.Parse(feeSatStr));
         }
         else if (satPerVbyteStr != null)
         {
-            maxFee = new MaxFee(onchain: new MaxOnchainFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr)), proportionalPpm: proportionalPpm);
+            onchain = new MaxOnchainFee.Rate(satPerVbyte: ulong.Parse(satPerVbyteStr));
         }
+
+        if (onchain == null && proportionalPpm != null)
+        {
+            Console.Error.WriteLine("proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway");
+            return;
+        }
+
+        MaxFee? maxFee = onchain != null ? new MaxFee(onchain: onchain, proportionalPpm: proportionalPpm) : null;
 
         var result = await sdk.ClaimDeposit(new ClaimDepositRequest(
             txid: txid,

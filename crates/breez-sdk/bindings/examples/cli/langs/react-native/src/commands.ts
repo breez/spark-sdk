@@ -1011,10 +1011,6 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
   const proportionalPpmStr = parseFlag(args, '--proportional-ppm')
   const proportionalPpm = proportionalPpmStr !== undefined ? Number(proportionalPpmStr) : undefined
 
-  if (proportionalPpm !== undefined && satPerVbyteStr === undefined && recommendedFeeLeewayStr === undefined) {
-    return 'Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway'
-  }
-
   let maxFee: MaxFee | undefined
 
   if (recommendedFeeLeewayStr !== undefined) {
@@ -1032,13 +1028,17 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
   } else if (feeSatStr !== undefined) {
     maxFee = MaxFee.create({
       onchain: new MaxOnchainFee.Fixed({ amount: BigInt(feeSatStr) }),
-      proportionalPpm: undefined
+      proportionalPpm
     })
   } else if (satPerVbyteStr !== undefined) {
     maxFee = MaxFee.create({
       onchain: new MaxOnchainFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) }),
       proportionalPpm
     })
+  }
+
+  if (maxFee === undefined && proportionalPpm !== undefined) {
+    return 'Error: proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway'
   }
 
   const result = await sdk.claimDeposit({
