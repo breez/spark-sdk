@@ -640,28 +640,29 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('--fee-sat <amount>', 'The max fee to claim the deposit', parseInt)
     .option('--sat-per-vbyte <rate>', 'The max fee per vbyte to claim the deposit', parseInt)
     .option('--recommended-fee-leeway <amount>', 'Use recommended fee with this leeway in sat/vbyte', parseInt)
-    .option('--proportional-ppm <amount>', 'A share of the deposit amount, in parts per million, allowed on top of the max fee per vbyte or the recommended fee', parseInt)
+    .option('--proportional-ppm <amount>', 'A share of the deposit amount, in parts per million, allowed on top of the max fee', parseInt)
     .action(async (txid, vout, options) => {
       const sdk = getSdk()
       const voutNum = parseInt(vout, 10)
 
-      if (options.proportionalPpm != null && options.satPerVbyte == null && options.recommendedFeeLeeway == null) {
-        throw new Error('proportional_ppm requires sat_per_vbyte or recommended_fee_leeway')
-      }
-
-      let maxFee
+      let onchain
       if (options.recommendedFeeLeeway != null) {
         if (options.feeSat != null || options.satPerVbyte != null) {
           throw new Error('Cannot specify fee_sat or sat_per_vbyte when using recommended fee')
         }
-        maxFee = { type: 'networkRecommended', leewaySatPerVbyte: options.recommendedFeeLeeway, proportionalPpm: options.proportionalPpm }
+        onchain = { type: 'networkRecommended', leewaySatPerVbyte: options.recommendedFeeLeeway }
       } else if (options.feeSat != null && options.satPerVbyte != null) {
         throw new Error('Cannot specify both fee_sat and sat_per_vbyte')
       } else if (options.feeSat != null) {
-        maxFee = { type: 'fixed', amount: options.feeSat }
+        onchain = { type: 'fixed', amount: options.feeSat }
       } else if (options.satPerVbyte != null) {
-        maxFee = { type: 'rate', satPerVbyte: options.satPerVbyte, proportionalPpm: options.proportionalPpm }
+        onchain = { type: 'rate', satPerVbyte: options.satPerVbyte }
       }
+
+      if (onchain == null && options.proportionalPpm != null) {
+        throw new Error('proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway')
+      }
+      const maxFee = onchain != null ? { onchain, proportionalPpm: options.proportionalPpm } : undefined
 
       const value = await sdk.claimDeposit({
         txid,

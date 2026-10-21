@@ -823,27 +823,29 @@ suspend fun handleClaimDeposit(sdk: BreezSdk, reader: LineReader, args: List<Str
         return
     }
 
-    if (proportionalPpm != null && satPerVbyte == null && recommendedFeeLeeway == null) {
-        println("Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
-        return
-    }
-
-    val maxFee: MaxFee? = when {
+    val onchain: MaxOnchainFee? = when {
         recommendedFeeLeeway != null -> {
             if (feeSat != null || satPerVbyte != null) {
                 println("Cannot specify fee_sat or sat_per_vbyte when using recommended fee")
                 return
             }
-            MaxFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway, proportionalPpm = proportionalPpm)
+            MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte = recommendedFeeLeeway)
         }
         feeSat != null && satPerVbyte != null -> {
             println("Cannot specify both --fee-sat and --sat-per-vbyte")
             return
         }
-        feeSat != null -> MaxFee.Fixed(amount = feeSat)
-        satPerVbyte != null -> MaxFee.Rate(satPerVbyte = satPerVbyte, proportionalPpm = proportionalPpm)
+        feeSat != null -> MaxOnchainFee.Fixed(amount = feeSat)
+        satPerVbyte != null -> MaxOnchainFee.Rate(satPerVbyte = satPerVbyte)
         else -> null
     }
+
+    if (onchain == null && proportionalPpm != null) {
+        println("Error: proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway")
+        return
+    }
+
+    val maxFee = onchain?.let { MaxFee(onchain = it, proportionalPpm = proportionalPpm) }
 
     val result = sdk.claimDeposit(
         ClaimDepositRequest(

@@ -18,7 +18,7 @@ The SDK takes the fastest claim whose fee fits the max claim fee. Whether a depo
 
 The [max claim fee](config.md#max-deposit-claim-fee) is the most the SDK pays to claim a deposit on its own. It caps both the standard claim fee and the instant claim fee, so it also decides whether deposits are claimed early at all.
 
-It is set as an absolute amount in sats, a rate in sats/vbyte, or the fastest recommended fee plus a leeway. The rate and the recommended fee can also allow a share of the deposit amount, {{#name proportional_ppm}}, because the provider's fees grow with the deposit. Without it, a large deposit can exceed the max claim fee even when on-chain fees are low. The share counts toward every claim, so it also raises what an instant or expedited claim may cost.
+Its on-chain part is set as an absolute amount in sats, a rate in sats/vbyte, or the fastest recommended fee plus a leeway. On top of it, {{#name proportional_ppm}} can allow a share of the deposit amount, because the provider's fees grow with the deposit. Without it, a large deposit can exceed the max claim fee even when on-chain fees are low. The share counts toward every claim, so it also raises what an instant or expedited claim may cost.
 
 The default, 1 sat/vbyte plus 0.1% of the deposit amount, is sized for the standard claim, so deposits are usually credited at 3 confirmations. Raise it to have deposits credited early. To make automatic claims more likely, follow the fastest recommended fee:
 

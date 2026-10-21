@@ -969,7 +969,7 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	feeSat := fs.Uint64("fee-sat", 0, "Max fee in sats (fixed)")
 	satPerVbyte := fs.Uint64("sat-per-vbyte", 0, "Max fee per vbyte (rate)")
 	recommendedFeeLeeway := fs.Uint64("recommended-fee-leeway", 0, "Use fastest recommended fee plus this leeway (sat/vbyte)")
-	proportionalPpmStr := fs.String("proportional-ppm", "", "A share of the deposit amount, in parts per million, allowed on top of the max fee per vbyte or the recommended fee")
+	proportionalPpmStr := fs.String("proportional-ppm", "", "A share of the deposit amount, in parts per million, allowed on top of the max fee")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -996,30 +996,37 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 		proportionalPpm = &val32
 	}
 
-	if proportionalPpm != nil && *satPerVbyte == 0 && *recommendedFeeLeeway == 0 {
-		return fmt.Errorf("proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
-	}
-
-	var maxFee breez_sdk_spark.MaxFee
+	var onchain breez_sdk_spark.MaxOnchainFee
+	hasOnchain := false
 	if *recommendedFeeLeeway > 0 {
 		if *feeSat > 0 || *satPerVbyte > 0 {
 			return fmt.Errorf("cannot specify fee-sat or sat-per-vbyte when using recommended fee")
 		}
-		maxFee = breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: *recommendedFeeLeeway, ProportionalPpm: proportionalPpm}
+		onchain = breez_sdk_spark.MaxOnchainFeeNetworkRecommended{LeewaySatPerVbyte: *recommendedFeeLeeway}
+		hasOnchain = true
 	} else if *feeSat > 0 && *satPerVbyte > 0 {
 		return fmt.Errorf("cannot specify both --fee-sat and --sat-per-vbyte")
 	} else if *feeSat > 0 {
-		maxFee = breez_sdk_spark.MaxFeeFixed{Amount: *feeSat}
+		onchain = breez_sdk_spark.MaxOnchainFeeFixed{Amount: *feeSat}
+		hasOnchain = true
 	} else if *satPerVbyte > 0 {
-		maxFee = breez_sdk_spark.MaxFeeRate{SatPerVbyte: *satPerVbyte, ProportionalPpm: proportionalPpm}
+		onchain = breez_sdk_spark.MaxOnchainFeeRate{SatPerVbyte: *satPerVbyte}
+		hasOnchain = true
+	}
+
+	if !hasOnchain && proportionalPpm != nil {
+		return fmt.Errorf("proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway")
+	}
+
+	var maxFee *breez_sdk_spark.MaxFee
+	if hasOnchain {
+		maxFee = &breez_sdk_spark.MaxFee{Onchain: onchain, ProportionalPpm: proportionalPpm}
 	}
 
 	req := breez_sdk_spark.ClaimDepositRequest{
-		Txid: txid,
-		Vout: uint32(vout),
-	}
-	if maxFee != nil {
-		req.MaxFee = &maxFee
+		Txid:   txid,
+		Vout:   uint32(vout),
+		MaxFee: maxFee,
 	}
 	result, err := sdk.ClaimDeposit(req)
 	if err = liftError(err); err != nil {

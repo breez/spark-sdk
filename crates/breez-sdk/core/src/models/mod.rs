@@ -290,7 +290,8 @@ impl Payment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionDetails {
-    /// Overall status of the conversion (persisted in storage)
+    /// Overall status of the conversion. On a send, it follows the cross-chain
+    /// step until that step finishes.
     pub status: ConversionStatus,
     /// Ordered list of conversion steps. For sends: [AMM, cross-chain].
     /// For receives: [cross-chain, AMM]. Rebuilt on retrieval, not persisted.
@@ -1247,55 +1248,122 @@ impl Config {
     }
 }
 
-/// The most a deposit claim may cost.
-///
-/// `Rate` and `NetworkRecommended` can add a share of the deposit amount,
-/// `proportional_ppm` in parts per million (100 ppm is 0.01%), to allow for a
-/// provider fee that grows with the deposit. It applies to every claim, early
-/// ones included. Unset adds nothing.
+/// The most a deposit claim may cost: an on-chain part plus an optional share
+/// of the deposit amount.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "StoredMaxFee", into = "StoredMaxFee")]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct MaxFee {
+    pub onchain: MaxOnchainFee,
+    /// A share of the deposit amount added on top of the on-chain part, in parts
+    /// per million (100 ppm is 0.01%), to allow for a provider fee that grows
+    /// with the deposit. It applies to every claim, early ones included. Unset
+    /// adds nothing.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub proportional_ppm: Option<u32>,
+}
+
+/// The on-chain part of a [`MaxFee`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum MaxFee {
-    /// An absolute cap on the total fee, in sats, whatever the deposit amount.
+pub enum MaxOnchainFee {
+    /// A fixed amount in sats.
     Fixed { amount: u64 },
-    /// A fee rate in sats per vbyte, plus the optional share of the deposit.
+    /// A fee rate in sats per vbyte.
+    Rate { sat_per_vbyte: u64 },
+    /// The fastest recommended fee rate at the time of the claim plus a leeway in
+    /// sats per vbyte.
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
+}
+
+/// How a [`MaxFee`] is persisted: one variant per on-chain kind, each carrying the
+/// proportional part. Ceilings stored before the split are in this shape, so
+/// keeping it lets them load as they are.
+#[derive(Serialize, Deserialize)]
+enum StoredMaxFee {
+    Fixed {
+        amount: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proportional_ppm: Option<u32>,
+    },
     Rate {
         sat_per_vbyte: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         proportional_ppm: Option<u32>,
     },
-    /// The fastest recommended fee rate at the time of the claim plus a leeway in
-    /// sats per vbyte, plus the optional share of the deposit.
     NetworkRecommended {
         leeway_sat_per_vbyte: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         proportional_ppm: Option<u32>,
     },
+}
+
+impl From<StoredMaxFee> for MaxFee {
+    fn from(stored: StoredMaxFee) -> Self {
+        let (onchain, proportional_ppm) = match stored {
+            StoredMaxFee::Fixed {
+                amount,
+                proportional_ppm,
+            } => (MaxOnchainFee::Fixed { amount }, proportional_ppm),
+            StoredMaxFee::Rate {
+                sat_per_vbyte,
+                proportional_ppm,
+            } => (MaxOnchainFee::Rate { sat_per_vbyte }, proportional_ppm),
+            StoredMaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+                proportional_ppm,
+            } => (
+                MaxOnchainFee::NetworkRecommended {
+                    leeway_sat_per_vbyte,
+                },
+                proportional_ppm,
+            ),
+        };
+        MaxFee {
+            onchain,
+            proportional_ppm,
+        }
+    }
+}
+
+impl From<MaxFee> for StoredMaxFee {
+    fn from(max_fee: MaxFee) -> Self {
+        let proportional_ppm = max_fee.proportional_ppm;
+        match max_fee.onchain {
+            MaxOnchainFee::Fixed { amount } => StoredMaxFee::Fixed {
+                amount,
+                proportional_ppm,
+            },
+            MaxOnchainFee::Rate { sat_per_vbyte } => StoredMaxFee::Rate {
+                sat_per_vbyte,
+                proportional_ppm,
+            },
+            MaxOnchainFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+            } => StoredMaxFee::NetworkRecommended {
+                leeway_sat_per_vbyte,
+                proportional_ppm,
+            },
+        }
+    }
 }
 
 impl MaxFee {
     /// The share of the deposit amount allowed on top of the on-chain part, in
     /// parts per million.
     pub(crate) fn proportional_ppm(&self) -> u32 {
-        match self {
-            MaxFee::Fixed { .. } => 0,
-            MaxFee::Rate {
-                proportional_ppm, ..
-            }
-            | MaxFee::NetworkRecommended {
-                proportional_ppm, ..
-            } => proportional_ppm.unwrap_or(0),
-        }
+        self.proportional_ppm.unwrap_or(0)
     }
 
     /// The on-chain part of the ceiling, priced at the current fee market.
     pub(crate) async fn to_fee(&self, fee_market: &FeeMarket<'_>) -> Result<Fee, SdkError> {
-        match self {
-            MaxFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
-            MaxFee::Rate { sat_per_vbyte, .. } => Ok(Fee::Rate {
+        match &self.onchain {
+            MaxOnchainFee::Fixed { amount } => Ok(Fee::Fixed { amount: *amount }),
+            MaxOnchainFee::Rate { sat_per_vbyte } => Ok(Fee::Rate {
                 sat_per_vbyte: *sat_per_vbyte,
             }),
-            MaxFee::NetworkRecommended {
+            MaxOnchainFee::NetworkRecommended {
                 leeway_sat_per_vbyte,
-                ..
             } => {
                 let recommended_fees = fee_market.recommended_fees().await?;
                 let max_fee_rate = recommended_fees
@@ -1838,12 +1906,11 @@ pub struct BridgeToCashAppResponse {
 
 impl std::fmt::Display for MaxFee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MaxFee::Fixed { amount } => write!(f, "Fixed: {amount}")?,
-            MaxFee::Rate { sat_per_vbyte, .. } => write!(f, "Rate: {sat_per_vbyte}")?,
-            MaxFee::NetworkRecommended {
+        match &self.onchain {
+            MaxOnchainFee::Fixed { amount } => write!(f, "Fixed: {amount}")?,
+            MaxOnchainFee::Rate { sat_per_vbyte } => write!(f, "Rate: {sat_per_vbyte}")?,
+            MaxOnchainFee::NetworkRecommended {
                 leeway_sat_per_vbyte,
-                ..
             } => write!(f, "NetworkRecommended: {leeway_sat_per_vbyte}")?,
         }
         match self.proportional_ppm() {
@@ -3801,22 +3868,52 @@ mod tests {
 
     #[test_all]
     fn max_fee_stored_without_a_proportional_part_still_loads() {
-        let rate: MaxFee = serde_json::from_str(r#"{"Rate":{"sat_per_vbyte":12}}"#).unwrap();
+        for (stored, onchain) in [
+            (
+                r#"{"Fixed":{"amount":500}}"#,
+                MaxOnchainFee::Fixed { amount: 500 },
+            ),
+            (
+                r#"{"Rate":{"sat_per_vbyte":12}}"#,
+                MaxOnchainFee::Rate { sat_per_vbyte: 12 },
+            ),
+            (
+                r#"{"NetworkRecommended":{"leeway_sat_per_vbyte":3}}"#,
+                MaxOnchainFee::NetworkRecommended {
+                    leeway_sat_per_vbyte: 3,
+                },
+            ),
+        ] {
+            let max_fee: MaxFee = serde_json::from_str(stored).unwrap();
+            assert_eq!(
+                max_fee,
+                MaxFee {
+                    onchain,
+                    proportional_ppm: None,
+                }
+            );
+        }
+    }
+
+    #[test_all]
+    fn max_fee_is_stored_in_its_flat_shape() {
+        let max_fee = MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount: 500 },
+            proportional_ppm: Some(1_000),
+        };
+        let stored = serde_json::to_string(&max_fee).unwrap();
         assert_eq!(
-            rate,
-            MaxFee::Rate {
-                sat_per_vbyte: 12,
-                proportional_ppm: None,
-            }
+            stored,
+            r#"{"Fixed":{"amount":500,"proportional_ppm":1000}}"#
         );
-        let recommended: MaxFee =
-            serde_json::from_str(r#"{"NetworkRecommended":{"leeway_sat_per_vbyte":3}}"#).unwrap();
+        assert_eq!(serde_json::from_str::<MaxFee>(&stored).unwrap(), max_fee);
+        let without_ppm = MaxFee {
+            onchain: MaxOnchainFee::Rate { sat_per_vbyte: 2 },
+            proportional_ppm: None,
+        };
         assert_eq!(
-            recommended,
-            MaxFee::NetworkRecommended {
-                leeway_sat_per_vbyte: 3,
-                proportional_ppm: None,
-            }
+            serde_json::to_string(&without_ppm).unwrap(),
+            r#"{"Rate":{"sat_per_vbyte":2}}"#
         );
     }
 }

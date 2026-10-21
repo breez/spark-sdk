@@ -42,8 +42,8 @@ changes five things:
 let mut config = default_config(Network::Regtest);
 let spark_config = std::fs::read_to_string("regtest/local/data/spark-config.json")?;
 config.spark_config = Some(parse_spark_config(spark_config)?);
-config.max_deposit_claim_fee = Some(MaxFee::Rate {
-    sat_per_vbyte: 5,
+config.max_deposit_claim_fee = Some(MaxFee {
+    onchain: MaxOnchainFee::Rate { sat_per_vbyte: 5 },
     proportional_ppm: None,
 });
 config.lnurl_domain = Some("http://127.0.0.1:8080".to_string());

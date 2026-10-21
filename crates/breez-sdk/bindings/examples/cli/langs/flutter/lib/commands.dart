@@ -838,28 +838,30 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   final proportionalPpmStr = results.option('proportional-ppm');
   final proportionalPpm = proportionalPpmStr != null ? int.parse(proportionalPpmStr) : null;
 
-  if (proportionalPpm != null && satPerVbyteStr == null && leewayStr == null) {
-    print('proportional_ppm requires sat_per_vbyte or recommended_fee_leeway');
-    return;
-  }
-
-  MaxFee? maxFee;
+  MaxOnchainFee? onchain;
   if (leewayStr != null) {
     if (feeSatStr != null || satPerVbyteStr != null) {
       print('Cannot specify fee_sat or sat_per_vbyte when using recommended fee');
       return;
     }
-    maxFee = MaxFee.networkRecommended(
-      leewaySatPerVbyte: BigInt.parse(leewayStr),
-      proportionalPpm: proportionalPpm,
-    );
+    onchain = MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.parse(leewayStr));
   } else if (feeSatStr != null && satPerVbyteStr != null) {
     print('Cannot specify both fee_sat and sat_per_vbyte');
     return;
   } else if (feeSatStr != null) {
-    maxFee = MaxFee.fixed(amount: BigInt.parse(feeSatStr));
+    onchain = MaxOnchainFee.fixed(amount: BigInt.parse(feeSatStr));
   } else if (satPerVbyteStr != null) {
-    maxFee = MaxFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr), proportionalPpm: proportionalPpm);
+    onchain = MaxOnchainFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr));
+  }
+
+  if (onchain == null && proportionalPpm != null) {
+    print('proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway');
+    return;
+  }
+
+  MaxFee? maxFee;
+  if (onchain != null) {
+    maxFee = MaxFee(onchain: onchain, proportionalPpm: proportionalPpm);
   }
 
   final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));

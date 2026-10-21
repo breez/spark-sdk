@@ -29,6 +29,7 @@ import {
   AssetFilter,
   PaymentDetailsFilter,
   MaxFee,
+  MaxOnchainFee,
   Fee,
   SparkHtlcStatus,
   SparkMasterIdentityPublicKey,
@@ -1010,26 +1011,34 @@ async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
   const proportionalPpmStr = parseFlag(args, '--proportional-ppm')
   const proportionalPpm = proportionalPpmStr !== undefined ? Number(proportionalPpmStr) : undefined
 
-  if (proportionalPpm !== undefined && satPerVbyteStr === undefined && recommendedFeeLeewayStr === undefined) {
-    return 'Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway'
-  }
-
   let maxFee: MaxFee | undefined
 
   if (recommendedFeeLeewayStr !== undefined) {
     if (feeSatStr !== undefined || satPerVbyteStr !== undefined) {
       return 'Cannot specify fee_sat or sat_per_vbyte when using recommended fee'
     }
-    maxFee = new MaxFee.NetworkRecommended({
-      leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr),
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.NetworkRecommended({
+        leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr)
+      }),
       proportionalPpm
     })
   } else if (feeSatStr !== undefined && satPerVbyteStr !== undefined) {
     return 'Cannot specify both --fee-sat and --sat-per-vbyte'
   } else if (feeSatStr !== undefined) {
-    maxFee = new MaxFee.Fixed({ amount: BigInt(feeSatStr) })
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.Fixed({ amount: BigInt(feeSatStr) }),
+      proportionalPpm
+    })
   } else if (satPerVbyteStr !== undefined) {
-    maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr), proportionalPpm })
+    maxFee = MaxFee.create({
+      onchain: new MaxOnchainFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) }),
+      proportionalPpm
+    })
+  }
+
+  if (maxFee === undefined && proportionalPpm !== undefined) {
+    return 'Error: proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway'
   }
 
   const result = await sdk.claimDeposit({

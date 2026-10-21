@@ -47,6 +47,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const MaxFee: any;
   export type MaxFee = any;
 
+  export const MaxOnchainFee: any;
+  export type MaxOnchainFee = any;
+
   export const Fee: any;
   export type Fee = any;
 

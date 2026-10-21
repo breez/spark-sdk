@@ -103,7 +103,8 @@ The React Native CLI uses the `@breeztech/breez-sdk-spark-react-native` package.
 - Use `BreezSdkInterface` and `TokenIssuerInterface` types for parameters (not `BreezSdk`/`TokenIssuer` class types which include internal uniffi symbols)
 - Enum tags use `SdkEvent_Tags.Synced` pattern (not `event.type === 'synced'`)
 - Tagged union constructors: `new Seed.Mnemonic({...})`, `new ReceivePaymentMethod.SparkAddress()`
-- Tagged union instances for filters: `new MaxFee.Fixed({ amount })`, `new Fee.Rate({ satPerVbyte })`, `new PaymentDetailsFilter.Spark({...})`
+- Tagged union instances for filters: `new MaxOnchainFee.Fixed({ amount })`, `new Fee.Rate({ satPerVbyte })`, `new PaymentDetailsFilter.Spark({...})`
+- `MaxFee` is a record: `MaxFee.create({ onchain: new MaxOnchainFee.Fixed({ amount }), proportionalPpm })`
 - Record factories: `ConversionOptions.create({ conversionType, maxSlippageBps, completionTimeoutSecs })`
 - Simple enums are numeric (not strings): `PaymentType.Send`, `PaymentStatus.Completed`, `FeePolicy.FeesIncluded`
 - `AssetFilter` is a tagged union: `new AssetFilter.Bitcoin()`, `new AssetFilter.Token({ tokenIdentifier })`

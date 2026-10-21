@@ -353,23 +353,45 @@ pub(crate) async fn enrich_payment_conversions(
         None
     };
 
-    let conversions = build_conversions(payment, child_payments.as_deref());
+    apply_conversion_details(payment, child_payments.as_deref());
+    Ok(())
+}
 
-    if !conversions.is_empty() {
-        if let Some(ref mut cd) = payment.conversion_details {
-            cd.conversions = conversions;
-        } else {
-            // Cross-chain send without pre-set conversion_details — derive status from info
-            let status = extract_conversion_info(payment.details.clone())
-                .map_or(ConversionStatus::Completed, |info| info.status().clone());
-            payment.conversion_details = Some(crate::models::ConversionDetails {
-                status,
-                conversions,
-            });
-        }
+/// Sets `payment.conversion_details` from the conversions built for it.
+/// `child_payments` are the AMM legs linked to a payment with a stored status.
+///
+/// A payment without a stored status takes it from its cross-chain conversion
+/// info. A send whose stored status is `Completed` takes the status of a
+/// cross-chain leg that has not completed, since the stored status only
+/// covers the AMM leg that funded it.
+pub(crate) fn apply_conversion_details(payment: &mut Payment, child_payments: Option<&[Payment]>) {
+    let conversions = build_conversions(payment, child_payments);
+    if conversions.is_empty() {
+        return;
     }
 
-    Ok(())
+    let crosschain_status = conversions
+        .iter()
+        .find(|c| c.provider != crate::models::ConversionProvider::Amm)
+        .map(|c| c.status.clone());
+    let is_send = payment.payment_type == PaymentType::Send;
+
+    if let Some(ref mut cd) = payment.conversion_details {
+        cd.conversions = conversions;
+        if is_send
+            && cd.status == ConversionStatus::Completed
+            && let Some(status) = crosschain_status
+        {
+            cd.status = status;
+        }
+    } else {
+        let status = extract_conversion_info(payment.details.clone())
+            .map_or(ConversionStatus::Completed, |info| info.status().clone());
+        payment.conversion_details = Some(crate::models::ConversionDetails {
+            status,
+            conversions,
+        });
+    }
 }
 
 /// Builds the ordered list of conversions for a payment from its child payments
@@ -852,6 +874,97 @@ mod tests {
         assert!(conversions.is_empty());
     }
 
+    // --- apply_conversion_details status roll-up tests ---
+
+    fn with_status(mut info: ConversionInfo, status: ConversionStatus) -> ConversionInfo {
+        *info.status_mut() = status;
+        info
+    }
+
+    fn amm_children() -> Vec<Payment> {
+        vec![
+            token_child("c_send", PaymentType::Send),
+            spark_child("c_recv", PaymentType::Receive),
+        ]
+    }
+
+    /// Overall status of an AMM-funded send with a stored status of `stored`
+    /// and a cross-chain leg at `crosschain`.
+    fn rolled_up_status(
+        stored: ConversionStatus,
+        crosschain: ConversionStatus,
+    ) -> ConversionStatus {
+        let mut parent = parent_send_lightning(with_status(orchestra_info(), crosschain));
+        parent.conversion_details = Some(ConversionDetails {
+            status: stored,
+            conversions: vec![],
+        });
+        apply_conversion_details(&mut parent, Some(&amm_children()));
+        let details = parent.conversion_details.unwrap();
+        assert_eq!(details.conversions.len(), 2);
+        details.status
+    }
+
+    #[test]
+    fn rollup_completed_send_takes_unfinished_crosschain_status() {
+        for crosschain in [
+            ConversionStatus::Pending,
+            ConversionStatus::Failed,
+            ConversionStatus::Refunded,
+        ] {
+            assert_eq!(
+                rolled_up_status(ConversionStatus::Completed, crosschain.clone()),
+                crosschain
+            );
+        }
+    }
+
+    #[test]
+    fn rollup_completed_send_stays_completed_when_crosschain_completes() {
+        assert_eq!(
+            rolled_up_status(ConversionStatus::Completed, ConversionStatus::Completed),
+            ConversionStatus::Completed
+        );
+    }
+
+    #[test]
+    fn rollup_keeps_unfinished_stored_status() {
+        assert_eq!(
+            rolled_up_status(ConversionStatus::Pending, ConversionStatus::Completed),
+            ConversionStatus::Pending
+        );
+    }
+
+    #[test]
+    fn rollup_leaves_receives_unchanged() {
+        let mut parent = parent_receive_no_crosschain();
+        parent.details = Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: Some(orchestra_info()),
+        });
+        let children = vec![
+            spark_child("c_send", PaymentType::Send),
+            token_child("c_recv", PaymentType::Receive),
+        ];
+        apply_conversion_details(&mut parent, Some(&children));
+        assert_eq!(
+            parent.conversion_details.unwrap().status,
+            ConversionStatus::Completed
+        );
+    }
+
+    #[test]
+    fn rollup_derives_status_without_a_stored_one() {
+        let mut payment = parent_send_lightning(orchestra_info());
+        payment.conversion_details = None;
+        apply_conversion_details(&mut payment, None);
+        assert_eq!(
+            payment.conversion_details.unwrap().status,
+            ConversionStatus::Pending
+        );
+    }
+
     /// Storage is required by the signature but unreachable on this path: with
     /// `conversion_details` unset the child lookup is skipped, which is what
     /// makes the send and idempotent-replay call sites safe to run inline.
@@ -899,6 +1012,82 @@ mod tests {
             .unwrap();
 
         assert!(payment.conversion_details.is_none());
+    }
+
+    /// An AMM-funded cross-chain send as `complete_conversion_and_send` stores
+    /// it: AMM children linked to the send, and a stored `Completed` status
+    /// written once the AMM leg finishes, while the cross-chain leg is still
+    /// in flight.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn stored_send_reports_the_crosschain_leg_status() {
+        let storage = test_storage();
+        let mut send = spark_child("send_1", PaymentType::Send);
+        send.details = Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        });
+        for payment in [
+            send,
+            token_child("c_send", PaymentType::Send),
+            spark_child("c_recv", PaymentType::Receive),
+        ] {
+            storage.apply_payment_update(payment).await.unwrap();
+        }
+        for child in ["c_send", "c_recv"] {
+            storage
+                .insert_payment_metadata(
+                    child.to_string(),
+                    PaymentMetadata {
+                        parent_payment_id: Some("send_1".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let set_crosschain_status = |status| {
+            let storage = Arc::clone(&storage);
+            async move {
+                storage
+                    .insert_payment_metadata(
+                        "send_1".to_string(),
+                        PaymentMetadata {
+                            conversion_info: Some(with_status(orchestra_info(), status)),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        set_crosschain_status(ConversionStatus::Pending).await;
+        storage
+            .insert_payment_metadata(
+                "send_1".to_string(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        for status in [
+            ConversionStatus::Pending,
+            ConversionStatus::Failed,
+            ConversionStatus::Completed,
+        ] {
+            set_crosschain_status(status.clone()).await;
+            let payment =
+                get_payment_with_conversion_details("send_1".to_string(), Arc::clone(&storage))
+                    .await
+                    .unwrap();
+            let details = payment.conversion_details.unwrap();
+            assert_eq!(details.conversions.len(), 2, "AMM and cross-chain legs");
+            assert_eq!(details.status, status);
+        }
     }
 
     #[cfg(feature = "sqlite")]

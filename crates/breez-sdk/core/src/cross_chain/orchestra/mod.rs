@@ -7,7 +7,7 @@
 mod attribution;
 pub(super) mod storage_adapter;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -286,12 +286,20 @@ impl OrchestraService {
             // `SyncedStorage` and replicates a bump to every device. A
             // restart costs one extra probe per expired row.
             let mut probe_clock: HashMap<String, u64> = HashMap::new();
+            // Last order status seen per send payment, so a status is logged
+            // once when it changes rather than on every pass.
+            let mut order_statuses: HashMap<String, OrderStatus> = HashMap::new();
             // Spark invoice of the inbound payment that woke this pass.
             let mut paid_invoice: Option<String> = None;
             loop {
-                if let Err(e) =
-                    Self::poll_in_flight_sends(&storage, &client, &spark_wallet, &event_emitter)
-                        .await
+                if let Err(e) = Self::poll_in_flight_sends(
+                    &storage,
+                    &client,
+                    &spark_wallet,
+                    &event_emitter,
+                    &mut order_statuses,
+                )
+                .await
                 {
                     error!("Orchestra send-monitor poll failed: {e:?}");
                 }
@@ -375,8 +383,8 @@ impl OrchestraService {
                 Some((response.order_id, response.read_token.map(|t| t.0)))
             }
             Err(e) => {
-                debug!(
-                    "Orchestra: resubmit for payment {} still failing: {e}",
+                warn!(
+                    "Orchestra: resubmit for payment {} (quote {quote_id}) still failing: {e}",
                     payment.id
                 );
                 None
@@ -396,6 +404,7 @@ impl OrchestraService {
         client: &Arc<OrchestraClient>,
         spark_wallet: &Arc<SparkWallet>,
         event_emitter: &EventEmitter,
+        order_statuses: &mut HashMap<String, OrderStatus>,
     ) -> Result<(), SdkError> {
         // Receives carry a Pending conversion too, from the moment their
         // invoice is matched, and are the receive monitor's to finish.
@@ -534,12 +543,18 @@ impl OrchestraService {
             let status_response = match status_response {
                 Ok(r) => r,
                 Err(e) => {
-                    debug!("Orchestra monitor: status query failed for {order_id}: {e}");
+                    let invalid_read_token = is_invalid_read_token(&e);
+                    if invalid_read_token {
+                        debug!("Orchestra monitor: read token rejected for {order_id}: {e}");
+                    } else {
+                        warn!(
+                            "Orchestra monitor: status query failed for payment {} (order {order_id}): {e}",
+                            payment.id
+                        );
+                    }
                     // Dropped so the next pass reacquires one. The order id
                     // outlives the token, so it stays.
-                    if is_invalid_read_token(&e)
-                        && let Some(stale) = without_read_token(conversion_info)
-                    {
+                    if invalid_read_token && let Some(stale) = without_read_token(conversion_info) {
                         let metadata = crate::PaymentMetadata {
                             conversion_info: Some(stale),
                             ..Default::default()
@@ -558,10 +573,7 @@ impl OrchestraService {
                 }
             };
 
-            debug!(
-                "Orchestra monitor: payment {} order status: {:?} (amount_out={:?})",
-                payment.id, status_response.order.status, status_response.order.amount_out,
-            );
+            log_order_status_change(order_statuses, &payment.id, &status_response.order);
 
             let Some(updated_metadata) = apply_terminal_status(conversion_info, &status_response)
             else {
@@ -597,6 +609,7 @@ impl OrchestraService {
             }
         }
 
+        retain_pending_orders(order_statuses, pending.iter().map(|p| p.id.as_str()));
         Ok(())
     }
 
@@ -2268,7 +2281,7 @@ impl CrossChainService for OrchestraService {
         match &submit_res {
             Ok(r) => debug!("Orchestra: submit accepted, response: {r:?}"),
             Err(e) => warn!(
-                "Orchestra: submit failed for payment {payment_id} (deposit {spark_tx_hash}), leaving the order to the monitor: {e}"
+                "Orchestra: submit failed for payment {payment_id} (deposit {spark_tx_hash}, quote {quote_id}), leaving the order to the monitor: {e}"
             ),
         }
 
@@ -2457,6 +2470,71 @@ fn with_submitted_order(
         }
     }
     Some(updated)
+}
+
+/// Statuses where the order is held or off the expected path to delivery, or
+/// that this SDK doesn't recognise.
+fn is_blocking_order_status(status: OrderStatus) -> bool {
+    matches!(
+        status,
+        OrderStatus::AwaitingApproval
+            | OrderStatus::FallbackDelivered
+            | OrderStatus::Expired
+            | OrderStatus::Unfulfilled
+            | OrderStatus::Unknown
+    )
+}
+
+/// Records the order's status for the payment, returning whether it differs
+/// from the one recorded on the previous pass.
+fn record_order_status(
+    seen: &mut HashMap<String, OrderStatus>,
+    payment_id: &str,
+    status: OrderStatus,
+) -> bool {
+    seen.insert(payment_id.to_string(), status) != Some(status)
+}
+
+/// Drops recorded statuses for payments no longer pending, however their
+/// order finished. A terminal status whose update failed to persist stays
+/// pending, so it is not logged again on the next pass.
+fn retain_pending_orders<'a>(
+    seen: &mut HashMap<String, OrderStatus>,
+    pending_ids: impl IntoIterator<Item = &'a str>,
+) {
+    let pending: HashSet<&str> = pending_ids.into_iter().collect();
+    seen.retain(|id, _| pending.contains(id.as_str()));
+}
+
+/// Logs the order's status when it changed since the last pass: WARN for a
+/// blocking status, INFO otherwise.
+fn log_order_status_change(
+    seen: &mut HashMap<String, OrderStatus>,
+    payment_id: &str,
+    order: &Order,
+) {
+    if !record_order_status(seen, payment_id, order.status) {
+        return;
+    }
+    let error = match (&order.error_code, &order.error_message) {
+        (None, None) => String::new(),
+        (code, message) => format!(
+            ", error {}: {}",
+            code.as_deref().unwrap_or("-"),
+            message.as_deref().unwrap_or("-")
+        ),
+    };
+    if is_blocking_order_status(order.status) {
+        warn!(
+            "Orchestra: order {} for payment {payment_id} is {:?}{error}",
+            order.id, order.status
+        );
+    } else {
+        info!(
+            "Orchestra: order {} for payment {payment_id} is {:?}{error}",
+            order.id, order.status
+        );
+    }
 }
 
 /// Returns the updated [`PaymentMetadata`] for an Orchestra order that has
@@ -4573,6 +4651,67 @@ mod tests {
             ConversionInfo::Orchestra { status, .. } => assert_eq!(status, expected),
             other => panic!("expected Orchestra variant, got {other:?}"),
         }
+    }
+
+    #[test_all]
+    fn record_order_status_reports_only_changes() {
+        let mut seen = HashMap::new();
+        assert!(record_order_status(
+            &mut seen,
+            "p1",
+            OrderStatus::Processing
+        ));
+        assert!(!record_order_status(
+            &mut seen,
+            "p1",
+            OrderStatus::Processing
+        ));
+        assert!(record_order_status(
+            &mut seen,
+            "p1",
+            OrderStatus::AwaitingApproval
+        ));
+        assert!(!record_order_status(
+            &mut seen,
+            "p1",
+            OrderStatus::AwaitingApproval
+        ));
+        assert_eq!(seen.len(), 1);
+    }
+
+    #[test_all]
+    fn record_order_status_logs_a_repeated_terminal_status_once() {
+        let mut seen = HashMap::new();
+        record_order_status(&mut seen, "p1", OrderStatus::Delivering);
+        assert!(record_order_status(&mut seen, "p1", OrderStatus::Completed));
+        assert!(!record_order_status(
+            &mut seen,
+            "p1",
+            OrderStatus::Completed
+        ));
+    }
+
+    #[test_all]
+    fn retain_pending_orders_drops_finished_payments() {
+        let mut seen = HashMap::new();
+        record_order_status(&mut seen, "p1", OrderStatus::Completed);
+        record_order_status(&mut seen, "p2", OrderStatus::Processing);
+        record_order_status(&mut seen, "p3", OrderStatus::AwaitingApproval);
+        retain_pending_orders(&mut seen, ["p2", "p3"]);
+        assert!(!seen.contains_key("p1"));
+        assert!(seen.contains_key("p2"));
+        assert!(seen.contains_key("p3"));
+    }
+
+    #[test_all]
+    fn blocking_order_statuses() {
+        assert!(is_blocking_order_status(OrderStatus::AwaitingApproval));
+        assert!(is_blocking_order_status(OrderStatus::FallbackDelivered));
+        assert!(is_blocking_order_status(OrderStatus::Expired));
+        assert!(is_blocking_order_status(OrderStatus::Unfulfilled));
+        assert!(is_blocking_order_status(OrderStatus::Unknown));
+        assert!(!is_blocking_order_status(OrderStatus::Processing));
+        assert!(!is_blocking_order_status(OrderStatus::Refunding));
     }
 
     #[test_all]
