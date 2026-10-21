@@ -849,17 +849,20 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
       print('Cannot specify fee_sat or sat_per_vbyte when using recommended fee');
       return;
     }
-    maxFee = MaxFee.networkRecommended(
-      leewaySatPerVbyte: BigInt.parse(leewayStr),
+    maxFee = MaxFee(
+      onchain: MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.parse(leewayStr)),
       proportionalPpm: proportionalPpm,
     );
   } else if (feeSatStr != null && satPerVbyteStr != null) {
     print('Cannot specify both fee_sat and sat_per_vbyte');
     return;
   } else if (feeSatStr != null) {
-    maxFee = MaxFee.fixed(amount: BigInt.parse(feeSatStr));
+    maxFee = MaxFee(onchain: MaxOnchainFee.fixed(amount: BigInt.parse(feeSatStr)), proportionalPpm: null);
   } else if (satPerVbyteStr != null) {
-    maxFee = MaxFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr), proportionalPpm: proportionalPpm);
+    maxFee = MaxFee(
+      onchain: MaxOnchainFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr)),
+      proportionalPpm: proportionalPpm,
+    );
   }
 
   final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));

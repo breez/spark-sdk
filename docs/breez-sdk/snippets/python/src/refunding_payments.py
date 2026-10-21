@@ -10,6 +10,7 @@ from breez_sdk_spark import (
     default_config,
     Network,
     MaxFee,
+    MaxOnchainFee,
 )
 
 
@@ -77,7 +78,10 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
                 claim_request = ClaimDepositRequest(
                     txid=deposit.txid,
                     vout=deposit.vout,
-                    max_fee=MaxFee.FIXED(amount=required_fee),
+                    max_fee=MaxFee(
+                        onchain=MaxOnchainFee.FIXED(amount=required_fee),
+                        proportional_ppm=None,
+                    ),
                 )
                 await sdk.claim_deposit(request=claim_request)
     except Exception as error:
@@ -148,8 +152,9 @@ async def set_max_fee_to_recommended_fees():
 
     # Set the maximum fee to the fastest network recommended fee at the time of claim
     # with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
-    config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(
-        leeway_sat_per_vbyte=1, proportional_ppm=1000
+    config.max_deposit_claim_fee = MaxFee(
+        onchain=MaxOnchainFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1),
+        proportional_ppm=1000,
     )
     # ANCHOR_END: set-max-fee-to-recommended-fees
     logging.info(f"Config: {config}")
@@ -169,7 +174,10 @@ async def custom_claim_logic(sdk: BreezSdk, deposit):
                 claim_request = ClaimDepositRequest(
                     txid=deposit.txid,
                     vout=deposit.vout,
-                    max_fee=MaxFee.FIXED(amount=required_fee),
+                    max_fee=MaxFee(
+                        onchain=MaxOnchainFee.FIXED(amount=required_fee),
+                        proportional_ppm=None,
+                    ),
                 )
                 await sdk.claim_deposit(request=claim_request)
     except Exception as error:

@@ -326,7 +326,10 @@ async fn test_deposit_fee_manual_claim(#[future] env: Result<Environment>) -> Re
         .claim_deposit(ClaimDepositRequest {
             txid: txid_found.clone(),
             vout,
-            max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
+            max_fee: Some(MaxFee {
+                onchain: MaxOnchainFee::Fixed { amount: 100_000 },
+                proportional_ppm: None,
+            }),
         })
         .await?;
     // A standard (mature) claim settles synchronously and returns the payment.
@@ -407,7 +410,10 @@ async fn test_claim_deposit_records_the_max_fee(#[future] env: Result<Environmen
     // it was held to is what the deposit now stands at. Whether that comes back as
     // a deferral or an error depends on whether the deposit has matured yet, which
     // is a race on regtest, so this asserts only that nothing was claimed.
-    let ceiling = MaxFee::Fixed { amount: 1 };
+    let ceiling = MaxFee {
+        onchain: MaxOnchainFee::Fixed { amount: 1 },
+        proportional_ppm: None,
+    };
     let refused = bob
         .sdk
         .claim_deposit(ClaimDepositRequest {
@@ -950,7 +956,10 @@ async fn test_deposit_too_small_to_claim(#[future] env: Result<Environment>) -> 
         .claim_deposit(ClaimDepositRequest {
             txid: dep.txid.clone(),
             vout: dep.vout,
-            max_fee: Some(MaxFee::Fixed { amount: 100_000 }),
+            max_fee: Some(MaxFee {
+                onchain: MaxOnchainFee::Fixed { amount: 100_000 },
+                proportional_ppm: None,
+            }),
         })
         .await;
     assert!(
@@ -1134,7 +1143,10 @@ async fn test_manual_instant_deposit_claim(#[future] env: Result<Environment>) -
                 vout,
                 // regtest quotes a 0-conf plan, whose spread carries a 3% term:
                 // ~1_700 sats at 50k, so the ceiling has to clear that.
-                max_fee: Some(MaxFee::Fixed { amount: 3_000 }),
+                max_fee: Some(MaxFee {
+                    onchain: MaxOnchainFee::Fixed { amount: 3_000 },
+                    proportional_ppm: None,
+                }),
             })
             .await
         {
@@ -1466,7 +1478,10 @@ async fn test_claim_deposit_rejects_concurrent_calls(
     let request = || ClaimDepositRequest {
         txid: txid.clone(),
         vout,
-        max_fee: Some(MaxFee::Fixed { amount: 3_000 }),
+        max_fee: Some(MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount: 3_000 },
+            proportional_ppm: None,
+        }),
     };
     let (r1, r2) = tokio::join!(
         bob.sdk.claim_deposit(request()),
@@ -1512,7 +1527,10 @@ async fn test_zero_conf_deposit_auto_claim(#[future] env: Result<Environment>) -
     // this test funds.
     let mut bob = env
         .create_wallet_seeing_mempool(|cfg| {
-            cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 3_000 });
+            cfg.max_deposit_claim_fee = Some(MaxFee {
+                onchain: MaxOnchainFee::Fixed { amount: 3_000 },
+                proportional_ppm: None,
+            });
         })
         .await?;
 

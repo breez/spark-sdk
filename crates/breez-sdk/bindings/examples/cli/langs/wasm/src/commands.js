@@ -654,13 +654,13 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
         if (options.feeSat != null || options.satPerVbyte != null) {
           throw new Error('Cannot specify fee_sat or sat_per_vbyte when using recommended fee')
         }
-        maxFee = { type: 'networkRecommended', leewaySatPerVbyte: options.recommendedFeeLeeway, proportionalPpm: options.proportionalPpm }
+        maxFee = { onchain: { type: 'networkRecommended', leewaySatPerVbyte: options.recommendedFeeLeeway }, proportionalPpm: options.proportionalPpm }
       } else if (options.feeSat != null && options.satPerVbyte != null) {
         throw new Error('Cannot specify both fee_sat and sat_per_vbyte')
       } else if (options.feeSat != null) {
-        maxFee = { type: 'fixed', amount: options.feeSat }
+        maxFee = { onchain: { type: 'fixed', amount: options.feeSat } }
       } else if (options.satPerVbyte != null) {
-        maxFee = { type: 'rate', satPerVbyte: options.satPerVbyte, proportionalPpm: options.proportionalPpm }
+        maxFee = { onchain: { type: 'rate', satPerVbyte: options.satPerVbyte }, proportionalPpm: options.proportionalPpm }
       }
 
       const value = await sdk.claimDeposit({

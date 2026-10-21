@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use breez_sdk_spark::{
-    BitcoinChainService, BreezSdk, Config, GetInfoRequest, MaxFee, Network, SdkBuilder, Seed,
-    SparkConfig, SparkSigningOperator, SparkSspConfig, SyncWalletRequest, default_config,
-    default_external_signers, default_server_config,
+    BitcoinChainService, BreezSdk, Config, GetInfoRequest, MaxFee, MaxOnchainFee, Network,
+    SdkBuilder, Seed, SparkConfig, SparkSigningOperator, SparkSspConfig, SyncWalletRequest,
+    default_config, default_external_signers, default_server_config,
 };
 use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::fixtures::sspd::internal_api;
@@ -306,8 +306,8 @@ fn base_local_config(
     config.sync_interval_secs = 5;
     // The SSP quotes its spend cost plus a margin, which the SDK's default ceiling
     // (1 sat/vByte over a 99-vByte claim tx) refuses.
-    config.max_deposit_claim_fee = Some(MaxFee::Rate {
-        sat_per_vbyte: 4,
+    config.max_deposit_claim_fee = Some(MaxFee {
+        onchain: MaxOnchainFee::Rate { sat_per_vbyte: 4 },
         proportional_ppm: None,
     });
     config.spark_config = Some(SparkConfig {

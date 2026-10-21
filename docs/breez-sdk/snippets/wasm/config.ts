@@ -10,14 +10,19 @@ const exampleConfigureSdk = async () => {
   config.maxDepositClaimFee = undefined
 
   // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
-  config.maxDepositClaimFee = { type: 'rate', satPerVbyte: 10, proportionalPpm: 1000 }
+  config.maxDepositClaimFee = {
+    onchain: { type: 'rate', satPerVbyte: 10 },
+    proportionalPpm: 1000
+  }
 
   // Set a maximum fee of 1000 sat
-  config.maxDepositClaimFee = { type: 'fixed', amount: 1000 }
+  config.maxDepositClaimFee = { onchain: { type: 'fixed', amount: 1000 } }
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte
-  config.maxDepositClaimFee = { type: 'networkRecommended', leewaySatPerVbyte: 1 }
+  config.maxDepositClaimFee = {
+    onchain: { type: 'networkRecommended', leewaySatPerVbyte: 1 }
+  }
   // ANCHOR_END: max-deposit-claim-fee
   console.log('Config:', config)
 }

@@ -19,18 +19,27 @@ namespace BreezSdkSnippets
             // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
             config = config with
             {
-                maxDepositClaimFee = new MaxFee.Rate(satPerVbyte: 10, proportionalPpm: 1000)
+                maxDepositClaimFee = new MaxFee(
+                    onchain: new MaxOnchainFee.Rate(satPerVbyte: 10),
+                    proportionalPpm: 1000
+                )
             };
 
             // Set a maximum fee of 1000 sat
-            config = config with { maxDepositClaimFee = new MaxFee.Fixed(amount: 1000) };
+            config = config with
+            {
+                maxDepositClaimFee = new MaxFee(
+                    onchain: new MaxOnchainFee.Fixed(amount: 1000),
+                    proportionalPpm: null
+                )
+            };
 
             // Set the maximum fee to the fastest network recommended fee at the time of claim
             // with a leeway of 1 sats/vbyte
             config = config with
             {
-                maxDepositClaimFee = new MaxFee.NetworkRecommended(
-                    leewaySatPerVbyte: 1,
+                maxDepositClaimFee = new MaxFee(
+                    onchain: new MaxOnchainFee.NetworkRecommended(leewaySatPerVbyte: 1),
                     proportionalPpm: null
                 )
             };

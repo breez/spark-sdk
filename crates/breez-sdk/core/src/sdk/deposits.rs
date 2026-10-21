@@ -1231,6 +1231,8 @@ mod tests {
         InstantStaticDepositQuoteResult,
     };
 
+    use crate::MaxOnchainFee;
+
     use super::{
         CLAIM_TX_SIZE_VBYTES, ClaimDeferredReason, ClaimDepositOutcome, ClaimGuards, Fee,
         InstantClaimOutcome, InstantClaimPlan, MaxFee, Replaced, ResolvedMaxFee, SdkError,
@@ -1243,7 +1245,10 @@ mod tests {
     // ---- resolve_claim_ceiling / larger_ceiling ----
 
     fn fixed(amount: u64) -> MaxFee {
-        MaxFee::Fixed { amount }
+        MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount },
+            proportional_ppm: None,
+        }
     }
 
     #[test]
@@ -1299,8 +1304,8 @@ mod tests {
     fn ceilings_are_compared_as_sats_not_by_shape() {
         // A rate and a fixed amount are only comparable once resolved, and the rate
         // here admits more despite the smaller number on its face.
-        let rate = MaxFee::Rate {
-            sat_per_vbyte: 5,
+        let rate = MaxFee {
+            onchain: MaxOnchainFee::Rate { sat_per_vbyte: 5 },
             proportional_ppm: None,
         };
         assert_eq!(larger_ceiling(&rate, 495, &fixed(99), 99), rate);
@@ -1406,23 +1411,23 @@ mod tests {
         assert!(!needs_own_ceiling_resolution(None, None));
         // Equal values of a different variant are still equal.
         assert!(!needs_own_ceiling_resolution(
-            Some(&MaxFee::Rate {
-                sat_per_vbyte: 4,
+            Some(&MaxFee {
+                onchain: MaxOnchainFee::Rate { sat_per_vbyte: 4 },
                 proportional_ppm: None,
             }),
-            Some(&MaxFee::Rate {
-                sat_per_vbyte: 4,
+            Some(&MaxFee {
+                onchain: MaxOnchainFee::Rate { sat_per_vbyte: 4 },
                 proportional_ppm: None,
             })
         ));
         // A different proportional part is a different ceiling.
         assert!(needs_own_ceiling_resolution(
-            Some(&MaxFee::Rate {
-                sat_per_vbyte: 4,
+            Some(&MaxFee {
+                onchain: MaxOnchainFee::Rate { sat_per_vbyte: 4 },
                 proportional_ppm: Some(750),
             }),
-            Some(&MaxFee::Rate {
-                sat_per_vbyte: 4,
+            Some(&MaxFee {
+                onchain: MaxOnchainFee::Rate { sat_per_vbyte: 4 },
                 proportional_ppm: None,
             })
         ));
@@ -1447,6 +1452,13 @@ mod tests {
         let max_fee = ResolvedMaxFee::new(Fee::Fixed { amount: 500 }, 0);
         assert_eq!(max_fee.ceiling_sats(1_000), 500);
         assert_eq!(max_fee.ceiling_sats(100_000_000), 500);
+    }
+
+    #[test]
+    fn a_fixed_amount_takes_a_proportional_part_too() {
+        let max_fee = ResolvedMaxFee::new(Fee::Fixed { amount: 500 }, 1_000);
+        assert_eq!(max_fee.ceiling_sats(0), 500);
+        assert_eq!(max_fee.ceiling_sats(1_000_000), 1_500);
     }
 
     #[test]

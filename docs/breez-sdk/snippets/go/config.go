@@ -18,22 +18,24 @@ func ConfigureSdk() {
 
 	// Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
 	proportionalPpm := uint32(1000)
-	feeRateInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeRate{
-		SatPerVbyte:     10,
+	feeRate := breez_sdk_spark.MaxFee{
+		Onchain:         breez_sdk_spark.MaxOnchainFeeRate{SatPerVbyte: 10},
 		ProportionalPpm: &proportionalPpm,
-	})
-	config.MaxDepositClaimFee = &feeRateInterface
+	}
+	config.MaxDepositClaimFee = &feeRate
 
 	// Set a maximum fee of 1000 sat
-	feeFixedInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeFixed{Amount: 1000})
-	config.MaxDepositClaimFee = &feeFixedInterface
+	feeFixed := breez_sdk_spark.MaxFee{
+		Onchain: breez_sdk_spark.MaxOnchainFeeFixed{Amount: 1000},
+	}
+	config.MaxDepositClaimFee = &feeFixed
 
 	// Set the maximum fee to the fastest network recommended fee at the time of claim
 	// with a leeway of 1 sats/vbyte
-	networkRecommendedInterface := breez_sdk_spark.MaxFee(
-		breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: 1},
-	)
-	config.MaxDepositClaimFee = &networkRecommendedInterface
+	networkRecommended := breez_sdk_spark.MaxFee{
+		Onchain: breez_sdk_spark.MaxOnchainFeeNetworkRecommended{LeewaySatPerVbyte: 1},
+	}
+	config.MaxDepositClaimFee = &networkRecommended
 	// ANCHOR_END: max-deposit-claim-fee
 	log.Printf("Config: %+v", config)
 }

@@ -4,10 +4,10 @@ use chrono::Utc;
 
 use crate::{
     ChainTransaction, DepositClaimError, InstantClaimStatus, LeafRecovery, LnurlWithdrawInfo,
-    MaxFee, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType,
-    RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage, StoredWatchtowerExitOutput,
-    TokenMetadata, TokenTransactionType, UpdateDepositPayload, UpdateLeafRecovery,
-    UpdateWatchedAddressPayload, WatchtowerExitRecovery,
+    MaxFee, MaxOnchainFee, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus,
+    PaymentType, RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage,
+    StoredWatchtowerExitOutput, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
+    UpdateLeafRecovery, UpdateWatchedAddressPayload, WatchtowerExitRecovery,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -1875,17 +1875,26 @@ pub async fn test_deposit_max_claim_fee(storage: Box<dyn Storage>) {
     // Every variant round-trips: each encodes differently, so one standing in for
     // the others would leave two encodings unexercised.
     for max_fee in [
-        MaxFee::Fixed { amount: 25_000 },
-        MaxFee::Rate {
-            sat_per_vbyte: 12,
+        MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount: 25_000 },
             proportional_ppm: None,
         },
-        MaxFee::Rate {
-            sat_per_vbyte: 12,
+        MaxFee {
+            onchain: MaxOnchainFee::Fixed { amount: 25_000 },
+            proportional_ppm: Some(500),
+        },
+        MaxFee {
+            onchain: MaxOnchainFee::Rate { sat_per_vbyte: 12 },
+            proportional_ppm: None,
+        },
+        MaxFee {
+            onchain: MaxOnchainFee::Rate { sat_per_vbyte: 12 },
             proportional_ppm: Some(750),
         },
-        MaxFee::NetworkRecommended {
-            leeway_sat_per_vbyte: 3,
+        MaxFee {
+            onchain: MaxOnchainFee::NetworkRecommended {
+                leeway_sat_per_vbyte: 3,
+            },
             proportional_ppm: Some(1_000),
         },
     ] {
@@ -1920,7 +1929,10 @@ pub async fn test_deposit_max_claim_fee(storage: Box<dyn Storage>) {
     let deposits = storage.list_deposits().await.unwrap();
     assert_eq!(deposits[0].max_claim_fee, None);
 
-    let ceiling = MaxFee::Fixed { amount: 7_000 };
+    let ceiling = MaxFee {
+        onchain: MaxOnchainFee::Fixed { amount: 7_000 },
+        proportional_ppm: None,
+    };
     storage
         .update_deposit(
             "tx_max_fee".to_string(),

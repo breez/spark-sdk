@@ -6,6 +6,7 @@ from breez_sdk_spark import (
     Network,
     LeafOptimizationConfig,
     MaxFee,
+    MaxOnchainFee,
     SparkConfig,
     SparkSigningOperator,
     SparkSspConfig,
@@ -25,15 +26,20 @@ async def configure_sdk():
     config.max_deposit_claim_fee = None
 
     # Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
-    config.max_deposit_claim_fee = MaxFee.RATE(sat_per_vbyte=10, proportional_ppm=1000)
+    config.max_deposit_claim_fee = MaxFee(
+        onchain=MaxOnchainFee.RATE(sat_per_vbyte=10), proportional_ppm=1000
+    )
 
     # Set a maximum fee of 1000 sat
-    config.max_deposit_claim_fee = MaxFee.FIXED(amount=1000)
+    config.max_deposit_claim_fee = MaxFee(
+        onchain=MaxOnchainFee.FIXED(amount=1000), proportional_ppm=None
+    )
 
     # Set the maximum fee to the fastest network recommended fee at the time of claim
     # with a leeway of 1 sats/vbyte
-    config.max_deposit_claim_fee = MaxFee.NETWORK_RECOMMENDED(
-        leeway_sat_per_vbyte=1, proportional_ppm=None
+    config.max_deposit_claim_fee = MaxFee(
+        onchain=MaxOnchainFee.NETWORK_RECOMMENDED(leeway_sat_per_vbyte=1),
+        proportional_ppm=None,
     )
     # ANCHOR_END: max-deposit-claim-fee
     logging.info(f"Config: {config}")

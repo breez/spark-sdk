@@ -13,14 +13,23 @@ class Config {
         config.maxDepositClaimFee = null
 
         // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
-        config.maxDepositClaimFee = MaxFee.Rate(10u, 1000u)
+        config.maxDepositClaimFee = MaxFee(
+            onchain = MaxOnchainFee.Rate(10u),
+            proportionalPpm = 1000u
+        )
 
         // Set a maximum fee of 1000 sat
-        config.maxDepositClaimFee = MaxFee.Fixed(1000u)
+        config.maxDepositClaimFee = MaxFee(
+            onchain = MaxOnchainFee.Fixed(1000u),
+            proportionalPpm = null
+        )
 
         // Set the maximum fee to the fastest network recommended fee at the time of claim
         // with a leeway of 1 sats/vbyte
-        config.maxDepositClaimFee = MaxFee.NetworkRecommended(1u, null)
+        config.maxDepositClaimFee = MaxFee(
+            onchain = MaxOnchainFee.NetworkRecommended(1u),
+            proportionalPpm = null
+        )
         // ANCHOR_END: max-deposit-claim-fee
         println("Config: $config")
     }

@@ -264,18 +264,16 @@ pub struct _DepositInfo {
 }
 
 #[frb(mirror(MaxFee))]
-pub enum _MaxFee {
-    Fixed {
-        amount: u64,
-    },
-    Rate {
-        sat_per_vbyte: u64,
-        proportional_ppm: Option<u32>,
-    },
-    NetworkRecommended {
-        leeway_sat_per_vbyte: u64,
-        proportional_ppm: Option<u32>,
-    },
+pub struct _MaxFee {
+    pub onchain: MaxOnchainFee,
+    pub proportional_ppm: Option<u32>,
+}
+
+#[frb(mirror(MaxOnchainFee))]
+pub enum _MaxOnchainFee {
+    Fixed { amount: u64 },
+    Rate { sat_per_vbyte: u64 },
+    NetworkRecommended { leeway_sat_per_vbyte: u64 },
 }
 
 #[frb(mirror(Fee))]
