@@ -1,6 +1,6 @@
 # Pinned to the same commit as spark-so-private.dockerfile: these define the
 # schema the operator built from that commit expects.
-ARG VERSION=35b57a32e14a5a0f8567967f47a742c50ccf0953
+ARG VERSION=bb5711ef810849fde471923cc35fc618041020db
 
 FROM ghcr.io/breez/spark-operator:${VERSION} AS operator
 
