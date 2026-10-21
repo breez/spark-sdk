@@ -772,40 +772,31 @@ def _build_claim_deposit_parser():
                    help="Use recommended fee + leeway")
     p.add_argument("--proportional-ppm", type=int, default=None,
                    help="A share of the deposit amount, in parts per million, "
-                   "allowed on top of the max fee per vbyte or the recommended fee")
+                   "allowed on top of the max fee")
     return p
 
 async def _handle_claim_deposit(sdk, _token_issuer, _session, args):
-    if (args.proportional_ppm is not None
-            and args.sat_per_vbyte is None
-            and args.recommended_fee_leeway is None):
-        print("proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
-        return
     if args.recommended_fee_leeway is not None:
         if args.fee_sat is not None or args.sat_per_vbyte is not None:
             print("Cannot specify fee_sat or sat_per_vbyte when using recommended fee")
             return
-        max_fee = MaxFee(
-            onchain=MaxOnchainFee.NETWORK_RECOMMENDED(
-                leeway_sat_per_vbyte=args.recommended_fee_leeway,
-            ),
-            proportional_ppm=args.proportional_ppm,
+        onchain = MaxOnchainFee.NETWORK_RECOMMENDED(
+            leeway_sat_per_vbyte=args.recommended_fee_leeway,
         )
     elif args.fee_sat is not None and args.sat_per_vbyte is not None:
         print("Cannot specify both fee_sat and sat_per_vbyte")
         return
     elif args.fee_sat is not None:
-        max_fee = MaxFee(
-            onchain=MaxOnchainFee.FIXED(amount=args.fee_sat),
-            proportional_ppm=None,
-        )
+        onchain = MaxOnchainFee.FIXED(amount=args.fee_sat)
     elif args.sat_per_vbyte is not None:
-        max_fee = MaxFee(
-            onchain=MaxOnchainFee.RATE(sat_per_vbyte=args.sat_per_vbyte),
-            proportional_ppm=args.proportional_ppm,
-        )
+        onchain = MaxOnchainFee.RATE(sat_per_vbyte=args.sat_per_vbyte)
     else:
-        max_fee = None
+        onchain = None
+    if onchain is None and args.proportional_ppm is not None:
+        print("proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway")
+        return
+    max_fee = (MaxFee(onchain=onchain, proportional_ppm=args.proportional_ppm)
+               if onchain is not None else None)
 
     result = await sdk.claim_deposit(request=ClaimDepositRequest(
         txid=args.txid,

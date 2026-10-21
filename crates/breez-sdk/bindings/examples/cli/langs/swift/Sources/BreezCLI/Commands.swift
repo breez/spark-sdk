@@ -828,28 +828,30 @@ func handleClaimDeposit(_ sdk: BreezSdk, _ args: [String]) async throws {
     let recommendedFeeLeeway = fp.get("recommended-fee-leeway").flatMap { UInt64($0) }
     let proportionalPpm = fp.get("proportional-ppm").flatMap { UInt32($0) }
 
-    if proportionalPpm != nil && satPerVbyte == nil && recommendedFeeLeeway == nil {
-        print("Error: proportional_ppm requires sat_per_vbyte or recommended_fee_leeway")
-        return
-    }
-
-    let maxFee: MaxFee?
+    let onchain: MaxOnchainFee?
     if let leeway = recommendedFeeLeeway {
         if feeSat != nil || satPerVbyte != nil {
             print("Cannot specify fee-sat or sat-per-vbyte when using recommended fee")
             return
         }
-        maxFee = MaxFee(onchain: .networkRecommended(leewaySatPerVbyte: leeway), proportionalPpm: proportionalPpm)
+        onchain = .networkRecommended(leewaySatPerVbyte: leeway)
     } else if let feeSat, satPerVbyte != nil {
         print("Cannot specify both fee-sat and sat-per-vbyte")
         return
     } else if let feeSat {
-        maxFee = MaxFee(onchain: .fixed(amount: feeSat), proportionalPpm: nil)
+        onchain = .fixed(amount: feeSat)
     } else if let satPerVbyte {
-        maxFee = MaxFee(onchain: .rate(satPerVbyte: satPerVbyte), proportionalPpm: proportionalPpm)
+        onchain = .rate(satPerVbyte: satPerVbyte)
     } else {
-        maxFee = nil
+        onchain = nil
     }
+
+    if onchain == nil && proportionalPpm != nil {
+        print("Error: proportional_ppm requires fee_sat, sat_per_vbyte or recommended_fee_leeway")
+        return
+    }
+
+    let maxFee: MaxFee? = onchain.map { MaxFee(onchain: $0, proportionalPpm: proportionalPpm) }
 
     let result = try await sdk.claimDeposit(request: ClaimDepositRequest(
         txid: txid,
