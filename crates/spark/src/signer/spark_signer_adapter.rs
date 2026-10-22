@@ -343,7 +343,8 @@ impl SparkSigner for SparkSignerAdapter {
 
         for leaf in &leaves {
             let signing_key = SecretSource::Derived(signing_path(&leaf.signing_key.derived_from)?);
-            let new_signing_key = SecretSource::Derived(signing_path(&leaf.new_leaf_id)?);
+            let new_signing_key =
+                SecretSource::Encrypted(self.signer.generate_random_secret().await?);
 
             new_leaf_keys.push(NewLeafKey {
                 node_id: leaf.node.id.clone(),
@@ -765,14 +766,13 @@ mod tests {
         held_under: &TreeNodeId,
     ) -> (Vec<PublicKey>, PublicKey) {
         let operators = operators();
-        let new_leaf_id = TreeNodeId::generate();
         let prepared = adapter
             .prepare_transfer(PrepareTransferRequest {
                 transfer_id: TransferId::generate(),
                 receiver_public_key: adapter.get_identity_public_key().await.unwrap(),
                 leaves: vec![TransferLeafInput {
                     node: create_test_tree_node(node_id, 1_000),
-                    new_leaf_id: new_leaf_id.clone(),
+                    new_leaf_id: TreeNodeId::generate(),
                     signing_key: LeafSigningKey {
                         derived_from: held_under.clone(),
                     },
@@ -784,11 +784,6 @@ mod tests {
             .unwrap();
 
         let new_key = prepared.new_leaf_keys[0].new_signing_public_key;
-        assert_eq!(
-            new_key,
-            adapter.get_public_key_for_leaf(&new_leaf_id).await.unwrap(),
-            "the leaf moves to the key derived from the new leaf id"
-        );
 
         let mut tweaks = Vec::new();
         for (recipient, secret) in &operators {

@@ -256,8 +256,8 @@ impl ExternalLeafSigningKey {
 }
 
 /// FFI-safe representation of `spark_wallet::TransferLeafInput`. Conveys the
-/// leaf id, the key the leaf is held under and the new (post-transfer) leaf id;
-/// the signer derives the keys from them.
+/// leaf id, the key the leaf is held under and a fresh per-send leaf id; the
+/// signer generates the new (post-transfer) leaf key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalTransferLeafInput {
