@@ -12,7 +12,7 @@ How errors appear differs by language:
 - **React Native**: each variant is a class under `SdkError`. Match it with `instanceOf` and read its fields from `inner`.
 - **Other languages**: each variant is its own error type or case, with its fields available directly.
 
-Deposits the SDK claims in the background don't throw. When one of those claims fails, the reason is recorded on the deposit's {{#name claim_error}} instead. It uses the same [MaxDepositClaimFeeExceeded](#max-deposit-claim-fee-exceeded), [MissingUtxo](#missing-utxo) and [DepositTooSmall](#deposit-too-small) cases described below, and any other failure is recorded as a generic message. See [Handling claim outcomes](./onchain_claims.md#handling-claim-outcomes).
+Deposits the SDK claims in the background don't throw. When one of those claims fails, the reason is recorded on the deposit's {{#name claim_error}} instead. It uses the same [MaxDepositClaimFeeExceeded](#max-deposit-claim-fee-exceeded), [MissingUtxo](#missing-utxo) and [DepositTooSmall](#deposit-too-small) cases described below, and any other failure is recorded as a generic message. See [Handling the outcome](./onchain_manual_claims.md#handling-the-outcome).
 
 ## Error reference
 
@@ -80,7 +80,7 @@ The Bitcoin chain service failed, for example while fetching a deposit transacti
     <a class="header" href="#max-deposit-claim-fee-exceeded">MaxDepositClaimFeeExceeded</a>
 </h3>
 
-Claiming a deposit costs more than the maximum fee allows, or no maximum fee is set. {{#name required_fee_sats}} gives the fee the claim needs, so you can ask the user to approve it and claim again with a higher maximum. See [Handling claim outcomes](./onchain_claims.md#handling-claim-outcomes).
+Claiming a deposit costs more than the maximum fee allows, or no maximum fee is set. {{#name required_fee_sats}} gives the fee the claim needs, so you can ask the user to approve it and claim again with a higher maximum. See [Handling the outcome](./onchain_manual_claims.md#handling-the-outcome).
 
 <h3 id="missing-utxo">
     <a class="header" href="#missing-utxo">MissingUtxo</a>
@@ -92,19 +92,19 @@ The deposit transaction has no output at the given index, so the transaction id 
     <a class="header" href="#deposit-too-small">DepositTooSmall</a>
 </h3>
 
-After the claim fee, the deposit would credit less than the dust limit. No maximum fee makes it claimable, but a drop in on-chain fees can. See [Handling claim outcomes](./onchain_claims.md#handling-claim-outcomes).
+After the claim fee, the deposit would credit less than the dust limit. No maximum fee makes it claimable, but a drop in on-chain fees can. See [Handling the outcome](./onchain_manual_claims.md#handling-the-outcome).
 
 <h3 id="deposit-claim-in-progress">
     <a class="header" href="#deposit-claim-in-progress">DepositClaimInProgress</a>
 </h3>
 
-Another claim on this deposit is already running, or an early claim was already made. It is not a failure to show the user, and it needs nothing from you. See [Claiming a deposit manually](./onchain_claims.md#claiming-a-deposit-manually).
+Another claim on this deposit is already running, or an early claim was already made. It is not a failure to show the user, and it needs nothing from you. See [Claiming a deposit manually](./onchain_manual_claims.md#claiming).
 
 <h3 id="refund-replacement-fee-too-low">
     <a class="header" href="#refund-replacement-fee-too-low">RefundReplacementFeeTooLow</a>
 </h3>
 
-A refund for this deposit is already on the network, and the new one doesn't pay enough to replace it. Retry with a fee of at least {{#name required_fee_sats}}. See [Tracking a refund](./onchain_claims.md#tracking-a-refund).
+A refund for this deposit is already on the network, and the new one doesn't pay enough to replace it. Retry with a fee of at least {{#name required_fee_sats}}. See [Tracking a refund](./onchain_refunds.md#tracking-a-refund).
 
 <h3 id="lnurl-error">
     <a class="header" href="#lnurl-error">LnurlError</a>

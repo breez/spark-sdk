@@ -1,7 +1,8 @@
 # Getting Started
 
-Integrating Breez SDK into your application takes just a few minutes. Follow these steps to get started:
+Integrating Breez SDK into your product takes just a few minutes. Follow these steps to get started:
 
+<!-- cards: links -->
 - **[Installing the SDK](/guide/install.md)**
 - **[Testing and development](/guide/testing.md)**
 - **[Initializing the SDK](/guide/initializing.md)**
@@ -12,31 +13,59 @@ Integrating Breez SDK into your application takes just a few minutes. Follow the
 - **[Adding logging](/guide/logging.md)**
 - **[Spark status](/guide/spark_status.md)**
 
+## Languages & Frameworks
+
+The Breez SDK is available for the following languages and frameworks:
+
+<!-- cards: tiles -->
+- [iOS/Swift](/guide/install_ios_swift.md)
+- [Android/Kotlin](/guide/install_android_kotlin.md)
+- [Kotlin Multiplatform](/guide/install_kotlin_multiplatform.md)
+- [Javascript/Typescript (Wasm)](/guide/install_javascript.md)
+- [React Native/Expo](/guide/install_react_native.md)
+- [Rust](/guide/install_rust.md)
+- [Flutter](/guide/install_flutter.md)
+- [Go](/guide/install_go.md)
+- [Python](/guide/install_python.md)
+- [C#](/guide/install_csharp.md)
+
 ## API Key
 
-The Breez SDK API key must be set for the SDK to work. You can request one by <a target="_blank" href="{{api_key_form_uri}}">filling out this form</a>, or programmatically with the following request:
+The Breez SDK API key must be set for the SDK to work. The API key is sent to the provided email address.
+
+<a class="doc-button" target="_blank" href="{{api_key_form_uri}}">Request an API key</a>
+
+Or request one programmatically with the following request:
 
 ```bash
-curl -d "fullname=<full name>" -d "company=<company>" -d "email=<email>" -d "message=<message>" \
-  https://breez.technology/contact/apikey
+curl https://breez.technology/contact/apikey \
+  -d "fullname=<full name>" \
+  -d "company=<company>" \
+  -d "email=<email>" \
+  -d "message=<message>"
 ```
-
-The API key is sent to the provided email address.
 
 ## UX Guidelines
 
 When implementing the Breez SDK, we recommend reading through our [UX Guidelines](/guide/uxguide.md) to provide a consistent and intuitive experience for your end-users.
 
-Many of the guidelines are implemented in [Glow](https://glow-app.co), which you can use as a UX reference during SDK implementation.
+Many of the guidelines are implemented in [Glow](https://breez.technology/glow), which you can use as a UX reference during SDK implementation.
 
 ## Demo
 
-Looking for a quick way to try the SDK in your browser or as PWA? Check out our demo app *Glow*:
+Glow is a bitcoin and stablecoins app, powered by the Breez SDK. Users experience the best of bitcoin UX. Developers get a production-ready reference to explore, fork, and ship.
+
+<!-- cards: stores -->
+- [Download Glow on the App Store](https://apps.apple.com/us/app/glow-lightning-fast-bitcoin/id6762465698)
+- [Get Glow on Google Play](https://play.google.com/store/apps/details?id=technology.breez.glow)
+- [Repository](https://github.com/breez/glow-app)
+
+Looking for a quick way to try the SDK in your browser or as PWA? Check out the Glow web demo:
 
 - **Live demo:** [https://glow-app.co](https://glow-app.co)
-- **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
+- **Repository:** [breez/glow-web](https://github.com/breez/glow-web)
 
-> **Note:** The demo is for demonstration purposes only and not intended for production use.
+> **Note:** The web demo is for demonstration purposes only and not intended for production use.
 
 ## Support
 

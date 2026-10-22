@@ -6,11 +6,11 @@ Bitcoin sent to the wallet's on-chain address arrives as a deposit, which has to
 
 A deposit can be claimed at three speeds. Every claim is made through the Spark Service Provider, whose fee covers the on-chain cost of the claim and may include a share of the deposit amount. For the two faster ones the provider also fronts the funds, and charges more for doing so.
 
-| Claim | When funds arrive | Cost |
-|---|---|---|
-| Instant | At 0 confirmations. Offered for some deposits only. | Instant claim fee |
-| Expedited | At 1 or 2 confirmations | Instant claim fee |
-| Standard | At 3 confirmations on mainnet (1 on regtest) | Standard claim fee, the lowest |
+| Claim | Availability | When funds arrive | Cost |
+|---|---|---|---|
+| Instant | Provider decides per deposit | At 0 confirmations, while the deposit is still in the mempool | Instant claim fee |
+| Expedited | Usually offered | At 1 or 2 confirmations | Instant claim fee |
+| Standard | Always | At 3 confirmations on mainnet (1 on regtest) | Standard claim fee, the lowest |
 
 The SDK takes the fastest claim whose fee fits the max claim fee. Whether a deposit is offered an instant or expedited claim, and at which depth, is decided by the provider for each deposit. The SDK retries the early claim as confirmations arrive, so a deposit the provider will not front in the mempool is often claimed a block or two later.
 
