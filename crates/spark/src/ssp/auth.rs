@@ -53,7 +53,7 @@ impl SspAuthHeaderProvider {
                 .get_session(&self.ssp_identity_public_key)
                 .await;
             match cached {
-                Ok(session) if session.is_valid() => return Ok(session),
+                Ok(session) if session.has_valid_token() => return Ok(session),
                 Ok(_) => debug!("SSP session expired, authenticating"),
                 Err(SessionStoreError::NotFound) => {
                     debug!("SSP session not found, authenticating")
@@ -134,6 +134,8 @@ impl SspAuthHeaderProvider {
                 .map_err(|_| {
                     GraphQLError::Authentication("Invalid expiration timestamp".to_string())
                 })?,
+            refresh_token: None,
+            refresh_token_expiration: None,
         })
     }
 }

@@ -7549,6 +7549,7 @@ dependencies = [
  "bip39",
  "bitcoin",
  "bytes",
+ "frost-secp256k1-tr",
  "futures",
  "hex",
  "platform-utils 0.1.0",

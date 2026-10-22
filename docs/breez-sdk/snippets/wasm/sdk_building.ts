@@ -275,12 +275,12 @@ class EncryptingSessionStore implements SessionStore {
 
   getSession = async (serviceIdentityKey: string): Promise<Session> => {
     const session = await this.inner.getSession(serviceIdentityKey)
-    // Decrypt session.token here before returning it.
+    // Decrypt session.token and session.refreshToken here before returning it.
     return session
   }
 
   setSession = async (serviceIdentityKey: string, session: Session): Promise<void> => {
-    // Encrypt session.token here before persisting it.
+    // Encrypt session.token and session.refreshToken here before persisting it.
     await this.inner.setSession(serviceIdentityKey, session)
   }
 }

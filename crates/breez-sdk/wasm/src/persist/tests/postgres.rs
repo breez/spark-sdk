@@ -16,6 +16,16 @@ extern "C" {
     ) -> Result<Storage, JsValue>;
 }
 
+#[wasm_bindgen(module = "js/postgres-session-store")]
+extern "C" {
+    #[wasm_bindgen(js_name = "createPostgresSessionStore", catch)]
+    async fn create_postgres_session_store(
+        pool_config: &JsValue,
+        identity: &[u8],
+        logger: Option<&crate::logger::Logger>,
+    ) -> Result<crate::models::session_store::SessionStore, JsValue>;
+}
+
 // Import test helpers
 #[wasm_bindgen(module = "js/postgres-test-helpers.cjs")]
 extern "C" {
@@ -213,4 +223,35 @@ async fn test_update_boltz_status_to_completed() {
 async fn test_sync_storage() {
     let storage = create_test_storage("pg_sync_storage").await;
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
+}
+
+async fn create_test_session_store(test_name: &str) -> breez_sdk_spark::SessionStoreAdapter {
+    let conn_string = create_test_connection_string(test_name)
+        .await
+        .expect("Failed to create test connection string");
+    let pool_config = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &pool_config,
+        &JsValue::from_str("connectionString"),
+        &conn_string,
+    )
+    .expect("Failed to build pool config");
+    let session_store = create_postgres_session_store(&pool_config, &TEST_IDENTITY, None)
+        .await
+        .expect("Failed to create postgres session store");
+    breez_sdk_spark::SessionStoreAdapter::new(std::sync::Arc::new(
+        crate::models::session_store::WasmSessionStore { session_store },
+    ))
+}
+
+#[wasm_bindgen_test]
+async fn test_session_refresh_token_round_trip() {
+    let store = create_test_session_store("pg_session_refresh_round_trip").await;
+    spark_wallet::session_store_tests::test_refresh_token_round_trip(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_session_overwrite_clears_refresh_token() {
+    let store = create_test_session_store("pg_session_overwrite_refresh").await;
+    spark_wallet::session_store_tests::test_overwrite_clears_refresh_token(&store).await;
 }

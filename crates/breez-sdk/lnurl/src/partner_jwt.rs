@@ -800,6 +800,8 @@ mod tests {
                 Session {
                     token: "sess".to_string(),
                     expiration: 9_999_999_999,
+                    refresh_token: None,
+                    refresh_token_expiration: None,
                 },
             )
             .await
