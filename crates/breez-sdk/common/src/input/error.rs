@@ -36,6 +36,8 @@ impl Bip21Error {
 pub enum ParseError {
     #[error("empty input")]
     EmptyInput,
+    #[error("input is longer than {} bytes", super::MAX_INPUT_LENGTH)]
+    InputTooLong,
     #[error("Bip-21 error: {0}")]
     Bip21Error(Bip21Error),
     #[error("invalid input")]
