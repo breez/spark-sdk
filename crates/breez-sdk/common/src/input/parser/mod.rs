@@ -34,6 +34,10 @@ const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
 
+/// The longest input the parser accepts, with room for a bitcoin: URI that
+/// contains the longest BOLT11 invoice LDK accepts.
+pub const MAX_INPUT_LENGTH: usize = 32 * 1024;
+
 /// Validates lightning address format without network calls.
 /// Returns true if format is valid: user@domain where user contains only `[a-z0-9-_.]`
 pub fn validate_lightning_address_format(input: &str) -> bool {
@@ -96,6 +100,10 @@ where
     }
 
     pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
+        if input.len() > MAX_INPUT_LENGTH {
+            return Err(ParseError::InputTooLong);
+        }
+
         // No other supported format starts with `$`, including BIP-353, whose
         // user part is a DNS label.
         if input.starts_with('$') {
@@ -534,7 +542,17 @@ fn extract_bip353_record(records: Vec<String>) -> Option<String> {
         return None;
     }
 
-    bip353_record.into_iter().next()
+    let record = bip353_record.into_iter().next()?;
+    if record.len() > MAX_INPUT_LENGTH {
+        error!(
+            "Invalid decoded TXT data. Record longer than {MAX_INPUT_LENGTH} bytes ({})",
+            record.len()
+        );
+
+        return None;
+    }
+
+    Some(record)
 }
 
 fn parse_bip_21(

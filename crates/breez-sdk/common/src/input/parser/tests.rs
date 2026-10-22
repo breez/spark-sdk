@@ -6,7 +6,8 @@ use serde_json::json;
 use crate::input::error::Bip21Error;
 use crate::input::parser::InputParser;
 use crate::input::{
-    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType, ParseError,
+    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType,
+    MAX_INPUT_LENGTH, ParseError,
 };
 use crate::test_utils::mock_dns_resolver::MockDnsResolver;
 use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
@@ -431,6 +432,50 @@ async fn test_bip21_without_payment_methods() {
     let result = input_parser.parse(bip21_no_methods).await;
 
     assert!(matches!(result, Err(ParseError::Bip21Error(_))));
+}
+
+#[async_test_all]
+async fn test_input_length_limit() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let uri = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?foo=";
+    let longest = format!(
+        "{uri}{}",
+        "a".repeat(MAX_INPUT_LENGTH.saturating_sub(uri.len()))
+    );
+    let result = input_parser.parse(&longest).await;
+    assert!(matches!(result, Ok(InputType::Bip21(_))), "{result:?}");
+
+    let result = input_parser.parse(&format!("{longest}a")).await;
+    assert!(
+        matches!(result, Err(ParseError::InputTooLong)),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
+async fn test_bip353_record_length_limit() {
+    let record = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?foo=";
+    let longest = format!(
+        "{record}{}",
+        "a".repeat(MAX_INPUT_LENGTH.saturating_sub(record.len()))
+    );
+    let mock_dns_resolver = MockDnsResolver::new();
+    mock_dns_resolver.add_response(vec![longest.clone()]);
+    mock_dns_resolver.add_response(vec![format!("{longest}a")]);
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let result = input_parser.parse("user@example.com").await;
+    assert!(matches!(result, Ok(InputType::Bip21(_))), "{result:?}");
+
+    let result = input_parser.parse("user@example.com").await;
+    assert!(
+        matches!(result, Err(ParseError::InvalidInput)),
+        "{result:?}"
+    );
 }
 
 #[async_test_all]
