@@ -18,6 +18,11 @@ pub enum Bip21Error {
     UnknownRequiredParameter(String),
     #[error("bip21 does not contain any payment methods")]
     NoPaymentMethods,
+    #[error(
+        "bip21 contains more than {} payment methods",
+        super::MAX_PAYMENT_METHODS
+    )]
+    TooManyPaymentMethods,
 }
 
 impl Bip21Error {

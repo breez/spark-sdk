@@ -7,7 +7,7 @@ use crate::input::error::Bip21Error;
 use crate::input::parser::InputParser;
 use crate::input::{
     Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType,
-    MAX_INPUT_LENGTH, ParseError,
+    MAX_INPUT_LENGTH, MAX_PAYMENT_METHODS, ParseError,
 };
 use crate::test_utils::mock_dns_resolver::MockDnsResolver;
 use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
@@ -451,6 +451,34 @@ async fn test_input_length_limit() {
     let result = input_parser.parse(&format!("{longest}a")).await;
     assert!(
         matches!(result, Err(ParseError::InputTooLong)),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
+async fn test_bip21_payment_method_limit() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let bc = "bc=bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj";
+    let params = vec![bc; MAX_PAYMENT_METHODS.saturating_sub(1)].join("&");
+    let most = format!("bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?{params}");
+    let result = input_parser.parse(&most).await;
+    assert!(
+        matches!(
+            &result,
+            Ok(InputType::Bip21(bip21)) if bip21.payment_methods.len() == MAX_PAYMENT_METHODS
+        ),
+        "{result:?}"
+    );
+
+    let result = input_parser.parse(&format!("{most}&{bc}")).await;
+    assert!(
+        matches!(
+            result,
+            Err(ParseError::Bip21Error(Bip21Error::TooManyPaymentMethods))
+        ),
         "{result:?}"
     );
 }

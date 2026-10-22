@@ -38,6 +38,11 @@ const LNURL_HRP: &str = "lnurl";
 /// contains the longest BOLT11 invoice LDK accepts.
 pub const MAX_INPUT_LENGTH: usize = 32 * 1024;
 
+/// The most payment methods the parser reads from one bitcoin: URI. Each
+/// payment method has its own copy of the URI, so with this limit the memory
+/// for those copies grows with the URI length instead of its square.
+pub const MAX_PAYMENT_METHODS: usize = 32;
+
 /// Validates lightning address format without network calls.
 /// Returns true if format is valid: user@domain where user contains only `[a-z0-9-_.]`
 pub fn validate_lightning_address_format(input: &str) -> bool {
@@ -623,6 +628,9 @@ fn parse_bip_21(
             };
 
             parse_bip21_key(source, &mut bip_21, original_key, value, key, is_required)?;
+            if bip_21.payment_methods.len() > MAX_PAYMENT_METHODS {
+                return Err(Bip21Error::TooManyPaymentMethods);
+            }
         }
     }
 
