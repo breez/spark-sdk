@@ -1330,7 +1330,6 @@ impl MysqlTokenStore {
         Ok(())
     }
 
-    #[allow(clippy::cast_possible_wrap)]
     async fn update_token_outputs_inner(
         &self,
         conn: &mut Conn,
@@ -1367,10 +1366,20 @@ impl MysqlTokenStore {
 
         // 2. Insert new outputs. Each output names its own token, so only the ones
         // whose token comes with metadata can be stored.
+        let spent_outpoints = self
+            .spent_outpoints_among(&mut tx, &outputs_to_add.outputs)
+            .await?;
         let mut insertable: Vec<&TokenOutputWithPrevOut> =
             Vec::with_capacity(outputs_to_add.outputs.len());
         let mut upserted_tokens: HashSet<&str> = HashSet::new();
         for output in &outputs_to_add.outputs {
+            let outpoint = (
+                output.prev_tx_hash.clone(),
+                output.prev_tx_vout.cast_signed(),
+            );
+            if spent_outpoints.contains(&outpoint) {
+                continue;
+            }
             let token_identifier = &output.output.token_identifier;
             let Some(metadata) = outputs_to_add.metadata_for(token_identifier) else {
                 warn!("Skipping outputs of token {token_identifier}: no metadata provided");
@@ -1380,25 +1389,6 @@ impl MysqlTokenStore {
                 self.upsert_metadata(&mut tx, metadata).await?;
             }
             insertable.push(output);
-        }
-
-        // Clear spent status for outputs being (re-)added.
-        if !insertable.is_empty() {
-            let pair_placeholders = vec!["(?, ?)"; insertable.len()].join(", ");
-            let sql = format!(
-                "DELETE FROM brz_token_spent_outputs \
-                 WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-            );
-            let mut params: Vec<Value> =
-                Vec::with_capacity(insertable.len().saturating_mul(2).saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            for output in &insertable {
-                params.push(Value::from(output.prev_tx_hash.clone()));
-                params.push(Value::from(output.prev_tx_vout as i32));
-            }
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
         }
 
         for output in insertable {
@@ -1504,6 +1494,33 @@ impl MysqlTokenStore {
 
         tx.commit().await.map_err(map_err)?;
         Ok(())
+    }
+
+    async fn spent_outpoints_among(
+        &self,
+        tx: &mut mysql_async::Transaction<'_>,
+        outputs: &[TokenOutputWithPrevOut],
+    ) -> Result<HashSet<(String, i32)>, TokenOutputServiceError> {
+        if outputs.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let pair_placeholders = vec!["(?, ?)"; outputs.len()].join(", ");
+        let sql = format!(
+            "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
+             WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+        );
+        let mut params: Vec<Value> =
+            Vec::with_capacity(outputs.len().saturating_mul(2).saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        for output in outputs {
+            params.push(Value::from(output.prev_tx_hash.clone()));
+            params.push(Value::from(output.prev_tx_vout.cast_signed()));
+        }
+        let rows: Vec<(String, i32)> = tx
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        Ok(rows.into_iter().collect())
     }
 
     #[allow(clippy::cast_possible_wrap)]
@@ -2094,9 +2111,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_outputs_clears_spent_status() {
+    async fn test_update_token_outputs_skips_reserved_output() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
-        shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+        shared_tests::test_update_token_outputs_skips_reserved_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_token_outputs_skips_spent_output() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_update_token_outputs_skips_spent_output(&fixture.store).await;
     }
 
     #[tokio::test]

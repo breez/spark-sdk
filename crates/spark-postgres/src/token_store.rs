@@ -645,7 +645,6 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(result)
     }
 
-    #[allow(clippy::cast_possible_wrap)]
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
@@ -683,28 +682,18 @@ impl TokenOutputStore for PostgresTokenStore {
         }
 
         // 2. Insert new outputs, grouped by the token each one names.
-        for (token_identifier, outputs) in group_outputs_by_token(&outputs_to_add.outputs) {
+        let spent_outpoints = self
+            .spent_outpoints_among(&tx, &outputs_to_add.outputs)
+            .await?;
+        let unspent_outputs = outputs_to_add.outputs.iter().filter(|o| {
+            !spent_outpoints.contains(&(o.prev_tx_hash.clone(), o.prev_tx_vout.cast_signed()))
+        });
+        for (token_identifier, outputs) in group_outputs_by_token(unspent_outputs) {
             let Some(metadata) = outputs_to_add.metadata_for(&token_identifier) else {
                 warn!("Skipping outputs of token {token_identifier}: no metadata provided");
                 continue;
             };
             self.upsert_metadata(&tx, metadata).await?;
-
-            // Clear spent status for outputs being (re-)added.
-            let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
-            let vouts: Vec<i32> = outputs.iter().map(|o| o.prev_tx_vout as i32).collect();
-            if !tx_hashes.is_empty() {
-                tx.execute(
-                    "DELETE FROM brz_token_spent_outputs \
-                     WHERE user_id = $1 \
-                       AND (prev_tx_hash, prev_tx_vout) IN ( \
-                         SELECT * FROM UNNEST($2::text[], $3::int[]) \
-                       )",
-                    &[&self.identity, &tx_hashes, &vouts],
-                )
-                .await
-                .map_err(map_err)?;
-            }
 
             for output in outputs {
                 self.insert_single_output(&tx, &token_identifier, output)
@@ -1319,6 +1308,33 @@ impl PostgresTokenStore {
         Ok(())
     }
 
+    async fn spent_outpoints_among(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        outputs: &[TokenOutputWithPrevOut],
+    ) -> Result<HashSet<(String, i32)>, TokenOutputServiceError> {
+        if outputs.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
+        let vouts: Vec<i32> = outputs
+            .iter()
+            .map(|o| o.prev_tx_vout.cast_signed())
+            .collect();
+        let rows = tx
+            .query(
+                "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
+                 WHERE user_id = $1 \
+                   AND (prev_tx_hash, prev_tx_vout) IN ( \
+                     SELECT * FROM UNNEST($2::text[], $3::int[]) \
+                   )",
+                &[&self.identity, &tx_hashes, &vouts],
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+    }
+
     /// Inserts a single output into the database.
     #[allow(clippy::cast_possible_wrap)]
     async fn insert_single_output(
@@ -1544,9 +1560,9 @@ fn validate_targets(
 }
 
 /// Groups outputs by the token each one names, keeping first-seen token order.
-fn group_outputs_by_token(
-    outputs: &[TokenOutputWithPrevOut],
-) -> Vec<(String, Vec<&TokenOutputWithPrevOut>)> {
+fn group_outputs_by_token<'a>(
+    outputs: impl IntoIterator<Item = &'a TokenOutputWithPrevOut>,
+) -> Vec<(String, Vec<&'a TokenOutputWithPrevOut>)> {
     let mut grouped: Vec<(String, Vec<&TokenOutputWithPrevOut>)> = Vec::new();
     for output in outputs {
         let identifier = &output.output.token_identifier;
@@ -1962,9 +1978,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_outputs_clears_spent_status() {
+    async fn test_update_token_outputs_skips_reserved_output() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+        shared_tests::test_update_token_outputs_skips_reserved_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_token_outputs_skips_spent_output() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_update_token_outputs_skips_spent_output(&fixture.store).await;
     }
 
     #[tokio::test]

@@ -634,8 +634,15 @@ class MysqlTokenStore {
         }
 
         // 2. Insert new outputs, grouped by the token each one names.
-        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+        const spentOutpoints = await this._spentOutpointsAmong(
+          conn,
           outputsToAdd?.outputs
+        );
+        const unspentOutputs = (outputsToAdd?.outputs ?? []).filter(
+          (o) => !spentOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+        );
+        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+          unspentOutputs
         )) {
           const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
           if (!metadata) {
@@ -646,18 +653,6 @@ class MysqlTokenStore {
             continue;
           }
           await this._upsertMetadata(conn, metadata);
-
-          // Clear spent status for outputs being (re-)added.
-          const params = [this.identity];
-          for (const o of outputs) {
-            params.push(o.prevTxHash, o.prevTxVout);
-          }
-          await conn.query(
-            `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${buildPairPlaceholders(
-              outputs.length
-            )})`,
-            params
-          );
 
           for (const output of outputs) {
             await this._insertSingleOutput(conn, tokenIdentifier, output);
@@ -1183,6 +1178,23 @@ class MysqlTokenStore {
         metadata.creationEntityPublicKey || null,
       ]
     );
+  }
+
+  async _spentOutpointsAmong(conn, outputs) {
+    if (!outputs || outputs.length === 0) {
+      return new Set();
+    }
+    const params = [this.identity];
+    for (const o of outputs) {
+      params.push(o.prevTxHash, o.prevTxVout);
+    }
+    const [rows] = await conn.query(
+      `SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${buildPairPlaceholders(
+        outputs.length
+      )})`,
+      params
+    );
+    return new Set(rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`));
   }
 
   async _insertSingleOutput(conn, tokenIdentifier, output) {

@@ -629,8 +629,15 @@ class PostgresTokenStore {
         }
 
         // 2. Insert new outputs, grouped by the token each one names.
-        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+        const spentOutpoints = await this._spentOutpointsAmong(
+          client,
           outputsToAdd?.outputs
+        );
+        const unspentOutputs = (outputsToAdd?.outputs ?? []).filter(
+          (o) => !spentOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+        );
+        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+          unspentOutputs
         )) {
           const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
           if (!metadata) {
@@ -641,18 +648,6 @@ class PostgresTokenStore {
             continue;
           }
           await this._upsertMetadata(client, metadata);
-
-          // Clear spent status for outputs being (re-)added.
-          const txHashes = outputs.map((o) => o.prevTxHash);
-          const vouts = outputs.map((o) => o.prevTxVout);
-          await client.query(
-            `DELETE FROM brz_token_spent_outputs
-             WHERE user_id = $1
-               AND (prev_tx_hash, prev_tx_vout) IN (
-                 SELECT * FROM UNNEST($2::text[], $3::int[])
-               )`,
-            [this.identity, txHashes, vouts]
-          );
 
           for (const output of outputs) {
             await this._insertSingleOutput(client, tokenIdentifier, output);
@@ -1202,6 +1197,27 @@ class PostgresTokenStore {
         metadata.creationEntityPublicKey || null,
         this.identity,
       ]
+    );
+  }
+
+  async _spentOutpointsAmong(client, outputs) {
+    if (!outputs || outputs.length === 0) {
+      return new Set();
+    }
+    const result = await client.query(
+      `SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs
+       WHERE user_id = $1
+         AND (prev_tx_hash, prev_tx_vout) IN (
+           SELECT * FROM UNNEST($2::text[], $3::int[])
+         )`,
+      [
+        this.identity,
+        outputs.map((o) => o.prevTxHash),
+        outputs.map((o) => o.prevTxVout),
+      ]
+    );
+    return new Set(
+      result.rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
     );
   }
 
