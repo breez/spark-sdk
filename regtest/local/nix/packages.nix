@@ -44,7 +44,7 @@ rec {
     modRoot = "spark";
     subPackages = [ "bin/operator" ];
     # Moves with the operator pin in spark-so-private.dockerfile.
-    vendorHash = "sha256-n37t8AERouhhN1o13HoxkVqdg0hsS3wIjUVE8Gg6bxg=";
+    vendorHash = "sha256-bPkZpVth1LHDAgvydOKH9oGWk+5KxnjQN1Rccjl9NOQ=";
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.zeromq ];
     doCheck = false;
@@ -57,7 +57,7 @@ rec {
     cargoRoot = "signer";
     buildAndTestSubdir = "signer/spark-frost-signer";
     # Moves with the operator pin in spark-so-private.dockerfile.
-    cargoHash = "sha256-HvgcvTphBXKdEUTaSCmPphsT7wPOwlJ90xus+LnDZiI=";
+    cargoHash = "sha256-h46NASyr91dfEfff31Wu874jY2N9e1nj3LViA3H3eSw=";
     nativeBuildInputs = [ pkgs.protobuf ];
     doCheck = false;
   };
