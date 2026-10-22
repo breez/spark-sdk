@@ -2,7 +2,7 @@
 
 To use Lightning addresses with the Breez SDK, you need a domain served by an LNURL server. You can use the LNURL server hosted by Breez, or run your own.
 
-## Option #1: Hosted {#hosted}
+## Hosted service {#hosted}
 
 Breez runs the LNURL server for your domain. Point your domain to it with a CNAME record, or, if the domain also serves your website, forward the LNURL paths to it from your web server.
 
@@ -71,7 +71,7 @@ location ~ ^/(\.well-known/lnurlp|lnurlp|lnurlpay)/ {
 
 If your web server sits behind a CDN or load balancer, set `X-Forwarded-For` to the client IP that the CDN or load balancer reports instead of `$remote_addr`.
 
-## Option #2: Self-hosted {#self-hosted}
+## Self-hosted service {#self-hosted}
 
 Run the [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) yourself, point your domain to it, and add the domain to the server's allowed domains. There is no need to contact Breez. See the server's README for how to build, configure and run it.
 

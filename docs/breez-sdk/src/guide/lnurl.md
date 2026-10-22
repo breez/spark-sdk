@@ -1,6 +1,6 @@
 # Using LNURL and Lightning addresses
 
-The Breez SDK - Spark supports the following <a target="_blank" href="https://github.com/lnurl/luds">LNURL</a> functionality:
+The Breez SDK supports the following <a target="_blank" href="https://github.com/lnurl/luds">LNURL</a> functionality:
 
 - **[Sending payments using LNURL-Pay/Lightning address]** (including BIP353 addresses)
 - **[Managing contacts]** — Save frequently used Lightning addresses for quick access
