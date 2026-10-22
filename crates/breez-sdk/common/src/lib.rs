@@ -14,6 +14,7 @@ pub mod network;
 pub mod sync;
 pub mod tonic_wrap;
 pub mod utils;
+pub mod x402;
 
 // Re-export platform-utils HTTP types for backwards compatibility
 pub use platform_utils::{

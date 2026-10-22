@@ -31,13 +31,18 @@
         "console": "readonly",
         "crypto": "readonly",
         "DOMException": "readonly",
+        "Headers": "readonly",
         "IDBKeyRange": "readonly",
         "indexedDB": "readonly",
         "navigator": "readonly",
         "performance": "readonly",
         "PublicKeyCredential": "readonly",
+        "Request": "readonly",
+        "Response": "readonly",
         "self": "readonly",
+        "setTimeout": "readonly",
         "TextEncoder": "readonly",
+        "URL": "readonly",
         "window": "readonly"
       }
     },

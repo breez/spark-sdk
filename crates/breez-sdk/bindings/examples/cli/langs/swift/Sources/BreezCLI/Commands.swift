@@ -165,6 +165,7 @@ func printHelp(_ registry: [String: CommandEntry]) {
     print("  \("webhooks <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Webhook commands (use 'webhooks help' for details)")
     print("  \("token-allowances <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token allowance commands (use 'token-allowances help' for details)")
     print("  \("stable-balance <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Stable balance commands (use 'stable-balance help' for details)")
+    print("  \("x402 <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))x402 commands (use 'x402 help' for details)")
     print("  \("exit / quit".padding(toLength: 40, withPad: " ", startingAt: 0))Exit the CLI")
     print("  \("help".padding(toLength: 40, withPad: " ", startingAt: 0))Show this help message")
     print()

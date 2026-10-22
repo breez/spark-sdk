@@ -47,7 +47,7 @@ test: cargo-test wasm-test
 cargo-test:
 	cargo xtask test
 
-wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone wasm-test-js-ssl-mode
+wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone wasm-test-js-ssl-mode wasm-test-js-x402-fetch
 
 wasm-test-browser:
 	cargo xtask wasm-test
@@ -70,6 +70,10 @@ wasm-test-mysql-timezone: wasm-test-node
 wasm-test-js-ssl-mode:
 	cd crates/breez-sdk/wasm/js/mysql-storage && npm install && npm test
 	cd crates/breez-sdk/wasm/js/postgres-storage && npm install && npm test
+
+# Unit tests for the x402 fetch wrapper, against a fake fetch and payer.
+wasm-test-js-x402-fetch:
+	cd crates/breez-sdk/wasm/js/x402-fetch && npm test
 
 wasm-js-lint:
 	cd crates/breez-sdk/wasm/js && npm ci && ESLINT_USE_FLAT_CONFIG=false npm run lint
