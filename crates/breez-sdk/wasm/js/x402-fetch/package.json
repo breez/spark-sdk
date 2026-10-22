@@ -1,0 +1,8 @@
+{
+  "name": "@breez-sdk/x402-fetch",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test index.test.js"
+  }
+}

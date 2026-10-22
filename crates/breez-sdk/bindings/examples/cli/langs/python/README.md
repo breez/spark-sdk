@@ -93,6 +93,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 
+**x402**: `x402 fetch` (pays the Lightning challenge of a URL that answers 402)
+
 **Advanced**: `advanced recover-funds`, `advanced check-recover-funds`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state` (expert-only, builds raw transactions for self-broadcast)
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`

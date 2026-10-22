@@ -381,6 +381,16 @@ impl From<breez_sdk_common::lnurl::error::LnurlError> for SdkError {
     }
 }
 
+impl From<breez_sdk_common::x402::error::X402Error> for SdkError {
+    fn from(e: breez_sdk_common::x402::error::X402Error) -> Self {
+        use breez_sdk_common::x402::error::X402ErrorReason;
+        match e.reason {
+            X402ErrorReason::PaymentNotPaid => SdkError::Generic(format!("x402: {e}")),
+            _ => SdkError::InvalidInput(format!("x402: {e}")),
+        }
+    }
+}
+
 impl From<breez_sdk_common::input::ParseError> for SdkError {
     fn from(e: breez_sdk_common::input::ParseError) -> Self {
         SdkError::InvalidInput(e.to_string())

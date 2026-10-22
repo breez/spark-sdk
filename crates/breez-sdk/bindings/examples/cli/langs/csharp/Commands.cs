@@ -287,6 +287,7 @@ public static class Commands
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
         Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");
         Console.WriteLine($"  {"stable-balance <subcommand>",-40} Stable balance commands (use 'stable-balance help' for details)");
+        Console.WriteLine($"  {"x402 <subcommand>",-40} x402 related commands (use 'x402 help' for details)");
         Console.WriteLine($"  {"exit / quit",-40} Exit the CLI");
         Console.WriteLine($"  {"help",-40} Show this help message");
         Console.WriteLine();

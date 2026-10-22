@@ -11,7 +11,7 @@
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
  *   get-spark-status, advanced (subcommand), issuer (subcommand),
- *   contacts (subcommand), webhooks (subcommand)
+ *   contacts (subcommand), webhooks (subcommand), x402 (subcommand)
  */
 
 import {
@@ -57,6 +57,7 @@ import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
 import { dispatchWebhooksCommand } from './webhooks'
 import { dispatchStableBalanceCommand } from './stable_balance'
+import { dispatchX402Command } from './x402'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -212,6 +213,7 @@ export const COMMAND_NAMES = [
   'contacts',
   'webhooks',
   'stable-balance',
+  'x402',
 ]
 
 // ---------------------------------------------------------------------------
@@ -260,6 +262,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
     { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
     { name: 'stable-balance', description: 'Stable balance commands (use "stable-balance help" for details)', run: handleStableBalance },
+    { name: 'x402', description: 'x402 commands (use "x402 help" for details)', run: handleX402 },
   ]
 
   for (const cmd of commands) {
@@ -1519,6 +1522,12 @@ async function handleWebhooks(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
 async function handleStableBalance(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchStableBalanceCommand(args, sdk)
+}
+
+// --- x402 (delegation) ---
+
+async function handleX402(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchX402Command(args, sdk)
 }
 
 // ---------------------------------------------------------------------------

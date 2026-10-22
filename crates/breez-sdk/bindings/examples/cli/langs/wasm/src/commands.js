@@ -8,6 +8,7 @@ const { registerIssuerCommands } = require('./issuer')
 const { registerContactsCommands } = require('./contacts')
 const { registerWebhooksCommands } = require('./webhooks')
 const { registerStableBalanceCommands } = require('./stable-balance')
+const { registerX402Commands } = require('./x402')
 
 // ---------------------------------------------------------------------------
 // Command names for tab completion
@@ -66,6 +67,7 @@ const COMMAND_NAMES = [
   'stable-balance get',
   'stable-balance set',
   'stable-balance unset',
+  'x402 fetch',
   'pay-batch',
   'advanced recover-funds',
   'advanced check-recover-funds',
@@ -1066,6 +1068,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
   // --- stable-balance subcommands ---
   registerStableBalanceCommands(program, getSdk)
+
+  // --- x402 subcommands ---
+  registerX402Commands(program, getSdk)
 
   return program
 }

@@ -10,6 +10,7 @@ use crate::{
     logger::{Logger, WasmTracingLayer},
     models::{chain_service::RecommendedFees, *},
     sdk_builder::SdkBuilder,
+    x402::X402,
 };
 
 #[wasm_bindgen]
@@ -672,6 +673,13 @@ impl BreezSdk {
         let token_issuer = self.sdk.get_token_issuer();
         TokenIssuer {
             token_issuer: Rc::new(token_issuer),
+        }
+    }
+
+    #[wasm_bindgen(js_name = "getX402")]
+    pub fn get_x402(&self) -> X402 {
+        X402 {
+            x402: Rc::new(self.sdk.get_x402()),
         }
     }
 

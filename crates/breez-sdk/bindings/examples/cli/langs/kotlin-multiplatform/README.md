@@ -125,6 +125,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
+**x402**: `x402 fetch`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 **Advanced** (expert-only): `advanced recover-funds`, `advanced check-recover-funds`

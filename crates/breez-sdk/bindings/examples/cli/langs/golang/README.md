@@ -97,6 +97,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 
+**x402**: `x402 fetch`
+
 **Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Advanced**: `advanced recover-funds`, `advanced check-recover-funds`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state` (expert-only)

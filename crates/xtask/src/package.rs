@@ -219,13 +219,13 @@ fn package_wasm_target(
         copy_web_tree_store_files(crate_dir, &out_path)?;
     }
 
-    // The top-level packages/wasm/package.json exposes
+    // The top-level packages/wasm/package.json exposes each helper as a
+    // sub-export pointing into the `web` output, e.g.
     //   "./passkey-prf-provider": "./web/passkey-prf-provider/index.js"
-    // so the helper only needs to land in the `web` target output to be
-    // reachable via the `@breeztech/breez-sdk-spark/passkey-prf-provider`
-    // sub-export.
+    // so the helpers only need to land in the `web` target output.
     if target == "web" {
-        copy_passkey_prf_provider_files(crate_dir, &out_path)?;
+        copy_web_helper_files(crate_dir, &out_path, "passkey-prf-provider")?;
+        copy_web_helper_files(crate_dir, &out_path, "x402-fetch")?;
     }
 
     println!("Successfully built WASM target: {}", target);
@@ -379,18 +379,18 @@ export default function init(wasmInput?: any): Promise<void>;
     Ok(())
 }
 
-fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
-    let src_dir = crate_dir.join("js/passkey-prf-provider");
+fn copy_web_helper_files(crate_dir: &Path, out_path: &Path, helper: &str) -> Result<()> {
+    let src_dir = crate_dir.join("js").join(helper);
 
     if !src_dir.exists() {
         println!(
-            "Warning: passkey-prf-provider source directory not found at {:?}",
-            src_dir
+            "Warning: {} source directory not found at {:?}",
+            helper, src_dir
         );
         return Ok(());
     }
 
-    let dest_dir = out_path.join("passkey-prf-provider");
+    let dest_dir = out_path.join(helper);
     std::fs::create_dir_all(&dest_dir)?;
 
     let files_to_copy = ["index.js", "index.d.ts"];
@@ -406,17 +406,19 @@ fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<
                     dest_file.display()
                 )
             })?;
-            println!("Copied passkey-prf-provider file: {}", file_name);
+            println!("Copied {} file: {}", helper, file_name);
         } else {
             return Err(anyhow::anyhow!(
-                "passkey-prf-provider file not found: {}",
+                "{} file not found: {}",
+                helper,
                 src_file.display()
             ));
         }
     }
 
     println!(
-        "Successfully copied passkey-prf-provider files to {}",
+        "Successfully copied {} files to {}",
+        helper,
         dest_dir.display()
     );
     Ok(())

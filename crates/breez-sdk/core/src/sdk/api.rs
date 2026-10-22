@@ -29,6 +29,7 @@ use crate::{
     },
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
+    x402::X402,
 };
 
 use super::BreezSdk;
@@ -327,6 +328,11 @@ impl BreezSdk {
     /// Returns an instance of the [`TokenIssuer`] for managing token issuance.
     pub fn get_token_issuer(&self) -> TokenIssuer {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
+    }
+
+    /// Returns an instance of [`X402`] for paying x402 challenges.
+    pub fn get_x402(&self) -> X402 {
+        X402::new(self.clone())
     }
 
     /// Manually drives leaf optimization, blocking until the requested work

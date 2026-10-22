@@ -2492,3 +2492,50 @@ pub struct _ConnectWithPasskeyResponse {
     pub credential: Option<PasskeyCredential>,
     pub labels: Vec<String>,
 }
+
+#[frb(mirror(PayX402Request))]
+pub struct _PayX402Request {
+    pub payment_required: String,
+    pub request: X402Request,
+    pub max_amount: X402PaymentAmount,
+    pub conversion_options: Option<ConversionOptions>,
+    pub completion_timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(X402Request))]
+pub enum _X402Request {
+    Http {
+        method: String,
+        url: String,
+        headers: Vec<X402Header>,
+        body: Option<Vec<u8>>,
+    },
+    Mcp {
+        server: String,
+        params: String,
+    },
+}
+
+#[frb(mirror(X402PaymentAmount))]
+pub enum _X402PaymentAmount {
+    Lightning { amount_sats: u64 },
+}
+
+#[frb(mirror(X402Header))]
+pub struct _X402Header {
+    pub name: String,
+    pub value: String,
+}
+
+#[frb(mirror(X402PaymentStatus))]
+pub enum _X402PaymentStatus {
+    Paid,
+    Pending,
+}
+
+#[frb(mirror(PayX402Response))]
+pub struct _PayX402Response {
+    pub status: X402PaymentStatus,
+    pub payment_signature: Option<String>,
+    pub payment: Payment,
+}

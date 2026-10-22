@@ -103,6 +103,8 @@ Once inside the REPL, type `help` for all commands:
 
 **Stable Balance**: `stable-balance <subcommand>`
 
+**x402**: `x402 <subcommand>`, including `x402 fetch` to fetch a URL and pay its x402 Lightning challenge
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 ## Build

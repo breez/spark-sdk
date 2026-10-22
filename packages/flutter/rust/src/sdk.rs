@@ -402,6 +402,13 @@ impl BreezSdk {
         }
     }
 
+    #[frb(sync)]
+    pub fn get_x402(&self) -> crate::x402::X402 {
+        crate::x402::X402 {
+            x402: Arc::new(self.inner.get_x402()),
+        }
+    }
+
     pub async fn optimize_leaves(
         &self,
         request: OptimizeLeavesRequest,

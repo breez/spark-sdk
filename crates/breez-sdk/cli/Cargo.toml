@@ -10,6 +10,7 @@ fido2 = ["dep:ctap-hid-fido2", "dep:rpassword"]
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 bip39 = { workspace = true, features = ["rand"] }
 bitcoin.workspace = true
 breez-sdk-spark = { workspace = true, features = ["sqlite", "postgres", "mysql", "passkey"] }
@@ -18,6 +19,7 @@ clap = { workspace = true, features = ["derive"] }
 ctap-hid-fido2 = { version = "3.5", optional = true }
 dirs.workspace = true
 hex.workspace = true
+platform-utils.workspace = true
 rand.workspace = true
 rpassword = { version = "7.3", optional = true }
 rustyline = { workspace = true, features = ["derive"] }
@@ -28,7 +30,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-platform-utils.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["io-util", "net", "process", "time"] }
 

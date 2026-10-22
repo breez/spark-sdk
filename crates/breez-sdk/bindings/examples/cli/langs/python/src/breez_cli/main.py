@@ -40,6 +40,7 @@ from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
 from breez_cli.stable_balance import STABLE_BALANCE_COMMAND_NAMES, dispatch_stable_balance_command
 from breez_cli.token_allowances import TOKEN_ALLOWANCES_COMMAND_NAMES, dispatch_token_allowances_command
 from breez_cli.webhooks import WEBHOOKS_COMMAND_NAMES, dispatch_webhooks_command
+from breez_cli.x402 import X402_COMMAND_NAMES, dispatch_x402_command
 from breez_cli.passkey import create_provider, resolve_passkey_seed
 from breez_cli.persistence import CliPersistence
 from breez_cli.serialization import serialize
@@ -288,7 +289,7 @@ async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_ty
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + TOKEN_ALLOWANCES_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + TOKEN_ALLOWANCES_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + X402_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -339,6 +340,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
                 await dispatch_token_allowances_command(cmd_args, sdk)
             elif cmd_name == "webhooks":
                 await dispatch_webhooks_command(cmd_args, sdk)
+            elif cmd_name == "x402":
+                await dispatch_x402_command(cmd_args, sdk)
             elif cmd_name in registry:
                 parser, handler = registry[cmd_name]
                 try:
@@ -379,6 +382,7 @@ def print_help(registry):
     print(f"  {'stable-balance <subcommand>':40s} Stable balance commands (use 'stable-balance help' for details)")
     print(f"  {'token-allowances <subcommand>':40s} Token allowance commands (use 'token-allowances help' for details)")
     print(f"  {'webhooks <subcommand>':40s} Webhook commands (use 'webhooks help' for details)")
+    print(f"  {'x402 <subcommand>':40s} x402 commands (use 'x402 help' for details)")
     print(f"  {'exit / quit':40s} Exit the CLI")
     print(f"  {'help':40s} Show this help message")
     print()

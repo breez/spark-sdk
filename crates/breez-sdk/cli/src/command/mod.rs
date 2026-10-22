@@ -6,6 +6,7 @@ mod issuer;
 mod stable_balance;
 mod token_allowances;
 mod webhooks;
+mod x402;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
@@ -41,6 +42,7 @@ use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::token_allowances::TokenAllowanceCommand;
 use crate::command::webhooks::WebhookCommand;
+use crate::command::x402::X402Command;
 
 /// A batch recipient parsed from `payment_request`, `payment_request:amount` or
 /// `payment_request:amount:token_identifier`.
@@ -623,6 +625,10 @@ pub enum Command {
     /// Stable balance related commands
     #[command(subcommand)]
     StableBalance(StableBalanceCommand),
+
+    /// x402 related commands
+    #[command(subcommand)]
+    X402(X402Command),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -1573,6 +1579,7 @@ pub(crate) async fn execute_command(
         }
         Command::Webhooks(webhook_command) => webhooks::handle_command(sdk, webhook_command).await,
         Command::StableBalance(sb_command) => stable_balance::handle_command(sdk, sb_command).await,
+        Command::X402(x402_command) => x402::handle_command(sdk, x402_command).await,
     }
 }
 

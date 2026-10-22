@@ -29,6 +29,7 @@ mod tokens;
 mod turnkey;
 mod user_settings;
 mod webhooks;
+mod x402;
 
 use anyhow::Result;
 

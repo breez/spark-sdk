@@ -448,7 +448,7 @@ let tokenIssuer = sdk.getTokenIssuer()
 let registry = buildCommandRegistry()
 
 // Set up tab completion
-allCompletionCommands = commandNames + advancedCommandNames + issuerCommandNames + contactsCommandNames + webhooksCommandNames + stableBalanceCommandNames + ["help", "exit", "quit"]
+allCompletionCommands = commandNames + advancedCommandNames + issuerCommandNames + contactsCommandNames + webhooksCommandNames + stableBalanceCommandNames + x402CommandNames + ["help", "exit", "quit"]
 rl_attempted_completion_function = attemptedCompletion
 
 // Load history
@@ -505,6 +505,8 @@ replLoop: while true {
         await dispatchWebhooksCommand(cmdArgs, sdk: sdk)
     } else if cmdName == "stable-balance" {
         await dispatchStableBalanceCommand(cmdArgs, sdk: sdk)
+    } else if cmdName == "x402" {
+        await dispatchX402Command(cmdArgs, sdk: sdk)
     } else if let cmd = registry[cmdName] {
         do {
             try await cmd.run(sdk, cmdArgs)

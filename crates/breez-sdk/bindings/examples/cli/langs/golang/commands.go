@@ -115,6 +115,7 @@ func PrintHelp(registry map[string]Command) {
 	fmt.Printf("  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
 	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
 	fmt.Printf("  %-40s %s\n", "webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)")
+	fmt.Printf("  %-40s %s\n", "x402 <subcommand>", "x402 commands (use 'x402 help' for details)")
 	fmt.Printf("  %-40s %s\n", "stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)")
 	fmt.Printf("  %-40s %s\n", "exit / quit", "Exit the CLI")
 	fmt.Printf("  %-40s %s\n", "help", "Show this help message")

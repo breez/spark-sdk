@@ -14,6 +14,7 @@ import 'readline.dart';
 import 'serialization.dart';
 import 'stable_balance.dart';
 import 'webhooks.dart';
+import 'x402.dart';
 
 /// Parses `HOST:PORT` into a [ProxyConfig]. Splits from the right so an IPv6
 /// literal keeps its colons.
@@ -192,6 +193,7 @@ Future<void> _runRepl(
     ...contactsCommandNames,
     ...webhookCommandNames,
     ...stableBalanceCommandNames,
+    ...x402CommandNames,
     'exit',
     'quit',
     'help',
@@ -231,6 +233,8 @@ Future<void> _runRepl(
         await dispatchWebhookCommand(cmdArgs, sdk);
       } else if (cmdName == 'stable-balance') {
         await dispatchStableBalanceCommand(cmdArgs, sdk);
+      } else if (cmdName == 'x402') {
+        await dispatchX402Command(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -277,6 +281,7 @@ void _printHelp(Map<String, CommandEntry> registry) {
   stdout.writeln(
     '  ${'stable-balance <subcommand>'.padRight(40)} Stable balance commands (use \'stable-balance help\' for details)',
   );
+  stdout.writeln('  ${'x402 <subcommand>'.padRight(40)} x402 commands (use \'x402 help\' for details)');
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');
   stdout.writeln('');

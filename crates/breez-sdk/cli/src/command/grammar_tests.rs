@@ -16,6 +16,7 @@ use super::issuer::IssuerCommand;
 use super::stable_balance::StableBalanceCommand;
 use super::token_allowances::TokenAllowanceCommand;
 use super::webhooks::{WebhookCommand, WebhookEventTypeArg};
+use super::x402::X402Command;
 use super::{Command, ReceivePaymentMethodArg};
 
 fn parse(line: &str) -> Result<Command, clap::Error> {
@@ -906,6 +907,36 @@ fn webhooks_subcommands() {
 
     parse_err("webhooks register https://hook.example s3cret");
     parse_err("webhooks register https://hook.example s3cret not-an-event");
+}
+
+#[test]
+fn x402_subcommands() {
+    let Command::X402(X402Command::Fetch {
+        url,
+        max_amount_sats,
+        method,
+        body,
+        headers,
+    }) = parse_ok(
+        "x402 fetch https://api.example.com/a --max-amount-sats 50 -X POST -d {} -H 'Content-Type: application/json'",
+    )
+    else {
+        panic!("expected X402 Fetch");
+    };
+    assert_eq!(url, "https://api.example.com/a");
+    assert_eq!(max_amount_sats, 50);
+    assert_eq!(method, "POST");
+    assert_eq!(body.as_deref(), Some("{}"));
+    assert_eq!(headers, ["Content-Type: application/json"]);
+
+    let Command::X402(X402Command::Fetch { method, .. }) =
+        parse_ok("x402 fetch https://api.example.com/a --max-amount-sats 50")
+    else {
+        panic!("expected X402 Fetch");
+    };
+    assert_eq!(method, "GET");
+
+    parse_err("x402 fetch https://api.example.com/a");
 }
 
 #[test]

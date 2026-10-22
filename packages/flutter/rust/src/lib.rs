@@ -10,6 +10,7 @@ pub mod passkey;
 pub mod sdk;
 pub mod sdk_builder;
 pub mod sdk_context;
+pub mod x402;
 
 pub use passkey::PasskeyClient;
 pub use sdk::BreezSdk;

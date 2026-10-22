@@ -399,6 +399,7 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 	allCommands = append(allCommands, IssuerCommandNames...)
 	allCommands = append(allCommands, ContactCommandNames...)
 	allCommands = append(allCommands, WebhookCommandNames...)
+	allCommands = append(allCommands, X402CommandNames...)
 	allCommands = append(allCommands, StableBalanceCommandNames...)
 	allCommands = append(allCommands, "exit", "quit", "help")
 
@@ -478,6 +479,8 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 			DispatchContactCommand(cmdArgs, sdk, rl)
 		} else if cmdName == "webhooks" {
 			DispatchWebhookCommand(cmdArgs, sdk, rl)
+		} else if cmdName == "x402" {
+			DispatchX402Command(cmdArgs, sdk, rl)
 		} else if cmdName == "stable-balance" {
 			DispatchStableBalanceCommand(cmdArgs, sdk, rl)
 		} else if cmd, ok := registry[cmdName]; ok {
