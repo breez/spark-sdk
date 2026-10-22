@@ -50,6 +50,11 @@ pub enum Bip21Error {
     UnknownRequiredParameter(String),
     #[error("bip21 does not contain any payment methods")]
     NoPaymentMethods,
+    #[error(
+        "bip21 contains more than {} payment methods",
+        breez_sdk_common::input::MAX_PAYMENT_METHODS
+    )]
+    TooManyPaymentMethods,
 }
 
 #[derive(Clone, Debug, Error)]
