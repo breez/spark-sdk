@@ -92,7 +92,15 @@ Its fields tell you how much Bitcoin to gather and how to structure it:
 
 Only the steps that have a CPFP child need funding, and {{#name funding}} is unset when no step has one. The fees of a cooperative recovery and of a sweep come out of the funds being recovered. The refund of a leaf whose last tree transaction went out in the operators' version has no CPFP child (see [A step left waiting can be sent by the operators](#broadcast-the-transactions)). Neither has the refund of a leaf received with a [watchtower fee ladder](./config.md#watchtower-fee-ladder): it pays its own fee out of the leaf.
 
-{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. {{#enum SkippedLeafReason::FeeExceedsValue}} means that at this fee rate recovering the leaf costs at least what is left of its funds: the value listed, less the fee built into each step that went out, or goes out, in the operators' version (see [A step left waiting can be sent by the operators](#broadcast-the-transactions)). {{#enum SkippedLeafReason::FundsNotFound}} means the SDK read the chain and found no output holding the leaf's funds. {{#enum SkippedLeafReason::Unverified}} means the SDK could not look up where the leaf's funds are, and it looks again the next time you prepare. {{#enum SkippedLeafReason::OperatorsUnavailable}} means the SDK needs data from the Spark operators to find the leaf's funds and could not reach them, or they were too busy, and it tries again the next time you prepare. {{#enum SkippedLeafReason::NotRecoverable}} means no recovery can be built for the leaf as it stands, and its {{#name message}} says why. A leaf whose recovery already finished is not listed.
+{{#name skipped}} lists the leaves your {{#name selection}} covers that are not in {{#name leaves}}, each with its value and a {{#name reason}}. A leaf whose recovery already finished is not listed.
+
+| Reason | Meaning |
+|---|---|
+| {{#enum SkippedLeafReason::FeeExceedsValue}} | At this fee rate, recovering the leaf costs at least what is left of its funds: the value listed, less the fee built into each step that went out, or goes out, in the operators' version (see [A step left waiting can be sent by the operators](#broadcast-the-transactions)) |
+| {{#enum SkippedLeafReason::FundsNotFound}} | The SDK read the chain and found no output holding the leaf's funds |
+| {{#enum SkippedLeafReason::Unverified}} | The SDK could not look up where the leaf's funds are. It looks again the next time you prepare |
+| {{#enum SkippedLeafReason::OperatorsUnavailable}} | The SDK needs data from the Spark operators to find the leaf's funds, and could not reach them or they were too busy. It tries again the next time you prepare |
+| {{#enum SkippedLeafReason::NotRecoverable}} | No recovery can be built for the leaf as it stands. Its {{#name message}} says why |
 
 Preparing also reads the chain, and {{#name exit_chain_state}} carries back what it found for the unilateral exit: which nodes are already on-chain, which refunds landed, and which of those have been swept. {{#name recover_funds}} builds only the steps still left, so it takes the whole {{#name PrepareRecoverFundsResponse}} unchanged. {{#name exit_chain_state}} also shows how far an exit has got.
 
