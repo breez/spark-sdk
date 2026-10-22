@@ -1119,6 +1119,7 @@ pub enum SkippedLeafReason {
     FeeExceedsValue,
     FundsNotFound,
     Unverified,
+    OperatorsUnavailable,
     NotRecoverable { message: String },
 }
 

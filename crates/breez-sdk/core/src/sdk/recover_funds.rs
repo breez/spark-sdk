@@ -628,7 +628,7 @@ impl BreezSdk {
                 .filter(|leaf| is_finished(leaf))
                 .map(|leaf| leaf.leaf_id.clone()),
         );
-        let skipped = selected
+        let mut skipped: Vec<SkippedLeaf> = selected
             .iter()
             .filter_map(|leaf| {
                 let leaf_id = leaf.id.to_string();
@@ -636,6 +636,11 @@ impl BreezSdk {
                 skipped_cooperative_leaf(leaf, stored.get(&leaf_id), lookup)
             })
             .collect();
+        if found.operators_unavailable {
+            for leaf in &mut skipped {
+                leaf.reason = SkippedLeafReason::OperatorsUnavailable;
+            }
+        }
         let cooperative = selected
             .iter()
             .filter_map(|leaf| found.exits.remove(&leaf.id.to_string()))

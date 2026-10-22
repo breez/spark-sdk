@@ -3564,6 +3564,10 @@ pub enum SkippedLeafReason {
     /// The SDK could not look up where the leaf's funds are. It looks again the
     /// next time you prepare.
     Unverified,
+    /// The SDK needs data from the Spark operators to find the leaf's funds,
+    /// and could not reach them or they were too busy. It tries again the next
+    /// time you prepare.
+    OperatorsUnavailable,
     /// No recovery can be built for the leaf as it stands. `message` says why.
     NotRecoverable { message: String },
 }
