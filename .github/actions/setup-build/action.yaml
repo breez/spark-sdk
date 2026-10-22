@@ -16,10 +16,9 @@ runs:
   using: 'composite'
   steps:
     - name: Install Protoc
-      uses: arduino/setup-protoc@v3
+      uses: taiki-e/install-action@v2
       with:
-        version: "30.2"
-        repo-token: ${{ inputs.github-token }}
+        tool: protoc@3.30.2
 
     # Shortens the absolute source paths that panic locations embed in the iOS
     # and Android libraries (about 80 KB each). Per-target variables merge with
