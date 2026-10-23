@@ -41,6 +41,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
+mod domain_rewrites;
 mod domains;
 mod error;
 mod invoice_paid;
@@ -375,6 +376,7 @@ where
     let default_api_key = resolve_default_api_key(args.default_api_key.as_deref(), is_mainnet)?;
 
     let domains = domains::start(repository.clone(), is_mainnet, default_api_key.clone()).await?;
+    let rewrites = domain_rewrites::start(repository.clone()).await?;
 
     // Makes the pre-v2 signed-message tail observable, which is what gates
     // dropping the legacy candidates.
@@ -508,6 +510,7 @@ where
             }
         },
         domains,
+        rewrites,
         nostr_keys,
         ca_cert,
         crl_url: args.crl_url,
@@ -525,7 +528,29 @@ where
         webhook_secret,
     };
 
-    let server_router = Router::new()
+    let listener = tokio::net::TcpListener::bind(args.address).await?;
+    let server = axum::serve(listener, router(state).into_make_service());
+
+    let graceful = server.with_graceful_shutdown(async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to create Ctrl+C shutdown signal");
+    });
+
+    // Await the server to receive the shutdown signal
+    if let Err(e) = graceful.await {
+        error!("shutdown error: {e}");
+    }
+
+    info!("lnurl server stopped");
+    Ok(())
+}
+
+fn router<DB>(state: State<DB>) -> Router
+where
+    DB: LnurlRepository + webhooks::WebhookRepository + Clone + Send + Sync + 'static,
+{
+    Router::new()
         .route(
             "/lnurlpay/available/{identifier}",
             get(LnurlServer::<DB>::available),
@@ -579,6 +604,10 @@ where
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
         .route("/webhook", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state.rewrites),
+            domain_rewrites::rewrite_domain,
+        ))
         .layer(Extension(state))
         .layer(
             CorsLayer::new()
@@ -586,24 +615,7 @@ where
                 .allow_headers(Any)
                 .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS]),
         )
-        .layer(DefaultBodyLimit::max(1_000_000));
-
-    let listener = tokio::net::TcpListener::bind(args.address).await?;
-    let server = axum::serve(listener, server_router.into_make_service());
-
-    let graceful = server.with_graceful_shutdown(async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to create Ctrl+C shutdown signal");
-    });
-
-    // Await the server to receive the shutdown signal
-    if let Err(e) = graceful.await {
-        error!("shutdown error: {e}");
-    }
-
-    info!("lnurl server stopped");
-    Ok(())
+        .layer(DefaultBodyLimit::max(1_000_000))
 }
 
 fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String, secret: String) {
@@ -695,6 +707,72 @@ mod tests {
     use super::{Args, explicit_cli_overrides, parse_auth_seed, resolve_default_api_key};
     use clap::{CommandFactory, FromArgMatches};
     use figment::{Figment, providers::Serialized};
+
+    /// A wallet registers an address on an allowed domain and a payer resolves
+    /// it there. Neither works on a domain that is not allowed.
+    #[tokio::test]
+    async fn the_router_serves_addresses_on_allowed_domains_only() {
+        use crate::test_support::{TestServer, sign, test_db, test_state, transfer_key};
+        use axum::http::{Method, StatusCode};
+        use lnurl_models::{RegisterLnurlPayRequest, RegisterLnurlPayResponse, signed_message};
+
+        let (_pg, db) = test_db().await;
+        let state = test_state(db).await;
+        state
+            .domains
+            .write()
+            .await
+            .insert("allowed.example".to_string(), None);
+        let server = TestServer::start(super::router(state)).await;
+
+        let (secret, pubkey) = transfer_key(1);
+        let register = |domain: &'static str| {
+            let timestamp = crate::time::now_u64();
+            let message = signed_message::register(domain, "alice", "Tips", timestamp);
+            server
+                .request(Method::POST, domain, &format!("/lnurlpay/{pubkey}"))
+                .json(&RegisterLnurlPayRequest {
+                    username: "alice".to_string(),
+                    signature: hex::encode(sign(&secret, &message).serialize_der()),
+                    timestamp,
+                    description: "Tips".to_string(),
+                })
+                .send()
+        };
+
+        let refused = register("other.example").await.unwrap();
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+
+        let registered: RegisterLnurlPayResponse = register("allowed.example")
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(registered.lightning_address, "alice@allowed.example");
+
+        let pay = |domain: &'static str| {
+            server
+                .request(Method::GET, domain, "/.well-known/lnurlp/alice")
+                .send()
+        };
+        let refused = pay("other.example").await.unwrap();
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        let payable: serde_json::Value = pay("allowed.example")
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            payable["callback"],
+            "https://allowed.example/lnurlp/alice/invoice"
+        );
+    }
 
     #[test]
     fn explicit_cli_overrides_excludes_defaults() {

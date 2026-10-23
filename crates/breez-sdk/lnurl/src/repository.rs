@@ -62,6 +62,11 @@ pub struct Invoice {
     pub updated_at: i64,
     /// The domain this invoice was created for, if any.
     pub domain: Option<String>,
+    /// The domain the invoice was requested on. It is another domain than
+    /// `domain` when the server rewrote the request.
+    pub actual_domain: Option<String>,
+    /// The username the invoice was requested for.
+    pub username: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
 }
@@ -81,6 +86,15 @@ pub struct DomainConfig {
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
     pub jwt: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DomainRewriteConfig {
+    pub domain: String,
+    /// The domain the server handles requests for `domain` as.
+    pub target_domain: String,
+    /// Whether usernames are registered or held under `domain` itself.
+    pub has_names: bool,
 }
 
 /// How often expired signed-message claims are pruned.
@@ -148,7 +162,7 @@ pub struct TransferRequest<'a> {
     pub from_pubkey: &'a str,
     pub to_pubkey: &'a str,
     pub username: &'a str,
-    pub description: &'a str,
+    pub description: Option<&'a str>,
 }
 
 #[async_trait::async_trait]
@@ -265,6 +279,9 @@ pub trait LnurlRepository {
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
 
+    /// Get the domains the server handles as another domain.
+    async fn list_domain_rewrites(&self) -> Result<Vec<DomainRewriteConfig>, LnurlRepositoryError>;
+
     /// Store the cached partner JWT for a domain.
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
 
@@ -356,7 +373,7 @@ pub mod shared_tests {
             domain: domain.into(),
             pubkey: pubkey.into(),
             name: name.into(),
-            description: name.into(),
+            description: Some(name.into()),
         }
     }
 
@@ -373,6 +390,127 @@ pub mod shared_tests {
         db.upsert_user(&user(domain, pubkey, name), None).await
     }
 
+    /// A user who gave no description is stored without one, also when a
+    /// transfer moves the username to another pubkey.
+    pub async fn a_user_without_a_description_is_stored_without_one<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "plain.com";
+        db.upsert_user(
+            &User {
+                domain: domain.into(),
+                pubkey: "pppp".into(),
+                name: "pia".into(),
+                description: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let stored = db.get_user_by_name(domain, "pia").await.unwrap().unwrap();
+        assert_eq!(stored.description, None);
+
+        db.transfer_username(
+            TransferRequest {
+                description: None,
+                ..transfer(domain, "pppp", "qqqq", "pia")
+            },
+            transfer_claim(b"plain-transfer"),
+        )
+        .await
+        .unwrap();
+        let moved = db.get_user_by_name(domain, "pia").await.unwrap().unwrap();
+        assert_eq!((moved.pubkey.as_str(), moved.description), ("qqqq", None));
+    }
+
+    /// The caller rewrites `empty.com`, `used.com` and `held.com` to
+    /// `target.com` first.
+    pub async fn list_domain_rewrites_reports_names_under_a_domain<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        register(db, "used.com", "aaaa", "alice").await.unwrap();
+        register(db, "held.com", "bbbb", "bob").await.unwrap();
+        assert!(db.delete_user("held.com", "bbbb", "bob").await.unwrap());
+        register(db, "target.com", "cccc", "carol").await.unwrap();
+
+        let mut rewrites: Vec<(String, String, bool)> = db
+            .list_domain_rewrites()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|rewrite| (rewrite.domain, rewrite.target_domain, rewrite.has_names))
+            .collect();
+        rewrites.sort();
+        assert_eq!(
+            rewrites,
+            [
+                ("empty.com".to_string(), "target.com".to_string(), false),
+                ("held.com".to_string(), "target.com".to_string(), true),
+                ("used.com".to_string(), "target.com".to_string(), true),
+            ]
+        );
+    }
+
+    /// The metadata of a payment names the address its invoice was requested
+    /// for, which the user may have given up since. An invoice stored without
+    /// a username or without a domain gets no address.
+    pub async fn metadata_names_the_address_an_invoice_was_requested_for<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        register(db, "tips.example", "pppp", "pia").await.unwrap();
+        let invoice = |payment_hash: &str, actual_domain: Option<&str>, username: Option<&str>| {
+            super::Invoice {
+                payment_hash: payment_hash.into(),
+                user_pubkey: "pppp".into(),
+                invoice: "lnbc1".into(),
+                preimage: None,
+                invoice_expiry: i64::MAX,
+                created_at: 1,
+                updated_at: 1,
+                domain: actual_domain.map(|_| "tips.example".into()),
+                actual_domain: actual_domain.map(Into::into),
+                username: username.map(Into::into),
+                amount_received_sat: None,
+            }
+        };
+        for stored in [
+            invoice("requested-on-the-domain", Some("tips.example"), Some("pia")),
+            invoice(
+                "requested-on-a-rewritten-domain",
+                Some("cash.example"),
+                Some("pia"),
+            ),
+            invoice("without-username", Some("tips.example"), None),
+            invoice("without-domain", None, None),
+        ] {
+            db.upsert_invoice(&stored).await.unwrap();
+        }
+        register(db, "tips.example", "pppp", "pilar").await.unwrap();
+
+        let metadata = db
+            .get_metadata_by_pubkey("pppp", 0, 100, None)
+            .await
+            .unwrap();
+        let address = |payment_hash: &str| {
+            metadata
+                .iter()
+                .find(|m| m.payment_hash == payment_hash)
+                .expect("metadata for the invoice")
+                .lightning_address
+                .as_deref()
+        };
+        assert_eq!(address("requested-on-the-domain"), Some("pia@tips.example"));
+        assert_eq!(
+            address("requested-on-a-rewritten-domain"),
+            Some("pia@cash.example")
+        );
+        assert_eq!(address("without-username"), None);
+        assert_eq!(address("without-domain"), None);
+    }
+
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
     /// and leaves the existing owner's row intact, rather than replacing it.
     pub async fn registering_taken_name_with_other_pubkey_is_rejected<DB>(db: &DB)
@@ -387,7 +525,7 @@ pub mod shared_tests {
                     domain: "a.com".into(),
                     pubkey: "bbbb".into(),
                     name: "alice".into(),
-                    description: "bob".into(),
+                    description: Some("bob".into()),
                 },
                 None,
             )
@@ -549,7 +687,7 @@ pub mod shared_tests {
             from_pubkey: from,
             to_pubkey: to,
             username,
-            description: username,
+            description: Some(username),
         }
     }
 
@@ -957,7 +1095,7 @@ pub mod shared_tests {
                 domain: domain.into(),
                 pubkey: "cccc".into(),
                 name: "cleo".into(),
-                description: "new description".into(),
+                description: Some("new description".into()),
             },
             Some(limit(1)),
         )
@@ -967,7 +1105,7 @@ pub mod shared_tests {
             db.get_user_by_pubkey(domain, "cccc")
                 .await
                 .unwrap()
-                .map(|u| u.description),
+                .and_then(|u| u.description),
             Some("new description".to_string())
         );
 

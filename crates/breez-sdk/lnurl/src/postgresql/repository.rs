@@ -4,8 +4,8 @@ use spark_postgres::deadpool_postgres::{GenericClient, Pool};
 use spark_postgres::tokio_postgres;
 
 use crate::repository::{
-    DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
-    TransferRequest, WebhookPayloadData,
+    DomainConfig, DomainRewriteConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt,
+    RegistrationLimit, TransferRequest, WebhookPayloadData,
 };
 use crate::webhooks::repository::{
     NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
@@ -598,6 +598,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      z.zap_event
                  ,      GREATEST(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
                  ,      i.preimage
+                 ,      i.username || '@' || i.actual_domain
                  FROM (
                      SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                      UNION
@@ -625,6 +626,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
                     preimage: row.try_get(5)?,
+                    lightning_address: row.try_get(6)?,
                 })
             })
             .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
@@ -669,6 +671,38 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn list_domain_rewrites(&self) -> Result<Vec<DomainRewriteConfig>, LnurlRepositoryError> {
+        let client = self.pool.get().await?;
+        // Not EXISTS: for a domain without rows, postgres answers that with a
+        // scan of the whole table.
+        let stmt = client
+            .prepare_cached(
+                "SELECT r.domain, r.target_domain,
+                        (SELECT u.pubkey FROM users u
+                         WHERE u.domain = r.domain
+                         ORDER BY u.pubkey LIMIT 1) IS NOT NULL
+                        OR (SELECT n.name FROM released_names n
+                            WHERE n.domain = r.domain
+                            ORDER BY n.name LIMIT 1) IS NOT NULL
+                 FROM domain_rewrites r",
+            )
+            .await?;
+        let rows = client.query(&stmt, &[]).await?;
+
+        let rewrites = rows
+            .into_iter()
+            .map(|row| {
+                Ok(DomainRewriteConfig {
+                    domain: row.try_get(0)?,
+                    target_domain: row.try_get(1)?,
+                    has_names: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<DomainRewriteConfig>, tokio_postgres::Error>>()?;
+
+        Ok(rewrites)
+    }
+
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
         let stmt = client
@@ -682,8 +716,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   invoice = excluded.invoice
@@ -691,7 +725,9 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   invoice_expiry = excluded.invoice_expiry
                  ,   updated_at = excluded.updated_at
                  ,   domain = excluded.domain
-                 ,   amount_received_sat = excluded.amount_received_sat",
+                 ,   amount_received_sat = excluded.amount_received_sat
+                 ,   actual_domain = excluded.actual_domain
+                 ,   username = excluded.username",
             )
             .await?;
         client
@@ -707,6 +743,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     &invoice.updated_at,
                     &invoice.domain,
                     &invoice.amount_received_sat,
+                    &invoice.actual_domain,
+                    &invoice.username,
                 ],
             )
             .await?;
@@ -720,7 +758,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
+                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username
                  FROM invoices
                  WHERE payment_hash = $1",
             )
@@ -738,6 +776,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     created_at: row.try_get(5)?,
                     updated_at: row.try_get(6)?,
                     domain: row.try_get(7)?,
+                    actual_domain: row.try_get(9)?,
+                    username: row.try_get(10)?,
                     amount_received_sat: row.try_get(8)?,
                 })
             })
@@ -768,6 +808,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      i.updated_at     AS i_updated_at
                  ,      i.domain         AS i_domain
                  ,      i.amount_received_sat AS i_amount_received_sat
+                 ,      i.actual_domain  AS i_actual_domain
+                 ,      i.username       AS i_username
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -802,6 +844,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     created_at: row.try_get("i_created_at")?,
                     updated_at: row.try_get("i_updated_at")?,
                     domain: row.try_get("i_domain")?,
+                    actual_domain: row.try_get("i_actual_domain")?,
+                    username: row.try_get("i_username")?,
                     amount_received_sat: row.try_get("i_amount_received_sat")?,
                 })
             })
@@ -935,7 +979,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let stmt = client
             .prepare_cached(
                 "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
-                        u.name, u.domain,
+                        COALESCE(i.username, u.name), COALESCE(i.actual_domain, i.domain),
                         sc.sender_comment,
                         i.domain,
                         z.zap_request
@@ -953,8 +997,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .into_iter()
             .map(|row| {
                 let name: Option<String> = row.try_get(5)?;
-                let user_domain: Option<String> = row.try_get(6)?;
-                let lightning_address = match (name, user_domain) {
+                let actual_domain: Option<String> = row.try_get(6)?;
+                let lightning_address = match (name, actual_domain) {
                     (Some(n), Some(d)) => Some(format!("{n}@{d}")),
                     _ => None,
                 };
@@ -1204,6 +1248,74 @@ mod postgres_tests {
     }
 
     #[tokio::test]
+    async fn a_user_without_a_description_is_stored_without_one() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_user_without_a_description_is_stored_without_one(&db).await;
+    }
+
+    #[tokio::test]
+    async fn list_domain_rewrites_reports_names_under_a_domain() {
+        use crate::repository::LnurlRepository;
+
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        assert!(db.list_domain_rewrites().await.unwrap().is_empty());
+
+        pool.get()
+            .await
+            .unwrap()
+            .batch_execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('target.com');
+                 INSERT INTO domain_rewrites (domain, target_domain)
+                 VALUES ('empty.com', 'target.com'),
+                        ('used.com', 'target.com'),
+                        ('held.com', 'target.com');",
+            )
+            .await
+            .unwrap();
+        shared_tests::list_domain_rewrites_reports_names_under_a_domain(&db).await;
+    }
+
+    #[tokio::test]
+    async fn the_database_refuses_a_rewrite_the_server_cannot_serve() {
+        let (_pg, pool) = test_pool().await;
+        let client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('target.com'), ('Target.com')",
+            )
+            .await
+            .unwrap();
+
+        for (domain, target_domain, accepted) in [
+            ("a.com", "missing.com", false),
+            ("A.com", "target.com", false),
+            ("a.com", "Target.com", false),
+            ("a.com", "target.com", true),
+        ] {
+            let inserted = client
+                .execute(
+                    "INSERT INTO domain_rewrites (domain, target_domain) VALUES ($1, $2)",
+                    &[&domain, &target_domain],
+                )
+                .await;
+            assert_eq!(
+                inserted.is_ok(),
+                accepted,
+                "a rewrite of '{domain}' to '{target_domain}': {inserted:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_names_the_address_an_invoice_was_requested_for() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::metadata_names_the_address_an_invoice_was_requested_for(&db).await;
+    }
+
+    #[tokio::test]
     async fn registering_taken_name_with_other_pubkey_is_rejected() {
         let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
@@ -1361,7 +1473,7 @@ mod postgres_tests {
                 domain: domain.into(),
                 pubkey: "kkkk".into(),
                 name: "jane".into(),
-                description: "jane".into(),
+                description: Some("jane".into()),
             },
             None,
         )

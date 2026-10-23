@@ -406,6 +406,37 @@ fn migrations() -> Vec<Vec<String>> {
                  ON address_registrations (created_at)"
                 .to_string(),
         ],
+        vec![
+            // A user who gave no description has none, and the server shows
+            // its default.
+            "ALTER TABLE users ALTER COLUMN description DROP NOT NULL".to_string(),
+        ],
+        vec![
+            // The server handles a request for `domain` as a request for
+            // `target_domain`. It lowercases a `Host` before it looks the
+            // name up, so both are lowercase.
+            "CREATE TABLE domain_rewrites (
+                    domain VARCHAR(255) PRIMARY KEY,
+                    target_domain VARCHAR(255) NOT NULL REFERENCES allowed_domains (domain),
+                    CHECK (domain = lower(domain)),
+                    CHECK (target_domain = lower(target_domain))
+                )"
+            .to_string(),
+        ],
+        vec![
+            // The address an invoice was requested for: its username, and the
+            // domain the request was sent to. An invoice that exists already
+            // was requested on its `domain`, and gets the name its user holds
+            // now.
+            "ALTER TABLE invoices ADD COLUMN actual_domain VARCHAR(255)".to_string(),
+            "ALTER TABLE invoices ADD COLUMN username VARCHAR(64)".to_string(),
+            "UPDATE invoices
+             SET actual_domain = invoices.domain,
+                 username = (SELECT users.name FROM users
+                             WHERE users.pubkey = invoices.user_pubkey
+                               AND users.domain = invoices.domain)"
+                .to_string(),
+        ],
     ]
 }
 
@@ -676,6 +707,66 @@ mod tests {
         }
     }
 
+    /// An invoice from before the server stored the address it was requested
+    /// for was requested on its `domain`. It gets the name its user holds
+    /// there, and stays without one when no user matches.
+    #[tokio::test]
+    async fn existing_invoices_get_the_address_of_their_user() {
+        let (_pg, pool) = empty_test_pool().await;
+        let before_addresses = migrations().len() - 1;
+        spark_postgres::run_migrations(
+            &pool,
+            MIGRATIONS_TABLE,
+            &migrations()[..before_addresses],
+            None,
+        )
+        .await
+        .expect("migrate up to the address columns");
+        let client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "INSERT INTO users (domain, pubkey, name, description, updated_at)
+                 VALUES ('paid.com', 'pk1', 'alice', '', 0);
+                 INSERT INTO invoices
+                     (payment_hash, user_pubkey, invoice, invoice_expiry, created_at, updated_at, domain)
+                 VALUES ('same-domain', 'pk1', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('other-domain', 'pk1', 'lnbc1', 0, 0, 0, 'other.com'),
+                        ('other-user', 'pk2', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('no-domain', 'pk1', 'lnbc1', 0, 0, 0, NULL);",
+            )
+            .await
+            .unwrap();
+
+        run(&pool).await.expect("add the address columns");
+
+        let addresses: Vec<(String, Option<String>, Option<String>)> = client
+            .query(
+                "SELECT payment_hash, username, actual_domain FROM invoices ORDER BY payment_hash",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect();
+        let address = |payment_hash: &str, username: Option<&str>, domain: Option<&str>| {
+            (
+                payment_hash.to_string(),
+                username.map(str::to_string),
+                domain.map(str::to_string),
+            )
+        };
+        assert_eq!(
+            addresses,
+            [
+                address("no-domain", None, None),
+                address("other-domain", None, Some("other.com")),
+                address("other-user", None, Some("paid.com")),
+                address("same-domain", Some("alice"), Some("paid.com")),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn fresh_database_applies_every_migration() {
         let (_pg, pool) = empty_test_pool().await;
@@ -689,7 +780,7 @@ mod tests {
     #[tokio::test]
     async fn fully_migrated_database_reruns_nothing() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         // Re-running migration 1 would fail: `users` already exists.
         run(&pool).await.expect("adopt migrated database");
@@ -712,7 +803,7 @@ mod tests {
     #[tokio::test]
     async fn adoption_is_idempotent() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         run(&pool).await.expect("first run");
         run(&pool).await.expect("second run");
