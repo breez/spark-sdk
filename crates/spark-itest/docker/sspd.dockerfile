@@ -22,6 +22,6 @@ COPY --from=builder /app/target/release/sspd /usr/local/bin/sspd
 COPY --from=builder /app/target/release/ssp-cli /usr/local/bin/ssp-cli
 
 # The GraphQL API and the internal gRPC API.
-EXPOSE 8080 59050
+EXPOSE 8080 8081
 
 ENTRYPOINT ["sspd"]
