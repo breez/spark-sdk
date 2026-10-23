@@ -7,6 +7,7 @@ pub mod payment_observer;
 pub mod rest_client;
 pub mod session_store;
 pub mod x402;
+pub mod x402_store;
 
 use std::collections::HashMap;
 

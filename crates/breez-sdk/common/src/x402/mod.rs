@@ -4,9 +4,12 @@
 pub mod binding;
 pub mod client;
 pub mod error;
+mod fields;
 mod invoice;
 mod jcs;
 pub mod network;
+pub mod quote;
+pub mod server;
 pub mod types;
 
 #[cfg(test)]

@@ -59,3 +59,56 @@ func payMcpToolCall(x402: X402, structuredContent: String) async throws {
     }
     // ANCHOR_END: pay-mcp-tool-call
 }
+
+func createChallenge(x402: X402) async throws {
+    // ANCHOR: create-challenge
+    // The unpaid request, with its URL built from your public origin
+    let request = X402Request.http(
+        method: "GET",
+        url: "https://api.example.com/article/A",
+        headers: [X402Header(name: "accept", value: "application/json")],
+        body: nil
+    )
+    let response = try await x402.createChallenge(
+        request: CreateX402ChallengeRequest(
+            request: request,
+            // Headers that change what is served, so the payment covers them too
+            boundNames: ["accept"],
+            amounts: [X402PaymentAmount.lightning(amountSats: 21)],
+            maxTimeoutSecs: nil,
+            description: "An article",
+            mimeType: "application/json"
+        ))
+
+    // Respond with status 402 and this PAYMENT-REQUIRED header
+    print("PAYMENT-REQUIRED: \(response.paymentRequired)")
+    // ANCHOR_END: create-challenge
+}
+
+func settlePayment(x402: X402, paymentSignatureHeader: String) async throws {
+    // ANCHOR: settle-payment
+    // The paid request, exactly as received
+    let request = X402Request.http(
+        method: "GET",
+        url: "https://api.example.com/article/A",
+        headers: [X402Header(name: "accept", value: "application/json")],
+        body: nil
+    )
+    let response = try await x402.settle(
+        request: SettleX402Request(
+            // The PAYMENT-SIGNATURE header of the request
+            payment: paymentSignatureHeader,
+            request: request,
+            boundNames: ["accept"]
+        ))
+
+    // Send the PAYMENT-RESPONSE header either way
+    print("PAYMENT-RESPONSE: \(response.paymentResponse)")
+    if response.success {
+        // Serve the resource
+    } else {
+        // Respond with status 402 and a new challenge
+        print("Payment refused: \(String(describing: response.errorReason))")
+    }
+    // ANCHOR_END: settle-payment
+}

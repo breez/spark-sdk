@@ -9,6 +9,7 @@ pub mod engine;
 pub mod faucet;
 pub mod lnurl;
 pub mod session;
+pub mod x402;
 
 use std::collections::HashMap;
 
@@ -23,7 +24,7 @@ pub struct Scenario {
     #[serde(default)]
     pub requires: Vec<String>,
     /// Fixtures the runner provisions before the first session. "lnurl"
-    /// exposes `${lnurl_url}`.
+    /// exposes `${lnurl_url}` and "x402" exposes `${x402_url}`.
     #[serde(default)]
     pub fixtures: Vec<String>,
     pub sessions: Vec<Session>,

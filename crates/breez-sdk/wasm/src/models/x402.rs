@@ -46,3 +46,35 @@ pub struct PayX402Response {
     pub payment_signature: Option<String>,
     pub payment: Payment,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateX402ChallengeRequest)]
+pub struct CreateX402ChallengeRequest {
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateX402ChallengeResponse)]
+pub struct CreateX402ChallengeResponse {
+    pub payment_required: String,
+    pub payment_hash: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SettleX402Request)]
+pub struct SettleX402Request {
+    pub payment: String,
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SettleX402Response)]
+pub struct SettleX402Response {
+    pub success: bool,
+    pub error_reason: Option<String>,
+    pub payment_response: String,
+    pub payment_hash: Option<String>,
+    pub amount: Option<X402PaymentAmount>,
+}

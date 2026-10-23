@@ -9,8 +9,8 @@ use tokio::sync::OnceCell;
 use crate::{
     Network, SdkError,
     persist::postgres::{
-        PostgresStorage, create_postgres_session_store, create_postgres_token_store,
-        create_postgres_tree_store,
+        PostgresStorage, PostgresX402ReplayStore, create_postgres_session_store,
+        create_postgres_token_store, create_postgres_tree_store,
     },
 };
 
@@ -60,6 +60,7 @@ impl PostgresBackend {
                 create_postgres_tree_store(self.pool.clone(), identity, true).await?;
                 create_postgres_token_store(self.pool.clone(), identity, true).await?;
                 create_postgres_session_store(self.pool.clone(), identity, true).await?;
+                PostgresX402ReplayStore::new(self.pool.clone(), identity, true).await?;
                 Ok::<(), SdkError>(())
             })
             .await
@@ -87,11 +88,14 @@ impl StorageBackend for PostgresBackend {
             create_postgres_token_store(self.pool.clone(), &identity, false).await?;
         let session_store =
             create_postgres_session_store(self.pool.clone(), &identity, false).await?;
+        let x402_replay_store =
+            Arc::new(PostgresX402ReplayStore::new(self.pool.clone(), &identity, false).await?);
         Ok(Arc::new(ResolvedStores {
             storage,
             tree_store: Some(tree_store),
             token_output_store: Some(token_output_store),
             session_store: Some(session_store),
+            x402_replay_store: Some(x402_replay_store),
         }))
     }
 }
@@ -127,7 +131,7 @@ mod tests {
     }
 
     /// Asserts every store in `stores` is present and backed by a fully migrated
-    /// schema by issuing a trivial read against each of the four tables. This is
+    /// schema by issuing a trivial read against each of its tables. This is
     /// what guards the fix: per-tenant stores are built migration-free, so each
     /// of these reads only succeeds if `ensure_migrated` already created that
     /// store's schema.
@@ -164,12 +168,20 @@ mod tests {
             }
             Ok(_) => panic!("unexpected session returned from empty session store"),
         }
+
+        stores
+            .x402_replay_store
+            .as_ref()
+            .expect("x402 replay store present")
+            .consume("regtest:hash".to_string(), u64::from(u32::MAX))
+            .await
+            .expect("x402 replay store schema migrated");
     }
 
     /// With `run_migration = true`, the backend migrates the shared database once
     /// via `ensure_migrated`, then builds each tenant's stores migration-free.
     /// This exercises that path end-to-end: concurrent first-callers race into
-    /// the `OnceCell`, all four stores' migrations must be covered (so the
+    /// the `OnceCell`, every store's migrations must be covered (so the
     /// migration-free per-tenant builds see a complete schema), and two tenants
     /// are provisioned over the same pool.
     #[tokio::test]

@@ -2539,3 +2539,35 @@ pub struct _PayX402Response {
     pub payment_signature: Option<String>,
     pub payment: Payment,
 }
+
+#[frb(mirror(CreateX402ChallengeRequest))]
+pub struct _CreateX402ChallengeRequest {
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[frb(mirror(CreateX402ChallengeResponse))]
+pub struct _CreateX402ChallengeResponse {
+    pub payment_required: String,
+    pub payment_hash: String,
+}
+
+#[frb(mirror(SettleX402Request))]
+pub struct _SettleX402Request {
+    pub payment: String,
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+}
+
+#[frb(mirror(SettleX402Response))]
+pub struct _SettleX402Response {
+    pub success: bool,
+    pub error_reason: Option<String>,
+    pub payment_response: String,
+    pub payment_hash: Option<String>,
+    pub amount: Option<X402PaymentAmount>,
+}

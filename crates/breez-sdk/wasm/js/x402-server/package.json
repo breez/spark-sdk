@@ -1,0 +1,8 @@
+{
+  "name": "@breez-sdk/x402-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test index.test.js"
+  }
+}

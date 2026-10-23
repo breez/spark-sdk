@@ -5,7 +5,7 @@ use std::sync::Arc;
 use macros::async_trait;
 use spark_wallet::PublicKey;
 
-use crate::{Network, SdkError, SqliteStorage};
+use crate::{Network, SdkError, SqliteStorage, persist::sqlite::SqliteX402ReplayStore};
 
 use super::{ResolvedStores, StorageBackend};
 
@@ -33,6 +33,7 @@ impl StorageBackend for SqliteBackend {
             PublicKey::from_slice(&identity).map_err(|e| SdkError::Generic(e.to_string()))?;
         let db_path = crate::default_storage_path(&self.storage_dir, &network, &identity)?;
         let storage = Arc::new(SqliteStorage::new(&db_path)?);
+        let x402_replay_store = Arc::new(SqliteX402ReplayStore::new(storage.get_db_path())?);
         let db_path = storage.get_db_path();
         let db_path = db_path
             .to_str()
@@ -46,6 +47,7 @@ impl StorageBackend for SqliteBackend {
             tree_store: Some(tree_store),
             token_output_store: None,
             session_store: None,
+            x402_replay_store: Some(x402_replay_store),
         }))
     }
 }

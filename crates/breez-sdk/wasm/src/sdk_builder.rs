@@ -10,15 +10,17 @@ use crate::{
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         rest_client::{RestClient, WasmRestClient},
         session_store::{DefaultSessionStore, SessionStore, WasmSessionStore},
+        x402_store::{WasmX402ReplayStore, X402ReplayStore},
     },
     persist::{
         Storage, WasmStorage,
         pool::{
             JsPool, create_mysql_pool, create_mysql_session_store_with_pool,
             create_mysql_storage_with_pool, create_mysql_token_store_with_pool,
-            create_mysql_tree_store_with_pool, create_postgres_pool,
-            create_postgres_session_store_with_pool, create_postgres_storage_with_pool,
-            create_postgres_token_store_with_pool, create_postgres_tree_store_with_pool,
+            create_mysql_tree_store_with_pool, create_mysql_x402_replay_store_with_pool,
+            create_postgres_pool, create_postgres_session_store_with_pool,
+            create_postgres_storage_with_pool, create_postgres_token_store_with_pool,
+            create_postgres_tree_store_with_pool, create_postgres_x402_replay_store_with_pool,
         },
     },
     sdk::BreezSdk,
@@ -29,7 +31,8 @@ use crate::{
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_spark::{PrebuiltBackend, SessionStoreAdapter, StorageBackend, identity_public_key};
 use platform_utils::tokio::sync::OnceCell;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen_futures::JsFuture;
 
 /// Configuration for PostgreSQL storage connection pool.
 #[derive(Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
@@ -355,6 +358,27 @@ impl SdkBuilder {
         self
     }
 
+    /// Overrides the store that records which x402 payments have been used,
+    /// replacing the one the storage backend provides. Needed to charge with
+    /// x402 when the backend provides none, such as in the browser.
+    #[wasm_bindgen(js_name = "withX402ReplayStore")]
+    pub fn with_x402_replay_store(mut self, x402_replay_store: X402ReplayStore) -> Self {
+        self.builder = self
+            .builder
+            .with_x402_replay_store(Arc::new(WasmX402ReplayStore { x402_replay_store }));
+        self
+    }
+
+    /// Sets the secret x402 quotes are signed with, in place of a key derived
+    /// from the signer. Needed to charge with x402 when the signer can't
+    /// compute an HMAC. Every server instance must use the same secret, of at
+    /// least 32 random bytes.
+    #[wasm_bindgen(js_name = "withX402QuoteSecret")]
+    pub fn with_x402_quote_secret(mut self, secret: Vec<u8>) -> Self {
+        self.builder = self.builder.with_x402_quote_secret(secret);
+        self
+    }
+
     /// **Deprecated.** Use `withStorageBackend(postgresStorage(config))`.
     #[wasm_bindgen(js_name = "withPostgresBackend")]
     #[allow(clippy::unnecessary_wraps)]
@@ -507,12 +531,19 @@ async fn resolve_storage_config(
             });
             let tree_store_js =
                 default_tree_store(&storage_dir, network, &identity_pub_key).await?;
-            Ok(Arc::new(PrebuiltBackend::new(
+            let mut backend = PrebuiltBackend::new(
                 storage,
                 Some(Arc::new(WasmTreeStore::new(tree_store_js))),
                 None,
                 None,
-            )))
+            );
+            if let Some(x402_replay_store) =
+                default_x402_replay_store(&storage_dir, network, &identity_pub_key).await?
+            {
+                backend = backend
+                    .with_x402_replay_store(Arc::new(WasmX402ReplayStore { x402_replay_store }));
+            }
+            Ok(Arc::new(backend))
         }
         WasmStorageConfigKind::Postgres { config } => {
             let run_migration = config.run_migration;
@@ -575,7 +606,7 @@ async fn build_mysql_storage_shared(
     build_mysql_storage(pool, identity, foreign_key_mode, false).await
 }
 
-/// Builds the four PostgreSQL-backed JS stores over `pool`.
+/// Builds the PostgreSQL-backed JS stores over `pool`.
 async fn build_postgres_storage(
     pool: &JsPool,
     identity: &[u8],
@@ -592,19 +623,24 @@ async fn build_postgres_storage(
         create_postgres_token_store_with_pool(pool, identity, logger_ref, run_migration).await?;
     let session_store_js =
         create_postgres_session_store_with_pool(pool, identity, logger_ref, run_migration).await?;
-    Ok(Arc::new(PrebuiltBackend::new(
-        storage,
-        Some(Arc::new(WasmTreeStore::new(tree_store_js))),
-        Some(Arc::new(WasmTokenStore::new(token_store_js))),
-        Some(Arc::new(SessionStoreAdapter::new(Arc::new(
-            WasmSessionStore {
-                session_store: session_store_js,
-            },
-        )))),
-    )))
+    let x402_replay_store =
+        create_postgres_x402_replay_store_with_pool(pool, identity, run_migration).await?;
+    Ok(Arc::new(
+        PrebuiltBackend::new(
+            storage,
+            Some(Arc::new(WasmTreeStore::new(tree_store_js))),
+            Some(Arc::new(WasmTokenStore::new(token_store_js))),
+            Some(Arc::new(SessionStoreAdapter::new(Arc::new(
+                WasmSessionStore {
+                    session_store: session_store_js,
+                },
+            )))),
+        )
+        .with_x402_replay_store(Arc::new(WasmX402ReplayStore { x402_replay_store })),
+    ))
 }
 
-/// Builds the four MySQL-backed JS stores over `pool`.
+/// Builds the MySQL-backed JS stores over `pool`.
 async fn build_mysql_storage(
     pool: &JsPool,
     identity: &[u8],
@@ -633,16 +669,21 @@ async fn build_mysql_storage(
     .await?;
     let session_store_js =
         create_mysql_session_store_with_pool(pool, identity, logger_ref, run_migration).await?;
-    Ok(Arc::new(PrebuiltBackend::new(
-        storage,
-        Some(Arc::new(WasmTreeStore::new(tree_store_js))),
-        Some(Arc::new(WasmTokenStore::new(token_store_js))),
-        Some(Arc::new(SessionStoreAdapter::new(Arc::new(
-            WasmSessionStore {
-                session_store: session_store_js,
-            },
-        )))),
-    )))
+    let x402_replay_store =
+        create_mysql_x402_replay_store_with_pool(pool, identity, run_migration).await?;
+    Ok(Arc::new(
+        PrebuiltBackend::new(
+            storage,
+            Some(Arc::new(WasmTreeStore::new(tree_store_js))),
+            Some(Arc::new(WasmTokenStore::new(token_store_js))),
+            Some(Arc::new(SessionStoreAdapter::new(Arc::new(
+                WasmSessionStore {
+                    session_store: session_store_js,
+                },
+            )))),
+        )
+        .with_x402_replay_store(Arc::new(WasmX402ReplayStore { x402_replay_store })),
+    ))
 }
 
 /// Returns a `'static` reference to the thread-local WASM logger.
@@ -682,6 +723,30 @@ async fn default_tree_store(
     let db_path = breez_sdk_spark::default_storage_path(data_dir, network, identity_pub_key)?;
     let logger_ref = get_wasm_logger_ref();
     Ok(create_default_tree_store(db_path.to_string_lossy().as_ref(), logger_ref).await?)
+}
+
+/// Builds the default x402 replay store, in the main storage's `SQLite` file.
+/// Only Node provides one: browsers don't serve x402 requests.
+async fn default_x402_replay_store(
+    data_dir: &str,
+    network: &breez_sdk_spark::Network,
+    identity_pub_key: &PublicKey,
+) -> WasmResult<Option<X402ReplayStore>> {
+    let factory = js_sys::Reflect::get(
+        &js_sys::global(),
+        &JsValue::from_str("createDefaultX402ReplayStore"),
+    )?;
+    let Some(factory) = factory.dyn_ref::<js_sys::Function>() else {
+        return Ok(None);
+    };
+    let db_path = breez_sdk_spark::default_storage_path(data_dir, network, identity_pub_key)?;
+    let promise: js_sys::Promise = factory
+        .call1(
+            &JsValue::NULL,
+            &JsValue::from_str(&db_path.to_string_lossy()),
+        )?
+        .dyn_into()?;
+    Ok(Some(JsFuture::from(promise).await?.unchecked_into()))
 }
 
 #[wasm_bindgen]

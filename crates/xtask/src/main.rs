@@ -545,6 +545,23 @@ fn wasm_test_cmd(
                 sh.change_dir(&current_dir);
             }
 
+            // Install node-x402-store dependencies (better-sqlite3 native module)
+            let node_x402_store_path = Path::new("crates/breez-sdk/wasm/js/node-x402-store");
+            if node_x402_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    node_x402_store_path.display()
+                );
+                sh.change_dir(node_x402_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install node-x402-store npm dependencies.")?;
+                cmd!(sh, "npm rebuild")
+                    .run()
+                    .with_context(|| "Failed to rebuild node-x402-store native modules.")?;
+                sh.change_dir(&current_dir);
+            }
+
             // Install postgres-storage dependencies
             let pg_storage_path = Path::new("crates/breez-sdk/wasm/js/postgres-storage");
             if pg_storage_path.exists() {
@@ -1060,6 +1077,7 @@ fn itest_cmd() -> Result<()> {
         "static_deposit_instant",
         "tokens",
         "unilateral_exit",
+        "x402",
     ];
     let mut args = vec![
         "test".to_string(),

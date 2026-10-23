@@ -53,6 +53,7 @@ session resumes the same wallet (the mnemonic persists in `<data-dir>/phrase`).
   "requires": ["faucet", "docker"],   // optional; skip when unmet ("faucet"
                                       //   and "docker" are the only names)
   "fixtures": ["lnurl"],              // optional; provisioned by the runner
+                                      //   ("lnurl" and "x402")
   "sessions": [
     {
       "wallet": "alice",              // data-dir key
@@ -85,7 +86,7 @@ A step is exactly one of:
 ```
 
 `${name}` interpolates captured variables (and `${lnurl_url}` from the lnurl
-fixture) inside `cmd`, `stdin`, `extra_args`, `expect_contains`, string
+fixture, `${x402_url}` from the x402 one) inside `cmd`, `stdin`, `extra_args`, `expect_contains`, string
 matchers, and `faucet_fund.address`.
 
 ### Tolerant matching
@@ -110,3 +111,13 @@ The Rust CLI prints `snake_case` JSON with externally tagged enums
    missing answer shows up as a step timeout with the transcript attached.
 3. Verify with `make cli-itest` and `make wasm-itest` (needs
    `FAUCET_USERNAME`/`FAUCET_PASSWORD`; docker for lnurl scenarios).
+
+## Fixtures
+
+- **lnurl**: the LNURL server and its Postgres in docker, so its scenarios
+  also require `docker`. Exposes `${lnurl_url}`.
+- **x402**: an HTTP resource charged for with x402, served in-process by its
+  own SDK on regtest, so it needs no docker. Exposes `${x402_url}`, which
+  answers with `{"content":"paid article"}` once paid 100 sats. The Rust
+  runner serves it with axum, and the JS runner with the package's
+  `x402-server` helper.

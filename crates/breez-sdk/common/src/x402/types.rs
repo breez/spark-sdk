@@ -93,7 +93,51 @@ impl PaymentRequired {
     }
 }
 
+/// The body of a `PAYMENT-RESPONSE` header.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettlementResponse {
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
+    pub transaction: String,
+    pub network: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payer: Option<String>,
+}
+
+impl PaymentRequired {
+    /// Encodes the challenge as a `PAYMENT-REQUIRED` header value, or as JSON
+    /// for an MCP tool result's `structuredContent`.
+    pub fn encode(&self, transport: Transport) -> X402Result<String> {
+        encode_for(self, transport)
+    }
+}
+
+impl SettlementResponse {
+    /// Encodes the response as a `PAYMENT-RESPONSE` header value, or as JSON
+    /// for MCP's `_meta["x402/payment-response"]`.
+    pub fn encode(&self, transport: Transport) -> X402Result<String> {
+        encode_for(self, transport)
+    }
+}
+
 impl PaymentPayload {
+    /// Accepts either a `PAYMENT-SIGNATURE` header value or MCP's
+    /// `_meta["x402/payment"]` JSON.
+    pub fn from_header_or_json(value: &str) -> X402Result<Self> {
+        if value.trim_start().starts_with('{') {
+            serde_json::from_str(value).map_err(|e| {
+                X402Error::new(
+                    X402ErrorReason::InvalidPayload,
+                    format!("not valid JSON: {e}"),
+                )
+            })
+        } else {
+            decode_header(value, X402ErrorReason::InvalidPayload)
+        }
+    }
+
     /// Encodes the payload as a `PAYMENT-SIGNATURE` header value, or as JSON
     /// for MCP's `_meta["x402/payment"]`.
     pub fn encode(&self, transport: Transport) -> X402Result<String> {

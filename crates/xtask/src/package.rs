@@ -212,6 +212,30 @@ fn package_wasm_target(
         copy_mysql_tree_store_files(crate_dir, &out_path)?;
         copy_mysql_token_store_files(crate_dir, &out_path)?;
         copy_mysql_session_store_files(crate_dir, &out_path)?;
+        copy_x402_store_files(
+            crate_dir,
+            &out_path,
+            "node-x402-store",
+            "x402-store",
+            "Node.js SQLite x402 replay store implementation for Breez SDK WASM (CommonJS)",
+            Some(("better-sqlite3", "^9.2.2")),
+        )?;
+        copy_x402_store_files(
+            crate_dir,
+            &out_path,
+            "postgres-x402-store",
+            "postgres-x402-store",
+            "Node.js PostgreSQL x402 replay store implementation for Breez SDK WASM (CommonJS)",
+            None,
+        )?;
+        copy_x402_store_files(
+            crate_dir,
+            &out_path,
+            "mysql-x402-store",
+            "mysql-x402-store",
+            "Node.js MySQL x402 replay store implementation for Breez SDK WASM (CommonJS)",
+            None,
+        )?;
     }
 
     if target == "web" || target == "bundler" {
@@ -226,6 +250,7 @@ fn package_wasm_target(
     if target == "web" {
         copy_web_helper_files(crate_dir, &out_path, "passkey-prf-provider")?;
         copy_web_helper_files(crate_dir, &out_path, "x402-fetch")?;
+        copy_web_helper_files(crate_dir, &out_path, "x402-server")?;
     }
 
     println!("Successfully built WASM target: {}", target);
@@ -1017,6 +1042,42 @@ fn copy_mysql_session_store_files(crate_dir: &Path, out_path: &Path) -> Result<(
     Ok(())
 }
 
+/// Copies the x402 store package at `js/<src_name>` to `<dest_name>` in the
+/// Node.js output, with a package.json naming its one driver dependency.
+fn copy_x402_store_files(
+    crate_dir: &Path,
+    out_path: &Path,
+    src_name: &str,
+    dest_name: &str,
+    description: &str,
+    dependency: Option<(&str, &str)>,
+) -> Result<()> {
+    let src = crate_dir.join("js").join(src_name);
+    let dest = out_path.join(dest_name);
+    std::fs::create_dir_all(&dest)?;
+    for file_name in ["index.cjs", "errors.cjs", "migrations.cjs"] {
+        let src_file = src.join(file_name);
+        std::fs::copy(&src_file, dest.join(file_name))
+            .with_context(|| format!("Failed to copy {}", src_file.display()))?;
+    }
+    let mut package_json = serde_json::json!({
+        "name": format!("@breez-sdk/{src_name}"),
+        "version": "1.0.0",
+        "description": description,
+        "main": "index.cjs",
+    });
+    if let Some((name, version)) = dependency {
+        package_json["dependencies"] = serde_json::json!({ name: version });
+    }
+    std::fs::write(
+        dest.join("package.json"),
+        serde_json::to_string_pretty(&package_json)?,
+    )
+    .with_context(|| format!("Failed to write {dest_name} package.json"))?;
+    println!("Copied {src_name} to {}", dest.display());
+    Ok(())
+}
+
 fn copy_nodejs_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
     let js_src = crate_dir.join("js/node-tree-store");
     if !js_src.exists() {
@@ -1134,6 +1195,16 @@ try {
     console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
 }
 
+// The default x402 replay store, in the same SQLite file as the storage
+try {
+    const { createDefaultX402ReplayStore } = require('./x402-store/index.cjs');
+    global.createDefaultX402ReplayStore = createDefaultX402ReplayStore;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load Node.js x402 replay store:', error.message);
+    }
+}
+
 // Automatically import and set up the default tree store for Node.js
 try {
     const { createDefaultTreeStore } = require('./tree-store/index.cjs');
@@ -1158,6 +1229,15 @@ try {
     // The WASM bridge builds every PostgreSQL store from a pool, so a caller that asks
     // for PostgreSQL storage gets this load error.
     global.createPostgresPool = () => { throw error; };
+}
+
+try {
+    const { createPostgresX402ReplayStoreWithPool } = require('./postgres-x402-store/index.cjs');
+    global.createPostgresX402ReplayStoreWithPool = createPostgresX402ReplayStoreWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load PostgreSQL x402 replay store:', error.message);
+    }
 }
 
 // Automatically import and set up the PostgreSQL tree store for Node.js
@@ -1206,6 +1286,15 @@ try {
     // The WASM bridge builds every MySQL store from a pool, so a caller that asks
     // for MySQL storage gets this load error.
     global.createMysqlPool = () => { throw error; };
+}
+
+try {
+    const { createMysqlX402ReplayStoreWithPool } = require('./mysql-x402-store/index.cjs');
+    global.createMysqlX402ReplayStoreWithPool = createMysqlX402ReplayStoreWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load MySQL x402 replay store:', error.message);
+    }
 }
 
 // Automatically import and set up the MySQL tree store for Node.js

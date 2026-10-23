@@ -14,6 +14,8 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 - Change the [Account Number](#with-account-number) to derive an independent wallet from the same seed
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
 - [Session Store](#with-session-store) to customize how cached auth tokens are persisted (for example, at-rest encryption)
+- [x402 Replay Store](#with-x402-replay-store) to keep the records of settled x402 payments in your own store
+- [x402 Quote Secret](#with-x402-quote-secret) to sign x402 quotes with a secret when the signer can't compute HMACs
 - [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
@@ -126,6 +128,20 @@ When wrapping the backend's store, pass the same storage backend to both {{#name
 **Note:** Not supported in Flutter.
 
 </div>
+
+## With x402 Replay Store
+
+When [charging with x402](x402_charging.md), the SDK records each settled payment as used, so it can't pay for a second request. By default the storage backend keeps these records: the SQLite, PostgreSQL and MySQL backends do, in Rust and in Node.js. Browser storage and a custom storage backend keep none, and without a store, creating a challenge fails.
+
+Use {{#name with_x402_replay_store}} to provide your own {{#name X402ReplayStore}}, such as one on Redis or your own database. Every server instance charging for the same SDK must share it. {{#name consume}} must be atomic, so that of two concurrent calls with the same key exactly one returns `true`. A record can be deleted after its {{#name retain_until_secs}}.
+
+**Note:** Not supported in Flutter.
+
+## With x402 Quote Secret
+
+x402 challenges carry a quote the SDK signs, with a key derived from the signer, so every server instance built from the same seed accepts the others' quotes. If your signer can't compute HMACs, as with a signing-only external signer, use {{#name with_x402_quote_secret}} instead. Pass a secret of at least 32 random bytes, the same on every instance charging for the SDK.
+
+**Note:** Not supported in Flutter.
 
 <h2 id="with-context">
     <a class="header" href="#with-shared-context">With Shared SDK Context</a>

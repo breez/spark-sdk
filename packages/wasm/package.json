@@ -33,6 +33,11 @@
         "import": "./web/x402-fetch/index.js",
         "default": "./web/x402-fetch/index.js"
       },
+      "./x402-server": {
+        "types": "./web/x402-server/index.d.ts",
+        "import": "./web/x402-server/index.js",
+        "default": "./web/x402-server/index.js"
+      },
       ".": {
         "node": {
           "import": "./nodejs/index.mjs",

@@ -381,6 +381,12 @@ impl From<breez_sdk_common::lnurl::error::LnurlError> for SdkError {
     }
 }
 
+impl From<crate::X402StoreError> for SdkError {
+    fn from(e: crate::X402StoreError) -> Self {
+        SdkError::StorageError(format!("x402 invoice store: {e}"))
+    }
+}
+
 impl From<breez_sdk_common::x402::error::X402Error> for SdkError {
     fn from(e: breez_sdk_common::x402::error::X402Error) -> Self {
         use breez_sdk_common::x402::error::X402ErrorReason;

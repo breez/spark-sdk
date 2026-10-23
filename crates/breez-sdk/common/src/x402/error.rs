@@ -8,12 +8,18 @@ pub type X402Result<T> = Result<T, X402Error>;
 pub enum X402ErrorReason {
     InvalidX402Version,
     InvalidPaymentRequirements,
+    InvalidPayload,
     UnsupportedScheme,
     UnsupportedNetwork,
+    NetworkMismatch,
     Asset,
     Amount,
+    AmountMismatch,
     PayToMalformed,
+    PayToMismatch,
     MaxTimeout,
+    MaxTimeoutMismatch,
+    ExtraMismatch,
     AssetTransferMethod,
     PaymentFlow,
     RequestBinding,
@@ -36,6 +42,17 @@ pub enum X402ErrorReason {
     PayerPreimageRequired,
     PayerPreimageMalformed,
     PayerPreimageHashMismatch,
+    PreimageMissing,
+    PreimageMalformed,
+    PreimageLength,
+    PreimageHashMismatch,
+    DuplicateSettlement,
+    /// The accepted terms carry no valid quote from this receiver.
+    InvalidQuote,
+    /// The invoice is not yet settled to the receiver. May be retried.
+    InvoiceNotSettled,
+    /// The receiver could not be asked whether the invoice is settled. May be retried.
+    ReceiverUnavailable,
 }
 
 impl X402ErrorReason {
@@ -43,12 +60,18 @@ impl X402ErrorReason {
         match self {
             Self::InvalidX402Version => "invalid_x402_version",
             Self::InvalidPaymentRequirements => "invalid_payment_requirements",
+            Self::InvalidPayload => "invalid_payload",
             Self::UnsupportedScheme => "unsupported_scheme",
             Self::UnsupportedNetwork => "unsupported_network",
+            Self::NetworkMismatch => "network_mismatch",
             Self::Asset => "invalid_exact_lnbtc_asset",
             Self::Amount => "invalid_exact_lnbtc_amount",
+            Self::AmountMismatch => "invalid_exact_lnbtc_amount_mismatch",
             Self::PayToMalformed => "invalid_exact_lnbtc_pay_to_malformed",
+            Self::PayToMismatch => "invalid_exact_lnbtc_pay_to_mismatch",
             Self::MaxTimeout => "invalid_exact_lnbtc_max_timeout",
+            Self::MaxTimeoutMismatch => "invalid_exact_lnbtc_max_timeout_mismatch",
+            Self::ExtraMismatch => "invalid_exact_lnbtc_extra_mismatch",
             Self::AssetTransferMethod => "invalid_exact_lnbtc_asset_transfer_method",
             Self::PaymentFlow => "invalid_exact_lnbtc_payment_flow",
             Self::RequestBinding => "invalid_exact_lnbtc_request_binding",
@@ -71,6 +94,14 @@ impl X402ErrorReason {
             Self::PayerPreimageRequired => "invalid_exact_lnbtc_payer_preimage_required",
             Self::PayerPreimageMalformed => "invalid_exact_lnbtc_payer_preimage_malformed",
             Self::PayerPreimageHashMismatch => "invalid_exact_lnbtc_payer_preimage_hash_mismatch",
+            Self::PreimageMissing => "invalid_exact_lnbtc_preimage_missing",
+            Self::PreimageMalformed => "invalid_exact_lnbtc_preimage_malformed",
+            Self::PreimageLength => "invalid_exact_lnbtc_preimage_length",
+            Self::PreimageHashMismatch => "invalid_exact_lnbtc_preimage_hash_mismatch",
+            Self::DuplicateSettlement => "duplicate_settlement",
+            Self::InvalidQuote => "invalid_exact_lnbtc_quote",
+            Self::InvoiceNotSettled => "exact_lnbtc_invoice_not_settled",
+            Self::ReceiverUnavailable => "exact_lnbtc_receiver_unavailable",
         }
     }
 }
@@ -83,7 +114,7 @@ pub struct X402Error {
 }
 
 impl X402Error {
-    pub(crate) fn new(reason: X402ErrorReason, detail: impl Into<String>) -> Self {
+    pub fn new(reason: X402ErrorReason, detail: impl Into<String>) -> Self {
         Self {
             reason,
             detail: detail.into(),

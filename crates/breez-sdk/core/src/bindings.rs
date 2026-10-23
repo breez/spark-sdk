@@ -114,6 +114,28 @@ impl SdkBuilder {
         *builder = builder.clone().with_session_store(session_store);
     }
 
+    /// Overrides the store that records which x402 payments have been used,
+    /// replacing the one the backend provides. Needed to charge with x402
+    /// when the backend provides none, such as a custom backend.
+    /// Arguments:
+    /// - `x402_replay_store`: The store every server instance charging for
+    ///   this SDK shares.
+    pub async fn with_x402_replay_store(&self, x402_replay_store: Arc<dyn crate::X402ReplayStore>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_x402_replay_store(x402_replay_store);
+    }
+
+    /// Sets the secret x402 quotes are signed with, in place of a key derived
+    /// from the signer. Needed to charge with x402 when the signer can't
+    /// compute an HMAC, as with a signing-only external signer. Every server
+    /// instance charging for this SDK must use the same secret.
+    /// Arguments:
+    /// - `secret`: At least 32 random bytes.
+    pub async fn with_x402_quote_secret(&self, secret: Vec<u8>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_x402_quote_secret(secret);
+    }
+
     /// **Deprecated.** Use
     /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
     /// [`custom_storage`](crate::custom_storage).

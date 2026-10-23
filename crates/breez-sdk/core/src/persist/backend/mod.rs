@@ -1,8 +1,8 @@
 //! Storage backend abstraction.
 //!
-//! A [`StorageBackend`] produces the four per-tenant stores the SDK needs: the
-//! main [`Storage`], plus a [`TreeStore`], [`TokenOutputStore`] and
-//! [`SessionStore`]. Each built-in backend is an independent module — adding
+//! A [`StorageBackend`] produces the per-tenant stores the SDK needs: the
+//! main [`Storage`], plus a [`TreeStore`], [`TokenOutputStore`],
+//! [`SessionStore`] and [`X402ReplayStore`]. Each built-in backend is an independent module — adding
 //! one touches nothing else, and there is no central enum of storage options.
 //!
 //! [`SdkBuilder::with_storage_backend`](crate::SdkBuilder::with_storage_backend)
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use macros::async_trait;
 use spark_wallet::{SessionStore, TokenOutputStore, TreeStore};
 
-use crate::{Network, SdkError, persist::Storage};
+use crate::{Network, SdkError, X402ReplayStore, persist::Storage};
 
 mod prebuilt;
 
@@ -30,7 +30,7 @@ mod postgres;
 #[cfg(feature = "mysql")]
 mod mysql;
 
-/// The four per-tenant stores produced by a [`StorageBackend`].
+/// The per-tenant stores produced by a [`StorageBackend`].
 ///
 /// An opaque handle: the SDK reads its stores internally; the fields never
 /// cross the FFI boundary.
@@ -40,6 +40,7 @@ pub struct ResolvedStores {
     pub(crate) tree_store: Option<Arc<dyn TreeStore>>,
     pub(crate) token_output_store: Option<Arc<dyn TokenOutputStore>>,
     pub(crate) session_store: Option<Arc<dyn SessionStore>>,
+    pub(crate) x402_replay_store: Option<Arc<dyn X402ReplayStore>>,
 }
 
 /// A factory for a tenant's storage.
@@ -59,7 +60,8 @@ pub trait StorageBackend: Send + Sync {
 }
 
 /// Wraps a caller-supplied [`Storage`] implementation as a [`StorageBackend`].
-/// The tree, token-output and session stores use the in-memory defaults.
+/// The tree, token-output and session stores use the in-memory defaults, and
+/// there is no x402 replay store.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[must_use]
 pub fn custom_storage(storage: Arc<dyn Storage>) -> Arc<dyn StorageBackend> {

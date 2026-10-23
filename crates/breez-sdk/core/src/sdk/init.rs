@@ -44,6 +44,8 @@ impl BreezSdk {
             buy_bitcoin_provider: params.buy_bitcoin_provider,
             cross_chain_context: params.cross_chain_context,
             lightning_sender: params.lightning_sender,
+            x402_replay_store: params.x402_replay_store,
+            x402_quote_key: params.x402_quote_key,
         };
 
         sdk.start(initial_synced_sender).await;

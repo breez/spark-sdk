@@ -594,3 +594,23 @@ async fn test_migration_from_v20_to_v21() {
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].id, "ln-failed");
 }
+
+#[wasm_bindgen(module = "js/node-x402-store")]
+extern "C" {
+    #[wasm_bindgen(js_name = "createSqliteX402ReplayStore", catch)]
+    async fn create_sqlite_x402_replay_store(
+        db_path: &str,
+    ) -> Result<crate::models::x402_store::X402ReplayStore, JsValue>;
+}
+
+#[wasm_bindgen_test]
+async fn test_x402_replay_store() {
+    use crate::models::x402_store::WasmX402ReplayStore;
+    let store = WasmX402ReplayStore {
+        x402_replay_store: create_sqlite_x402_replay_store(":memory:").await.unwrap(),
+    };
+    let other = WasmX402ReplayStore {
+        x402_replay_store: create_sqlite_x402_replay_store(":memory:").await.unwrap(),
+    };
+    breez_sdk_spark::x402_replay_store_tests::run_all(&store, &other).await;
+}

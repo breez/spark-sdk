@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::logger::Logger;
 use crate::models::session_store::SessionStore;
+use crate::models::x402_store::X402ReplayStore;
 use crate::sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig};
 use crate::token_store::TokenStoreJs;
 use crate::tree_store::TreeStoreJs;
@@ -50,6 +51,13 @@ extern "C" {
         run_migration: bool,
     ) -> Result<SessionStore, JsValue>;
 
+    #[wasm_bindgen(js_name = "createPostgresX402ReplayStoreWithPool", catch)]
+    pub async fn create_postgres_x402_replay_store_with_pool(
+        pool: &JsPool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<X402ReplayStore, JsValue>;
+
     #[wasm_bindgen(js_name = "createMysqlPool", catch)]
     pub fn create_mysql_pool(config: MysqlStorageConfig) -> Result<JsPool, JsValue>;
 
@@ -86,4 +94,11 @@ extern "C" {
         logger: Option<&Logger>,
         run_migration: bool,
     ) -> Result<SessionStore, JsValue>;
+
+    #[wasm_bindgen(js_name = "createMysqlX402ReplayStoreWithPool", catch)]
+    pub async fn create_mysql_x402_replay_store_with_pool(
+        pool: &JsPool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<X402ReplayStore, JsValue>;
 }

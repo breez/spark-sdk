@@ -442,7 +442,10 @@ fn check_doc_snippets_python_cmd(skip_binding_gen: bool) -> Result<()> {
         .arg("--disable-error-code=no-untyped-call")
         .arg("--disable-error-code=import-untyped")
         .arg("--disable-error-code=no-any-return")
+        // UniFFI's enum variant classes subclass their enum only at runtime, so
+        // mypy rejects a variant where the enum is expected.
         .arg("--disable-error-code=arg-type")
+        .arg("--disable-error-code=list-item")
         .arg("--no-warn-no-return")
         .arg("--allow-untyped-defs")
         .current_dir(&python_snippets_dir)

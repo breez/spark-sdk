@@ -15,10 +15,12 @@ use super::{
     types::{PaymentPayload, PaymentRequired},
 };
 
+mod settle;
+
 const VECTORS: &str = include_str!("vectors/exact_lnbtc.json");
 const FIXTURE_VERSION: u64 = 1;
 
-fn vectors() -> Value {
+pub(super) fn vectors() -> Value {
     let vectors: Value = serde_json::from_str(VECTORS).expect("vectors parse");
     assert_eq!(vectors["fixture_version"], FIXTURE_VERSION);
     vectors
@@ -126,7 +128,7 @@ fn mcp_binding_vectors() {
 
 /// Applies an RFC 6902 patch limited to `add`, `remove` and `replace` on
 /// object members, which is all the vectors use.
-fn apply_patch(doc: &mut Value, patch: &Value) {
+pub(super) fn apply_patch(doc: &mut Value, patch: &Value) {
     for op in patch.as_array().expect("patch") {
         let pointer = op["path"].as_str().expect("path");
         let (parent, key) = pointer.rsplit_once('/').expect("member path");

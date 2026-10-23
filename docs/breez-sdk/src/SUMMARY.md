@@ -70,6 +70,7 @@
   - [Using Turnkey](guide/turnkey.md)
 - [Using x402](guide/x402.md)
   - [Paying with x402](guide/x402_paying.md)
+  - [Charging with x402](guide/x402_charging.md)
 - [Advanced features](guide/advanced.md)
   - [Custom configuration](guide/config.md)
   - [SOCKS5 proxy](guide/proxy.md)

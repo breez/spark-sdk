@@ -1,0 +1,44 @@
+{
+  "name": "x402 fetch pays a Lightning challenge and gets the resource",
+  "requires": ["faucet"],
+  "fixtures": ["x402"],
+  "sessions": [
+    {
+      "wallet": "alice",
+      "steps": [
+        {
+          "cmd": "receive -m bitcoin",
+          "expect_json": {
+            "payment_request": { "exists": true }
+          },
+          "capture": { "alice_deposit_address": "payment_request" }
+        },
+        {
+          "faucet_fund": { "address": "${alice_deposit_address}", "amount_sats": 50000 }
+        },
+        {
+          "cmd": "get-info -e true",
+          "retry": { "timeout_secs": 180, "interval_secs": 5 },
+          "expect_json": {
+            "balance_sats": { "gte": 40000 }
+          }
+        },
+        {
+          "cmd": "x402 fetch ${x402_url} --max-amount-sats 1000",
+          "expect_contains": ["HTTP 200"],
+          "expect_json": {
+            "content": "paid article"
+          }
+        },
+        {
+          "cmd": "list-payments -t send",
+          "expect_json": {
+            "payments.0.payment_type": "send",
+            "payments.0.amount": "100",
+            "payments.0.status": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

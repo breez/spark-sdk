@@ -63,3 +63,58 @@ Future<void> payMcpToolCall(X402 x402, String structuredContent) async {
   }
   // ANCHOR_END: pay-mcp-tool-call
 }
+
+Future<void> createChallenge(X402 x402) async {
+  // ANCHOR: create-challenge
+  // The unpaid request, with its URL built from your public origin
+  X402Request request = X402Request.http(
+    method: "GET",
+    url: "https://api.example.com/article/A",
+    headers: [X402Header(name: "accept", value: "application/json")],
+    body: null,
+  );
+  CreateX402ChallengeResponse response = await x402.createChallenge(
+    request: CreateX402ChallengeRequest(
+      request: request,
+      // Headers that change what is served, so the payment covers them too
+      boundNames: ["accept"],
+      amounts: [X402PaymentAmount.lightning(amountSats: BigInt.from(21))],
+      maxTimeoutSecs: null,
+      description: "An article",
+      mimeType: "application/json",
+    ),
+  );
+
+  // Respond with status 402 and this PAYMENT-REQUIRED header
+  print("PAYMENT-REQUIRED: ${response.paymentRequired}");
+  // ANCHOR_END: create-challenge
+}
+
+Future<void> settlePayment(X402 x402, String paymentSignatureHeader) async {
+  // ANCHOR: settle-payment
+  // The paid request, exactly as received
+  X402Request request = X402Request.http(
+    method: "GET",
+    url: "https://api.example.com/article/A",
+    headers: [X402Header(name: "accept", value: "application/json")],
+    body: null,
+  );
+  SettleX402Response response = await x402.settle(
+    request: SettleX402Request(
+      // The PAYMENT-SIGNATURE header of the request
+      payment: paymentSignatureHeader,
+      request: request,
+      boundNames: ["accept"],
+    ),
+  );
+
+  // Send the PAYMENT-RESPONSE header either way
+  print("PAYMENT-RESPONSE: ${response.paymentResponse}");
+  if (response.success) {
+    // Serve the resource
+  } else {
+    // Respond with status 402 and a new challenge
+    print("Payment refused: ${response.errorReason}");
+  }
+  // ANCHOR_END: settle-payment
+}

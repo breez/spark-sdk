@@ -129,6 +129,10 @@ pub struct BreezSdk {
     /// need to pay an LN invoice as part of a larger flow.
     #[allow(dead_code)]
     pub(crate) lightning_sender: Arc<LightningSender>,
+    /// Unset when neither the storage backend nor the builder provides one,
+    /// in which case charging with x402 is refused.
+    pub(crate) x402_replay_store: Option<Arc<dyn crate::X402ReplayStore>>,
+    pub(crate) x402_quote_key: Arc<crate::x402::X402QuoteKey>,
 }
 
 /// The parser bound to the SDK's shared HTTP client and its DNS resolver.
@@ -156,6 +160,8 @@ pub(crate) struct BreezSdkParams {
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_context: crate::cross_chain::CrossChainContext,
     pub lightning_sender: Arc<LightningSender>,
+    pub x402_replay_store: Option<Arc<dyn crate::X402ReplayStore>>,
+    pub x402_quote_key: Arc<crate::x402::X402QuoteKey>,
 }
 
 #[allow(clippy::needless_pass_by_value)]

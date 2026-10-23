@@ -214,3 +214,48 @@ async fn test_sync_storage() {
     let storage = create_test_storage("my_sync_storage").await;
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
 }
+
+#[wasm_bindgen(module = "js/mysql-storage")]
+extern "C" {
+    #[wasm_bindgen(js_name = "createMysqlPool", catch)]
+    fn create_mysql_pool(
+        config: crate::sdk_builder::MysqlStorageConfig,
+    ) -> Result<crate::persist::pool::JsPool, JsValue>;
+}
+
+#[wasm_bindgen(module = "js/mysql-x402-store")]
+extern "C" {
+    #[wasm_bindgen(js_name = "createMysqlX402ReplayStoreWithPool", catch)]
+    async fn create_mysql_x402_replay_store_with_pool(
+        pool: &crate::persist::pool::JsPool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<crate::models::x402_store::X402ReplayStore, JsValue>;
+}
+
+#[wasm_bindgen_test]
+async fn test_x402_replay_store() {
+    use crate::models::x402_store::WasmX402ReplayStore;
+    let conn_string = create_test_connection_string("mysql_x402_replay_store")
+        .await
+        .expect("Failed to create test connection string")
+        .as_string()
+        .expect("Connection string should be a string");
+    let pool = create_mysql_pool(crate::sdk_builder::default_mysql_storage_config(
+        &conn_string,
+    ))
+    .expect("Failed to create pool");
+    let mut other_identity = TEST_IDENTITY;
+    other_identity[0] = 0x03;
+    let store = WasmX402ReplayStore {
+        x402_replay_store: create_mysql_x402_replay_store_with_pool(&pool, &TEST_IDENTITY, true)
+            .await
+            .unwrap(),
+    };
+    let other = WasmX402ReplayStore {
+        x402_replay_store: create_mysql_x402_replay_store_with_pool(&pool, &other_identity, false)
+            .await
+            .unwrap(),
+    };
+    breez_sdk_spark::x402_replay_store_tests::run_all(&store, &other).await;
+}

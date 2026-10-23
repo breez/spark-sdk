@@ -68,3 +68,66 @@ async fn pay_mcp_tool_call(x402: &X402, structured_content: String) -> Result<()
     // ANCHOR_END: pay-mcp-tool-call
     Ok(())
 }
+
+async fn create_challenge(x402: &X402) -> Result<()> {
+    // ANCHOR: create-challenge
+    // The unpaid request, with its URL built from your public origin
+    let request = X402Request::Http {
+        method: "GET".to_string(),
+        url: "https://api.example.com/article/A".to_string(),
+        headers: vec![X402Header {
+            name: "accept".to_string(),
+            value: "application/json".to_string(),
+        }],
+        body: None,
+    };
+    let response = x402
+        .create_challenge(CreateX402ChallengeRequest {
+            request,
+            // Headers that change what is served, so the payment covers them too
+            bound_names: vec!["accept".to_string()],
+            amounts: vec![X402PaymentAmount::Lightning { amount_sats: 21 }],
+            max_timeout_secs: None,
+            description: Some("An article".to_string()),
+            mime_type: Some("application/json".to_string()),
+        })
+        .await?;
+
+    // Respond with status 402 and this PAYMENT-REQUIRED header
+    info!("PAYMENT-REQUIRED: {}", response.payment_required);
+    // ANCHOR_END: create-challenge
+    Ok(())
+}
+
+async fn settle_payment(x402: &X402, payment_signature_header: String) -> Result<()> {
+    // ANCHOR: settle-payment
+    // The paid request, exactly as received
+    let request = X402Request::Http {
+        method: "GET".to_string(),
+        url: "https://api.example.com/article/A".to_string(),
+        headers: vec![X402Header {
+            name: "accept".to_string(),
+            value: "application/json".to_string(),
+        }],
+        body: None,
+    };
+    let response = x402
+        .settle(SettleX402Request {
+            // The PAYMENT-SIGNATURE header of the request
+            payment: payment_signature_header,
+            request,
+            bound_names: vec!["accept".to_string()],
+        })
+        .await?;
+
+    // Send the PAYMENT-RESPONSE header either way
+    info!("PAYMENT-RESPONSE: {}", response.payment_response);
+    if response.success {
+        // Serve the resource
+    } else {
+        // Respond with status 402 and a new challenge
+        info!("Payment refused: {:?}", response.error_reason);
+    }
+    // ANCHOR_END: settle-payment
+    Ok(())
+}

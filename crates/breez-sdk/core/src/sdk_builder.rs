@@ -83,6 +83,7 @@ struct Signers {
     spark: Arc<dyn SparkSigner>,
     rtsync: Option<Arc<RTSyncSigner>>,
     lnurl_auth: Option<Arc<LnurlAuthSignerAdapter>>,
+    hmac: Option<Arc<dyn crate::signer::HmacSigner>>,
 }
 
 /// Inputs to [`build_spark_wallet`] — bundled to avoid an >8-argument helper.
@@ -109,6 +110,8 @@ pub struct SdkBuilder {
 
     storage: Option<Arc<dyn StorageBackend>>,
     session_store: Option<Arc<dyn crate::session_store::SessionStore>>,
+    x402_replay_store: Option<Arc<dyn crate::X402ReplayStore>>,
+    x402_quote_secret: Option<Vec<u8>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     rest_chain_service_configs: Vec<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
@@ -136,6 +139,8 @@ impl SdkBuilder {
             },
             storage: None,
             session_store: None,
+            x402_replay_store: None,
+            x402_quote_secret: None,
             chain_service: None,
             rest_chain_service_configs: Vec::new(),
             fiat_service: None,
@@ -199,6 +204,8 @@ impl SdkBuilder {
             },
             storage: None,
             session_store: None,
+            x402_replay_store: None,
+            x402_quote_secret: None,
             chain_service: None,
             rest_chain_service_configs: Vec::new(),
             fiat_service: None,
@@ -278,6 +285,35 @@ impl SdkBuilder {
         session_store: Arc<dyn crate::session_store::SessionStore>,
     ) -> Self {
         self.session_store = Some(session_store);
+        self
+    }
+
+    /// Overrides the store that records which x402 payments have been used,
+    /// replacing the one the [`StorageBackend`] provides. Needed to charge
+    /// with x402 when the backend provides none, such as a custom backend.
+    ///
+    /// Arguments:
+    /// - `x402_replay_store`: The store every server instance charging for
+    ///   this SDK shares.
+    #[must_use]
+    pub fn with_x402_replay_store(
+        mut self,
+        x402_replay_store: Arc<dyn crate::X402ReplayStore>,
+    ) -> Self {
+        self.x402_replay_store = Some(x402_replay_store);
+        self
+    }
+
+    /// Sets the secret x402 quotes are signed with, in place of a key derived
+    /// from the signer. Needed to charge with x402 when the signer can't
+    /// compute an HMAC, as with a signing-only external signer. Every server
+    /// instance charging for this SDK must use the same secret.
+    ///
+    /// Arguments:
+    /// - `secret`: At least 32 random bytes.
+    #[must_use]
+    pub fn with_x402_quote_secret(mut self, secret: Vec<u8>) -> Self {
+        self.x402_quote_secret = Some(secret);
         self
     }
 
@@ -653,6 +689,13 @@ impl SdkBuilder {
             sync_coordinator,
             cross_chain_context,
             lightning_sender,
+            x402_replay_store: self
+                .x402_replay_store
+                .or_else(|| stores.x402_replay_store.clone()),
+            x402_quote_key: Arc::new(crate::x402::X402QuoteKey::new(
+                signers.hmac,
+                self.x402_quote_secret,
+            )),
         })
         .await?;
         debug!("Initialized and started breez sdk.");
@@ -795,6 +838,7 @@ fn build_signers(config: &Config, signer_source: &SignerSource) -> Result<Signer
         spark,
         rtsync,
         lnurl_auth,
+        hmac,
     })
 }
 

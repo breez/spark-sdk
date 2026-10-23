@@ -30,6 +30,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["io-util", "net", "process", "time"] }
 

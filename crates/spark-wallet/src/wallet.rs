@@ -1310,6 +1310,32 @@ impl SparkWallet {
         ))
     }
 
+    /// Whether the operators released the preimage for a Lightning payment to
+    /// this wallet with `payment_hash`, which they do only together with the
+    /// transfer that pays it. Invoices this wallet didn't issue never match.
+    pub async fn is_lightning_receive_settled(
+        &self,
+        payment_hash: &Hash,
+    ) -> Result<bool, SparkWalletError> {
+        let requests = self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    payment_hashes: vec![payment_hash.to_string()],
+                    identity_public_key: self.identity_public_key,
+                    status: Some(PreimageRequestStatus::PreimageShared),
+                    transfer_ids: Vec::new(),
+                    match_role: PreimageRequestRole::Receiver,
+                },
+                None,
+            )
+            .await?
+            .items;
+        Ok(requests
+            .iter()
+            .any(|r| r.payment_hash == *payment_hash && r.transfer.is_some()))
+    }
+
     pub async fn list_claimable_htlc_transfers(
         &self,
         paging: Option<PagingFilter>,
