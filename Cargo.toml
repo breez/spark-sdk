@@ -206,6 +206,7 @@ lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 log = "0.4.29"
 macros = { path = "crates/macros" }
 mime = "0.3.17"
+mockall = "0.12.1"
 nostr = { version = "0.43.1", default-features = false, features = ["std"] }
 nostr-sdk = { version = "0.43.0", default-features = false }
 platform-utils = { path = "crates/platform-utils" }

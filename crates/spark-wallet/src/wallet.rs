@@ -88,6 +88,7 @@ use crate::{
     TokenRecipient, WalletEvent, WalletLeaves, WalletSettings, WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
+    pending_deposits::PendingDeposits,
     unilateral_exit::{
         CpfpChangeInput, EXITING_STATUSES, ExitLeafSelection, ExitStateExport, ExitStateImport,
         RefundOutput, UnilateralExitBuild,
@@ -412,6 +413,9 @@ pub struct SparkWallet {
     /// lifetime" is what we want here regardless of outcome — subsequent
     /// staleness is handled by the periodic + post-payment sync.
     select_leaves_refresh: tokio::sync::OnceCell<()>,
+    /// Deposits the wallet is watching, which become spendable once every
+    /// operator has the leaf available.
+    pending_deposits: Arc<PendingDeposits>,
 }
 
 impl SparkWallet {
@@ -607,6 +611,11 @@ impl SparkWallet {
             }
         };
 
+        let pending_deposits = Arc::new(PendingDeposits::new(
+            Arc::clone(&tree_service),
+            Arc::clone(&event_manager),
+        ));
+
         Ok(Self {
             cancel,
             cancellation_token: tokio::sync::Mutex::new(Some(cancellation_token)),
@@ -632,6 +641,7 @@ impl SparkWallet {
             exit_chain_resolver,
             exit_state_changed_rx,
             select_leaves_refresh: tokio::sync::OnceCell::new(),
+            pending_deposits,
         })
     }
 }
@@ -922,10 +932,8 @@ impl SparkWallet {
         vout: u32,
     ) -> Result<Vec<WalletLeaf>, SparkWalletError> {
         let deposit_nodes = self.deposit_service.claim_deposit(tx, vout).await?;
-        self.tree_service
-            .insert_leaves(deposit_nodes.clone())
-            .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
+        self.pending_deposits.claimed(&deposit_nodes).await?;
 
         self.on_leaves_changed().await;
 
@@ -1528,6 +1536,7 @@ impl SparkWallet {
 
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
+        self.pending_deposits.synced();
         self.token_output_service.refresh_tokens_outputs().await?;
         // Claiming here any transfers that may have been missed in the event stream handling.
         // Note: recent counter swap transfers are skipped as they are claimed synchronously
@@ -2212,6 +2221,7 @@ impl SparkWallet {
                     Arc::clone(&self.token_service),
                     self.config.token_outputs_optimization_options.clone(),
                     self.config.max_concurrent_claims,
+                    Arc::clone(&self.pending_deposits),
                 ));
                 background_processor
                     .run_background_tasks(cancellation_token)
@@ -3080,6 +3090,7 @@ struct BackgroundProcessor {
     token_service: Arc<TokenService>,
     token_outputs_optimization_options: TokenOutputsOptimizationOptions,
     max_concurrent_claims: u32,
+    pending_deposits: Arc<PendingDeposits>,
 }
 
 impl BackgroundProcessor {
@@ -3099,6 +3110,7 @@ impl BackgroundProcessor {
         token_service: Arc<TokenService>,
         token_outputs_optimization_options: TokenOutputsOptimizationOptions,
         max_concurrent_claims: u32,
+        pending_deposits: Arc<PendingDeposits>,
     ) -> Self {
         Self {
             operator_pool,
@@ -3115,6 +3127,7 @@ impl BackgroundProcessor {
             token_service,
             token_outputs_optimization_options,
             max_concurrent_claims,
+            pending_deposits,
         }
     }
 
@@ -3157,6 +3170,12 @@ impl BackgroundProcessor {
             cloned_self
                 .forward_exit_state_changes(exit_state_rx, cancellation_token_for_exit_state)
                 .await;
+        });
+
+        let pending_deposits = Arc::clone(&self.pending_deposits);
+        let cancellation_token_for_deposits = cancellation_token.clone();
+        platform_utils::spawn(async move {
+            pending_deposits.run(cancellation_token_for_deposits).await;
         });
 
         if let Err(e) = self.tree_service.refresh_leaves().await {
@@ -3243,12 +3262,11 @@ impl BackgroundProcessor {
     }
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
-        let id = deposit.id.clone();
-        info!("Inserting deposit leaf: {:?}", deposit);
-        self.tree_service.insert_leaves(vec![deposit]).await?;
-        self.event_manager
-            .notify_listeners(WalletEvent::DepositConfirmed(id));
-        self.on_leaves_changed().await;
+        info!(
+            "The coordinator reported deposit leaf available: {:?}",
+            deposit
+        );
+        self.pending_deposits.reported(deposit);
         Ok(())
     }
 

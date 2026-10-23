@@ -2,9 +2,9 @@ use anyhow::Result;
 use bitcoin::Amount;
 use rstest::*;
 use spark_itest::helpers::{
-    WalletsFixture, deposit_to_wallet, deposit_with_amount, wait_for, wallets,
+    WalletsFixture, deposit_to_wallet, deposit_with_amount, wait_for, wait_for_event, wallets,
 };
-use spark_wallet::TransferId;
+use spark_wallet::{TransferId, WalletEvent};
 use tracing::info;
 
 #[rstest]
@@ -95,10 +95,17 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     let vout = output_index.expect("Could not find deposit address in transaction outputs");
     info!("Found deposit output at index: {}", vout);
 
+    let mut events = alice.subscribe_events();
     let leaves = alice.claim_deposit(tx, vout).await?;
     info!("Claimed deposit, got leaves: {:?}", leaves);
 
-    // Check that balance increased immediately after claiming
+    // The wallet stores the leaf once every operator holds it as available, and
+    // announces the deposit then.
+    wait_for_event(&mut events, 30, "DepositConfirmed", |event| match event {
+        WalletEvent::DepositConfirmed(id) => Ok(Some(WalletEvent::DepositConfirmed(id))),
+        _ => Ok(None),
+    })
+    .await?;
     let balance = alice.get_balance().await?;
     assert_eq!(balance, 100_000, "Balance should be the deposit amount");
 

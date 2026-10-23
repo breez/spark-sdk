@@ -104,6 +104,17 @@ impl Leaves {
     }
 }
 
+/// The outcome of refreshing given leaves.
+#[derive(Clone, Debug, Default)]
+pub struct RefreshedLeaves {
+    /// The leaves every operator holds as available, which the tree service
+    /// stored.
+    pub available: Vec<TreeNode>,
+    /// The leaves the coordinator holds as available that another operator
+    /// does not hold the same way yet. The tree service does not store them.
+    pub available_missing_from_operators: Vec<TreeNode>,
+}
+
 /// The two public keys needed to confirm a stored leaf's ownership was already
 /// verified, without loading the full node (and its transaction blobs). Its
 /// signing pubkey is a deterministic function of the leaf id, so a stored leaf
@@ -994,6 +1005,7 @@ pub enum LeafSelection {
     SwapNeeded(Vec<TreeNode>),
 }
 
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[macros::async_trait]
 pub trait TreeService: Send + Sync {
     /// Notifies each time leaves reach the pool, for the work that has to follow
@@ -1143,6 +1155,15 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
 
+    /// Refreshes the given leaves: fetches them by id from the coordinator and
+    /// every other operator, and stores each leaf they all hold as available,
+    /// as [`insert_leaves`](Self::insert_leaves) does. A leaf the coordinator
+    /// does not hold as available is in neither part of the outcome.
+    async fn refresh_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<RefreshedLeaves, TreeServiceError>;
+
     /// Inserts new leaves into the tree, each with the ancestors the caller
     /// already knows.
     ///
@@ -1230,6 +1251,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -1248,6 +1270,7 @@ pub trait TreeService: Send + Sync {
     /// needs it so the package is signed over up-to-date leaves. Renewal
     /// briefly reserves the leaves and persists the renewed data; when no
     /// renewal is needed the selection is read-only.
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn select_leaves_for_package(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -1324,6 +1347,7 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(feature = "test-utils", mockall::concretize)]
     async fn finalize_reservation(
         &self,
         id: LeavesReservationId,
