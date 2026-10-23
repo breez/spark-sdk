@@ -3,6 +3,8 @@ use lnurl_models::ListMetadataMetadata;
 use spark_postgres::deadpool_postgres::{GenericClient, Pool};
 use spark_postgres::tokio_postgres;
 
+use crate::domains::DomainGroup;
+use crate::merge::{JoiningHold, JoiningRegistration, MergedNames, Outcome};
 use crate::repository::{
     DomainConfig, Invoice, LnurlSenderComment, NameStatus, PendingZapReceipt, RegistrationLimit,
     TransferRequest, WebhookPayloadData,
@@ -224,6 +226,222 @@ where
     Ok(())
 }
 
+/// The usernames registered under `domain`, each with what `group` has for its
+/// pubkey and for its name.
+async fn joining_registrations<C>(
+    client: &C,
+    domain: &str,
+    group: &str,
+) -> Result<Vec<JoiningRegistration>, LnurlRepositoryError>
+where
+    C: GenericClient,
+{
+    let rows = client
+        .query(
+            "SELECT joining.name, joining.pubkey, joining.description
+                  , own.name, owner.pubkey, holder.pubkey
+             FROM users joining
+             LEFT JOIN users own ON own.domain = $2 AND own.pubkey = joining.pubkey
+             LEFT JOIN users owner ON owner.domain = $2 AND owner.name = joining.name
+             LEFT JOIN released_names holder
+                    ON holder.domain = $2 AND holder.name = joining.name
+             WHERE joining.domain = $1",
+            &[&domain, &group],
+        )
+        .await?;
+    let registrations = rows
+        .into_iter()
+        .map(|row| {
+            Ok(JoiningRegistration {
+                name: row.try_get(0)?,
+                pubkey: row.try_get(1)?,
+                description: row.try_get(2)?,
+                group_name: row.try_get(3)?,
+                group_owner: row.try_get(4)?,
+                group_holder: row.try_get(5)?,
+            })
+        })
+        .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
+    Ok(registrations)
+}
+
+/// The usernames held under `domain`, each with whether `group` has the name.
+async fn joining_holds<C>(
+    client: &C,
+    domain: &str,
+    group: &str,
+) -> Result<Vec<JoiningHold>, LnurlRepositoryError>
+where
+    C: GenericClient,
+{
+    let rows = client
+        .query(
+            "SELECT joining.name, joining.pubkey
+                  , owner.pubkey IS NOT NULL OR holder.pubkey IS NOT NULL
+             FROM released_names joining
+             LEFT JOIN users owner ON owner.domain = $2 AND owner.name = joining.name
+             LEFT JOIN released_names holder
+                    ON holder.domain = $2 AND holder.name = joining.name
+             WHERE joining.domain = $1",
+            &[&domain, &group],
+        )
+        .await?;
+    let holds = rows
+        .into_iter()
+        .map(|row| {
+            Ok(JoiningHold {
+                name: row.try_get(0)?,
+                pubkey: row.try_get(1)?,
+                in_group: row.try_get(2)?,
+            })
+        })
+        .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
+    Ok(holds)
+}
+
+/// Give each of `registrations` its outcome: move it from `domain` to `group`,
+/// hold its name in `group` for its pubkey, or remove it.
+async fn merge_registrations<C>(
+    client: &C,
+    domain: &str,
+    group: &str,
+    registrations: &[JoiningRegistration],
+) -> Result<(), LnurlRepositoryError>
+where
+    C: GenericClient,
+{
+    let dropped_holds: Vec<&str> = registrations
+        .iter()
+        .filter(|registration| registration.dropped_hold().is_some())
+        .map(|registration| registration.name.as_str())
+        .collect();
+    client
+        .execute(
+            "DELETE FROM released_names WHERE domain = $1 AND name = ANY($2)",
+            &[&group, &dropped_holds],
+        )
+        .await?;
+
+    let moved: Vec<&str> = registrations
+        .iter()
+        .filter(|registration| registration.outcome() == Outcome::Moved)
+        .map(|registration| registration.pubkey.as_str())
+        .collect();
+    client
+        .execute(
+            "UPDATE users SET domain = $2 WHERE domain = $1 AND pubkey = ANY($3)",
+            &[&domain, &group, &moved],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM users WHERE domain = $1", &[&domain])
+        .await?;
+
+    let (released_names, released_pubkeys): (Vec<&str>, Vec<&str>) = registrations
+        .iter()
+        .filter(|registration| registration.outcome() == Outcome::Released)
+        .map(|registration| (registration.name.as_str(), registration.pubkey.as_str()))
+        .unzip();
+    client
+        .execute(
+            "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
+             SELECT $1::text, released.name, released.pubkey, $4::bigint, NULL
+             FROM UNNEST($2::text[], $3::text[]) AS released (name, pubkey)",
+            &[&group, &released_names, &released_pubkeys, &now()],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Move each of `holds` from `domain` to `group`, or remove it.
+async fn merge_holds<C>(
+    client: &C,
+    domain: &str,
+    group: &str,
+    holds: &[JoiningHold],
+) -> Result<(), LnurlRepositoryError>
+where
+    C: GenericClient,
+{
+    let moved: Vec<&str> = holds
+        .iter()
+        .filter(|hold| hold.outcome() == Outcome::Moved)
+        .map(|hold| hold.name.as_str())
+        .collect();
+    client
+        .execute(
+            "UPDATE released_names SET domain = $2 WHERE domain = $1 AND name = ANY($3)",
+            &[&domain, &group, &moved],
+        )
+        .await?;
+    client
+        .execute("DELETE FROM released_names WHERE domain = $1", &[&domain])
+        .await?;
+    Ok(())
+}
+
+/// Write one `merged_names` row per registration and hold, and count the
+/// outcomes.
+async fn record_merge<C>(
+    client: &C,
+    domain: &str,
+    group: &str,
+    registrations: &[JoiningRegistration],
+    holds: &[JoiningHold],
+) -> Result<MergedNames, LnurlRepositoryError>
+where
+    C: GenericClient,
+{
+    let mut names = Vec::new();
+    let mut pubkeys = Vec::new();
+    let mut registered = Vec::new();
+    let mut descriptions = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut dropped_hold_pubkeys = Vec::new();
+    for registration in registrations {
+        names.push(registration.name.as_str());
+        pubkeys.push(registration.pubkey.as_str());
+        registered.push(true);
+        descriptions.push(Some(registration.description.as_str()));
+        outcomes.push(registration.outcome());
+        dropped_hold_pubkeys.push(registration.dropped_hold());
+    }
+    for hold in holds {
+        names.push(hold.name.as_str());
+        pubkeys.push(hold.pubkey.as_str());
+        registered.push(false);
+        descriptions.push(None);
+        outcomes.push(hold.outcome());
+        dropped_hold_pubkeys.push(None);
+    }
+    let outcome_names: Vec<&str> = outcomes.iter().map(|outcome| outcome.as_str()).collect();
+
+    client
+        .execute(
+            "INSERT INTO merged_names
+                 (merged_at, domain, domain_group, name, pubkey, registered, description,
+                  outcome, dropped_hold_pubkey)
+             SELECT $1::bigint, $2::text, $3::text, merged.name, merged.pubkey
+                  , merged.registered, merged.description, merged.outcome
+                  , merged.dropped_hold_pubkey
+             FROM UNNEST($4::text[], $5::text[], $6::boolean[], $7::text[], $8::text[], $9::text[])
+                  AS merged (name, pubkey, registered, description, outcome, dropped_hold_pubkey)",
+            &[
+                &now(),
+                &domain,
+                &group,
+                &names,
+                &pubkeys,
+                &registered,
+                &descriptions,
+                &outcome_names,
+                &dropped_hold_pubkeys,
+            ],
+        )
+        .await?;
+    Ok(MergedNames::count(&outcomes))
+}
+
 /// `users.updated_at` is an `INTEGER` column, so the timestamp is narrowed
 /// before binding. Saturating keeps writes working past 2038 rather than
 /// failing them, at the cost of a frozen timestamp.
@@ -238,10 +456,11 @@ fn now_secs_i32() -> i32 {
 impl crate::repository::LnurlRepository for LnurlRepository {
     async fn delete_user(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
         name: &str,
     ) -> Result<bool, LnurlRepositoryError> {
+        let domain = group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         lock_registrations(&tx, domain, &[pubkey]).await?;
@@ -263,7 +482,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn get_user_by_name(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
@@ -275,11 +494,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let maybe_user = client
-            .query_opt(&stmt, &[&domain, &name])
+            .query_opt(&stmt, &[&group.as_str(), &name])
             .await?
             .map(|row| {
                 Ok::<_, tokio_postgres::Error>(User {
-                    domain: domain.to_string(),
+                    group: group.clone(),
                     pubkey: row.try_get(0)?,
                     name: row.try_get(1)?,
                     description: row.try_get(2)?,
@@ -291,7 +510,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn get_user_by_pubkey(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
@@ -303,11 +522,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let maybe_user = client
-            .query_opt(&stmt, &[&domain, &pubkey])
+            .query_opt(&stmt, &[&group.as_str(), &pubkey])
             .await?
             .map(|row| {
                 Ok::<_, tokio_postgres::Error>(User {
-                    domain: domain.to_string(),
+                    group: group.clone(),
                     pubkey: row.try_get(0)?,
                     name: row.try_get(1)?,
                     description: row.try_get(2)?,
@@ -322,14 +541,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         user: &User,
         limit: Option<RegistrationLimit>,
     ) -> Result<(), LnurlRepositoryError> {
+        let domain = user.group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
 
-        lock_registrations(&tx, &user.domain, &[&user.pubkey]).await?;
+        lock_registrations(&tx, domain, &[&user.pubkey]).await?;
 
         // Read before the write overwrites it: taking a new name gives up the
         // one this pubkey holds now.
-        let previous = name_of(&tx, &user.domain, &user.pubkey).await?;
+        let previous = name_of(&tx, domain, &user.pubkey).await?;
 
         // Written before the hold is checked. Taking the name in the unique
         // index is what serializes this against a release of the same name, so
@@ -348,7 +568,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         tx.execute(
             &upsert_stmt,
             &[
-                &user.domain,
+                &domain,
                 &user.pubkey,
                 &user.name,
                 &user.description,
@@ -357,7 +577,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         )
         .await?;
 
-        if reserved_for_other(&tx, &user.domain, &user.name, &user.pubkey).await? {
+        if reserved_for_other(&tx, domain, &user.name, &user.pubkey).await? {
             // The tx rolls back on drop, so the name stays as the hold left it.
             return Err(LnurlRepositoryError::NameReserved);
         }
@@ -366,18 +586,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let release_stmt = tx
             .prepare_cached("DELETE FROM released_names WHERE domain = $1 AND name = $2")
             .await?;
-        tx.execute(&release_stmt, &[&user.domain, &user.name])
-            .await?;
+        tx.execute(&release_stmt, &[&domain, &user.name]).await?;
 
         let name_changed = previous.as_deref() != Some(user.name.as_str());
         if let Some(previous) = previous
             && previous != user.name
         {
-            reserve_name(&tx, &user.domain, &previous, &user.pubkey).await?;
+            reserve_name(&tx, domain, &previous, &user.pubkey).await?;
         }
 
         if name_changed && let Some(limit) = limit {
-            record_registration(&tx, &user.domain, &user.pubkey, limit).await?;
+            record_registration(&tx, domain, &user.pubkey, limit).await?;
         }
 
         tx.commit().await?;
@@ -386,7 +605,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn name_status(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
         asking_pubkey: Option<&str>,
     ) -> Result<NameStatus, LnurlRepositoryError> {
@@ -401,7 +620,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             )
             .await?;
         let row = client
-            .query_one(&stmt, &[&domain, &name, &now(), &asking_pubkey])
+            .query_one(&stmt, &[&group.as_str(), &name, &now(), &asking_pubkey])
             .await?;
         let taken: bool = row.try_get(0)?;
         let reserved: bool = row.try_get(1)?;
@@ -419,12 +638,13 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         claim: crate::repository::StatementClaim<'_>,
     ) -> Result<(), LnurlRepositoryError> {
         let TransferRequest {
-            domain,
+            group,
             from_pubkey,
             to_pubkey,
             username,
             description,
         } = transfer;
+        let domain = group.as_str();
         let mut client = self.pool.get().await?;
         let tx = client.transaction().await?;
         // Both sides, before the claim below: transactions that take the
@@ -598,6 +818,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      z.zap_event
                  ,      GREATEST(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
                  ,      i.preimage
+                 ,      i.username || '@' || i.domain
                  FROM (
                      SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                      UNION
@@ -625,6 +846,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
                     preimage: row.try_get(5)?,
+                    lightning_address: row.try_get(6)?,
                 })
             })
             .collect::<Result<Vec<_>, tokio_postgres::Error>>()?;
@@ -633,9 +855,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn list_domains(&self) -> Result<Vec<DomainConfig>, LnurlRepositoryError> {
         let client = self.pool.get().await?;
+        // The first row in index order rather than EXISTS: for a domain
+        // without rows Postgres answers EXISTS by reading the whole table.
         let stmt = client
             .prepare_cached(
-                "SELECT d.domain, a.api_key, a.jwt \
+                "SELECT d.domain, a.api_key, a.jwt, d.domain_group \
+                      , (SELECT u.pubkey FROM users u WHERE u.domain = d.domain \
+                         ORDER BY u.pubkey LIMIT 1) IS NOT NULL \
+                        OR (SELECT r.name FROM released_names r WHERE r.domain = d.domain \
+                            ORDER BY r.name LIMIT 1) IS NOT NULL \
                  FROM allowed_domains d \
                  LEFT JOIN domain_attribution a ON a.domain = d.domain",
             )
@@ -649,6 +877,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     domain: row.try_get(0)?,
                     api_key: row.try_get(1)?,
                     jwt: row.try_get(2)?,
+                    domain_group: row.try_get(3)?,
+                    has_names: row.try_get(4)?,
                 })
             })
             .collect::<Result<Vec<DomainConfig>, tokio_postgres::Error>>()?;
@@ -669,6 +899,35 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn merge_domain(
+        &self,
+        domain: &str,
+        group: &DomainGroup,
+    ) -> Result<MergedNames, LnurlRepositoryError> {
+        let group = group.as_str();
+        let mut client = self.pool.get().await?;
+        let tx = client.transaction().await?;
+        // Keeps every other writer of these tables out until the merge
+        // commits, so the rows read here are the ones the writes act on.
+        tx.batch_execute("LOCK TABLE users, released_names IN SHARE ROW EXCLUSIVE MODE")
+            .await?;
+
+        let registrations = joining_registrations(&tx, domain, group).await?;
+        let holds = joining_holds(&tx, domain, group).await?;
+        merge_registrations(&tx, domain, group, &registrations).await?;
+        merge_holds(&tx, domain, group, &holds).await?;
+        // A pubkey has one registration budget in the group.
+        tx.execute(
+            "UPDATE address_registrations SET domain = $2 WHERE domain = $1",
+            &[&domain, &group],
+        )
+        .await?;
+        let merged = record_merge(&tx, domain, group, &registrations, &holds).await?;
+
+        tx.commit().await?;
+        Ok(merged)
+    }
+
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError> {
         let client = self.pool.get().await?;
         let stmt = client
@@ -682,8 +941,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, username)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   invoice = excluded.invoice
@@ -691,7 +950,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   invoice_expiry = excluded.invoice_expiry
                  ,   updated_at = excluded.updated_at
                  ,   domain = excluded.domain
-                 ,   amount_received_sat = excluded.amount_received_sat",
+                 ,   amount_received_sat = excluded.amount_received_sat
+                 ,   username = excluded.username",
             )
             .await?;
         client
@@ -707,6 +967,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     &invoice.updated_at,
                     &invoice.domain,
                     &invoice.amount_received_sat,
+                    &invoice.username,
                 ],
             )
             .await?;
@@ -720,7 +981,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
+                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, username
                  FROM invoices
                  WHERE payment_hash = $1",
             )
@@ -739,6 +1000,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     updated_at: row.try_get(6)?,
                     domain: row.try_get(7)?,
                     amount_received_sat: row.try_get(8)?,
+                    username: row.try_get(9)?,
                 })
             })
             .transpose()?;
@@ -768,6 +1030,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      i.updated_at     AS i_updated_at
                  ,      i.domain         AS i_domain
                  ,      i.amount_received_sat AS i_amount_received_sat
+                 ,      i.username       AS i_username
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -803,6 +1066,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     updated_at: row.try_get("i_updated_at")?,
                     domain: row.try_get("i_domain")?,
                     amount_received_sat: row.try_get("i_amount_received_sat")?,
+                    username: row.try_get("i_username")?,
                 })
             })
             .transpose()?;
@@ -935,12 +1199,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let stmt = client
             .prepare_cached(
                 "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
-                        u.name, u.domain,
+                        u.name, COALESCE(d.domain_group, i.domain),
                         sc.sender_comment,
                         i.domain,
-                        z.zap_request
+                        z.zap_request,
+                        i.username
                  FROM invoices i
-                 LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
+                 LEFT JOIN allowed_domains d ON d.domain = i.domain
+                 LEFT JOIN users u ON u.pubkey = i.user_pubkey
+                                  AND u.domain = COALESCE(d.domain_group, i.domain)
                  LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
                  LEFT JOIN zaps z ON z.payment_hash = i.payment_hash
                  WHERE i.payment_hash = ANY($1)
@@ -953,20 +1220,21 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .into_iter()
             .map(|row| {
                 let name: Option<String> = row.try_get(5)?;
-                let user_domain: Option<String> = row.try_get(6)?;
-                let lightning_address = match (name, user_domain) {
-                    (Some(n), Some(d)) => Some(format!("{n}@{d}")),
-                    _ => None,
-                };
+                let group: String = row.try_get(6)?;
+                let domain: String = row.try_get(8)?;
+                let username: Option<String> = row.try_get(10)?;
+                // The username the invoice was created for, or without one the
+                // name its user holds now.
+                let name = username.or(name);
                 Ok::<_, tokio_postgres::Error>(WebhookPayloadData {
                     payment_hash: row.try_get(0)?,
                     user_pubkey: row.try_get(1)?,
                     invoice: row.try_get(2)?,
                     preimage: row.try_get(3)?,
                     amount_received_sat: row.try_get(4)?,
-                    lightning_address,
+                    lightning_address: name.map(|name| format!("{name}@{domain}")),
                     sender_comment: row.try_get(7)?,
-                    domain: row.try_get(8)?,
+                    group: DomainGroup::new(group),
                     nostr_zap_request: row.try_get(9)?,
                 })
             })
@@ -1187,6 +1455,68 @@ mod postgres_tests {
             .unwrap();
     }
 
+    /// Allow `group.com` and put `joined.com` in its group the way admins do.
+    async fn seed_domain_group(pool: &Pool) {
+        let client = pool.get().await.unwrap();
+        client
+            .execute(
+                "INSERT INTO allowed_domains (domain) VALUES ('group.com')",
+                &[],
+            )
+            .await
+            .unwrap();
+        client
+            .execute(
+                "INSERT INTO allowed_domains (domain, domain_group)
+                 VALUES ('joined.com', 'group.com')",
+                &[],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn metadata_names_the_address_an_invoice_was_requested_on() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::metadata_names_the_address_an_invoice_was_requested_on(&db).await;
+    }
+
+    #[tokio::test]
+    async fn list_domains_surfaces_groups() {
+        let (_pg, pool) = test_pool().await;
+        seed_domain_group(&pool).await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_groups(&db).await;
+    }
+
+    #[tokio::test]
+    async fn list_domains_reports_whether_a_domain_has_usernames() {
+        let (_pg, pool) = test_pool().await;
+        seed_domain_group(&pool).await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_reports_whether_a_domain_has_usernames(&db).await;
+    }
+
+    #[tokio::test]
+    async fn a_domain_group_has_to_be_an_allowed_domain() {
+        let (_pg, pool) = test_pool().await;
+        let inserted = pool
+            .get()
+            .await
+            .unwrap()
+            .execute(
+                "INSERT INTO allowed_domains (domain, domain_group)
+                 VALUES ('joined.com', 'missing.com')",
+                &[],
+            )
+            .await;
+        assert!(
+            inserted.is_err(),
+            "a group named after a domain that is not allowed must be refused"
+        );
+    }
+
     #[tokio::test]
     async fn list_domains_surfaces_api_keys() {
         let (_pg, pool) = test_pool().await;
@@ -1334,11 +1664,12 @@ mod postgres_tests {
     /// seeded directly: the read side is what a cooldown policy would build on.
     #[tokio::test]
     async fn a_lapsed_hold_lets_anyone_register_the_name() {
+        use crate::domains::DomainGroup;
         use crate::repository::{LnurlRepository, NameStatus};
 
         let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool.clone());
-        let domain = "lapsed.com";
+        let domain = &DomainGroup::new("lapsed.com");
 
         pool.get()
             .await
@@ -1346,7 +1677,7 @@ mod postgres_tests {
             .execute(
                 "INSERT INTO released_names (domain, name, pubkey, released_at, reclaimable_from)
                  VALUES ($1, 'jane', 'jjjj', 0, 1)",
-                &[&domain],
+                &[&domain.as_str()],
             )
             .await
             .unwrap();
@@ -1358,7 +1689,7 @@ mod postgres_tests {
         );
         db.upsert_user(
             &crate::user::User {
-                domain: domain.into(),
+                group: domain.clone(),
                 pubkey: "kkkk".into(),
                 name: "jane".into(),
                 description: "jane".into(),
@@ -1373,6 +1704,336 @@ mod postgres_tests {
                 .unwrap()
                 .map(|u| u.pubkey),
             Some("kkkk".to_string())
+        );
+    }
+
+    /// Register `name` to `pubkey` under `domain`, described by `description`.
+    async fn register(
+        db: &super::LnurlRepository,
+        domain: &str,
+        pubkey: &str,
+        name: &str,
+        description: &str,
+    ) {
+        use crate::repository::LnurlRepository;
+
+        db.upsert_user(
+            &crate::user::User {
+                group: crate::domains::DomainGroup::new(domain),
+                pubkey: pubkey.into(),
+                name: name.into(),
+                description: description.into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Leave `name` held for `pubkey` under `domain`.
+    async fn hold(db: &super::LnurlRepository, domain: &str, pubkey: &str, name: &str) {
+        use crate::repository::LnurlRepository;
+
+        register(db, domain, pubkey, name, "").await;
+        let group = crate::domains::DomainGroup::new(domain);
+        assert!(db.delete_user(&group, pubkey, name).await.unwrap());
+    }
+
+    /// The pubkey and description `name` is registered with under `domain`.
+    async fn registered(
+        db: &super::LnurlRepository,
+        domain: &str,
+        name: &str,
+    ) -> Option<(String, String)> {
+        use crate::repository::LnurlRepository;
+
+        db.get_user_by_name(&crate::domains::DomainGroup::new(domain), name)
+            .await
+            .unwrap()
+            .map(|user| (user.pubkey, user.description))
+    }
+
+    /// Whether `name` under `domain` is free for `pubkey` to register.
+    async fn free_for(db: &super::LnurlRepository, domain: &str, name: &str, pubkey: &str) -> bool {
+        use crate::repository::{LnurlRepository, NameStatus};
+
+        let group = crate::domains::DomainGroup::new(domain);
+        db.name_status(&group, name, Some(pubkey)).await.unwrap() == NameStatus::Free
+    }
+
+    /// A `merged_names` row: name, pubkey, registered, description, outcome and
+    /// the pubkey whose hold was dropped.
+    type MergedName = (String, String, bool, Option<String>, String, Option<String>);
+
+    fn merged_name(
+        name: &str,
+        pubkey: &str,
+        registered: bool,
+        description: Option<&str>,
+        outcome: &str,
+        dropped_hold_pubkey: Option<&str>,
+    ) -> MergedName {
+        (
+            name.to_string(),
+            pubkey.to_string(),
+            registered,
+            description.map(str::to_string),
+            outcome.to_string(),
+            dropped_hold_pubkey.map(str::to_string),
+        )
+    }
+
+    /// What the merges of `joined.com` into `group.com` recorded, by name.
+    async fn merged_names(pool: &Pool) -> Vec<MergedName> {
+        pool.get()
+            .await
+            .unwrap()
+            .query(
+                "SELECT name, pubkey, registered, description, outcome, dropped_hold_pubkey
+                 FROM merged_names
+                 WHERE domain = 'joined.com' AND domain_group = 'group.com'
+                 ORDER BY name",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row.get(0),
+                    row.get(1),
+                    row.get(2),
+                    row.get(3),
+                    row.get(4),
+                    row.get(5),
+                )
+            })
+            .collect()
+    }
+
+    /// Merge `joined.com` into `group.com`.
+    async fn merge(db: &super::LnurlRepository) -> crate::merge::MergedNames {
+        use crate::repository::LnurlRepository;
+
+        db.merge_domain("joined.com", &crate::domains::DomainGroup::new("group.com"))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_merge_moves_what_the_group_does_not_have() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        register(&db, "joined.com", "aaaa", "alice", "from alice").await;
+        hold(&db, "joined.com", "cccc", "carol").await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!((merged.moved, merged.released, merged.dropped), (2, 0, 0));
+        assert_eq!(
+            registered(&db, "group.com", "alice").await,
+            Some(("aaaa".to_string(), "from alice".to_string()))
+        );
+        assert!(free_for(&db, "group.com", "carol", "cccc").await);
+        assert!(!free_for(&db, "group.com", "carol", "dddd").await);
+        assert_eq!(registered(&db, "joined.com", "alice").await, None);
+        assert!(free_for(&db, "joined.com", "carol", "dddd").await);
+        assert_eq!(
+            merged_names(&pool).await,
+            [
+                merged_name("alice", "aaaa", true, Some("from alice"), "moved", None),
+                merged_name("carol", "cccc", false, None, "moved", None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_leaves_a_pubkey_the_username_it_has_in_the_group() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        register(&db, "group.com", "aaaa", "bob", "").await;
+        register(&db, "joined.com", "aaaa", "alice", "").await;
+        register(&db, "group.com", "dddd", "dave", "from the group").await;
+        register(&db, "joined.com", "dddd", "dave", "from the joined domain").await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!((merged.moved, merged.released, merged.dropped), (0, 1, 1));
+        assert_eq!(
+            registered(&db, "group.com", "bob").await,
+            Some(("aaaa".to_string(), String::new()))
+        );
+        assert_eq!(registered(&db, "group.com", "alice").await, None);
+        assert!(
+            free_for(&db, "group.com", "alice", "aaaa").await,
+            "the group holds the username for the pubkey that had it"
+        );
+        assert!(!free_for(&db, "group.com", "alice", "bbbb").await);
+        assert_eq!(
+            registered(&db, "group.com", "dave").await,
+            Some(("dddd".to_string(), "from the group".to_string()))
+        );
+        assert_eq!(
+            merged_names(&pool).await,
+            [
+                merged_name("alice", "aaaa", true, Some(""), "released", None),
+                merged_name(
+                    "dave",
+                    "dddd",
+                    true,
+                    Some("from the joined domain"),
+                    "dropped",
+                    None
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_leaves_a_username_with_the_pubkey_that_has_it_in_the_group() {
+        use crate::repository::LnurlRepository;
+
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        register(&db, "group.com", "bbbb", "alice", "").await;
+        register(&db, "joined.com", "aaaa", "alice", "").await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!((merged.moved, merged.released, merged.dropped), (0, 0, 1));
+        assert_eq!(
+            registered(&db, "group.com", "alice").await,
+            Some(("bbbb".to_string(), String::new()))
+        );
+        let group = crate::domains::DomainGroup::new("group.com");
+        assert!(
+            db.get_user_by_pubkey(&group, "aaaa")
+                .await
+                .unwrap()
+                .is_none(),
+            "the pubkey of the joined domain is left without a username"
+        );
+        assert_eq!(
+            merged_names(&pool).await,
+            [merged_name(
+                "alice",
+                "aaaa",
+                true,
+                Some(""),
+                "dropped",
+                None
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merged_registration_ends_a_hold_in_the_group() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        hold(&db, "group.com", "bbbb", "alice").await;
+        register(&db, "joined.com", "aaaa", "alice", "").await;
+        hold(&db, "group.com", "eeee", "erin").await;
+        register(&db, "joined.com", "eeee", "erin", "").await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!((merged.moved, merged.released, merged.dropped), (2, 0, 0));
+        assert_eq!(
+            registered(&db, "group.com", "alice").await,
+            Some(("aaaa".to_string(), String::new()))
+        );
+        assert_eq!(
+            registered(&db, "group.com", "erin").await,
+            Some(("eeee".to_string(), String::new()))
+        );
+        let holds: i64 = pool
+            .get()
+            .await
+            .unwrap()
+            .query_one("SELECT COUNT(*) FROM released_names", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(holds, 0, "a registered username is not held as well");
+        assert_eq!(
+            merged_names(&pool).await,
+            [
+                merged_name("alice", "aaaa", true, Some(""), "moved", Some("bbbb")),
+                merged_name("erin", "eeee", true, Some(""), "moved", Some("eeee")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merged_hold_gives_way_to_what_the_group_has() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        register(&db, "group.com", "bbbb", "alice", "").await;
+        hold(&db, "joined.com", "aaaa", "alice").await;
+        hold(&db, "group.com", "gggg", "frank").await;
+        hold(&db, "joined.com", "ffff", "frank").await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!((merged.moved, merged.released, merged.dropped), (0, 0, 2));
+        assert_eq!(
+            registered(&db, "group.com", "alice").await,
+            Some(("bbbb".to_string(), String::new()))
+        );
+        assert!(free_for(&db, "group.com", "frank", "gggg").await);
+        assert!(!free_for(&db, "group.com", "frank", "ffff").await);
+        assert_eq!(
+            merged_names(&pool).await,
+            [
+                merged_name("alice", "aaaa", false, None, "dropped", None),
+                merged_name("frank", "ffff", false, None, "dropped", None),
+            ]
+        );
+    }
+
+    /// A registration under the joined domain counts against the pubkey's
+    /// budget in the group.
+    #[tokio::test]
+    async fn a_merge_moves_the_registration_log() {
+        use crate::repository::{LnurlRepository, LnurlRepositoryError, RegistrationLimit};
+
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        let limit = Some(RegistrationLimit::daily(1));
+        let user = |domain: &str, name: &str| crate::user::User {
+            group: crate::domains::DomainGroup::new(domain),
+            pubkey: "aaaa".into(),
+            name: name.into(),
+            description: String::new(),
+        };
+        db.upsert_user(&user("joined.com", "alice"), limit)
+            .await
+            .unwrap();
+
+        merge(&db).await;
+
+        let second = db.upsert_user(&user("group.com", "bob"), limit).await;
+        assert!(
+            matches!(second, Err(LnurlRepositoryError::RegistrationLimitExceeded)),
+            "expected RegistrationLimitExceeded, got {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn merging_a_merged_domain_changes_nothing() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool.clone());
+        register(&db, "joined.com", "aaaa", "alice", "").await;
+        merge(&db).await;
+        let recorded = merged_names(&pool).await;
+
+        let merged = merge(&db).await;
+
+        assert_eq!(merged, crate::merge::MergedNames::default());
+        assert_eq!(merged_names(&pool).await, recorded);
+        assert_eq!(
+            registered(&db, "group.com", "alice").await,
+            Some(("aaaa".to_string(), String::new()))
         );
     }
 }

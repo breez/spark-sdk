@@ -635,6 +635,17 @@ impl MysqlStorage {
                     )",
                 ),
             ],
+            // Migration 27: The Lightning address a received LNURL payment was sent to.
+            vec![
+                Migration::AddColumn {
+                    table: "brz_lnurl_receive_metadata",
+                    column: "lightning_address",
+                    definition: "LONGTEXT NULL",
+                },
+                // Clear the lnurl_metadata_updated_after setting so the SDK fetches the
+                // Lightning address of payments it already synced.
+                Migration::sql("DELETE FROM brz_settings WHERE `key` = 'lnurl_metadata_updated_after'"),
+            ],
         ]
     }
 }
@@ -1518,7 +1529,7 @@ impl Storage for MysqlStorage {
         for row in &rows {
             let payment = map_payment(row)?;
             let parent_payment_id: String = row
-                .get(32)
+                .get(33)
                 .ok_or_else(|| StorageError::Implementation("missing parent_payment_id".into()))?;
             result.entry(parent_payment_id).or_default().push(payment);
         }
@@ -1893,13 +1904,14 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         for m in metadata {
             conn.exec_drop(
-                "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?, ?)
+                "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+                 VALUES (?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     nostr_zap_request = VALUES(nostr_zap_request),
                     nostr_zap_receipt = VALUES(nostr_zap_receipt),
-                    sender_comment = VALUES(sender_comment)",
-                (self.identity.clone(), m.payment_hash, m.nostr_zap_request, m.nostr_zap_receipt, m.sender_comment),
+                    sender_comment = VALUES(sender_comment),
+                    lightning_address = VALUES(lightning_address)",
+                (self.identity.clone(), m.payment_hash, m.nostr_zap_request, m.nostr_zap_receipt, m.sender_comment, m.lightning_address),
             )
             .await
             .map_err(map_db_error)?;
@@ -2433,8 +2445,8 @@ impl Storage for MysqlStorage {
     }
 }
 
-/// Base query for payment lookups. Indices 0-31 are used by `map_payment`,
-/// index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Base query for payment lookups. Indices 0-32 are used by `map_payment`,
+/// index 33 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -2466,6 +2478,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
            pm.parent_payment_id
@@ -2520,7 +2533,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let lnurl_nostr_zap_request: Option<String> = get_opt_str(row, 27);
             let lnurl_nostr_zap_receipt: Option<String> = get_opt_str(row, 28);
             let lnurl_sender_comment: Option<String> = get_opt_str(row, 29);
-            let lnurl_payment_hash: Option<String> = get_opt_str(row, 30);
+            let lnurl_lightning_address: Option<String> = get_opt_str(row, 30);
+            let lnurl_payment_hash: Option<String> = get_opt_str(row, 31);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_string_opt(lnurl_pay_info_str)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -2534,6 +2548,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     nostr_zap_request: lnurl_nostr_zap_request,
                     nostr_zap_receipt: lnurl_nostr_zap_receipt,
                     sender_comment: lnurl_sender_comment,
+                    lightning_address: lnurl_lightning_address,
                 })
             } else {
                 None
@@ -2621,7 +2636,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 .unwrap_or(PaymentMethod::Lightning)
         }),
         conversion_details: {
-            let conversion_status_str: Option<String> = get_opt_str(row, 31);
+            let conversion_status_str: Option<String> = get_opt_str(row, 32);
             conversion_status_str
                 .map(|s| {
                     s.parse::<ConversionStatus>()
@@ -3289,6 +3304,7 @@ mod tests {
             nostr_zap_request: Some("zap_a".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
+            lightning_address: None,
         }])
         .await
         .unwrap();
@@ -3297,6 +3313,7 @@ mod tests {
             nostr_zap_request: Some("zap_b".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
+            lightning_address: None,
         }])
         .await
         .unwrap();
@@ -3460,7 +3477,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration version must advance to 26");
+        assert_eq!(version, Some(27), "migration version must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3732,7 +3749,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration must advance to 26");
+        assert_eq!(version, Some(27), "migration must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

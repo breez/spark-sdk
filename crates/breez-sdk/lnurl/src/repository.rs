@@ -1,5 +1,7 @@
 use lnurl_models::ListMetadataMetadata;
 
+use crate::domains::DomainGroup;
+use crate::merge::MergedNames;
 use crate::user::User;
 use crate::zap::Zap;
 
@@ -25,7 +27,7 @@ pub enum LnurlRepositoryError {
 }
 
 /// A cap on the successful registrations one pubkey may perform in one domain
-/// inside a rolling window.
+/// group inside a rolling window.
 #[derive(Debug, Clone, Copy)]
 pub struct RegistrationLimit {
     pub max_per_window: u32,
@@ -62,6 +64,8 @@ pub struct Invoice {
     pub updated_at: i64,
     /// The domain this invoice was created for, if any.
     pub domain: Option<String>,
+    /// The username this invoice was created for, if the server stored it.
+    pub username: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
 }
@@ -77,6 +81,10 @@ pub struct PendingZapReceipt {
 #[derive(Debug, Clone)]
 pub struct DomainConfig {
     pub domain: String,
+    /// The domain whose group this domain is in, if set.
+    pub domain_group: Option<String>,
+    /// Whether usernames are registered or held under this domain.
+    pub has_names: bool,
     /// The domain's own Breez API key, if set.
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
@@ -144,7 +152,7 @@ pub enum NameStatus {
 
 /// Who a username moves between, and what the target's row says afterwards.
 pub struct TransferRequest<'a> {
-    pub domain: &'a str,
+    pub group: &'a DomainGroup,
     pub from_pubkey: &'a str,
     pub to_pubkey: &'a str,
     pub username: &'a str,
@@ -153,7 +161,7 @@ pub struct TransferRequest<'a> {
 
 #[async_trait::async_trait]
 pub trait LnurlRepository {
-    /// Delete `pubkey`'s row in `domain`, but only while it still holds `name`,
+    /// Delete `pubkey`'s row in `group`, but only while it still holds `name`,
     /// and hold `name` for it. Returns whether a row was removed.
     ///
     /// `name` is part of the condition so the caller's authorization check and
@@ -162,18 +170,18 @@ pub trait LnurlRepository {
     /// reads before deleting, so `false` means the row changed in between.
     async fn delete_user(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
         name: &str,
     ) -> Result<bool, LnurlRepositoryError>;
     async fn get_user_by_name(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
     async fn get_user_by_pubkey(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
 
@@ -187,7 +195,7 @@ pub trait LnurlRepository {
     /// With a `limit`, a registration that changes the held name counts against
     /// it and is refused with
     /// [`LnurlRepositoryError::RegistrationLimitExceeded`] once the pubkey has
-    /// used up its window on this domain. Re-registering the held name (e.g. a
+    /// used up its window in this group. Re-registering the held name (e.g. a
     /// description update) never counts, and a refused registration leaves no
     /// trace.
     async fn upsert_user(
@@ -196,7 +204,7 @@ pub trait LnurlRepository {
         limit: Option<RegistrationLimit>,
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Whether `name` in `domain` is owned, held, or free, answered for
+    /// Whether `name` in `group` is owned, held, or free, answered for
     /// `asking_pubkey`: a hold that pubkey may still reclaim reads as
     /// [`NameStatus::Free`], since it is free for the one asking.
     ///
@@ -205,7 +213,7 @@ pub trait LnurlRepository {
     /// reply would otherwise say who a name is held for.
     async fn name_status(
         &self,
-        domain: &str,
+        group: &DomainGroup,
         name: &str,
         asking_pubkey: Option<&str>,
     ) -> Result<NameStatus, LnurlRepositoryError>;
@@ -214,7 +222,7 @@ pub trait LnurlRepository {
     /// pubkey to the target, replacing any existing row for the target and
     /// releasing the name that row held.
     /// Returns [`LnurlRepositoryError::SourceNotOwner`] if the source does not
-    /// currently own the username in that domain.
+    /// currently own the username in that group.
     ///
     /// Claims `claim` in the same transaction and returns
     /// [`LnurlRepositoryError::StatementAlreadyUsed`] if it was already claimed.
@@ -264,6 +272,16 @@ pub trait LnurlRepository {
 
     /// Insert a domain if it doesn't already exist
     async fn add_domain(&self, domain: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Move the usernames registered or held under `domain` to `group`, which
+    /// `domain` joined, and record in `merged_names` what happened to each.
+    ///
+    /// What is registered in the group stays: [`crate::merge`] has every case.
+    async fn merge_domain(
+        &self,
+        domain: &str,
+        group: &DomainGroup,
+    ) -> Result<MergedNames, LnurlRepositoryError>;
 
     /// Store the cached partner JWT for a domain.
     async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
@@ -336,7 +354,7 @@ pub struct WebhookPayloadData {
     pub amount_received_sat: Option<i64>,
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
-    pub domain: String,
+    pub group: DomainGroup,
     pub nostr_zap_request: Option<String>,
 }
 
@@ -345,15 +363,16 @@ pub struct WebhookPayloadData {
 #[cfg(test)]
 pub mod shared_tests {
     use super::{
-        LnurlRepository, LnurlRepositoryError, NameStatus, RegistrationLimit, StatementClaim,
-        TransferRequest,
+        DomainConfig, Invoice, LnurlRepository, LnurlRepositoryError, NameStatus,
+        RegistrationLimit, StatementClaim, TransferRequest,
     };
+    use crate::domains::DomainGroup;
     use crate::user::User;
 
     /// A user of `domain` holding `name`, described by their own name.
-    fn user(domain: &str, pubkey: &str, name: &str) -> User {
+    fn user(domain: &DomainGroup, pubkey: &str, name: &str) -> User {
         User {
-            domain: domain.into(),
+            group: domain.clone(),
             pubkey: pubkey.into(),
             name: name.into(),
             description: name.into(),
@@ -363,7 +382,7 @@ pub mod shared_tests {
     /// Register `name` to `pubkey`, holding whatever it held before.
     async fn register<DB>(
         db: &DB,
-        domain: &str,
+        domain: &DomainGroup,
         pubkey: &str,
         name: &str,
     ) -> Result<(), LnurlRepositoryError>
@@ -379,12 +398,13 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        register(db, "a.com", "aaaa", "alice").await.unwrap();
+        let domain = &DomainGroup::new("a.com");
+        register(db, domain, "aaaa", "alice").await.unwrap();
 
         let result = db
             .upsert_user(
                 &User {
-                    domain: "a.com".into(),
+                    group: domain.clone(),
                     pubkey: "bbbb".into(),
                     name: "alice".into(),
                     description: "bob".into(),
@@ -397,11 +417,7 @@ pub mod shared_tests {
             "expected NameTaken, got {result:?}"
         );
 
-        let owner = db
-            .get_user_by_name("a.com", "alice")
-            .await
-            .unwrap()
-            .unwrap();
+        let owner = db.get_user_by_name(domain, "alice").await.unwrap().unwrap();
         assert_eq!(
             owner.pubkey, "aaaa",
             "existing owner was replaced, now resolves to pubkey {}",
@@ -419,29 +435,30 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        register(db, "a.com", "dddd", "dave").await.unwrap();
+        let domain = &DomainGroup::new("a.com");
+        register(db, domain, "dddd", "dave").await.unwrap();
 
-        let removed = db.delete_user("a.com", "dddd", "erin").await.unwrap();
+        let removed = db.delete_user(domain, "dddd", "erin").await.unwrap();
         assert!(
             !removed,
             "deleting 'erin' must report that it removed nothing"
         );
-        let held = db.get_user_by_pubkey("a.com", "dddd").await.unwrap();
+        let held = db.get_user_by_pubkey(domain, "dddd").await.unwrap();
         assert_eq!(
             held.map(|u| u.name),
             Some("dave".to_string()),
             "deleting 'erin' must not touch the 'dave' the pubkey holds"
         );
         assert_eq!(
-            db.name_status("a.com", "erin", None).await.unwrap(),
+            db.name_status(domain, "erin", None).await.unwrap(),
             NameStatus::Free,
             "a delete that removed nothing must not hold a name"
         );
 
-        let removed = db.delete_user("a.com", "dddd", "dave").await.unwrap();
+        let removed = db.delete_user(domain, "dddd", "dave").await.unwrap();
         assert!(removed, "deleting the held name must report the removal");
         assert!(
-            db.get_user_by_pubkey("a.com", "dddd")
+            db.get_user_by_pubkey(domain, "dddd")
                 .await
                 .unwrap()
                 .is_none(),
@@ -539,13 +556,13 @@ pub mod shared_tests {
 
     /// A transfer of `username` between the two pubkeys on `domain`.
     fn transfer<'a>(
-        domain: &'a str,
+        domain: &'a DomainGroup,
         from: &'a str,
         to: &'a str,
         username: &'a str,
     ) -> TransferRequest<'a> {
         TransferRequest {
-            domain,
+            group: domain,
             from_pubkey: from,
             to_pubkey: to,
             username,
@@ -560,7 +577,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "transfer-once.com";
+        let domain = &DomainGroup::new("transfer-once.com");
         register(db, domain, "aaaa", "amy").await.unwrap();
 
         let there = transfer_statement("aaaa", "bbbb", "amy");
@@ -593,7 +610,7 @@ pub mod shared_tests {
             "expected StatementAlreadyUsed, got {replayed:?}"
         );
         assert_eq!(
-            db.get_user_by_name("transfer-once.com", "amy")
+            db.get_user_by_name(domain, "amy")
                 .await
                 .unwrap()
                 .unwrap()
@@ -609,7 +626,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "transfer-retry.com";
+        let domain = &DomainGroup::new("transfer-retry.com");
         let statement = transfer_statement("cccc", "dddd", "cara");
         let failed = db
             .transfer_username(
@@ -639,13 +656,15 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        for domain in ["spend-a.com", "spend-b.com"] {
+        let first = &DomainGroup::new("spend-a.com");
+        let second = &DomainGroup::new("spend-b.com");
+        for domain in [first, second] {
             register(db, domain, "hhhh", "holly").await.unwrap();
         }
 
         let statement = transfer_statement("hhhh", "iiii", "holly");
         db.transfer_username(
-            transfer("spend-a.com", "hhhh", "iiii", "holly"),
+            transfer(first, "hhhh", "iiii", "holly"),
             transfer_claim(&statement),
         )
         .await
@@ -654,7 +673,7 @@ pub mod shared_tests {
         assert!(
             matches!(
                 db.transfer_username(
-                    transfer("spend-b.com", "hhhh", "iiii", "holly"),
+                    transfer(second, "hhhh", "iiii", "holly"),
                     transfer_claim(&statement),
                 )
                 .await,
@@ -670,7 +689,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "released.com";
+        let domain = &DomainGroup::new("released.com");
         register(db, domain, "aaaa", "alice").await.unwrap();
         assert!(db.delete_user(domain, "aaaa", "alice").await.unwrap());
 
@@ -719,7 +738,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "renamed.com";
+        let domain = &DomainGroup::new("renamed.com");
         register(db, domain, "cccc", "carol").await.unwrap();
         register(db, domain, "cccc", "caroline").await.unwrap();
 
@@ -754,14 +773,14 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "at-once.com";
+        let domain = &DomainGroup::new("at-once.com");
         let first = {
-            let db = db.clone();
-            tokio::spawn(async move { register(&db, domain, "mmmm", "mary").await })
+            let (db, domain) = (db.clone(), domain.clone());
+            tokio::spawn(async move { register(&db, &domain, "mmmm", "mary").await })
         };
         let second = {
-            let db = db.clone();
-            tokio::spawn(async move { register(&db, domain, "mmmm", "maud").await })
+            let (db, domain) = (db.clone(), domain.clone());
+            tokio::spawn(async move { register(&db, &domain, "mmmm", "maud").await })
         };
         first.await.unwrap().expect("the first registration");
         second.await.unwrap().expect("the second registration");
@@ -791,7 +810,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "transfer-holds.com";
+        let domain = &DomainGroup::new("transfer-holds.com");
         register(db, domain, "eeee", "erin").await.unwrap();
         register(db, domain, "ffff", "fran").await.unwrap();
 
@@ -873,6 +892,98 @@ pub mod shared_tests {
         );
     }
 
+    async fn domain_config<DB>(db: &DB, domain: &str) -> DomainConfig
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.list_domains()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|d| d.domain == domain)
+            .expect("an allowed domain")
+    }
+
+    /// `list_domains` reports the group a domain is configured with. The
+    /// caller allows `group.com` and puts `joined.com` in its group first, since
+    /// setting a group is a direct row write with no trait method.
+    pub async fn list_domains_surfaces_groups<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let joined = domain_config(db, "joined.com").await;
+        assert_eq!(joined.domain_group.as_deref(), Some("group.com"));
+        let group = domain_config(db, "group.com").await;
+        assert_eq!(group.domain_group, None);
+    }
+
+    /// `list_domains` reports whether usernames are registered or held under a
+    /// domain. The caller allows `group.com` and `joined.com` first.
+    pub async fn list_domains_reports_whether_a_domain_has_usernames<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        assert!(!domain_config(db, "group.com").await.has_names);
+
+        let domain = &DomainGroup::new("group.com");
+        register(db, domain, "aaaa", "alice").await.unwrap();
+        assert!(domain_config(db, "group.com").await.has_names);
+
+        assert!(db.delete_user(domain, "aaaa", "alice").await.unwrap());
+        assert!(
+            domain_config(db, "group.com").await.has_names,
+            "a released username is held under the domain"
+        );
+        assert!(!domain_config(db, "joined.com").await.has_names);
+    }
+
+    /// The metadata of a payment names the address its invoice was requested
+    /// on, which the user may have given up since. An invoice stored without
+    /// a username or without a domain gets no address.
+    pub async fn metadata_names_the_address_an_invoice_was_requested_on<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = &DomainGroup::new("paid.com");
+        register(db, domain, "pppp", "pia").await.unwrap();
+        let invoice = |payment_hash: &str, domain: Option<&str>, username: Option<&str>| Invoice {
+            payment_hash: payment_hash.into(),
+            user_pubkey: "pppp".into(),
+            invoice: "lnbc1".into(),
+            preimage: None,
+            invoice_expiry: i64::MAX,
+            created_at: 1,
+            updated_at: 1,
+            domain: domain.map(Into::into),
+            username: username.map(Into::into),
+            amount_received_sat: None,
+        };
+        for stored in [
+            invoice("paid-with-username", Some("paid.com"), Some("pia")),
+            invoice("paid-without-username", Some("paid.com"), None),
+            invoice("paid-without-domain", None, None),
+        ] {
+            db.upsert_invoice(&stored).await.unwrap();
+        }
+        register(db, domain, "pppp", "pilar").await.unwrap();
+
+        let metadata = db
+            .get_metadata_by_pubkey("pppp", 0, 100, None)
+            .await
+            .unwrap();
+        let address = |payment_hash: &str| {
+            metadata
+                .iter()
+                .find(|m| m.payment_hash == payment_hash)
+                .expect("metadata for the invoice")
+                .lightning_address
+                .as_deref()
+        };
+        assert_eq!(address("paid-with-username"), Some("pia@paid.com"));
+        assert_eq!(address("paid-without-username"), None);
+        assert_eq!(address("paid-without-domain"), None);
+    }
+
     /// A limit inside a window that never expires during the test.
     fn limit(max_per_window: u32) -> RegistrationLimit {
         RegistrationLimit {
@@ -884,7 +995,7 @@ pub mod shared_tests {
     /// Register `name` to `pubkey` under `limit`.
     async fn register_limited<DB>(
         db: &DB,
-        domain: &str,
+        domain: &DomainGroup,
         pubkey: &str,
         name: &str,
         limit: Option<RegistrationLimit>,
@@ -903,7 +1014,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit.com";
+        let domain = &DomainGroup::new("limit.com");
         register_limited(db, domain, "aaaa", "ada1", Some(limit(2)))
             .await
             .unwrap();
@@ -933,7 +1044,8 @@ pub mod shared_tests {
         register_limited(db, domain, "bbbb", "bea", Some(limit(2)))
             .await
             .expect("another pubkey must have its own budget");
-        register_limited(db, "limit-other.com", "aaaa", "ada1", Some(limit(2)))
+        let other = &DomainGroup::new("limit-other.com");
+        register_limited(db, other, "aaaa", "ada1", Some(limit(2)))
             .await
             .expect("the same pubkey must have its own budget on another domain");
         register_limited(db, domain, "aaaa", "ada3", None)
@@ -947,14 +1059,14 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-rereg.com";
+        let domain = &DomainGroup::new("limit-rereg.com");
         register_limited(db, domain, "cccc", "cleo", Some(limit(1)))
             .await
             .unwrap();
 
         db.upsert_user(
             &User {
-                domain: domain.into(),
+                group: domain.clone(),
                 pubkey: "cccc".into(),
                 name: "cleo".into(),
                 description: "new description".into(),
@@ -987,7 +1099,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-window.com";
+        let domain = &DomainGroup::new("limit-window.com");
         register_limited(db, domain, "dddd", "dot1", Some(limit(1)))
             .await
             .unwrap();
@@ -1011,7 +1123,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-refused.com";
+        let domain = &DomainGroup::new("limit-refused.com");
         register(db, domain, "eeee", "elsa").await.unwrap();
 
         let taken = register_limited(db, domain, "ffff", "elsa", Some(limit(1))).await;
@@ -1031,7 +1143,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-reclaim.com";
+        let domain = &DomainGroup::new("limit-reclaim.com");
         register_limited(db, domain, "gggg", "gwen", Some(limit(2)))
             .await
             .unwrap();
@@ -1059,7 +1171,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-transfer.com";
+        let domain = &DomainGroup::new("limit-transfer.com");
         register_limited(db, domain, "hhhh", "hana", Some(limit(1)))
             .await
             .unwrap();
@@ -1087,7 +1199,7 @@ pub mod shared_tests {
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let domain = "limit-prune.com";
+        let domain = &DomainGroup::new("limit-prune.com");
         register_limited(db, domain, "jjjj", "june1", Some(limit(2)))
             .await
             .unwrap();

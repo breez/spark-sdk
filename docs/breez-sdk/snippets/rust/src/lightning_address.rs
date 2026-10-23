@@ -104,6 +104,27 @@ pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn access_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
+    let payment_id = "<payment id>".to_string();
+    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let payment = response.payment;
+
+    // ANCHOR: access-lightning-address
+    // Check if this is a lightning payment with LNURL receive metadata
+    if let Some(PaymentDetails::Lightning {
+        lnurl_receive_metadata: Some(metadata),
+        ..
+    }) = payment.details
+    {
+        // Access the Lightning address the sender paid, if present
+        if let Some(lightning_address) = metadata.lightning_address {
+            println!("Lightning address: {}", lightning_address);
+        }
+    }
+    // ANCHOR_END: access-lightning-address
+    Ok(())
+}
+
 pub async fn access_sender_comment(sdk: &BreezSdk) -> anyhow::Result<()> {
     let payment_id = "<payment id>".to_string();
     let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;

@@ -37,19 +37,22 @@ pub struct State<DB> {
 }
 
 impl<DB> State<DB> {
-    /// The wallet to create an invoice for `domain` with.
+    /// The wallet to create an invoice for `group` with.
     ///
     /// When partner attribution is active, builds a per-request, background-less
-    /// wallet whose provider serves `domain`'s own partner JWT, or the default
-    /// when `domain` has no api key of its own. It shares the process signer,
+    /// wallet whose provider serves `group`'s own partner JWT, or the default
+    /// when `group` has no api key of its own. It shares the process signer,
     /// pre-warmed session, HTTP client, and connection pool, starts no background
     /// tasks, and is dropped after the request. Falls back to the state wallet
     /// when attribution is off (non-mainnet) or the per-request build fails.
-    pub async fn invoice_wallet(&self, domain: &str) -> Arc<spark_wallet::SparkWallet> {
+    pub async fn invoice_wallet(
+        &self,
+        group: &crate::domains::DomainGroup,
+    ) -> Arc<spark_wallet::SparkWallet> {
         let Some(cache) = &self.jwt_cache else {
             return Arc::clone(&self.wallet);
         };
-        let domain_jwt_provider = Some(cache.provider_for(domain.to_string())
+        let domain_jwt_provider = Some(cache.provider_for(group.to_string())
             as Arc<dyn spark::header_provider::HeaderProvider>);
         let built = spark_wallet::SparkWallet::new(
             self.spark_config.clone(),
@@ -69,7 +72,7 @@ impl<DB> State<DB> {
             Ok(wallet) => Arc::new(wallet),
             Err(e) => {
                 warn!(
-                    "failed to build attributed wallet for '{domain}', using the state wallet: {e}"
+                    "failed to build attributed wallet for '{group}', using the state wallet: {e}"
                 );
                 Arc::clone(&self.wallet)
             }

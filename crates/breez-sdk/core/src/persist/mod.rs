@@ -198,6 +198,7 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    pub lightning_address: Option<String>,
 }
 
 impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
@@ -207,6 +208,7 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
             nostr_zap_receipt: value.nostr_zap_receipt,
+            lightning_address: value.lightning_address,
         }
     }
 }

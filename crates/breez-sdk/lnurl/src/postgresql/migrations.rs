@@ -406,6 +406,45 @@ fn migrations() -> Vec<Vec<String>> {
                  ON address_registrations (created_at)"
                 .to_string(),
         ],
+        vec![
+            // A domain serves the users of the domain its domain_group names.
+            // With NULL it serves users of its own.
+            "ALTER TABLE allowed_domains
+                 ADD COLUMN domain_group VARCHAR(255) REFERENCES allowed_domains (domain)"
+                .to_string(),
+        ],
+        vec![
+            // The username the invoice was requested for. An invoice that
+            // exists already gets the name its user holds now.
+            "ALTER TABLE invoices ADD COLUMN username VARCHAR(64)".to_string(),
+            "UPDATE invoices
+             SET username = users.name
+             FROM users
+             WHERE users.pubkey = invoices.user_pubkey
+               AND users.domain = invoices.domain"
+                .to_string(),
+        ],
+        vec![
+            // What happened to each username under a domain when the domain
+            // joined a group. Nothing else keeps what a merge dropped.
+            // registered is false for a held username. outcome is 'moved',
+            // 'released' (the group holds it for its pubkey) or 'dropped'.
+            // dropped_hold_pubkey is the pubkey whose hold in the group ended
+            // because the registration moved to the group.
+            "CREATE TABLE merged_names (
+                    id BIGSERIAL PRIMARY KEY,
+                    merged_at BIGINT NOT NULL,
+                    domain VARCHAR(255) NOT NULL,
+                    domain_group VARCHAR(255) NOT NULL,
+                    name VARCHAR(64) NOT NULL,
+                    pubkey VARCHAR(66) NOT NULL,
+                    registered BOOLEAN NOT NULL,
+                    description VARCHAR(255),
+                    outcome VARCHAR(16) NOT NULL,
+                    dropped_hold_pubkey VARCHAR(66)
+                )"
+            .to_string(),
+        ],
     ]
 }
 
@@ -676,6 +715,62 @@ mod tests {
         }
     }
 
+    /// An invoice from before the server stored usernames gets the name its
+    /// user holds on the invoice's domain, and stays without one when no user
+    /// matches.
+    #[tokio::test]
+    async fn existing_invoices_get_the_username_their_user_holds() {
+        let (_pg, pool) = empty_test_pool().await;
+        let before_usernames = migrations()
+            .iter()
+            .position(|statements| statements[0].contains("ADD COLUMN username"))
+            .expect("a migration that adds the username column");
+        spark_postgres::run_migrations(
+            &pool,
+            MIGRATIONS_TABLE,
+            &migrations()[..before_usernames],
+            None,
+        )
+        .await
+        .expect("migrate up to the username column");
+        let client = pool.get().await.unwrap();
+        client
+            .batch_execute(
+                "INSERT INTO users (domain, pubkey, name, description, updated_at)
+                 VALUES ('paid.com', 'pk1', 'alice', '', 0);
+                 INSERT INTO invoices
+                     (payment_hash, user_pubkey, invoice, invoice_expiry, created_at, updated_at, domain)
+                 VALUES ('same-domain', 'pk1', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('other-domain', 'pk1', 'lnbc1', 0, 0, 0, 'other.com'),
+                        ('other-user', 'pk2', 'lnbc1', 0, 0, 0, 'paid.com'),
+                        ('no-domain', 'pk1', 'lnbc1', 0, 0, 0, NULL);",
+            )
+            .await
+            .unwrap();
+
+        run(&pool).await.expect("add the username column");
+
+        let usernames: Vec<(String, Option<String>)> = client
+            .query(
+                "SELECT payment_hash, username FROM invoices ORDER BY payment_hash",
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+        assert_eq!(
+            usernames,
+            [
+                ("no-domain".to_string(), None),
+                ("other-domain".to_string(), None),
+                ("other-user".to_string(), None),
+                ("same-domain".to_string(), Some("alice".to_string())),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn fresh_database_applies_every_migration() {
         let (_pg, pool) = empty_test_pool().await;
@@ -689,7 +784,7 @@ mod tests {
     #[tokio::test]
     async fn fully_migrated_database_reruns_nothing() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         // Re-running migration 1 would fail: `users` already exists.
         run(&pool).await.expect("adopt migrated database");
@@ -712,7 +807,7 @@ mod tests {
     #[tokio::test]
     async fn adoption_is_idempotent() {
         let (_pg, pool) = empty_test_pool().await;
-        migrate_as_previous_runner(&pool, migrations().len()).await;
+        migrate_as_previous_runner(&pool, PREVIOUS_VERSIONS.len()).await;
 
         run(&pool).await.expect("first run");
         run(&pool).await.expect("second run");

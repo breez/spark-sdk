@@ -574,6 +574,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         sender_comment: Some("Test sender comment".to_string()),
         nostr_zap_request: Some(r#"{"kind":9734,"content":"test zap"}"#.to_string()),
         nostr_zap_receipt: Some(r#"{"kind":9735,"content":"test receipt"}"#.to_string()),
+        lightning_address: Some("alice@example.com".to_string()),
     };
     let lightning_lnurl_receive_payment = Payment {
         id: "lightning_lnurl_receive_pmt".to_string(),
@@ -822,6 +823,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
             payment_hash: lnurl_receive_payment_hash.clone(),
             sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+            lightning_address: lnurl_receive_metadata.lightning_address.clone(),
         }])
         .await
         .unwrap();
@@ -1016,6 +1018,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     (Some(r_info), Some(e_info)) => {
                         assert_eq!(r_info.nostr_zap_request, e_info.nostr_zap_request);
                         assert_eq!(r_info.sender_comment, e_info.sender_comment);
+                        assert_eq!(r_info.lightning_address, e_info.lightning_address);
                     }
                     (None, None) => {}
                     _ => panic!(
@@ -1129,6 +1132,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_receipt: Some(
                 r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string(),
             ),
+            lightning_address: Some("alice@example.com".to_string()),
         }])
         .await
         .unwrap();
@@ -1158,6 +1162,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_receipt,
                 Some(r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string()),
                 "Nostr zap receipt should match"
+            );
+            assert_eq!(
+                metadata.lightning_address,
+                Some("alice@example.com".to_string()),
+                "Lightning address should match"
             );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),
@@ -1223,12 +1232,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 sender_comment: Some("Nice work!".to_string()),
                 nostr_zap_request: None,
                 nostr_zap_receipt: None,
+                lightning_address: Some("bob@example.com".to_string()),
             },
             SetLnurlMetadataItem {
                 payment_hash: "zaphash3".to_string(),
                 sender_comment: None,
                 nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 nostr_zap_receipt: None,
+                lightning_address: None,
             },
         ])
         .await
@@ -1254,6 +1265,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_request, None,
                 "Second payment should not have zap request"
             );
+            assert_eq!(
+                metadata.lightning_address,
+                Some("bob@example.com".to_string()),
+                "Second payment should have Lightning address"
+            );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),
     }
@@ -1276,6 +1292,40 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_request,
                 Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 "Third payment should have zap request"
+            );
+            assert_eq!(
+                metadata.lightning_address, None,
+                "Third payment should not have Lightning address"
+            );
+        }
+        _ => panic!("Expected Lightning payment with lnurl receive metadata"),
+    }
+
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: "zaphash3".to_string(),
+            sender_comment: None,
+            nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
+            nostr_zap_receipt: None,
+            lightning_address: Some("carol@example.com".to_string()),
+        }])
+        .await
+        .unwrap();
+
+    let updated_zap3 = storage
+        .get_payment_by_id(lightning_zap_payment3.id.clone())
+        .await
+        .unwrap();
+
+    match updated_zap3.details {
+        Some(PaymentDetails::Lightning {
+            lnurl_receive_metadata: Some(metadata),
+            ..
+        }) => {
+            assert_eq!(
+                metadata.lightning_address,
+                Some("carol@example.com".to_string()),
+                "Setting metadata again should replace the Lightning address"
             );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),

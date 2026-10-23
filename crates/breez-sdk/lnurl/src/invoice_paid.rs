@@ -4,6 +4,7 @@ use tracing::{debug, error};
 
 use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError};
 use crate::time::now_millis;
+use crate::user::User;
 use crate::webhooks::{WebhookRepository, WebhookService};
 
 #[derive(Debug, thiserror::Error)]
@@ -89,7 +90,7 @@ where
 pub async fn create_invoice<DB>(
     db: &DB,
     payment_hash: &str,
-    user_pubkey: &str,
+    user: &User,
     invoice: &str,
     invoice_expiry: i64,
     domain: &str,
@@ -100,13 +101,14 @@ where
     let now = now_millis();
     let invoice_record = Invoice {
         payment_hash: payment_hash.to_string(),
-        user_pubkey: user_pubkey.to_string(),
+        user_pubkey: user.pubkey.clone(),
         invoice: invoice.to_string(),
         preimage: None,
         invoice_expiry,
         created_at: now,
         updated_at: now,
         domain: Some(domain.to_string()),
+        username: Some(user.name.clone()),
         amount_received_sat: None,
     };
     db.upsert_invoice(&invoice_record).await?;
@@ -186,6 +188,7 @@ mod shared_tests {
             created_at: 1000,
             updated_at: 1000,
             domain: None,
+            username: None,
             amount_received_sat: None,
         })
         .await

@@ -559,6 +559,13 @@ class MigrationManager {
           )`,
         ],
       },
+      {
+        name: "Add lightning address to lnurl_receive_metadata and force its re-sync",
+        sql: [
+          `ALTER TABLE lnurl_receive_metadata ADD COLUMN lightning_address TEXT`,
+          `DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'`,
+        ],
+      },
     ];
   }
 }
