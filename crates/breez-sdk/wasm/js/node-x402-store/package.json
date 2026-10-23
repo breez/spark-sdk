@@ -1,0 +1,30 @@
+{
+  "name": "@breez-sdk/node-x402-store",
+  "version": "1.0.0",
+  "description": "Node.js SQLite x402 replay store implementation for Breez SDK WASM (CommonJS)",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.2.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breez/spark-sdk"
+  },
+  "keywords": [
+    "breez",
+    "x402",
+    "sqlite",
+    "wasm",
+    "nodejs"
+  ],
+  "author": "Breez Technology Ltd.",
+  "license": "MIT"
+}

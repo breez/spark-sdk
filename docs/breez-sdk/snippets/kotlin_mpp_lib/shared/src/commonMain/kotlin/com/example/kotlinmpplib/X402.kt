@@ -74,4 +74,67 @@ class X402Snippets {
         }
         // ANCHOR_END: pay-mcp-tool-call
     }
+
+    suspend fun createChallenge(x402: X402) {
+        // ANCHOR: create-challenge
+        try {
+            // The unpaid request, with its URL built from your public origin
+            val request = X402Request.Http(
+                method = "GET",
+                url = "https://api.example.com/article/A",
+                headers = listOf(X402Header(name = "accept", value = "application/json")),
+                body = null
+            )
+            val response = x402.createChallenge(
+                CreateX402ChallengeRequest(
+                    request = request,
+                    // Headers that change what is served, so the payment covers them too
+                    boundNames = listOf("accept"),
+                    amounts = listOf(X402PaymentAmount.Lightning(amountSats = 21u)),
+                    maxTimeoutSecs = null,
+                    description = "An article",
+                    mimeType = "application/json"
+                )
+            )
+
+            // Respond with status 402 and this PAYMENT-REQUIRED header
+            // Log.v("Breez", "PAYMENT-REQUIRED: ${response.paymentRequired}")
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: create-challenge
+    }
+
+    suspend fun settlePayment(x402: X402, paymentSignatureHeader: String) {
+        // ANCHOR: settle-payment
+        try {
+            // The paid request, exactly as received
+            val request = X402Request.Http(
+                method = "GET",
+                url = "https://api.example.com/article/A",
+                headers = listOf(X402Header(name = "accept", value = "application/json")),
+                body = null
+            )
+            val response = x402.settle(
+                SettleX402Request(
+                    // The PAYMENT-SIGNATURE header of the request
+                    payment = paymentSignatureHeader,
+                    request = request,
+                    boundNames = listOf("accept")
+                )
+            )
+
+            // Send the PAYMENT-RESPONSE header either way
+            // Log.v("Breez", "PAYMENT-RESPONSE: ${response.paymentResponse}")
+            if (response.success) {
+                // Serve the resource
+            } else {
+                // Respond with status 402 and a new challenge
+                // Log.v("Breez", "Payment refused: ${response.errorReason}")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: settle-payment
+    }
 }

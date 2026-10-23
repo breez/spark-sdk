@@ -12,6 +12,8 @@ mod base;
 mod config;
 #[cfg(feature = "mysql")]
 mod storage;
+#[cfg(feature = "mysql")]
+mod x402_store;
 
 // Re-export public configuration types and functions (with UniFFI annotations).
 #[allow(unused_imports)]
@@ -26,3 +28,5 @@ pub(crate) use base::{
 // Re-export storage implementation
 #[cfg(feature = "mysql")]
 pub(crate) use storage::MysqlStorage;
+#[cfg(feature = "mysql")]
+pub(crate) use x402_store::MysqlX402ReplayStore;

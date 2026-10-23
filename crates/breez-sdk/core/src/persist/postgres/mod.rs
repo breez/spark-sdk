@@ -9,6 +9,8 @@ mod base;
 mod config;
 #[cfg(feature = "postgres")]
 mod storage;
+#[cfg(feature = "postgres")]
+mod x402_store;
 
 // Re-export public configuration types and functions (with UniFFI annotations)
 pub use config::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config};
@@ -23,3 +25,5 @@ pub(crate) use base::{
 // Re-export storage implementation
 #[cfg(feature = "postgres")]
 pub(crate) use storage::PostgresStorage;
+#[cfg(feature = "postgres")]
+pub(crate) use x402_store::PostgresX402ReplayStore;

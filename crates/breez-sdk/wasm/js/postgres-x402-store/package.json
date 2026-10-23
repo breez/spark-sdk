@@ -1,0 +1,27 @@
+{
+  "name": "@breez-sdk/postgres-x402-store",
+  "version": "1.0.0",
+  "description": "Node.js PostgreSQL x402 replay store implementation for Breez SDK WASM (CommonJS)",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breez/spark-sdk"
+  },
+  "keywords": [
+    "breez",
+    "x402",
+    "postgres",
+    "wasm",
+    "nodejs"
+  ],
+  "author": "Breez Technology Ltd.",
+  "license": "MIT"
+}

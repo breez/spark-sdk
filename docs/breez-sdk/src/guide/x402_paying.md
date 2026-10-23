@@ -1,6 +1,6 @@
 # Paying with x402
 
-The SDK pays [x402](x402.md) challenges over Lightning, for both HTTP requests and MCP tool calls.
+The SDK pays [x402](x402.md) challenges over Lightning, for both HTTP requests and MCP tool calls. To charge for your own resources instead, see [Charging with x402](x402_charging.md).
 
 ## Paying for an HTTP request
 

@@ -83,3 +83,71 @@ pub struct PayX402Response {
     pub payment_signature: Option<String>,
     pub payment: Payment,
 }
+
+/// A request to create an x402 challenge for a request that hasn't been paid for.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CreateX402ChallengeRequest {
+    /// The request being charged for, as received. For HTTP, its URL must be
+    /// the public URL the client used, built from the server's configured
+    /// origin rather than from client-supplied headers.
+    pub request: X402Request,
+    /// The HTTP headers, or MCP `params._meta` members, the payment also
+    /// commits to besides the method, URL and body, or the tool call. Include
+    /// every one that changes what is served or to whom, such as
+    /// `authorization`. Lowercase and sorted.
+    pub bound_names: Vec<String>,
+    /// The price on each rail the challenge accepts, one amount per rail.
+    pub amounts: Vec<X402PaymentAmount>,
+    /// How long the challenge can be paid, in seconds. Defaults to 300.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_timeout_secs: Option<u32>,
+    /// What is being paid for, shown to the payer.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub description: Option<String>,
+    /// The resource's MIME type.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub mime_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CreateX402ChallengeResponse {
+    /// The challenge: the `PAYMENT-REQUIRED` header value of an HTTP 402
+    /// response, or the JSON for an MCP tool result's `structuredContent`.
+    pub payment_required: String,
+    /// The invoice's payment hash, in lowercase hex.
+    pub payment_hash: String,
+}
+
+/// A request to settle the payment sent with a paid-for request.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SettleX402Request {
+    /// The `PAYMENT-SIGNATURE` header value, or the JSON in an MCP call's
+    /// `params._meta["x402/payment"]`.
+    pub payment: String,
+    /// The request being served, as received.
+    pub request: X402Request,
+    /// The names bound when the challenge was created.
+    pub bound_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SettleX402Response {
+    /// Whether the payment is valid, paid to this SDK and now claimed.
+    /// Serve the request only when it is.
+    pub success: bool,
+    /// The x402 reason the payment was refused. `exact_lnbtc_invoice_not_settled`
+    /// and `exact_lnbtc_receiver_unavailable` may succeed when retried.
+    pub error_reason: Option<String>,
+    /// The outcome to send with the response: the `PAYMENT-RESPONSE` header
+    /// value for HTTP, or the JSON for an MCP result's
+    /// `_meta["x402/payment-response"]`.
+    pub payment_response: String,
+    /// The payment hash, in lowercase hex, when the payment could be identified.
+    pub payment_hash: Option<String>,
+    /// The amount paid, when successful.
+    pub amount: Option<X402PaymentAmount>,
+}

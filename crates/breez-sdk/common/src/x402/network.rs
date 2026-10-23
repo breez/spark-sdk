@@ -26,6 +26,12 @@ impl LnbtcNetwork {
         }
     }
 
+    pub fn from_id(id: &str) -> Option<Self> {
+        [Self::Mainnet, Self::Testnet3, Self::Signet, Self::Regtest]
+            .into_iter()
+            .find(|n| n.id() == id)
+    }
+
     pub fn currency(self) -> Currency {
         match self {
             Self::Mainnet => Currency::Bitcoin,

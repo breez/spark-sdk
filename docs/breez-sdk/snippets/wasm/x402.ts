@@ -59,3 +59,56 @@ const payMcpToolCall = async (x402: X402, structuredContent: string) => {
   }
   // ANCHOR_END: pay-mcp-tool-call
 }
+
+const createChallenge = async (x402: X402) => {
+  // ANCHOR: create-challenge
+  // The unpaid request, with its URL built from your public origin
+  const request: X402Request = {
+    type: 'http',
+    method: 'GET',
+    url: 'https://api.example.com/article/A',
+    headers: [{ name: 'accept', value: 'application/json' }],
+    body: undefined
+  }
+  const response = await x402.createChallenge({
+    request,
+    // Headers that change what is served, so the payment covers them too
+    boundNames: ['accept'],
+    amounts: [{ type: 'lightning', amountSats: 21 }],
+    maxTimeoutSecs: undefined,
+    description: 'An article',
+    mimeType: 'application/json'
+  })
+
+  // Respond with status 402 and this PAYMENT-REQUIRED header
+  console.log(`PAYMENT-REQUIRED: ${response.paymentRequired}`)
+  // ANCHOR_END: create-challenge
+}
+
+const settlePayment = async (x402: X402, paymentSignatureHeader: string) => {
+  // ANCHOR: settle-payment
+  // The paid request, exactly as received
+  const request: X402Request = {
+    type: 'http',
+    method: 'GET',
+    url: 'https://api.example.com/article/A',
+    headers: [{ name: 'accept', value: 'application/json' }],
+    body: undefined
+  }
+  const response = await x402.settle({
+    // The PAYMENT-SIGNATURE header of the request
+    payment: paymentSignatureHeader,
+    request,
+    boundNames: ['accept']
+  })
+
+  // Send the PAYMENT-RESPONSE header either way
+  console.log(`PAYMENT-RESPONSE: ${response.paymentResponse}`)
+  if (response.success) {
+    // Serve the resource
+  } else {
+    // Respond with status 402 and a new challenge
+    console.log(`Payment refused: ${response.errorReason ?? ''}`)
+  }
+  // ANCHOR_END: settle-payment
+}

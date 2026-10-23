@@ -14,6 +14,7 @@ const { spawn } = require('child_process')
 
 const { fundAddress } = require('./faucet')
 const { LnurlFixture } = require('./lnurl-fixture')
+const { X402Fixture } = require('./x402-fixture')
 
 const WASM_CLI_DIR = path.join(
   __dirname,
@@ -373,6 +374,10 @@ async function runScenario(scenario) {
         const lnurl = await LnurlFixture.start()
         vars.lnurl_url = lnurl.httpUrl
         fixtures.push(lnurl)
+      } else if (fixture === 'x402') {
+        const x402 = await X402Fixture.start()
+        vars.x402_url = x402.url
+        fixtures.push(x402)
       } else {
         throw new Error(`unknown fixture '${fixture}'`)
       }
@@ -413,7 +418,7 @@ async function runScenario(scenario) {
     }
   } finally {
     for (const fixture of fixtures) {
-      fixture.stop()
+      await fixture.stop()
     }
     for (const dir of walletDirs.values()) {
       fs.rmSync(dir, { recursive: true, force: true })

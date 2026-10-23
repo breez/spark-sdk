@@ -1,4 +1,7 @@
 mod models;
+mod quote_key;
+mod server;
+mod store;
 
 use breez_sdk_common::x402::{
     binding::{HttpRequest, McpToolCall, parse_tool_call_params},
@@ -18,11 +21,15 @@ use crate::{
 };
 
 pub use models::*;
+pub(crate) use quote_key::X402QuoteKey;
+#[cfg(any(test, feature = "test-utils"))]
+pub use store::x402_replay_store_tests;
+pub use store::{X402ReplayStore, X402StoreError};
 
 const DEFAULT_COMPLETION_TIMEOUT_SECS: u32 = 30;
 
-/// Pays for HTTP resources and MCP tool calls that use the x402 protocol over
-/// Lightning (the `exact` scheme on `lnbtc`).
+/// Pays for, and charges for, HTTP resources and MCP tool calls with the x402
+/// protocol over Lightning (the `exact` scheme on `lnbtc`).
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct X402 {
     sdk: BreezSdk,

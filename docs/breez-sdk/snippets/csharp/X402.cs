@@ -70,5 +70,68 @@ namespace BreezSdkSnippets
             }
             // ANCHOR_END: pay-mcp-tool-call
         }
+
+        async Task CreateChallenge(X402 x402)
+        {
+            // ANCHOR: create-challenge
+            // The unpaid request, with its URL built from your public origin
+            var request = new X402Request.Http(
+                method: "GET",
+                url: "https://api.example.com/article/A",
+                headers: new X402Header[] {
+                    new X402Header(name: "accept", value: "application/json")
+                },
+                body: null
+            );
+            var response = await x402.CreateChallenge(request: new CreateX402ChallengeRequest(
+                request: request,
+                // Headers that change what is served, so the payment covers them too
+                boundNames: new string[] { "accept" },
+                amounts: new X402PaymentAmount[]
+                {
+                    new X402PaymentAmount.Lightning(amountSats: 21)
+                },
+                maxTimeoutSecs: null,
+                description: "An article",
+                mimeType: "application/json"
+            ));
+
+            // Respond with status 402 and this PAYMENT-REQUIRED header
+            Console.WriteLine($"PAYMENT-REQUIRED: {response.paymentRequired}");
+            // ANCHOR_END: create-challenge
+        }
+
+        async Task SettlePayment(X402 x402, string paymentSignatureHeader)
+        {
+            // ANCHOR: settle-payment
+            // The paid request, exactly as received
+            var request = new X402Request.Http(
+                method: "GET",
+                url: "https://api.example.com/article/A",
+                headers: new X402Header[] {
+                    new X402Header(name: "accept", value: "application/json")
+                },
+                body: null
+            );
+            var response = await x402.Settle(request: new SettleX402Request(
+                // The PAYMENT-SIGNATURE header of the request
+                payment: paymentSignatureHeader,
+                request: request,
+                boundNames: new string[] { "accept" }
+            ));
+
+            // Send the PAYMENT-RESPONSE header either way
+            Console.WriteLine($"PAYMENT-RESPONSE: {response.paymentResponse}");
+            if (response.success)
+            {
+                // Serve the resource
+            }
+            else
+            {
+                // Respond with status 402 and a new challenge
+                Console.WriteLine($"Payment refused: {response.errorReason}");
+            }
+            // ANCHOR_END: settle-payment
+        }
     }
 }
