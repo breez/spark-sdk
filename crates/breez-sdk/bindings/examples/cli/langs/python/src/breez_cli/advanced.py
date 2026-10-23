@@ -156,6 +156,8 @@ def _print_skipped(skipped):
             text = "its funds were not found on-chain"
         elif isinstance(reason, SkippedLeafReason.UNVERIFIED):
             text = "its funds could not be looked up"
+        elif isinstance(reason, SkippedLeafReason.OPERATORS_UNAVAILABLE):
+            text = "the Spark operators were unavailable"
         elif isinstance(reason, SkippedLeafReason.NOT_RECOVERABLE):
             text = reason.message
         else:
