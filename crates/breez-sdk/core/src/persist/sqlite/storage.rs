@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use tracing::warn;
 
-use super::{Payment, Storage, StorageError};
+use crate::persist::{Payment, Storage, StorageError};
 
 const DEFAULT_DB_FILENAME: &str = "storage.sql";
 /// SQLite-based storage implementation
