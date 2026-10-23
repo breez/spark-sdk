@@ -148,7 +148,7 @@ pub struct TransferRequest<'a> {
     pub from_pubkey: &'a str,
     pub to_pubkey: &'a str,
     pub username: &'a str,
-    pub description: &'a str,
+    pub description: Option<&'a str>,
 }
 
 #[async_trait::async_trait]
@@ -356,7 +356,7 @@ pub mod shared_tests {
             domain: domain.into(),
             pubkey: pubkey.into(),
             name: name.into(),
-            description: name.into(),
+            description: Some(name.into()),
         }
     }
 
@@ -373,6 +373,40 @@ pub mod shared_tests {
         db.upsert_user(&user(domain, pubkey, name), None).await
     }
 
+    /// A user who gave no description is stored without one, also when a
+    /// transfer moves the username to another pubkey.
+    pub async fn a_user_without_a_description_is_stored_without_one<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let domain = "plain.com";
+        db.upsert_user(
+            &User {
+                domain: domain.into(),
+                pubkey: "pppp".into(),
+                name: "pia".into(),
+                description: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let stored = db.get_user_by_name(domain, "pia").await.unwrap().unwrap();
+        assert_eq!(stored.description, None);
+
+        db.transfer_username(
+            TransferRequest {
+                description: None,
+                ..transfer(domain, "pppp", "qqqq", "pia")
+            },
+            transfer_claim(b"plain-transfer"),
+        )
+        .await
+        .unwrap();
+        let moved = db.get_user_by_name(domain, "pia").await.unwrap().unwrap();
+        assert_eq!((moved.pubkey.as_str(), moved.description), ("qqqq", None));
+    }
+
     /// Upserting a name already owned by a different pubkey returns `NameTaken`
     /// and leaves the existing owner's row intact, rather than replacing it.
     pub async fn registering_taken_name_with_other_pubkey_is_rejected<DB>(db: &DB)
@@ -387,7 +421,7 @@ pub mod shared_tests {
                     domain: "a.com".into(),
                     pubkey: "bbbb".into(),
                     name: "alice".into(),
-                    description: "bob".into(),
+                    description: Some("bob".into()),
                 },
                 None,
             )
@@ -549,7 +583,7 @@ pub mod shared_tests {
             from_pubkey: from,
             to_pubkey: to,
             username,
-            description: username,
+            description: Some(username),
         }
     }
 
@@ -957,7 +991,7 @@ pub mod shared_tests {
                 domain: domain.into(),
                 pubkey: "cccc".into(),
                 name: "cleo".into(),
-                description: "new description".into(),
+                description: Some("new description".into()),
             },
             Some(limit(1)),
         )
@@ -967,7 +1001,7 @@ pub mod shared_tests {
             db.get_user_by_pubkey(domain, "cccc")
                 .await
                 .unwrap()
-                .map(|u| u.description),
+                .and_then(|u| u.description),
             Some("new description".to_string())
         );
 

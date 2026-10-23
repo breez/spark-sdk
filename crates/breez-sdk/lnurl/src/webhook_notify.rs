@@ -129,7 +129,7 @@ mod shared_tests {
                 name: "alice".to_string(),
                 pubkey: "enqueue_pubkey".to_string(),
                 domain: domain.to_string(),
-                description: String::new(),
+                description: None,
             },
             None,
         )

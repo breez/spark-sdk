@@ -1204,6 +1204,13 @@ mod postgres_tests {
     }
 
     #[tokio::test]
+    async fn a_user_without_a_description_is_stored_without_one() {
+        let (_pg, pool) = test_pool().await;
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::a_user_without_a_description_is_stored_without_one(&db).await;
+    }
+
+    #[tokio::test]
     async fn registering_taken_name_with_other_pubkey_is_rejected() {
         let (_pg, pool) = test_pool().await;
         let db = super::LnurlRepository::new(pool);
@@ -1361,7 +1368,7 @@ mod postgres_tests {
                 domain: domain.into(),
                 pubkey: "kkkk".into(),
                 name: "jane".into(),
-                description: "jane".into(),
+                description: Some("jane".into()),
             },
             None,
         )

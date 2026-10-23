@@ -406,6 +406,11 @@ fn migrations() -> Vec<Vec<String>> {
                  ON address_registrations (created_at)"
                 .to_string(),
         ],
+        vec![
+            // A user who gave no description has none, and the server shows
+            // its default.
+            "ALTER TABLE users ALTER COLUMN description DROP NOT NULL".to_string(),
+        ],
     ]
 }
 

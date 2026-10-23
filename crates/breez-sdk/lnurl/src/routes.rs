@@ -39,7 +39,7 @@ use crate::{
         LnurlRepository, LnurlRepositoryError, NameStatus, StatementClaim, TransferRequest,
     },
     state::State,
-    user::{USERNAME_VALIDATION_REGEX, User},
+    user::{USERNAME_VALIDATION_REGEX, User, shown_description},
 };
 
 /// Named locally for how it reads at the call sites, defined in `lnurl-models`
@@ -217,7 +217,7 @@ where
             domain,
             pubkey: pubkey.to_string(),
             name: username,
-            description,
+            description: given_description(&description).map(str::to_string),
         };
 
         if let Err(e) = state.db.upsert_user(&user, state.registration_limit).await {
@@ -261,6 +261,11 @@ where
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
+            description: Some(shown_description(
+                &user.name,
+                &user.domain,
+                user.description.as_deref(),
+            )),
         }))
     }
 
@@ -333,7 +338,7 @@ where
                     from_pubkey: &from_pk.to_string(),
                     to_pubkey: &to_pk.to_string(),
                     username: &username,
-                    description: &description,
+                    description: given_description(&description),
                 },
                 StatementClaim {
                     hash: &statement_hash(&from_pk, &authorization.message),
@@ -390,6 +395,11 @@ where
         Ok(Json(TransferLnurlPayResponse {
             lnurl,
             lightning_address: format!("{username}@{domain}"),
+            description: Some(shown_description(
+                &username,
+                &domain,
+                given_description(&description),
+            )),
         }))
     }
 
@@ -505,11 +515,13 @@ where
         match user {
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
+                let description =
+                    shown_description(&user.name, &user.domain, user.description.as_deref());
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
-                    description: user.description,
+                    description,
                 }))
             }
             None => Err((
@@ -1297,6 +1309,12 @@ fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value
     Ok(())
 }
 
+/// The description a client gave. A client sends an empty one to leave the
+/// description to the server.
+fn given_description(description: &str) -> Option<&str> {
+    (!description.is_empty()).then_some(description)
+}
+
 /// Take the metadata request's signature and timestamp from the headers,
 /// falling back to the query string only where a header is absent.
 ///
@@ -1920,7 +1938,10 @@ fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
 
 fn get_metadata(domain: &str, user: &User) -> String {
     json!(vec![
-        vec!["text/plain", &user.description],
+        vec![
+            "text/plain",
+            &shown_description(&user.name, domain, user.description.as_deref()),
+        ],
         vec!["text/identifier", &format!("{}@{}", user.name, domain)],
     ])
     .to_string()
@@ -2886,6 +2907,111 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A wallet that sends an empty description leaves the description to the
+    /// server, which stores none and shows its default to payers and wallets.
+    #[tokio::test]
+    async fn an_address_without_a_description_shows_the_servers_default() {
+        use crate::test_support::{TestServer, test_db, test_state};
+        use axum::http::Method;
+
+        let (_pg, db) = test_db().await;
+        let state = test_state(db.clone()).await;
+        state
+            .domains
+            .write()
+            .await
+            .insert("tips.example".to_string(), None);
+        let server = TestServer::start(crate::router(state)).await;
+        let ((alice_secret, alice), (bob_secret, bob)) = (transfer_key(1), transfer_key(2));
+        let signed = |secret, message: &str| hex::encode(sign(secret, message).serialize_der());
+        let shown = "Pay to alice@tips.example";
+
+        let timestamp = now_u64();
+        let message = signed_message::register("tips.example", "alice", "", timestamp);
+        let registered: RegisterLnurlPayResponse = server
+            .request(Method::POST, "tips.example", &format!("/lnurlpay/{alice}"))
+            .json(&RegisterLnurlPayRequest {
+                username: "alice".to_string(),
+                signature: signed(&alice_secret, &message),
+                timestamp,
+                description: String::new(),
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(registered.description.as_deref(), Some(shown));
+        let stored = db.get_user_by_name("tips.example", "alice").await.unwrap();
+        assert_eq!(stored.map(|user| user.description), Some(None));
+
+        let message = signed_message::recover("tips.example", &alice.to_string(), timestamp);
+        let recovered: RecoverLnurlPayResponse = server
+            .request(
+                Method::POST,
+                "tips.example",
+                &format!("/lnurlpay/{alice}/recover"),
+            )
+            .json(&RecoverLnurlPayRequest {
+                signature: signed(&alice_secret, &message),
+                timestamp,
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(recovered.description, shown);
+
+        let pay: Value = server
+            .request(Method::GET, "tips.example", "/lnurlp/alice")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let metadata: Value = serde_json::from_str(pay["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata[0], json!(["text/plain", shown]));
+
+        let (alice, bob) = (alice.to_string(), bob.to_string());
+        let from_message =
+            signed_message::transfer_from("tips.example", "alice", &alice, &bob, timestamp);
+        let to_message =
+            signed_message::transfer_to("tips.example", "alice", &alice, &bob, "", timestamp);
+        let handed_over: TransferLnurlPayResponse = server
+            .request(
+                Method::POST,
+                "tips.example",
+                &format!("/lnurlpay/{bob}/transfer"),
+            )
+            .json(&TransferLnurlPayRequest {
+                username: "alice".to_string(),
+                description: String::new(),
+                from_pubkey: alice,
+                from_signature: signed(&alice_secret, &from_message),
+                to_signature: signed(&bob_secret, &to_message),
+                timestamp: Some(timestamp),
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(handed_over.description.as_deref(), Some(shown));
+    }
+
     // -- Signed messages -------------------------------------------------------
     //
     // Routes verify via SparkWallet::verify_message, which delegates to
@@ -3590,7 +3716,7 @@ mod tests {
             domain: "example.com".to_string(),
             pubkey: "02abc123".to_string(),
             name: name.to_string(),
-            description: String::new(),
+            description: None,
         }
     }
 
