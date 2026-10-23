@@ -221,6 +221,8 @@ private func printSkipped(_ skipped: [SkippedLeaf]) {
             reason = "its funds were not found on-chain"
         case .unverified:
             reason = "its funds could not be looked up"
+        case .operatorsUnavailable:
+            reason = "the Spark operators were unavailable"
         case let .notRecoverable(message):
             reason = message
         }

@@ -10,7 +10,7 @@ use bitcoin::{
     hex::{DisplayHex, FromHex},
 };
 use spark_wallet::{
-    ChainQuery, ChainResult, Observation, TreeNode, TreeNodeId, TreeNodeStatus,
+    ChainQuery, ChainResult, Observation, SparkWalletError, TreeNode, TreeNodeId, TreeNodeStatus,
     UnsignedWatchtowerExitRecovery, WatchtowerExitLookup, WatchtowerExitOutput,
     assumed_watchtower_exit_output, build_watchtower_exit_recovery, scan_watchtower_exits,
 };
@@ -62,6 +62,9 @@ pub(super) struct WatchtowerExits {
     pub(super) exits: HashMap<String, WatchtowerExit>,
     /// Each leaf that has no output to recover.
     pub(super) missing: HashMap<String, MissingExit>,
+    /// Whether the SDK could not fetch the leaves' ancestors because it could
+    /// not reach the operators or they were too busy.
+    pub(super) operators_unavailable: bool,
 }
 
 /// A leaf whose lookup gave no output to recover.
@@ -166,15 +169,15 @@ impl BreezSdk {
             .await
     }
 
-    /// The nodes of `leaf_ids` with their ancestors, and whether they are the
-    /// operators' current ones. When the operators cannot be reached, they are
-    /// the ones the wallet stored at an earlier fetch.
+    /// The nodes of `leaf_ids` with their ancestors as the operators hold them,
+    /// or, when the SDK cannot fetch those, as the wallet stored them at an
+    /// earlier fetch, with the error of the fetch.
     async fn nodes_with_ancestors(
         &self,
         leaf_ids: &[TreeNodeId],
-    ) -> (HashMap<TreeNodeId, TreeNode>, bool) {
+    ) -> (HashMap<TreeNodeId, TreeNode>, Option<SparkWalletError>) {
         let fetch_error = match self.spark_wallet.fetch_nodes_with_ancestors(leaf_ids).await {
-            Ok(nodes) => return (nodes, true),
+            Ok(nodes) => return (nodes, None),
             Err(e) => e,
         };
         warn!("Failed to fetch the ancestors of watchtower-exited leaves: {fetch_error}");
@@ -186,7 +189,7 @@ impl BreezSdk {
                 warn!("Failed to read the stored ancestors of watchtower-exited leaves: {e}");
                 HashMap::new()
             });
-        (stored, false)
+        (stored, Some(fetch_error))
     }
 
     /// Looks up the output each of `leaves` is recovered from and whether a
@@ -211,21 +214,25 @@ impl BreezSdk {
             .filter(|leaf| !from_storage.contains(&leaf.id.to_string()))
             .map(|leaf| leaf.id.clone())
             .collect();
-        let (nodes, ancestors_current) = if exited.is_empty() {
-            (HashMap::new(), true)
+        let (nodes, fetch_error) = if exited.is_empty() {
+            (HashMap::new(), None)
         } else {
             self.nodes_with_ancestors(&exited).await
         };
-        store_watchtower_exit_lookups(
+        let found = store_watchtower_exit_lookups(
             leaves,
             &nodes,
-            ancestors_current,
+            fetch_error.is_none(),
             stored,
             from_storage,
             queries,
             self.storage.as_ref(),
         )
-        .await
+        .await?;
+        Ok(WatchtowerExits {
+            operators_unavailable: fetch_error.is_some_and(|e| e.is_operator_unavailable()),
+            ..found
+        })
     }
 
     /// The signed recovery of `exit` and its fee: one stored before, or else one

@@ -120,6 +120,10 @@ mod tests {
         }
         let transport = SparkWalletError::from(OperatorRpcError::Transport("refused".to_string()));
         assert!(transport.is_operator_unavailable());
+        let tree_service = SparkWalletError::from(spark::tree::TreeServiceError::from(
+            OperatorRpcError::Transport("refused".to_string()),
+        ));
+        assert!(tree_service.is_operator_unavailable());
     }
 
     #[test]
@@ -136,5 +140,9 @@ mod tests {
         assert!(
             !SparkWalletError::ValidationError("invalid".to_string()).is_operator_unavailable()
         );
+        let tree_service = SparkWalletError::from(spark::tree::TreeServiceError::from(
+            OperatorRpcError::from(Status::internal("operator")),
+        ));
+        assert!(!tree_service.is_operator_unavailable());
     }
 }

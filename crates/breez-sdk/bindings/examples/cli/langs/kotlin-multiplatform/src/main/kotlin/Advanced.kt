@@ -11,6 +11,7 @@ private fun skippedLeafMessage(reason: SkippedLeafReason): String {
         is SkippedLeafReason.FeeExceedsValue -> "recovering it costs too much at this fee rate"
         is SkippedLeafReason.FundsNotFound -> "its funds were not found on-chain"
         is SkippedLeafReason.Unverified -> "its funds could not be looked up"
+        is SkippedLeafReason.OperatorsUnavailable -> "the Spark operators were unavailable"
         is SkippedLeafReason.NotRecoverable -> reason.message
     }
 }
