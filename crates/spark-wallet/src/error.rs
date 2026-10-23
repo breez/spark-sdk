@@ -15,6 +15,9 @@ pub enum SparkWalletError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
 
+    #[error("Silent payment addresses are not supported for {0}")]
+    SilentPaymentAddressNotSupported(&'static str),
+
     #[error("Invalid output index")]
     InvalidOutputIndex,
 

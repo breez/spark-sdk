@@ -11,6 +11,7 @@ pub mod operator;
 pub mod services;
 pub mod session_store;
 pub mod signer;
+pub mod silent_payment;
 pub mod ssp;
 pub mod token;
 pub mod tree;

@@ -1,9 +1,12 @@
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{All, PublicKey, Secp256k1};
-use bitcoin::{Address, OutPoint, Transaction, Txid};
+use bitcoin::{Address, OutPoint, ScriptBuf, Transaction, Txid};
 use frost_secp256k1_tr::Identifier;
 use platform_utils::time::SystemTime;
 use serde::Serialize;
@@ -18,12 +21,16 @@ use crate::services::models::{
     map_signing_nonce_commitments, sign_leaf_refunds, split_signing_commitments_by_variant,
 };
 use crate::services::{ExitSpeed, LeafKeyTweak, Transfer, TransferId, TransferService};
-use crate::services::{ServiceError, TransferObserver};
+use crate::services::{
+    ServiceError, SilentPaymentProof, TransferObserver, validate_silent_payment_payout,
+};
 use crate::signer::{
     OperatorRecipient, PrepareTransferRequest, PreparedTransfer, SparkSigner, TransferLeafInput,
 };
+use crate::silent_payment::SilentPaymentAddress;
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
+use crate::ssp::SilentPaymentProof as SspSilentPaymentProof;
 use crate::ssp::{CoopExitAcceptance, SparkCoopExitRequestStatus};
 use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
@@ -97,9 +104,107 @@ impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
     }
 }
 
+/// Where a cooperative exit pays out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WithdrawalAddress {
+    Bitcoin(Address),
+    SilentPayment(SilentPaymentAddress),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum WithdrawalAddressError {
+    #[error("not a Bitcoin address or silent payment address: {0}")]
+    Invalid(String),
+    #[error("the address is not for {0}")]
+    WrongNetwork(Network),
+}
+
+impl WithdrawalAddress {
+    pub fn parse(address: &str, network: Network) -> Result<Self, WithdrawalAddressError> {
+        if let Ok(bitcoin_address) = address.parse::<Address<NetworkUnchecked>>() {
+            let bitcoin_address = bitcoin_address
+                .require_network(network.into())
+                .map_err(|_| WithdrawalAddressError::WrongNetwork(network))?;
+            return Ok(Self::Bitcoin(bitcoin_address));
+        }
+        let silent_payment_address = address
+            .parse::<SilentPaymentAddress>()
+            .map_err(|_| WithdrawalAddressError::Invalid(address.to_string()))?;
+        if !silent_payment_address.is_valid_for_network(network) {
+            return Err(WithdrawalAddressError::WrongNetwork(network));
+        }
+        Ok(Self::SilentPayment(silent_payment_address))
+    }
+}
+
+impl fmt::Display for WithdrawalAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WithdrawalAddress::Bitcoin(address) => address.fmt(f),
+            WithdrawalAddress::SilentPayment(address) => address.fmt(f),
+        }
+    }
+}
+
+impl TryFrom<SspSilentPaymentProof> for SilentPaymentProof {
+    type Error = ServiceError;
+
+    fn try_from(proof: SspSilentPaymentProof) -> Result<Self, Self::Error> {
+        let invalid = |field: &str| {
+            ServiceError::ValidationError(format!(
+                "the SSP's silent payment proof contains an invalid {field}"
+            ))
+        };
+        Ok(Self {
+            output_index: u32::try_from(proof.output_index).map_err(|_| invalid("output index"))?,
+            input_public_keys: proof
+                .input_public_keys
+                .iter()
+                .map(|key| parse_compressed_key(key))
+                .collect::<Option<_>>()
+                .ok_or_else(|| invalid("input public key"))?,
+            input_outpoints: proof
+                .input_outpoints
+                .iter()
+                .map(|outpoint| OutPoint::from_str(outpoint).ok())
+                .collect::<Option<_>>()
+                .ok_or_else(|| invalid("input outpoint"))?,
+            input_prevout_scripts: proof
+                .input_prevout_scripts
+                .iter()
+                .map(|script| ScriptBuf::from_hex(script).ok())
+                .collect::<Option<_>>()
+                .ok_or_else(|| invalid("input prevout script"))?,
+            input_prevout_transactions: proof
+                .input_prevout_transactions
+                .iter()
+                .map(|transaction| {
+                    let bytes = hex::decode(transaction).ok()?;
+                    bitcoin::consensus::deserialize(&bytes).ok()
+                })
+                .collect::<Option<_>>()
+                .ok_or_else(|| invalid("input prevout transaction"))?,
+            ecdh_share: parse_compressed_key(&proof.ecdh_share)
+                .ok_or_else(|| invalid("ECDH share"))?,
+            dleq_proof: hex::decode(&proof.dleq_proof)
+                .ok()
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or_else(|| invalid("DLEQ proof"))?,
+        })
+    }
+}
+
+fn parse_compressed_key(hex_key: &str) -> Option<PublicKey> {
+    let bytes = hex::decode(hex_key).ok()?;
+    if bytes.len() != bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE {
+        return None;
+    }
+    PublicKey::from_slice(&bytes).ok()
+}
+
 pub struct CoopExitParams<'a> {
     pub leaves: Vec<LeafKeyTweak>,
-    pub withdrawal_address: &'a Address,
+    pub withdrawal_address: &'a WithdrawalAddress,
     pub withdraw_all: bool,
     pub exit_speed: ExitSpeed,
     pub fee_quote_id: Option<String>,
@@ -153,7 +258,7 @@ impl CoopExitService {
     pub async fn fetch_coop_exit_fee_quote(
         &self,
         leaves: Vec<TreeNode>,
-        withdrawal_address: Address,
+        withdrawal_address: &WithdrawalAddress,
     ) -> Result<CoopExitFeeQuote, ServiceError> {
         let leaf_external_ids: Vec<String> =
             leaves.iter().map(|leaf| leaf.id.to_string()).collect();
@@ -236,24 +341,33 @@ impl CoopExitService {
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
-        let coop_exit_request = self
-            .ssp_client
-            .request_coop_exit(RequestCoopExitInput {
-                leaf_external_ids,
-                withdrawal_address: withdrawal_address.to_string(),
-                idempotency_key: None,
-                exit_speed: exit_speed.into(),
-                withdraw_all,
-                fee_leaf_external_ids,
-                fee_quote_id,
-                user_outbound_transfer_external_id: Some(unwrapped_transfer_id.to_string()),
-            })
-            .await?;
+        let request_input = RequestCoopExitInput {
+            leaf_external_ids,
+            withdrawal_address: withdrawal_address.to_string(),
+            idempotency_key: None,
+            exit_speed: exit_speed.into(),
+            withdraw_all,
+            fee_leaf_external_ids,
+            fee_quote_id,
+            user_outbound_transfer_external_id: Some(unwrapped_transfer_id.to_string()),
+        };
+        let (coop_exit_request, silent_payment_proof) = match withdrawal_address {
+            WithdrawalAddress::Bitcoin(_) => (
+                self.ssp_client.request_coop_exit(request_input).await?,
+                None,
+            ),
+            WithdrawalAddress::SilentPayment(_) => {
+                self.ssp_client
+                    .request_coop_exit_with_silent_payment_proof(request_input)
+                    .await?
+            }
+        };
 
-        let expected_exit_txid = validate_coop_exit_payout_transaction(
+        let expected_exit_txid = validate_coop_exit_payout(
             &coop_exit_request.raw_coop_exit_transaction,
             &coop_exit_request.coop_exit_txid,
             withdrawal_address,
+            silent_payment_proof,
             expected_payout_amount_sats,
         )?;
 
@@ -713,12 +827,80 @@ fn exit_leaves_sum(leaves: &[LeafKeyTweak]) -> Result<u64, ServiceError> {
         .sum()
 }
 
+fn validate_coop_exit_payout(
+    raw_coop_exit_transaction: &str,
+    coop_exit_txid: &str,
+    withdrawal_address: &WithdrawalAddress,
+    silent_payment_proof: Option<SspSilentPaymentProof>,
+    expected_payout_amount_sats: u64,
+) -> Result<Txid, ServiceError> {
+    match withdrawal_address {
+        WithdrawalAddress::Bitcoin(address) => validate_coop_exit_payout_transaction(
+            raw_coop_exit_transaction,
+            coop_exit_txid,
+            address,
+            expected_payout_amount_sats,
+        ),
+        WithdrawalAddress::SilentPayment(address) => {
+            let proof = silent_payment_proof.ok_or_else(|| {
+                ServiceError::ValidationError(
+                    "the SSP returned no proof for a silent payment withdrawal".to_string(),
+                )
+            })?;
+            validate_silent_payment_coop_exit(
+                raw_coop_exit_transaction,
+                coop_exit_txid,
+                address,
+                proof.try_into()?,
+                expected_payout_amount_sats,
+            )
+        }
+    }
+}
+
+fn validate_silent_payment_coop_exit(
+    raw_coop_exit_transaction: &str,
+    coop_exit_txid: &str,
+    address: &SilentPaymentAddress,
+    proof: SilentPaymentProof,
+    expected_payout_amount_sats: u64,
+) -> Result<Txid, ServiceError> {
+    let (exit_tx, txid) = decode_coop_exit_transaction(raw_coop_exit_transaction, coop_exit_txid)?;
+    validate_silent_payment_payout(&exit_tx, address, &proof, expected_payout_amount_sats)
+        .map_err(|e| {
+            ServiceError::ValidationError(format!("SSP silent payment proof rejected: {e}"))
+        })?;
+    Ok(txid)
+}
+
 fn validate_coop_exit_payout_transaction(
     raw_coop_exit_transaction: &str,
     coop_exit_txid: &str,
     withdrawal_address: &Address,
     expected_payout_amount_sats: u64,
 ) -> Result<Txid, ServiceError> {
+    let (exit_tx, expected_txid) =
+        decode_coop_exit_transaction(raw_coop_exit_transaction, coop_exit_txid)?;
+
+    let expected_script = withdrawal_address.script_pubkey();
+    let pays_user = exit_tx.output.iter().any(|out| {
+        out.script_pubkey == expected_script && out.value.to_sat() >= expected_payout_amount_sats
+    });
+    if !pays_user {
+        return Err(ServiceError::ValidationError(format!(
+            "SSP cooperative exit transaction does not pay the requested withdrawal address for the expected amount (>= {expected_payout_amount_sats} sats)"
+        )));
+    }
+
+    Ok(expected_txid)
+}
+
+/// The exit transaction in the SSP's response, checked against the txid the
+/// SSP gave for it.
+fn decode_coop_exit_transaction(
+    raw_coop_exit_transaction: &str,
+    coop_exit_txid: &str,
+) -> Result<(Transaction, Txid), ServiceError> {
     if raw_coop_exit_transaction.is_empty() || coop_exit_txid.is_empty() {
         return Err(ServiceError::ValidationError(
             "SSP coop exit response missing L1 transaction fields".to_string(),
@@ -742,17 +924,7 @@ fn validate_coop_exit_payout_transaction(
         )));
     }
 
-    let expected_script = withdrawal_address.script_pubkey();
-    let pays_user = exit_tx.output.iter().any(|out| {
-        out.script_pubkey == expected_script && out.value.to_sat() >= expected_payout_amount_sats
-    });
-    if !pays_user {
-        return Err(ServiceError::ValidationError(format!(
-            "SSP cooperative exit transaction does not pay the requested withdrawal address for the expected amount (>= {expected_payout_amount_sats} sats)"
-        )));
-    }
-
-    Ok(expected_txid)
+    Ok((exit_tx, expected_txid))
 }
 
 #[cfg(test)]
@@ -909,6 +1081,98 @@ mod tests {
 
         assert!(validate_coop_exit_payout_transaction("", &txid, &addr, 1000).is_err());
         assert!(validate_coop_exit_payout_transaction(&raw, "", &addr, 1000).is_err());
+    }
+
+    fn key(seed: u8) -> PublicKey {
+        PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &SecretKey::from_slice(&[seed; 32]).unwrap(),
+        )
+    }
+
+    fn silent_payment_address(network: Network) -> SilentPaymentAddress {
+        SilentPaymentAddress::new(key(1), key(2), network)
+    }
+
+    #[test_all]
+    fn parses_withdrawal_addresses_for_their_network() {
+        let bitcoin_address = test_address(1);
+        let regtest = silent_payment_address(Network::Regtest);
+        let signet = silent_payment_address(Network::Signet);
+
+        assert_eq!(
+            WithdrawalAddress::parse(&bitcoin_address.to_string(), Network::Regtest),
+            Ok(WithdrawalAddress::Bitcoin(bitcoin_address.clone()))
+        );
+        assert_eq!(
+            WithdrawalAddress::parse(&regtest.to_string(), Network::Regtest),
+            Ok(WithdrawalAddress::SilentPayment(regtest))
+        );
+        assert_eq!(
+            WithdrawalAddress::parse(&signet.to_string(), Network::Testnet),
+            Ok(WithdrawalAddress::SilentPayment(signet))
+        );
+        assert_eq!(
+            WithdrawalAddress::SilentPayment(regtest).to_string(),
+            regtest.to_string()
+        );
+        for address in [bitcoin_address.to_string(), regtest.to_string()] {
+            assert_eq!(
+                WithdrawalAddress::parse(&address, Network::Mainnet),
+                Err(WithdrawalAddressError::WrongNetwork(Network::Mainnet))
+            );
+        }
+        assert!(matches!(
+            WithdrawalAddress::parse("not an address", Network::Regtest),
+            Err(WithdrawalAddressError::Invalid(_))
+        ));
+    }
+
+    fn proof(input_public_key: &str) -> SspSilentPaymentProof {
+        SspSilentPaymentProof {
+            output_index: 0,
+            input_public_keys: vec![input_public_key.to_string()],
+            input_outpoints: vec![OutPoint::new(Txid::all_zeros(), 0).to_string()],
+            input_prevout_scripts: vec![format!("0014{}", "00".repeat(20))],
+            input_prevout_transactions: vec![serialize_hex(&exit_tx(Vec::new()))],
+            ecdh_share: key(3).to_string(),
+            dleq_proof: "00".repeat(64),
+        }
+    }
+
+    fn silent_payment_validation_error(proof: Option<SspSilentPaymentProof>) -> String {
+        let address = WithdrawalAddress::SilentPayment(silent_payment_address(Network::Regtest));
+        let (raw, txid) = paying(&test_address(1), 1000);
+        match validate_coop_exit_payout(&raw, &txid, &address, proof, 1000) {
+            Err(ServiceError::ValidationError(message)) => message,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[test_all]
+    fn rejects_silent_payment_withdrawal_without_proof() {
+        assert_eq!(
+            silent_payment_validation_error(None),
+            "the SSP returned no proof for a silent payment withdrawal"
+        );
+    }
+
+    #[test_all]
+    fn rejects_unreadable_silent_payment_proof() {
+        let uncompressed = bitcoin::PublicKey::new_uncompressed(key(4)).to_string();
+        assert_eq!(
+            silent_payment_validation_error(Some(proof(&uncompressed))),
+            "the SSP's silent payment proof contains an invalid input public key"
+        );
+    }
+
+    #[test_all]
+    fn rejects_silent_payment_proof_that_does_not_verify() {
+        let message = silent_payment_validation_error(Some(proof(&key(4).to_string())));
+        assert!(
+            message.starts_with("SSP silent payment proof rejected: "),
+            "{message}"
+        );
     }
 
     /// A coop exit signs every connector refund with the key the leaf is held

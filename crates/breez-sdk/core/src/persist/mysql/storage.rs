@@ -635,6 +635,27 @@ impl MysqlStorage {
                     )",
                 ),
             ],
+            // Migration 27: The destination address and output index of a
+            // withdrawal. With the sync offset at 0, the SDK re-fetches every
+            // transfer on its next sync and fills in both columns for past
+            // withdrawals.
+            vec![
+                Migration::AddColumn {
+                    table: "brz_payments",
+                    column: "withdraw_vout",
+                    definition: "INT UNSIGNED NULL",
+                },
+                Migration::AddColumn {
+                    table: "brz_payments",
+                    column: "withdraw_destination_address",
+                    definition: "TEXT NULL",
+                },
+                Migration::sql(
+                    "UPDATE brz_settings
+                     SET value = JSON_SET(value, '$.offset', 0)
+                     WHERE `key` = 'sync_offset' AND value IS NOT NULL",
+                ),
+            ],
         ]
     }
 }
@@ -965,15 +986,30 @@ impl MysqlStorage {
         identity: &[u8],
         payment: Payment,
     ) -> Result<(), StorageError> {
-        let (withdraw_tx_id, spark): (Option<&str>, Option<bool>) = match &payment.details {
-            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None),
-            Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
-            _ => (None, None),
-        };
+        let (withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark) =
+            match &payment.details {
+                Some(PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                }) => (
+                    Some(tx_id.as_str()),
+                    Some(*vout),
+                    Some(destination_address.as_str()),
+                    None,
+                ),
+                Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+                Some(
+                    PaymentDetails::Token { .. }
+                    | PaymentDetails::Lightning { .. }
+                    | PaymentDetails::Deposit { .. },
+                )
+                | None => (None, None, None, None),
+            };
 
         tx.exec_drop(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     payment_type = VALUES(payment_type),
                     status = VALUES(status),
@@ -982,6 +1018,8 @@ impl MysqlStorage {
                     timestamp = VALUES(timestamp),
                     method = VALUES(method),
                     withdraw_tx_id = VALUES(withdraw_tx_id),
+                    withdraw_vout = VALUES(withdraw_vout),
+                    withdraw_destination_address = VALUES(withdraw_destination_address),
                     spark = VALUES(spark)",
             (
                 identity.to_vec(),
@@ -993,6 +1031,8 @@ impl MysqlStorage {
                 i64::try_from(payment.timestamp)?,
                 Some(payment.method.to_string()),
                 withdraw_tx_id.map(str::to_string),
+                withdraw_vout,
+                withdraw_destination_address.map(str::to_string),
                 spark,
             ),
         )
@@ -1518,7 +1558,7 @@ impl Storage for MysqlStorage {
         for row in &rows {
             let payment = map_payment(row)?;
             let parent_payment_id: String = row
-                .get(32)
+                .get(34)
                 .ok_or_else(|| StorageError::Implementation("missing parent_payment_id".into()))?;
             result.entry(parent_payment_id).or_default().push(payment);
         }
@@ -2433,8 +2473,8 @@ impl Storage for MysqlStorage {
     }
 }
 
-/// Base query for payment lookups. Indices 0-31 are used by `map_payment`,
-/// index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Base query for payment lookups. Indices 0-33 are used by `map_payment`,
+/// index 34 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -2468,6 +2508,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pm.parent_payment_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -2549,7 +2591,17 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 conversion_info,
             })
         }
-        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, Some(tx_id), _, _, _) => {
+            // A withdrawal stored before the SDK kept these values has no details
+            // until the next sync rewrites it.
+            get_opt_u32(row, 32)
+                .zip(get_opt_str(row, 33))
+                .map(|(vout, destination_address)| PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                })
+        }
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
             tx_id,
             vout: get_opt_u32(row, 9).ok_or_else(|| {
@@ -2866,6 +2918,12 @@ mod tests {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_payment_details_update_persistence(Box::new(fixture.storage))
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_withdraw_details() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_withdraw_details(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3460,7 +3518,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration version must advance to 26");
+        assert_eq!(version, Some(27), "migration version must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -3732,7 +3790,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(26), "migration must advance to 26");
+        assert_eq!(version, Some(27), "migration must advance to 27");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

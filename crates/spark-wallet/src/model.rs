@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use bitcoin::{Address, Transaction, hashes::sha256, secp256k1::PublicKey};
+use bitcoin::{Transaction, hashes::sha256, secp256k1::PublicKey};
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use spark::{
@@ -13,7 +13,7 @@ use spark::{
     services::{
         ExitSpeed, LightningSendPayment, Preimage, PreimageRequestStatus,
         PreimageRequestWithTransfer, TokenTransaction, Transfer, TransferId, TransferLeaf,
-        TransferStatus, TransferType,
+        TransferStatus, TransferType, WithdrawalAddress,
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
@@ -477,7 +477,7 @@ pub enum MasterIdentityPublicKeyUpdate {
 }
 
 pub(crate) struct WithdrawInnerParams<'a> {
-    pub address: Address,
+    pub address: WithdrawalAddress,
     pub exit_speed: ExitSpeed,
     pub leaves_reservation: &'a LeavesReservation,
     pub target_amounts: Option<&'a TargetAmounts>,

@@ -1407,6 +1407,8 @@ mod tests {
             method: crate::PaymentMethod::Withdraw,
             details: Some(PaymentDetails::Withdraw {
                 tx_id: "tx1".to_string(),
+                vout: 0,
+                destination_address: "bcrt1p_destination".to_string(),
             }),
             conversion_details: None,
         };
@@ -1415,7 +1417,7 @@ mod tests {
 
         assert!(matches!(
             out.details,
-            Some(PaymentDetails::Withdraw { tx_id }) if tx_id == "tx1"
+            Some(PaymentDetails::Withdraw { tx_id, .. }) if tx_id == "tx1"
         ));
     }
 

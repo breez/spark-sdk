@@ -65,6 +65,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -566,13 +568,12 @@ class MysqlStorage {
   }
 
   async _runPaymentUpsert(conn, payment) {
-    const withdrawTxId =
-      payment.details?.type === "withdraw" ? payment.details.txId : null;
+    const withdraw = payment.details?.type === "withdraw" ? payment.details : null;
     const spark = payment.details?.type === "spark" ? 1 : null;
 
     await conn.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          payment_type=VALUES(payment_type),
          status=VALUES(status),
@@ -581,6 +582,8 @@ class MysqlStorage {
          timestamp=VALUES(timestamp),
          method=VALUES(method),
          withdraw_tx_id=VALUES(withdraw_tx_id),
+         withdraw_vout=VALUES(withdraw_vout),
+         withdraw_destination_address=VALUES(withdraw_destination_address),
          spark=VALUES(spark)`,
       [
         this.identity,
@@ -591,7 +594,9 @@ class MysqlStorage {
         payment.fees.toString(),
         payment.timestamp,
         payment.method ? toJson(payment.method) : null,
-        withdrawTxId,
+        withdraw?.txId ?? null,
+        withdraw?.vout ?? null,
+        withdraw?.destinationAddress ?? null,
         spark,
       ]
     );
@@ -1239,10 +1244,16 @@ class MysqlStorage {
         details.conversionInfo = parseJson(row.conversion_info);
       }
     } else if (row.withdraw_tx_id) {
-      details = {
-        type: "withdraw",
-        txId: row.withdraw_tx_id,
-      };
+      // A withdrawal stored before the SDK kept these values has no details
+      // until the next sync rewrites it.
+      if (row.withdraw_vout != null && row.withdraw_destination_address != null) {
+        details = {
+          type: "withdraw",
+          txId: row.withdraw_tx_id,
+          vout: Number(row.withdraw_vout),
+          destinationAddress: row.withdraw_destination_address,
+        };
+      }
     } else if (row.deposit_tx_id) {
       details = {
         type: "deposit",

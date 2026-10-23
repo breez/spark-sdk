@@ -119,6 +119,21 @@ pub struct RequestCoopExit;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
+    extern_enums(
+        "CurrencyUnit",
+        "ExitSpeed",
+        "BitcoinNetwork",
+        "SparkCoopExitRequestStatus",
+    )
+)]
+pub struct RequestCoopExitWithSilentPaymentProof;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/queries.graphql",
+    schema_path = "schema/spark.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus",)
 )]
 pub struct RequestSwap;

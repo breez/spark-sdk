@@ -559,6 +559,17 @@ impl PostgresStorage {
                  )"
                 .to_string(),
             ],
+            // Migration 26: The destination address and output index of a
+            // withdrawal. With the sync offset at 0, the SDK re-fetches every
+            // transfer on its next sync and fills in both columns for past
+            // withdrawals.
+            vec![
+                "ALTER TABLE brz_payments ADD COLUMN withdraw_vout BIGINT".to_string(),
+                "ALTER TABLE brz_payments ADD COLUMN withdraw_destination_address TEXT".to_string(),
+                "UPDATE brz_settings
+                 SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
+                 WHERE key = 'sync_offset' AND value IS NOT NULL".to_string(),
+            ],
         ]
     }
 }
@@ -832,16 +843,31 @@ impl PostgresStorage {
         payment: Payment,
     ) -> Result<(), StorageError> {
         // Compute detail columns for the main payments row
-        let (withdraw_tx_id, spark): (Option<&str>, Option<bool>) = match &payment.details {
-            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None),
-            Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
-            _ => (None, None),
-        };
+        let (withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark) =
+            match &payment.details {
+                Some(PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                }) => (
+                    Some(tx_id.as_str()),
+                    Some(i64::from(*vout)),
+                    Some(destination_address.as_str()),
+                    None,
+                ),
+                Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+                Some(
+                    PaymentDetails::Token { .. }
+                    | PaymentDetails::Lightning { .. }
+                    | PaymentDetails::Deposit { .. },
+                )
+                | None => (None, None, None, None),
+            };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT(user_id, id) DO UPDATE SET
                     payment_type = EXCLUDED.payment_type,
                     status = EXCLUDED.status,
@@ -850,6 +876,8 @@ impl PostgresStorage {
                     timestamp = EXCLUDED.timestamp,
                     method = EXCLUDED.method,
                     withdraw_tx_id = EXCLUDED.withdraw_tx_id,
+                    withdraw_vout = EXCLUDED.withdraw_vout,
+                    withdraw_destination_address = EXCLUDED.withdraw_destination_address,
                     spark = EXCLUDED.spark",
             &[
                 &identity,
@@ -861,6 +889,8 @@ impl PostgresStorage {
                 &i64::try_from(payment.timestamp)?,
                 &Some(payment.method.to_string()),
                 &withdraw_tx_id,
+                &withdraw_vout,
+                &withdraw_destination_address,
                 &spark,
             ],
         )
@@ -1393,7 +1423,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(32);
+            let parent_payment_id: String = row.get(34);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -2286,7 +2316,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-33 are used by `map_payment`, index 34 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -2320,6 +2350,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pm.parent_payment_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -2400,7 +2432,21 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 conversion_info,
             })
         }
-        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, Some(tx_id), _, _, _) => {
+            let vout = row
+                .get::<_, Option<i64>>(32)
+                .map(u32::try_from)
+                .transpose()?;
+            let destination_address: Option<String> = row.get(33);
+            // A withdrawal stored before the SDK kept these values has no details
+            // until the next sync rewrites it.
+            vout.zip(destination_address)
+                .map(|(vout, destination_address)| PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                })
+        }
         (_, _, Some(tx_id), _, _) => {
             let vout: i64 = row.get::<_, Option<i64>>(9).ok_or_else(|| {
                 StorageError::Serialization("deposit row missing deposit_vout".to_string())
@@ -2663,6 +2709,12 @@ mod tests {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_payment_details_update_persistence(Box::new(fixture.storage))
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_withdraw_details() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_withdraw_details(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -3620,7 +3672,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 25, "migration version must advance to 25");
+        assert_eq!(version, 26, "migration version must advance to 26");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3916,7 +3968,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 25, "migration must advance to 25");
+        assert_eq!(version, 26, "migration must advance to 26");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client
