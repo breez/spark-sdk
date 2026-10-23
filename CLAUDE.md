@@ -143,7 +143,7 @@ The `Storage` trait (`crates/breez-sdk/core/src/persist/mod.rs`) has multiple im
 
 | Implementation | Location | Platform | DB |
 |---|---|---|---|
-| SQLite (Rust) | `crates/breez-sdk/core/src/persist/sqlite.rs` | Native (macOS, Linux, Windows) | SQLite |
+| SQLite (Rust) | `crates/breez-sdk/core/src/persist/sqlite/storage.rs` | Native (macOS, Linux, Windows) | SQLite |
 | PostgreSQL (Rust) | `crates/breez-sdk/core/src/persist/postgres/storage.rs` | Server (feature-gated: `postgres`) | PostgreSQL |
 | MySQL (Rust) | `crates/breez-sdk/core/src/persist/mysql/storage.rs` | Server (feature-gated: `mysql`) | MySQL |
 | Web (JS) | `crates/breez-sdk/wasm/js/web-storage/index.js` | Browser (WASM) | IndexedDB |
@@ -156,7 +156,7 @@ All implementations run the **same shared test suite** in `crates/breez-sdk/core
 1. Update every implementation listed above
 2. Add test coverage to the shared test suite (`tests.rs`)
 3. Add calls to any new test functions in **each** implementation's test harness:
-   - Rust SQLite: `crates/breez-sdk/core/src/persist/sqlite.rs` (test module at bottom)
+   - Rust SQLite: `crates/breez-sdk/core/src/persist/sqlite/storage.rs` (test module at bottom)
    - Rust Postgres: `crates/breez-sdk/core/src/persist/postgres/storage.rs` (test module at bottom)
    - Rust MySQL: `crates/breez-sdk/core/src/persist/mysql/storage.rs` (test module at bottom)
    - Web: `crates/breez-sdk/wasm/src/persist/tests/web.rs`
