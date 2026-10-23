@@ -128,6 +128,9 @@ function printSkipped(skipped) {
       case 'unverified':
         reason = 'its funds could not be looked up'
         break
+      case 'operatorsUnavailable':
+        reason = 'the Spark operators were unavailable'
+        break
       case 'notRecoverable':
         reason = leaf.reason.message
         break

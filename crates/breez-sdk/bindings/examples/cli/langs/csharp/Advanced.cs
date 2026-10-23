@@ -298,6 +298,7 @@ public static class AdvancedCommands
                 SkippedLeafReason.FeeExceedsValue => "recovering it costs too much at this fee rate",
                 SkippedLeafReason.FundsNotFound => "its funds were not found on-chain",
                 SkippedLeafReason.Unverified => "its funds could not be looked up",
+                SkippedLeafReason.OperatorsUnavailable => "the Spark operators were unavailable",
                 SkippedLeafReason.NotRecoverable nr => nr.message,
                 _ => leaf.reason.ToString()
             };

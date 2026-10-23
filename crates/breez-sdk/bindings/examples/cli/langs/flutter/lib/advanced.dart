@@ -286,6 +286,8 @@ void _printSkipped(List<SkippedLeaf> skipped) {
       reason = 'its funds were not found on-chain';
     } else if (r is SkippedLeafReason_Unverified) {
       reason = 'its funds could not be looked up';
+    } else if (r is SkippedLeafReason_OperatorsUnavailable) {
+      reason = 'the Spark operators were unavailable';
     } else if (r is SkippedLeafReason_NotRecoverable) {
       reason = r.message;
     } else {

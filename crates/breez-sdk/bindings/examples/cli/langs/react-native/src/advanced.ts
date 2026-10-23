@@ -195,6 +195,8 @@ function formatSkipped(skipped: SkippedLeaf[]): string[] {
       reason = 'its funds were not found on-chain'
     } else if (leaf.reason.tag === SkippedLeafReason_Tags.Unverified) {
       reason = 'its funds could not be looked up'
+    } else if (leaf.reason.tag === SkippedLeafReason_Tags.OperatorsUnavailable) {
+      reason = 'the Spark operators were unavailable'
     } else {
       reason = (leaf.reason as SkippedLeafReason).inner?.message ?? 'not recoverable'
     }

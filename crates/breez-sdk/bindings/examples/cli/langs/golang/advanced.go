@@ -318,6 +318,8 @@ func printSkipped(skipped []breez_sdk_spark.SkippedLeaf) {
 			reason = "its funds were not found on-chain"
 		case breez_sdk_spark.SkippedLeafReasonUnverified:
 			reason = "its funds could not be looked up"
+		case breez_sdk_spark.SkippedLeafReasonOperatorsUnavailable:
+			reason = "the Spark operators were unavailable"
 		case breez_sdk_spark.SkippedLeafReasonNotRecoverable:
 			reason = r.Message
 		default:
