@@ -34,6 +34,15 @@ const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
 
+/// The longest input the parser accepts, with room for a bitcoin: URI that
+/// contains the longest BOLT11 invoice LDK accepts.
+pub const MAX_INPUT_LENGTH: usize = 32 * 1024;
+
+/// The most payment methods the parser reads from one bitcoin: URI. Each
+/// payment method has its own copy of the URI, so with this limit the memory
+/// for those copies grows with the URI length instead of its square.
+pub const MAX_PAYMENT_METHODS: usize = 32;
+
 /// Validates lightning address format without network calls.
 /// Returns true if format is valid: user@domain where user contains only `[a-z0-9-_.]`
 pub fn validate_lightning_address_format(input: &str) -> bool {
@@ -96,6 +105,10 @@ where
     }
 
     pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
+        if input.len() > MAX_INPUT_LENGTH {
+            return Err(ParseError::InputTooLong);
+        }
+
         // No other supported format starts with `$`, including BIP-353, whose
         // user part is a DNS label.
         if input.starts_with('$') {
@@ -108,22 +121,24 @@ where
                 .map(InputType::LightningAddress));
         }
 
-        if input.contains('@') {
-            if let Some(lightning_address) = self.parse_lightning_address(input).await {
-                return Ok(Some(InputType::LightningAddress(lightning_address)));
-            }
-
-            if let Some(bip_21) = self.parse_bip_353(input).await? {
-                return Ok(Some(InputType::Bip21(bip_21)));
-            }
-        }
-
+        // A bitcoin: URI is not a lightning or BIP-353 address, even when one
+        // of its parameters contains an '@', so the parser handles it first.
         if has_bip_21_prefix(input) {
             let source = PaymentRequestSource {
                 bip_21_uri: Some(input.to_string()),
                 bip_353_address: None,
             };
             if let Some(bip_21) = parse_bip_21(input, &source)? {
+                return Ok(Some(InputType::Bip21(bip_21)));
+            }
+        }
+
+        if input.contains('@') {
+            if let Some(lightning_address) = self.parse_lightning_address(input).await {
+                return Ok(Some(InputType::LightningAddress(lightning_address)));
+            }
+
+            if let Some(bip_21) = self.parse_bip_353(input).await? {
                 return Ok(Some(InputType::Bip21(bip_21)));
             }
         }
@@ -160,15 +175,18 @@ where
 
         // Validate both parts are within the DNS label size limit.
         // See <https://datatracker.ietf.org/doc/html/rfc1035#section-2.3.4>
-        if local_part.len() > 63 {
+        if local_part.len() > 63 || domain.split('.').any(|label| label.len() > 63) {
             return Ok(None);
         }
 
-        // Domain can contain multiple labels - validate each one
-        if domain
-            .split('.')
-            .any(|label| label.is_empty() || label.len() > 63)
-        {
+        // Both parts can contain multiple labels - validate each one. A label
+        // may contain only the characters LDK allows in BIP-353 names.
+        if local_part.split('.').chain(domain.split('.')).any(|label| {
+            label.is_empty()
+                || !label
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ['-', '_'].contains(&c))
+        }) {
             return Ok(None);
         }
 
@@ -529,7 +547,17 @@ fn extract_bip353_record(records: Vec<String>) -> Option<String> {
         return None;
     }
 
-    bip353_record.into_iter().next()
+    let record = bip353_record.into_iter().next()?;
+    if record.len() > MAX_INPUT_LENGTH {
+        error!(
+            "Invalid decoded TXT data. Record longer than {MAX_INPUT_LENGTH} bytes ({})",
+            record.len()
+        );
+
+        return None;
+    }
+
+    Some(record)
 }
 
 fn parse_bip_21(
@@ -586,11 +614,13 @@ fn parse_bip_21(
     }
 
     if let Some(params) = params {
-        for param in params.split('&') {
-            let pos = param.find('=').ok_or(Bip21Error::MissingEquals)?;
-            let original_key_string = param[..pos].to_lowercase();
+        for param in params.split('&').filter(|param| !param.is_empty()) {
+            let (original_key, value) = match param.split_once('=') {
+                Some((key, value)) => (key, Some(value)),
+                None => (param, None),
+            };
+            let original_key_string = original_key.to_lowercase();
             let original_key = original_key_string.as_str();
-            let value = &param[(pos.saturating_add(1))..];
             let (key, is_required) = if let Some(stripped) = original_key.strip_prefix("req-") {
                 (stripped, true)
             } else {
@@ -598,6 +628,9 @@ fn parse_bip_21(
             };
 
             parse_bip21_key(source, &mut bip_21, original_key, value, key, is_required)?;
+            if bip_21.payment_methods.len() > MAX_PAYMENT_METHODS {
+                return Err(Bip21Error::TooManyPaymentMethods);
+            }
         }
     }
 
@@ -612,17 +645,23 @@ fn parse_bip21_key(
     source: &PaymentRequestSource,
     bip_21: &mut Bip21Details,
     original_key: &str,
-    value: &str,
+    value: Option<&str>,
     key: &str,
     is_required: bool,
 ) -> Result<(), Bip21Error> {
+    let value_or_invalid = || value.ok_or_else(|| Bip21Error::invalid_parameter(key));
+    let segwit_address = |network| -> Result<InputType, Bip21Error> {
+        parse_segwit_address(value_or_invalid()?, network, source)
+            .map(InputType::BitcoinAddress)
+            .ok_or_else(|| Bip21Error::invalid_parameter(key))
+    };
     match key {
         "amount" if bip_21.amount_sat.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
         "amount" => {
             bip_21.amount_sat = Some(
-                bitcoin::Amount::from_str_in(value, Denomination::Bitcoin)
+                bitcoin::Amount::from_str_in(value_or_invalid()?, Denomination::Bitcoin)
                     .map_err(|_| Bip21Error::InvalidAmount)?
                     .to_sat(),
             );
@@ -630,26 +669,31 @@ fn parse_bip21_key(
         "assetid" if bip_21.asset_id.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
-        "assetid" => bip_21.asset_id = Some(value.to_string()),
-        "bc" => {}
+        "assetid" => bip_21.asset_id = Some(value_or_invalid()?.to_string()),
+        "bc" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Bitcoin)?),
+        "bcrt" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Regtest)?),
         "label" if bip_21.label.is_some() => {
             return Err(Bip21Error::multiple_params(key));
         }
         "label" => {
             bip_21.label = Some(
-                percent_encode::decode(value)
+                percent_encode::decode(value_or_invalid()?)
                     .map_err(Bip21Error::invalid_parameter_func("label"))?,
             );
         }
         "lightning" => {
-            let lightning = parse_lightning_payment_method(value, source);
+            let lightning = parse_lightning_payment_method(value_or_invalid()?, source);
             match lightning {
                 Some(lightning) => bip_21.payment_methods.push(lightning),
                 None => return Err(Bip21Error::invalid_parameter("lightning")),
             }
         }
         "lno" => {
-            let bolt12_offer = parse_bolt12_offer(value, source);
+            let bolt12_offer = parse_bolt12_offer(value_or_invalid()?, source);
             match bolt12_offer {
                 Some(offer) => bip_21.payment_methods.push(InputType::Bolt12Offer(offer)),
                 None => return Err(Bip21Error::invalid_parameter("lno")),
@@ -660,12 +704,12 @@ fn parse_bip21_key(
         }
         "message" => {
             bip_21.message = Some(
-                percent_encode::decode(value)
+                percent_encode::decode(value_or_invalid()?)
                     .map_err(Bip21Error::invalid_parameter_func("message"))?,
             );
         }
         "sp" => {
-            let silent_payment_address = parse_silent_payment_address(value, source);
+            let silent_payment_address = parse_silent_payment_address(value_or_invalid()?, source);
             match silent_payment_address {
                 Some(silent_payment) => bip_21
                     .payment_methods
@@ -674,24 +718,46 @@ fn parse_bip21_key(
             }
         }
         "spark" => {
-            let spark_address = parse_spark_address(value, source);
+            let spark_address = parse_spark_address(value_or_invalid()?, source);
             match spark_address {
                 Some(spark_address) => bip_21.payment_methods.push(spark_address),
                 None => return Err(Bip21Error::invalid_parameter("spark")),
             }
         }
+        "tb" => bip_21
+            .payment_methods
+            .push(segwit_address(bitcoin::Network::Testnet)?),
         extra_key => {
             if is_required {
                 return Err(Bip21Error::UnknownRequiredParameter(extra_key.to_string()));
             }
 
-            bip_21.extras.push(Bip21Extra {
-                key: original_key.to_string(),
-                value: value.to_string(),
-            });
+            if let Some(value) = value {
+                bip_21.extras.push(Bip21Extra {
+                    key: original_key.to_string(),
+                    value: value.to_string(),
+                });
+            }
         }
     }
     Ok(())
+}
+
+/// Parses a segwit address that is valid for `network`.
+fn parse_segwit_address(
+    input: &str,
+    network: bitcoin::Network,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
+    let address = input
+        .parse::<Address<NetworkUnchecked>>()
+        .ok()?
+        .require_network(network)
+        .ok()?;
+    address.witness_program()?;
+    // bitcoin_address_details reports a tb address as signet, as the parser
+    // does for the address in the URI body.
+    bitcoin_address_details(address.into_unchecked(), source)
 }
 
 pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
@@ -781,7 +847,13 @@ fn parse_bitcoin_address(
         return None;
     }
 
-    let address: Address<NetworkUnchecked> = input.parse().ok()?;
+    bitcoin_address_details(input.parse().ok()?, source)
+}
+
+fn bitcoin_address_details(
+    address: Address<NetworkUnchecked>,
+    source: &PaymentRequestSource,
+) -> Option<BitcoinAddressDetails> {
     let network = match 1 {
         _ if address.is_valid_for_network(bitcoin::Network::Bitcoin) => bitcoin::Network::Bitcoin,
         _ if address.is_valid_for_network(bitcoin::Network::Regtest) => bitcoin::Network::Regtest,

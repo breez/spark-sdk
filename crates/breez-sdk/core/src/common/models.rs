@@ -18,6 +18,11 @@ pub enum BitcoinNetwork {
 pub enum ParseError {
     #[error("empty input")]
     EmptyInput,
+    #[error(
+        "input is longer than {} bytes",
+        breez_sdk_common::input::MAX_INPUT_LENGTH
+    )]
+    InputTooLong,
     #[error("Bip-21 error: {0}")]
     Bip21Error(Bip21Error),
     #[error("invalid input")]
@@ -47,6 +52,11 @@ pub enum Bip21Error {
     UnknownRequiredParameter(String),
     #[error("bip21 does not contain any payment methods")]
     NoPaymentMethods,
+    #[error(
+        "bip21 contains more than {} payment methods",
+        breez_sdk_common::input::MAX_PAYMENT_METHODS
+    )]
+    TooManyPaymentMethods,
 }
 
 #[derive(Clone, Debug, Error)]
