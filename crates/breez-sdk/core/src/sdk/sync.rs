@@ -13,7 +13,7 @@ use super::{
 };
 use crate::utils::time::now_secs;
 use crate::{
-    DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, InputType, InstantClaimStatus, MaxFee, PaymentDetails, PaymentType, SyncError,
     chain::FeeMarket,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
@@ -168,7 +168,7 @@ impl BreezSdk {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
+            let wallet_result = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -177,19 +177,19 @@ impl BreezSdk {
                             "sync_wallet_internal: Wallet sync completed in {:?}",
                             wallet_start.elapsed()
                         );
-                        true
+                        Some(Ok(()))
                     }
                     Err(e) => {
                         error!(
                             "sync_wallet_internal: Spark wallet sync failed in {:?}: {e:?}",
                             wallet_start.elapsed()
                         );
-                        false
+                        Some(Err(e))
                     }
                 }
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
-                false
+                None
             };
 
             // Finish any Lightning send that committed leaves with the operators
@@ -229,7 +229,7 @@ impl BreezSdk {
                 self.sync_recoverable_funds().await;
             }
 
-            (wallet_synced, wallet_state_synced)
+            (wallet_result, wallet_state_synced)
         };
 
         let sync_lnurl = async {
@@ -284,8 +284,16 @@ impl BreezSdk {
             }
         };
 
-        let ((wallet, wallet_state), lnurl_metadata, deposits) =
+        let ((wallet_result, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let wallet = matches!(wallet_result, Some(Ok(())));
+        // Set after the join so the balances are already written when these change.
+        if wallet && let Err(e) = cache.set_last_synced_at(now).await {
+            error!("sync_wallet_internal: Failed to update last synced at: {e:?}");
+        }
+        if let Some(result) = wallet_result {
+            *self.last_sync_error.lock().await = result.err().map(SyncError::from);
+        }
 
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {
@@ -856,6 +864,10 @@ impl BreezSdk {
         self.runtime
             .run_user_sync(self, super::SyncType::Full, true)
             .await?;
+        let last_sync_error = self.last_sync_error.lock().await.clone();
+        let last_synced_at = ObjectCacheRepository::new(self.storage.clone())
+            .get_last_synced_at()
+            .await?;
         // Whatever `exit_chain_auto_fetch_enabled` says: that flag governs the
         // automatic collection, and an explicit sync is the way to ask for one
         // with it turned off. Awaited rather than left to the background, so a
@@ -863,7 +875,10 @@ impl BreezSdk {
         // the time this returns. After the sync, so the leaves it brought in are
         // collected for too.
         self.runtime.collect_exit_chains(self).await?;
-        Ok(SyncWalletResponse {})
+        Ok(SyncWalletResponse {
+            last_sync_error,
+            last_synced_at,
+        })
     }
 }
 

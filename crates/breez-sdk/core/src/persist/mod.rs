@@ -37,6 +37,7 @@ use crate::{
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LAST_SYNC_TIME_KEY: &str = "last_sync_time";
+const LAST_SYNCED_AT_KEY: &str = "last_synced_at";
 pub(crate) const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
@@ -1175,6 +1176,25 @@ impl ObjectCacheRepository {
     pub(crate) async fn set_last_sync_time(&self, time: u64) -> Result<(), StorageError> {
         self.storage
             .set_cached_item(LAST_SYNC_TIME_KEY.to_string(), time.to_string())
+            .await
+    }
+
+    pub(crate) async fn get_last_synced_at(&self) -> Result<Option<u64>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LAST_SYNCED_AT_KEY.to_string())
+            .await?;
+        match value {
+            Some(v) => Ok(Some(v.parse().map_err(|_| {
+                StorageError::Serialization("invalid last_synced_at".to_string())
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_last_synced_at(&self, time: u64) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(LAST_SYNCED_AT_KEY.to_string(), time.to_string())
             .await
     }
 }

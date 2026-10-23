@@ -1,4 +1,6 @@
-use spark::{operator::rpc::is_temporary_code, services::ServiceError};
+use spark::{
+    operator::rpc::is_temporary_code, services::ServiceError, token::TokenOutputServiceError,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -84,9 +86,11 @@ impl SparkWalletError {
         match self {
             SparkWalletError::OperatorRpcError(error)
             | SparkWalletError::ServiceError(ServiceError::ServiceConnectionError(error))
-            | SparkWalletError::TreeServiceError(spark::tree::TreeServiceError::RpcError(error)) => {
-                error.is_unavailable()
-            }
+            | SparkWalletError::TreeServiceError(spark::tree::TreeServiceError::RpcError(error))
+            | SparkWalletError::TokenOutputServiceError(TokenOutputServiceError::RpcError(error))
+            | SparkWalletError::TokenOutputServiceError(TokenOutputServiceError::ServiceError(
+                ServiceError::ServiceConnectionError(error),
+            )) => error.is_unavailable(),
             SparkWalletError::ServiceError(ServiceError::RequestError(status)) => {
                 is_temporary_code(status.code())
             }
@@ -124,6 +128,20 @@ mod tests {
             OperatorRpcError::Transport("refused".to_string()),
         ));
         assert!(tree_service.is_operator_unavailable());
+    }
+
+    #[test]
+    fn unreachable_operators_are_unavailable_to_the_token_service() {
+        let unreachable = || Box::new(OperatorRpcError::Transport("refused".to_string()));
+        let rpc = SparkWalletError::TokenOutputServiceError(TokenOutputServiceError::RpcError(
+            unreachable(),
+        ));
+        let connection =
+            SparkWalletError::TokenOutputServiceError(TokenOutputServiceError::ServiceError(
+                ServiceError::ServiceConnectionError(unreachable()),
+            ));
+        assert!(rpc.is_operator_unavailable());
+        assert!(connection.is_operator_unavailable());
     }
 
     #[test]

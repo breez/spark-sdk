@@ -33,9 +33,9 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
 use crate::{
-    BitcoinChainService, LeafOptimizationConfig, Logger, Network, TokenOptimizationConfig,
-    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    models::SparkConfig, persist::Storage, rewards::RewardsDelegator,
+    BitcoinChainService, LeafOptimizationConfig, Logger, Network, SyncError,
+    TokenOptimizationConfig, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
+    logger, models::Config, models::SparkConfig, persist::Storage, rewards::RewardsDelegator,
     signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
     token_conversion::TokenConverter,
 };
@@ -113,6 +113,8 @@ pub struct BreezSdk {
     /// and explicit `claim_deposit` calls.
     pub(crate) claim_guards: deposits::ClaimGuards,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
+    /// The latest wallet sync's failure, cleared when one succeeds.
+    pub(crate) last_sync_error: Arc<Mutex<Option<SyncError>>>,
     /// Parses payment inputs over the SDK's own transports, so lightning-address
     /// and LNURL lookups honour the proxy and ride the redirect-validating
     /// LNURL client (their hosts are chosen by remote parties).
