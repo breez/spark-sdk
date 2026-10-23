@@ -1,21 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use bitcoin::Network;
 use bitcoin::hashes::Hash;
+use bitcoin::{FeeRate, Network};
+use spark::services::TransferId;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
-use crate::chain::{ChainClient, ChainError, ChainRepository};
+use crate::chain::{ChainRepository, ChainSync, ChainTip, Synced};
 use crate::coop_exit::repository::{CoopExitRecord, CoopExitStore};
 use crate::lightning::repository::{
     HoldInvoiceStatus, LightningReceiveRecord, LightningSendRecord, LightningStore,
     SendPaymentStatus,
 };
+use crate::pool::refund_outputs::RefundOutputs;
 use crate::pool::restock::{PoolEvent, RestockService};
+use crate::postgresql::PostgresLeafStore;
+use crate::postgresql::Reported;
 use crate::static_deposit::repository::{StaticDepositClaimRecord, StaticDepositClaimStore};
 use crate::swap::SwapStore;
 use crate::swap::repository::SwapDetail;
@@ -31,13 +35,17 @@ use ssp_internal_api::{
     GetLightningRequestRequest, GetLightningRequestResponse, GetStaticDepositClaimRequest,
     GetStaticDepositClaimResponse, LeavesAvailable, LightningReceive, LightningSend,
     ListCoopExitsRequest, ListCoopExitsResponse, ListPendingLightningRequest,
-    ListPendingLightningResponse, ListSwapsRequest, ListSwapsResponse, NewAddressRequest,
-    NewAddressResponse, PoolEvent as ApiPoolEvent, PoolLeafCount, PoolStatusRequest,
-    PoolStatusResponse, RequestRestockRequest, RequestRestockResponse, RestockDenomination,
-    StaticDepositClaim, StopRequest, StopResponse, SubscribePoolEventsRequest, Swap, SwapLeaf,
-    Utxo, UtxosRequest, UtxosResponse, onchain_wallet_server::OnchainWallet, pool_event,
-    pool_server::Pool, ssp_manager_server::SspManager,
+    ListPendingLightningResponse, ListRefundOutputsRequest, ListRefundOutputsResponse,
+    ListSwapsRequest, ListSwapsResponse, NewAddressRequest, NewAddressResponse,
+    PoolEvent as ApiPoolEvent, PoolLeafCount, PoolStatusRequest, PoolStatusResponse, RefundOutput,
+    RequestRestockRequest, RequestRestockResponse, RestockDenomination, StaticDepositClaim,
+    StopRequest, StopResponse, SubscribePoolEventsRequest, Swap, SwapLeaf,
+    SweepRefundOutputsRequest, SweepRefundOutputsResponse, Utxo, UtxosRequest, UtxosResponse,
+    onchain_wallet_server::OnchainWallet, pool_event, pool_server::Pool,
+    ssp_manager_server::SspManager,
 };
+use ssp_internal_api::{Dispute, ListDisputesRequest, ListDisputesResponse};
+use ssp_internal_api::{ListReservationsRequest, ListReservationsResponse, Reservation};
 
 const DEFAULT_COOP_EXIT_LIMIT: u32 = 100;
 const DEFAULT_SWAP_LIMIT: u32 = 100;
@@ -88,7 +96,7 @@ fn swap_leaf_to_proto(leaf: &crate::swap::repository::SwapLeaf) -> SwapLeaf {
 fn swap_to_proto(detail: &SwapDetail) -> Swap {
     Swap {
         id: detail.swap.id.clone(),
-        user_transfer_id: detail.swap.user_transfer_id.clone(),
+        user_transfer_id: detail.swap.user_transfer_id.to_string(),
         total_amount_sats: detail.swap.total_amount_sats.unsigned_abs(),
         target_amount_sats: detail.swap.target_amount_sats.unsigned_abs(),
         fee_sats: detail.swap.fee_sats.unsigned_abs(),
@@ -148,12 +156,12 @@ fn receive_to_proto(record: &LightningReceiveRecord) -> LightningReceive {
     }
 }
 
-pub struct ServerParams<C, R>
+pub struct ServerParams<R>
 where
-    C: ChainClient,
     R: ChainRepository,
 {
-    pub chain_client: Arc<C>,
+    pub chain_tip: ChainTip,
+    pub synced: Synced,
     pub network: Network,
     pub token: CancellationToken,
     pub wallet: Arc<SspWallet<R>>,
@@ -163,11 +171,9 @@ where
     pub swap_store: Arc<dyn SwapStore>,
 }
 
-pub struct Server<C>
-where
-    C: ChainClient,
-{
-    chain_client: Arc<C>,
+pub struct Server {
+    chain_tip: ChainTip,
+    synced: Synced,
     network: Network,
     token: CancellationToken,
     lightning_store: Arc<dyn LightningStore>,
@@ -176,13 +182,11 @@ where
     swap_store: Arc<dyn SwapStore>,
 }
 
-impl<C> Server<C>
-where
-    C: ChainClient,
-{
-    pub fn new<R: ChainRepository>(params: &ServerParams<C, R>) -> Self {
+impl Server {
+    pub fn new<R: ChainRepository>(params: &ServerParams<R>) -> Self {
         Self {
-            chain_client: Arc::clone(&params.chain_client),
+            chain_tip: params.chain_tip.clone(),
+            synced: params.synced.clone(),
             network: params.network,
             token: params.token.clone(),
             lightning_store: Arc::clone(&params.lightning_store),
@@ -198,7 +202,7 @@ pub struct WalletServer<R: ChainRepository> {
 }
 
 impl<R: ChainRepository> WalletServer<R> {
-    pub fn new<C: ChainClient>(params: &ServerParams<C, R>) -> Self {
+    pub fn new(params: &ServerParams<R>) -> Self {
         Self {
             wallet: Arc::clone(&params.wallet),
         }
@@ -206,22 +210,22 @@ impl<R: ChainRepository> WalletServer<R> {
 }
 
 #[tonic::async_trait]
-impl<C> SspManager for Server<C>
-where
-    C: ChainClient + Send + Sync + 'static,
-{
+impl SspManager for Server {
     async fn get_info(
         &self,
         _request: tonic::Request<GetInfoRequest>,
     ) -> Result<tonic::Response<GetInfoResponse>, tonic::Status> {
-        let block_height = self
-            .chain_client
-            .get_blockheight()
-            .await
-            .map_err(|e: ChainError| tonic::Status::internal(e.to_string()))?;
+        let (tip, synced, bitcoind) = match self.synced.chain_sync(&self.chain_tip) {
+            ChainSync::Synced { tip } => (Some(tip), true, None),
+            ChainSync::NotSynced { record, bitcoind } => (record, false, bitcoind),
+        };
         Ok(tonic::Response::new(GetInfoResponse {
-            block_height,
             network: self.network.to_string(),
+            block_height: tip.as_ref().map(|tip| tip.height),
+            block_hash: tip.map(|tip| tip.hash.to_string()),
+            synced,
+            bitcoind_block_height: bitcoind.map(|bitcoind| bitcoind.height),
+            bitcoind_synced: bitcoind.map(|bitcoind| bitcoind.synced),
         }))
     }
 
@@ -398,9 +402,50 @@ where
     }
 }
 
+/// The stores of the records the SSP reserves pool leaves for.
+pub struct ReservingStores {
+    pub swaps: Arc<dyn SwapStore>,
+    pub lightning: Arc<dyn LightningStore>,
+    pub static_deposits: Arc<dyn StaticDepositClaimStore>,
+}
+
+impl ReservingStores {
+    async fn records_of(
+        &self,
+        transfer_ids: &[TransferId],
+    ) -> Result<HashMap<TransferId, &'static str>, String> {
+        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
+        let swaps = self.swaps.counter_transfers_among(&ids).await?;
+        let paid_out: HashSet<TransferId> = self
+            .lightning
+            .get_receives_by_transfer_ids(transfer_ids)
+            .await?
+            .into_iter()
+            .filter_map(|receive| receive.transfer_id)
+            .collect();
+        let claims = self.static_deposits.transfers_among(&ids).await?;
+        let mut records = HashMap::new();
+        for (transfer_id, id) in transfer_ids.iter().zip(&ids) {
+            let record = if swaps.contains(id) {
+                "swap"
+            } else if paid_out.contains(transfer_id) {
+                "lightning_receive"
+            } else if claims.contains(id) {
+                "static_deposit"
+            } else {
+                continue;
+            };
+            records.insert(transfer_id.clone(), record);
+        }
+        Ok(records)
+    }
+}
+
 pub struct PoolServer {
     restock: Arc<RestockService>,
-    tree_store: Arc<dyn spark::tree::TreeStore>,
+    leaf_store: Arc<PostgresLeafStore>,
+    refund_outputs: RefundOutputs,
+    reserving: ReservingStores,
     denominations: Vec<u64>,
     /// Ends the event streams at shutdown: the server does not stop while a
     /// stream is open.
@@ -410,13 +455,17 @@ pub struct PoolServer {
 impl PoolServer {
     pub fn new(
         restock: Arc<RestockService>,
-        tree_store: Arc<dyn spark::tree::TreeStore>,
+        leaf_store: Arc<PostgresLeafStore>,
+        refund_outputs: RefundOutputs,
+        reserving: ReservingStores,
         denominations: Vec<u64>,
         token: CancellationToken,
     ) -> Self {
         Self {
             restock,
-            tree_store,
+            leaf_store,
+            refund_outputs,
+            reserving,
             denominations,
             token,
         }
@@ -464,18 +513,16 @@ impl Pool for PoolServer {
         &self,
         _request: Request<PoolStatusRequest>,
     ) -> Result<Response<PoolStatusResponse>, Status> {
-        let leaves = self
-            .tree_store
-            .get_leaves()
+        let counts = self
+            .leaf_store
+            .counts()
             .await
-            .map_err(|e| Status::internal(format!("could not read the leaf pool: {e}")))?;
-        let mut counts: HashMap<u64, u32> = HashMap::new();
-        let mut available_sats: u64 = 0;
-        for leaf in &leaves.available {
-            let count = counts.entry(leaf.value).or_insert(0);
-            *count = count.saturating_add(1);
-            available_sats = available_sats.saturating_add(leaf.value);
-        }
+            .map_err(|e| Status::internal(format!("could not read the leaf pool: {e}")))?
+            .available;
+        let available_sats = counts
+            .iter()
+            .map(|(value, count)| value.saturating_mul(u64::from(*count)))
+            .fold(0u64, u64::saturating_add);
         let mut available: Vec<PoolLeafCount> = counts
             .into_iter()
             .map(|(denomination_sats, count)| PoolLeafCount {
@@ -520,6 +567,123 @@ impl Pool for PoolServer {
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn list_refund_outputs(
+        &self,
+        _request: Request<ListRefundOutputsRequest>,
+    ) -> Result<Response<ListRefundOutputsResponse>, Status> {
+        let unswept = self
+            .refund_outputs
+            .unswept()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the refund outputs: {e}")))?;
+        let outputs = unswept
+            .into_iter()
+            .map(|unswept| RefundOutput {
+                leaf_id: unswept.output.node_id.to_string(),
+                txid: unswept.output.outpoint.txid.to_string(),
+                vout: unswept.output.outpoint.vout,
+                value_sats: unswept.output.output.value.to_sat(),
+                block_height: unswept.output.height,
+                spending_txid: unswept.spender.map(|txid| txid.to_string()),
+            })
+            .collect();
+        Ok(Response::new(ListRefundOutputsResponse { outputs }))
+    }
+
+    async fn sweep_refund_outputs(
+        &self,
+        request: Request<SweepRefundOutputsRequest>,
+    ) -> Result<Response<SweepRefundOutputsResponse>, Status> {
+        let request = request.into_inner();
+        let rate = request
+            .fee_rate_sat_per_vbyte
+            .map(|sat_per_vbyte| FeeRate::from_sat_per_vb(sat_per_vbyte).unwrap_or(FeeRate::MAX));
+        let sweep = self
+            .refund_outputs
+            .sweep(rate, request.replace_unconfirmed)
+            .await
+            .map_err(|e| Status::internal(format!("could not sweep the refund outputs: {e}")))?;
+        Ok(Response::new(SweepRefundOutputsResponse {
+            txids: sweep.transactions.iter().map(ToString::to_string).collect(),
+            output_count: u32::try_from(sweep.outputs).unwrap_or(u32::MAX),
+            value_sats: sweep.value_sats,
+            fee_sats: sweep.fee_sats,
+        }))
+    }
+
+    async fn list_disputes(
+        &self,
+        _request: Request<ListDisputesRequest>,
+    ) -> Result<Response<ListDisputesResponse>, Status> {
+        let disputes = self
+            .leaf_store
+            .all_disputes()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the disputes: {e}")))?;
+        let disputes = disputes.into_iter().map(dispute_to_proto).collect();
+        Ok(Response::new(ListDisputesResponse { disputes }))
+    }
+
+    async fn list_reservations(
+        &self,
+        request: Request<ListReservationsRequest>,
+    ) -> Result<Response<ListReservationsResponse>, Status> {
+        let orphaned_only = request.into_inner().orphaned_only;
+        let stored = self
+            .leaf_store
+            .reservations()
+            .await
+            .map_err(|e| Status::internal(format!("could not list the reservations: {e}")))?;
+        let transfer_ids: Vec<TransferId> = stored
+            .iter()
+            .map(|reservation| reservation.transfer_id.clone())
+            .collect();
+        let records = self
+            .reserving
+            .records_of(&transfer_ids)
+            .await
+            .map_err(|e| Status::internal(format!("could not look the transfers up: {e}")))?;
+        let mut reservations = Vec::with_capacity(stored.len());
+        for reservation in stored {
+            let record = records.get(&reservation.transfer_id).copied();
+            if orphaned_only && record.is_some() {
+                continue;
+            }
+            reservations.push(Reservation {
+                transfer_id: reservation.transfer_id.to_string(),
+                leaf_count: reservation.leaves,
+                value_sats: reservation.value,
+                reserved_at: reservation.reserved_at.to_rfc3339(),
+                record: record.map(str::to_string),
+            });
+        }
+        Ok(Response::new(ListReservationsResponse { reservations }))
+    }
+}
+
+fn dispute_to_proto(details: crate::postgresql::DisputeDetails) -> Dispute {
+    let (difference, operator_status) = match details.dispute.reported {
+        Reported::Unreported => ("unreported", None),
+        Reported::Status(status) => ("status", Some(status)),
+        Reported::AnotherOwner => ("owner", None),
+        Reported::AnotherRefund => ("refund", None),
+        Reported::Available => ("exiting", None),
+    };
+    Dispute {
+        leaf_id: details.dispute.node_id.to_string(),
+        difference: difference.to_string(),
+        value_sats: details.value,
+        refund_txid: details.refund_txid.to_string(),
+        refund_timelock: details.refund_timelock,
+        operator_status,
+        operator_refund_txid: details.operator_refund_txid,
+        operator_reported_since: details.observed_at.map(|at| at.to_rfc3339()),
+        spent_txid: details.exiting.map(|spend| spend.outpoint.txid.to_string()),
+        spent_vout: details.exiting.map(|spend| spend.outpoint.vout),
+        spending_txid: details.exiting.map(|spend| spend.txid.to_string()),
+        spending_block_height: details.exiting.map(|spend| spend.block_height),
     }
 }
 

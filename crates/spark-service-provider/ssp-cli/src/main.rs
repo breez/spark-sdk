@@ -13,11 +13,14 @@
 )]
 
 use clap::{Parser, Subcommand};
+use ssp_internal_api::ListDisputesRequest;
+use ssp_internal_api::ListReservationsRequest;
 use ssp_internal_api::{
     BalanceRequest, GetInfoRequest, GetLightningRequestRequest, ListPendingLightningRequest,
-    NewAddressRequest, PoolStatusRequest, RequestRestockRequest, RestockDenomination, StopRequest,
-    SubscribePoolEventsRequest, UtxosRequest, onchain_wallet_client::OnchainWalletClient,
-    pool_client::PoolClient, pool_event, ssp_manager_client::SspManagerClient,
+    ListRefundOutputsRequest, NewAddressRequest, PoolStatusRequest, RequestRestockRequest,
+    RestockDenomination, StopRequest, SubscribePoolEventsRequest, SweepRefundOutputsRequest,
+    UtxosRequest, onchain_wallet_client::OnchainWalletClient, pool_client::PoolClient, pool_event,
+    ssp_manager_client::SspManagerClient,
 };
 use tonic::{
     Request,
@@ -78,6 +81,27 @@ enum PoolCommand {
     },
     /// Follow what the pool service does as it stocks, until interrupted or the daemon stops
     Events,
+    /// List the unspent refund outputs of the leaves the SSP exited unilaterally
+    Exits,
+    /// Sweep those refund outputs into the onchain wallet
+    SweepExits {
+        /// Fee rate in sat/vB. Without it, the daemon uses its own estimate.
+        #[arg(long)]
+        fee_rate: Option<u64>,
+        /// Also sweep the outputs that are inputs of an unconfirmed sweep, to replace it.
+        /// Bitcoin Core accepts the new sweep only at a higher fee rate.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// List the unreserved leaves that only one of the SSP and the operators
+    /// would use, with what each side has for them
+    Disputes,
+    /// List the transfers the SSP has pool leaves reserved for
+    Reservations {
+        /// Only those that belong to no swap, lightning receive or static deposit claim.
+        #[arg(long)]
+        orphaned: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,10 +212,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                PoolCommand::Exits => list_refund_outputs(&mut client).await?,
+                PoolCommand::SweepExits { fee_rate, replace } => {
+                    sweep_refund_outputs(&mut client, fee_rate, replace).await?;
+                }
+                PoolCommand::Disputes => list_disputes(&mut client).await?,
+                PoolCommand::Reservations { orphaned } => {
+                    list_reservations(&mut client, orphaned).await?;
+                }
             }
         }
     }
 
+    Ok(())
+}
+
+async fn list_disputes(client: &mut PoolClient<Channel>) -> Result<(), Box<dyn std::error::Error>> {
+    let response = client
+        .list_disputes(Request::new(ListDisputesRequest {}))
+        .await?
+        .into_inner();
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+async fn list_reservations(
+    client: &mut PoolClient<Channel>,
+    orphaned_only: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let response = client
+        .list_reservations(Request::new(ListReservationsRequest { orphaned_only }))
+        .await?
+        .into_inner();
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+async fn list_refund_outputs(
+    client: &mut PoolClient<Channel>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let outputs = client
+        .list_refund_outputs(Request::new(ListRefundOutputsRequest {}))
+        .await?
+        .into_inner()
+        .outputs;
+    let total: u64 = outputs.iter().map(|output| output.value_sats).sum();
+    for output in &outputs {
+        let spender = output
+            .spending_txid
+            .as_ref()
+            .map(|txid| format!(", an input of unconfirmed {txid}"))
+            .unwrap_or_default();
+        println!(
+            "{:>8} sats  {}:{}  leaf {}, confirmed at {}{spender}",
+            output.value_sats, output.txid, output.vout, output.leaf_id, output.block_height
+        );
+    }
+    println!("{} outputs, {total} sats", outputs.len());
+    Ok(())
+}
+
+async fn sweep_refund_outputs(
+    client: &mut PoolClient<Channel>,
+    fee_rate: Option<u64>,
+    replace: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sweep = client
+        .sweep_refund_outputs(Request::new(SweepRefundOutputsRequest {
+            fee_rate_sat_per_vbyte: fee_rate,
+            replace_unconfirmed: replace,
+        }))
+        .await?
+        .into_inner();
+    for txid in &sweep.txids {
+        println!("{txid}");
+    }
+    println!(
+        "swept {} outputs: {} sats to the wallet, {} sats in fees",
+        sweep.output_count, sweep.value_sats, sweep.fee_sats
+    );
     Ok(())
 }
 
@@ -273,5 +372,56 @@ impl LightningHandler {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ssp_internal_api::GetInfoResponse;
+
+    const TIP: &str = "5b2a796358296bfc94e7dc9376bbf1016b0588e93f41867c40e2101b3cd8082c";
+
+    #[test]
+    fn get_info_prints_the_block_sspd_is_at_and_whether_it_is_synced() {
+        let synced = GetInfoResponse {
+            network: "regtest".to_string(),
+            block_height: Some(192),
+            block_hash: Some(TIP.to_string()),
+            synced: true,
+            bitcoind_block_height: None,
+            bitcoind_synced: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&synced).unwrap(),
+            json!({
+                "network": "regtest",
+                "block_height": 192,
+                "block_hash": TIP,
+                "synced": true,
+                "bitcoind_block_height": null,
+                "bitcoind_synced": null,
+            })
+        );
+
+        let behind = GetInfoResponse {
+            block_height: Some(190),
+            synced: false,
+            bitcoind_block_height: Some(192),
+            bitcoind_synced: Some(true),
+            ..synced
+        };
+        assert_eq!(
+            serde_json::to_value(&behind).unwrap(),
+            json!({
+                "network": "regtest",
+                "block_height": 190,
+                "block_hash": TIP,
+                "synced": false,
+                "bitcoind_block_height": 192,
+                "bitcoind_synced": true,
+            })
+        );
     }
 }

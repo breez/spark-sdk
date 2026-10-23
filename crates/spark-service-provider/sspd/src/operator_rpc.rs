@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use spark::operator::rpc::spark::{
     AdaptorPublicKeyPackage, FinalizeNodeSignaturesResponse, GetUtxosForAddressRequest,
     GetUtxosForAddressResponse, PrepareTreeAddressRequest, PrepareTreeAddressResponse,
-    QueryNodesRequest, QueryNodesResponse,
+    QueryNodesRequest, QueryNodesResponse, TreeNodeIds, query_nodes_request::Source,
 };
 use spark::operator::rpc::{HeaderInterceptor, SparkRpcClient};
+use spark::tree::{TreeNode, TreeNodeId};
 use tonic::service::interceptor::InterceptedService;
 
 pub mod proto {
@@ -230,4 +233,58 @@ pub async fn get_utxos_for_address(
         async move { c.get_utxos_for_address(req).await }
     })
     .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeQuery {
+    /// The coordinator returns the nodes the SSP's wallet may see.
+    Public,
+    /// The coordinator returns nodes whatever their wallet's privacy setting.
+    Internal,
+}
+
+/// The operators refuse a node query by more ids than this.
+pub const MAX_NODE_IDS_PER_QUERY: usize = 1000;
+
+/// Leaves out a node that the coordinator does not report.
+pub async fn nodes(
+    client: &SparkRpcClient,
+    network: spark::Network,
+    node_ids: &[TreeNodeId],
+    include_parents: bool,
+    query: NodeQuery,
+) -> Result<Vec<TreeNode>> {
+    let network: spark::operator::rpc::spark::Network = network.into();
+    let mut nodes: HashMap<String, TreeNode> = HashMap::new();
+    for chunk in node_ids.chunks(MAX_NODE_IDS_PER_QUERY) {
+        let limit = i64::try_from(chunk.len()).unwrap_or(i64::MAX);
+        let mut offset = 0;
+        loop {
+            let request = QueryNodesRequest {
+                source: Some(Source::NodeIds(TreeNodeIds {
+                    node_ids: chunk.iter().map(ToString::to_string).collect(),
+                })),
+                include_parents,
+                limit,
+                offset,
+                network: network as i32,
+                statuses: vec![],
+            };
+            let response = match query {
+                NodeQuery::Public => client.query_nodes(request).await?,
+                NodeQuery::Internal => query_nodes_internal(client, request).await?,
+            };
+            for (id, node) in response.nodes {
+                let node = TreeNode::try_from(node)
+                    .map_err(|e| OperatorRpcError::Unexpected(format!("node {id}: {e}")))?;
+                nodes.insert(id, node);
+            }
+            // The coordinator returns a positive offset while it has more nodes.
+            if response.offset <= 0 {
+                break;
+            }
+            offset = offset.saturating_add(limit);
+        }
+    }
+    Ok(nodes.into_values().collect())
 }

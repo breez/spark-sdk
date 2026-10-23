@@ -16,7 +16,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::handover::is_refusal;
-use crate::leaves::{IncomingLeafStore, IncomingTransfer, LeafSigningKeys, claim_into_pool};
+use crate::incoming_leaves::{IncomingLeafCheck, IncomingLeafError};
+use crate::leaves::{ClaimDeps, IncomingTransfer, claim_into_pool};
 use crate::wakeup::Wakeup;
 
 use super::node::{LightningNode, LightningNodeError, LightningPaymentId, PaymentState};
@@ -208,6 +209,8 @@ pub enum LightningSendError {
     AmountRequired,
     #[error("transfer not found: {0}")]
     TransferNotFound(String),
+    #[error(transparent)]
+    IncomingLeaf(#[from] IncomingLeafError),
     #[error("the transfer or idempotency key belongs to a different send request")]
     RequestConflict,
     #[error("the invoice is already being paid")]
@@ -249,6 +252,7 @@ pub struct LightningSendService {
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     transfer_service: Arc<TransferService>,
+    incoming_leaves: Arc<IncomingLeafCheck>,
     network: spark::Network,
     fee_policy: LightningSendFeePolicy,
     wakeup: Wakeup,
@@ -262,6 +266,7 @@ impl LightningSendService {
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         transfer_service: Arc<TransferService>,
+        incoming_leaves: Arc<IncomingLeafCheck>,
         network: spark::Network,
         fee_policy: LightningSendFeePolicy,
         wakeup: Wakeup,
@@ -272,6 +277,7 @@ impl LightningSendService {
             operator_pool,
             signer,
             transfer_service,
+            incoming_leaves,
             network,
             fee_policy,
             wakeup,
@@ -379,6 +385,7 @@ impl LightningSendService {
                 "the SSP could not claim the transfer's leaves".to_string(),
             ));
         }
+        self.incoming_leaves.check(transfer).await?;
 
         let min_fee = self.fee_policy.fee_for(amount_sats);
         let required = amount_sats.saturating_add(min_fee);
@@ -421,11 +428,8 @@ pub struct SendWorkerDeps {
     pub node: Arc<dyn LightningNode>,
     pub operator_pool: Arc<OperatorPool>,
     pub signer: Arc<dyn Signer>,
-    pub transfer_service: Arc<TransferService>,
     pub htlc_service: Arc<HtlcService>,
-    pub incoming: Arc<dyn IncomingLeafStore>,
-    pub admission: Wakeup,
-    pub leaf_signing_keys: Arc<dyn LeafSigningKeys>,
+    pub claim: Arc<ClaimDeps>,
     pub network: spark::Network,
     pub wakeup: Wakeup,
 }
@@ -508,6 +512,7 @@ async fn pay_send(deps: &SendWorkerDeps, record: &LightningSendRecord) -> Result
     }
 
     let transfer = deps
+        .claim
         .transfer_service
         .query_transfer(&record.user_transfer_id)
         .await?
@@ -622,6 +627,7 @@ async fn settle_send(
     record: &LightningSendRecord,
 ) -> Result<bool, BoxError> {
     let transfer = deps
+        .claim
         .transfer_service
         .query_transfer(&record.user_transfer_id)
         .await?
@@ -634,14 +640,7 @@ async fn settle_send(
         return Ok(false);
     }
     let claimed_transfer = deps.htlc_service.provide_preimage(preimage).await?;
-    let claimed = claim_into_pool(
-        &deps.transfer_service,
-        deps.leaf_signing_keys.as_ref(),
-        deps.incoming.as_ref(),
-        &deps.admission,
-        &claimed_transfer,
-    )
-    .await?;
+    let claimed = claim_into_pool(&deps.claim, &claimed_transfer).await?;
     deps.store.set_send_leaves_claimed(&record.id).await?;
     info!(send_id = %record.id, count = claimed.len(), "lightning send: claimed user leaves");
     Ok(true)

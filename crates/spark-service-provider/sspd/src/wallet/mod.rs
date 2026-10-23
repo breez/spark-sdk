@@ -13,13 +13,12 @@ use spark::services::{DepositService, TransferService};
 use spark::session_store::InMemorySessionStore;
 use spark::signer::{DefaultSigner, Signer, SparkSigner, SparkSignerAdapter};
 use spark::ssp::{RetryConfig, ServiceProvider, ServiceProviderConfig};
-use spark::tree::{ExitChainResolver, SynchronousTreeService, TreeService, TreeStore};
-use spark_postgres::{PostgresStorageConfig, PostgresTreeStore};
 use sqlx::PgPool;
 use thiserror::Error;
 use tracing::info;
 
 use crate::chain::ChainRepository;
+use crate::postgresql::{self, PostgresLeafStore};
 
 pub use onchain::{OnchainWallet, OnchainWalletError};
 
@@ -30,9 +29,6 @@ pub enum WalletError {
 
     #[error("signer error: {0}")]
     Signer(String),
-
-    #[error("postgres error: {0}")]
-    Postgres(#[from] spark_postgres::PostgresError),
 
     #[error("onchain wallet error: {0}")]
     Onchain(#[from] OnchainWalletError),
@@ -48,13 +44,11 @@ pub struct SparkServices {
     pub signer: Arc<dyn Signer>,
     pub spark_signer: Arc<dyn SparkSigner>,
     pub operator_pool: Arc<OperatorPool>,
-    pub tree_store: Arc<dyn TreeStore>,
+    pub leaf_store: Arc<PostgresLeafStore>,
     pub transfer_service: Arc<TransferService>,
     pub deposit_service: Arc<DepositService>,
     pub tree_deposit_service: TreeDepositService,
     pub timelocks: Arc<TimelockManager>,
-    pub exit_chains: Arc<ExitChainResolver>,
-    pub tree_service: Arc<dyn TreeService>,
     pub identity_public_key: PublicKey,
     pub network: spark::Network,
 }
@@ -66,18 +60,22 @@ pub struct SspWallet<R: ChainRepository> {
 }
 
 impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
     pub async fn new(
         seed: &[u8],
         network: Network,
-        leaf_store: PostgresStorageConfig,
         chain_repository: Arc<R>,
+        leaf_store_chain_repository: Arc<postgresql::ChainRepository>,
         pgpool: Arc<PgPool>,
         operators: Option<Vec<OperatorSetting>>,
         max_nodes_per_request: usize,
     ) -> Result<Self, WalletError> {
-        let onchain = Arc::new(OnchainWallet::new(seed, network, chain_repository, pgpool)?);
+        let onchain = Arc::new(OnchainWallet::new(
+            seed,
+            network,
+            chain_repository,
+            Arc::clone(&pgpool),
+        )?);
 
         let spark_network =
             spark::Network::try_from(network).map_err(WalletError::UnsupportedNetwork)?;
@@ -147,14 +145,11 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             spark_signer.clone(),
         ));
 
-        // By default the store releases a reservation after five minutes. That is
-        // turned off here: a handover has to keep its reservation until its outcome
-        // is known, and that can take longer.
-        let tree_store: Arc<dyn TreeStore> = Arc::new(
-            PostgresTreeStore::from_config(leaf_store, &identity_public_key.serialize())
-                .await?
-                .with_reservation_timeout(None),
-        );
+        let leaf_store = Arc::new(PostgresLeafStore::new(
+            pgpool,
+            identity_public_key,
+            leaf_store_chain_repository,
+        ));
 
         let timelocks = Arc::new(TimelockManager::new(
             spark_signer.clone(),
@@ -163,18 +158,6 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
             // The SSP's leaves keep their flat-fee direct node txs.
             false,
         ));
-        let tree_service: Arc<dyn TreeService> = Arc::new(SynchronousTreeService::new(
-            identity_public_key,
-            spark_network,
-            operator_pool.clone(),
-            Arc::clone(&tree_store),
-            Arc::clone(&timelocks),
-            spark_signer.clone(),
-            // The SSP is the service provider, so it has none to swap with.
-            None,
-            None,
-        ));
-        let exit_chains = Arc::new(ExitChainResolver::new(Arc::clone(&tree_service)));
 
         let tree_deposit_service = TreeDepositService::new(
             identity_public_key,
@@ -191,13 +174,11 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
                 signer,
                 spark_signer,
                 operator_pool,
-                tree_store,
+                leaf_store,
                 transfer_service,
                 deposit_service,
                 tree_deposit_service,
                 timelocks,
-                exit_chains,
-                tree_service,
                 identity_public_key,
                 network: spark_network,
             },

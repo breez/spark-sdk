@@ -38,10 +38,9 @@ reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
-spark-postgres = { workspace = true }
 spark = { workspace = true }
 frost-secp256k1-tr = { workspace = true }
-sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json"] }
+sqlx = { version = "0.8.2", features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "chrono", "json", "uuid"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -56,5 +55,8 @@ uuid = { workspace = true }
 tonic-build = { workspace = true }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["test-util"] }
 toml = "0.8"
 tower = { version = "0.5", features = ["util"] }

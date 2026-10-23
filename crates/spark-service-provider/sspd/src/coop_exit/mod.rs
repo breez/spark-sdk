@@ -8,9 +8,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::chain::Synced;
 use crate::fees::{self, FeeRateSource};
 use crate::wallet::onchain::{HeldCoins, Utxo};
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::transaction::{InputWeightPrediction, predict_weight_from_slices};
+use bitcoin::{FeeRate, Weight};
 use spark::operator::OperatorPool;
 use spark::services::{
     ServiceError, Transfer, TransferId, TransferService, TransferStatus, TransferType,
@@ -21,7 +24,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::RequestCoopExitInput;
-use crate::leaves::{IncomingLeafStore, IncomingTransfer, LeafSigningKeys, claim_into_pool};
+use crate::incoming_leaves::{IncomingLeafCheck, IncomingLeafError};
+use crate::leaves::{ClaimDeps, IncomingTransfer, claim_into_pool};
 use crate::wakeup::Wakeup;
 
 use self::repository::{CoopExitPrevout, CoopExitRecord, CoopExitStore};
@@ -32,7 +36,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 const COOP_EXIT_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Nodes do not relay a transaction weighing more.
-const MAX_STANDARD_TX_WEIGHT_WU: u64 = 400_000;
+const MAX_STANDARD_TX_WEIGHT: Weight = Weight::from_wu(400_000);
 
 /// An exit is rebroadcast until it has this many confirmations, even once its
 /// leaves are claimed: a reorg can unconfirm it.
@@ -42,28 +46,27 @@ pub const INCOMPLETE_REQUEST_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A quoted fee is sized before coin selection runs, so it assumes this many
 /// wallet inputs.
-const QUOTED_COOP_EXIT_INPUTS: u64 = 2;
+const QUOTED_COOP_EXIT_INPUTS: usize = 2;
 
 /// Headroom on a quoted fee for a coin selection needing more inputs than assumed.
 const QUOTE_FEE_MARGIN_PERCENT: u64 = 20;
 
-const REFUND_TX_WEIGHT_WU: u64 =
-    fees::TX_OVERHEAD_WU + 2 * fees::P2TR_INPUT_WU + fees::P2TR_OUTPUT_WU + fees::P2A_OUTPUT_WU;
+const REFUND_TX_WEIGHT: Weight = predict_weight_from_slices(
+    &[InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH; 2],
+    &[fees::P2TR_SCRIPT_LEN, fees::P2A_SCRIPT_LEN],
+);
 
-fn connector_tx_weight_wu(num_leaves: u64) -> u64 {
-    fees::TX_OVERHEAD_WU
-        .saturating_add(fees::P2TR_INPUT_WU)
-        .saturating_add(
-            num_leaves
-                .saturating_add(1)
-                .saturating_mul(fees::P2TR_OUTPUT_WU),
-        )
+fn connector_tx_weight(num_leaves: u64) -> Weight {
+    let outputs = usize::try_from(num_leaves.saturating_add(1)).unwrap_or(usize::MAX);
+    fees::p2tr_tx_weight(1, outputs)
 }
 
 /// Nodes relay a version 3 transaction of at most 10,000 vbytes, and the
 /// connector transaction has an output for each leaf.
-pub const MAX_COOP_EXIT_LEAVES: u64 =
-    (40_000 - fees::TX_OVERHEAD_WU - fees::P2TR_INPUT_WU) / fees::P2TR_OUTPUT_WU - 1;
+pub const MAX_COOP_EXIT_LEAVES: u64 = (40_000
+    - predict_weight_from_slices(&[InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH], &[]).to_wu())
+    / fees::P2TR_OUTPUT.to_wu()
+    - 1;
 
 pub fn check_leaf_count(num_leaves: u64) -> Result<(), CoopExitError> {
     if num_leaves > MAX_COOP_EXIT_LEAVES {
@@ -74,26 +77,17 @@ pub fn check_leaf_count(num_leaves: u64) -> Result<(), CoopExitError> {
     Ok(())
 }
 
-fn coop_exit_tx_weight_wu(num_inputs: u64, num_outputs: u64) -> u64 {
-    fees::TX_OVERHEAD_WU
-        .saturating_add(num_inputs.saturating_mul(fees::P2TR_INPUT_WU))
-        .saturating_add(num_outputs.saturating_mul(fees::P2TR_OUTPUT_WU))
-}
-
 /// A leaf's refund spends its connector output, and the operators fix the refund's
 /// outputs, so the connector's value goes to the refund's fee.
-fn per_leaf_connector_sats(sat_per_kw: u64) -> u64 {
-    fees::fee_sats(sat_per_kw, REFUND_TX_WEIGHT_WU).max(fees::P2TR_DUST_SATS)
+fn per_leaf_connector_sats(fee_rate: FeeRate) -> u64 {
+    fees::fee_sats(fee_rate, REFUND_TX_WEIGHT).max(fees::P2TR_DUST_SATS)
 }
 
-fn connector_funding_sats(num_leaves: u64, sat_per_kw: u64) -> u64 {
+fn connector_funding_sats(num_leaves: u64, fee_rate: FeeRate) -> u64 {
     num_leaves
-        .saturating_mul(per_leaf_connector_sats(sat_per_kw))
+        .saturating_mul(per_leaf_connector_sats(fee_rate))
         .saturating_add(fees::P2TR_DUST_SATS)
-        .saturating_add(fees::fee_sats(
-            sat_per_kw,
-            connector_tx_weight_wu(num_leaves),
-        ))
+        .saturating_add(fees::fee_sats(fee_rate, connector_tx_weight(num_leaves)))
 }
 
 fn miner_fees_sats(
@@ -122,14 +116,11 @@ pub struct CoopExitFees {
 }
 
 #[must_use]
-pub fn coop_exit_fees(num_leaves: u64, sat_per_kw: u64) -> CoopExitFees {
-    let exit_tx_fee = fees::fee_sats(
-        sat_per_kw,
-        coop_exit_tx_weight_wu(QUOTED_COOP_EXIT_INPUTS, 3),
-    );
+pub fn coop_exit_fees(num_leaves: u64, fee_rate: FeeRate) -> CoopExitFees {
+    let exit_tx_fee = fees::fee_sats(fee_rate, fees::p2tr_tx_weight(QUOTED_COOP_EXIT_INPUTS, 3));
     CoopExitFees {
         l1_broadcast_fee_sats: with_margin(
-            connector_funding_sats(num_leaves, sat_per_kw).saturating_add(exit_tx_fee),
+            connector_funding_sats(num_leaves, fee_rate).saturating_add(exit_tx_fee),
         ),
         user_fee_sats: 0,
     }
@@ -144,13 +135,14 @@ pub trait CoopExitOnchainWallet: Send + Sync {
         &self,
         need: &(dyn Fn(usize) -> u64 + Send + Sync),
     ) -> Result<(Vec<Utxo>, HeldCoins), BoxError>;
-    /// A fresh taproot address the wallet can sign for.
-    async fn next_address(&self) -> Result<bitcoin::Address, BoxError>;
-    /// The untweaked secret key of one of this wallet's taproot addresses.
-    async fn derive_keypair_for_address(
+    /// `count` fresh taproot addresses the wallet can sign for.
+    async fn next_addresses(&self, count: u32) -> Result<Vec<bitcoin::Address>, BoxError>;
+    /// The untweaked secret key of each of `addresses`, all of them taproot
+    /// addresses of this wallet.
+    async fn keys_for_addresses(
         &self,
-        address: &bitcoin::Address,
-    ) -> Result<bitcoin::secp256k1::SecretKey, BoxError>;
+        addresses: &[bitcoin::Address],
+    ) -> Result<HashMap<bitcoin::Address, bitcoin::secp256k1::SecretKey>, BoxError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -169,6 +161,11 @@ pub enum CoopExitError {
     TransferNotFound(String),
     #[error("coop-exit request not found: {0}")]
     NotFound(String),
+    #[error(transparent)]
+    LeafCheck(IncomingLeafError),
+    /// The SSP's log has the reason.
+    #[error("the SSP could not serve the request")]
+    Unavailable,
 }
 
 pub struct BuiltCoopExitTxs {
@@ -187,6 +184,8 @@ pub struct CoopExitService {
     transfer_service: Arc<TransferService>,
     wallet: Arc<dyn CoopExitOnchainWallet>,
     fee_rates: Arc<dyn FeeRateSource>,
+    incoming_leaves: Arc<IncomingLeafCheck>,
+    synced: Synced,
     network: spark::Network,
     worker: Wakeup,
 }
@@ -200,6 +199,8 @@ impl CoopExitService {
         transfer_service: Arc<TransferService>,
         wallet: Arc<dyn CoopExitOnchainWallet>,
         fee_rates: Arc<dyn FeeRateSource>,
+        incoming_leaves: Arc<IncomingLeafCheck>,
+        synced: Synced,
         network: spark::Network,
         worker: Wakeup,
     ) -> Self {
@@ -210,6 +211,8 @@ impl CoopExitService {
             transfer_service,
             wallet,
             fee_rates,
+            incoming_leaves,
+            synced,
             network,
             worker,
         }
@@ -233,6 +236,11 @@ impl CoopExitService {
         })?;
         let transfer_id = TransferId::from_str(&transfer_uuid.to_string())
             .map_err(|e| CoopExitError::InvalidInput(format!("invalid transfer id: {e}")))?;
+        // The SSP builds the exit transaction from the coins the chain record has.
+        if !self.synced.is_synced() {
+            warn!("refusing a coop exit request: the chain record is not at bitcoind's tip");
+            return Err(CoopExitError::Unavailable);
+        }
 
         if let Some(existing) = self
             .store
@@ -347,22 +355,23 @@ impl CoopExitService {
             .filter(|record| record.user_identity_public_key == *caller))
     }
 
-    pub async fn request_for_transfer(
+    pub async fn requests_for_transfers(
         &self,
-        transfer_id: &TransferId,
+        transfer_ids: &[TransferId],
         caller: &PublicKey,
-    ) -> Result<Option<CoopExitRecord>, CoopExitError> {
-        Ok(self
+    ) -> Result<Vec<CoopExitRecord>, CoopExitError> {
+        let mut requests = self
             .store
-            .get_by_transfer_id(transfer_id)
+            .get_by_transfer_ids(transfer_ids)
             .await
-            .map_err(CoopExitError::Store)?
-            .filter(|record| record.user_identity_public_key == *caller))
+            .map_err(CoopExitError::Store)?;
+        requests.retain(|record| record.user_identity_public_key == *caller);
+        Ok(requests)
     }
 
-    async fn fee_rate(&self) -> Result<u64, CoopExitError> {
+    async fn fee_rate(&self) -> Result<FeeRate, CoopExitError> {
         self.fee_rates
-            .sat_per_kw()
+            .fee_rate()
             .await
             .map_err(|e| CoopExitError::Wallet(format!("fee rate unavailable: {e}")))
     }
@@ -448,33 +457,34 @@ impl CoopExitService {
         let need = |inputs: usize| {
             payout
                 .saturating_add(connector_funding)
-                .saturating_add(fees::fee_sats(
-                    rate,
-                    coop_exit_tx_weight_wu(inputs as u64, 3),
-                ))
+                .saturating_add(fees::fee_sats(rate, fees::p2tr_tx_weight(inputs, 3)))
         };
         let (selected, held) = self
             .wallet
             .select_coins(&need)
             .await
             .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-        if coop_exit_tx_weight_wu(selected.len() as u64, 3) > MAX_STANDARD_TX_WEIGHT_WU {
+        if fees::p2tr_tx_weight(selected.len(), 3) > MAX_STANDARD_TX_WEIGHT {
             return Err(CoopExitError::Wallet(
                 "the exit needs more coins than one standard transaction spends".to_string(),
             ));
         }
         let inputs_sum: u64 = selected.iter().map(|u| u.value).sum();
 
-        let connector_funding_addr = self
+        // The connector outputs are for an address of the SSP's wallet, because
+        // whoever broadcasts a leaf's refund has to sign its connector input.
+        let addresses = self
             .wallet
-            .next_address()
+            .next_addresses(3)
             .await
             .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-        let change_addr = self
-            .wallet
-            .next_address()
-            .await
-            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
+        let Ok([connector_funding_addr, change_addr, connector_out_addr]) =
+            <[bitcoin::Address; 3]>::try_from(addresses)
+        else {
+            return Err(CoopExitError::Wallet(
+                "the wallet did not make three addresses".to_string(),
+            ));
+        };
 
         let coop_inputs: Vec<TxIn> = selected
             .iter()
@@ -514,13 +524,6 @@ impl CoopExitService {
         };
         let coop_exit_txid = coop_exit_tx.compute_txid();
 
-        // The leaf connectors pay the SSP: broadcasting a leaf's refund takes a
-        // signature for its connector input.
-        let connector_out_addr = self
-            .wallet
-            .next_address()
-            .await
-            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
         let connector_spk = connector_out_addr.script_pubkey();
         let mut connector_outputs: Vec<TxOut> = (0..num_connector_leaves)
             .map(|_| TxOut {
@@ -626,7 +629,7 @@ impl CoopExitService {
         }
 
         let mut prevouts: Vec<TxOut> = Vec::with_capacity(tx.input.len());
-        let mut keys = Vec::with_capacity(tx.input.len());
+        let mut addresses = Vec::with_capacity(tx.input.len());
         for input in &tx.input {
             let (txout, address) =
                 prevout_by_outpoint
@@ -638,12 +641,21 @@ impl CoopExitService {
                         ))
                     })?;
             prevouts.push(txout.clone());
-            let secret_key = self
-                .wallet
-                .derive_keypair_for_address(address)
-                .await
-                .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
-            keys.push(secret_key);
+            addresses.push(address.clone());
+        }
+        let wallet_keys = self
+            .wallet
+            .keys_for_addresses(&addresses)
+            .await
+            .map_err(|e| CoopExitError::Wallet(e.to_string()))?;
+        let keys: Vec<_> = addresses
+            .iter()
+            .filter_map(|address| wallet_keys.get(address))
+            .collect();
+        if keys.len() != addresses.len() {
+            return Err(CoopExitError::Wallet(
+                "the wallet has no key for an input".to_string(),
+            ));
         }
 
         let secp = Secp256k1::new();
@@ -754,7 +766,11 @@ impl CoopExitService {
                 "the SSP could not claim the transfer's leaves".to_string(),
             ));
         }
-        Ok(())
+        match self.incoming_leaves.check(&incoming.transfer).await {
+            Ok(()) => Ok(()),
+            Err(IncomingLeafError::Refused(why)) => Err(CoopExitError::InvalidInput(why)),
+            Err(e @ IncomingLeafError::Unavailable) => Err(CoopExitError::LeafCheck(e)),
+        }
     }
 }
 
@@ -830,7 +846,13 @@ pub trait CoopExitExecutor: Send + Sync {
     /// Returns `false` when the transfer is not claimable.
     async fn claim(&self, transfer_id: &TransferId) -> Result<bool, BoxError>;
     async fn committed_transfer_is_valid(&self, record: &CoopExitRecord) -> Result<bool, BoxError>;
-    async fn exit_confirmations(&self, record: &CoopExitRecord) -> Result<u64, BoxError>;
+    /// The confirmations of the exit transaction of each of `records`, by the
+    /// record's id. The map has no entry for a record whose exit transaction is
+    /// not in a block.
+    async fn exit_confirmations(
+        &self,
+        records: &[CoopExitRecord],
+    ) -> Result<HashMap<String, u64>, BoxError>;
 }
 
 pub struct CoopExitWorkerDeps {
@@ -869,8 +891,19 @@ pub async fn process_pending_coop_exits(deps: &CoopExitWorkerDeps) -> Result<(),
             error!(coop_exit_id = %record.id, "failed to settle incomplete coop exit: {e}");
         }
     }
-    for record in deps.store.pending().await? {
-        if let Err(e) = process_coop_exit(deps, &record).await {
+    let pending = deps.store.pending().await?;
+    // When the worker cannot read the confirmations, it still broadcasts and
+    // claims, and settles the exits in a later pass.
+    let confirmations = match deps.executor.exit_confirmations(&pending).await {
+        Ok(confirmations) => confirmations,
+        Err(e) => {
+            error!("could not read the confirmations of the pending coop exits: {e}");
+            HashMap::new()
+        }
+    };
+    for record in pending {
+        let confirmations = confirmations.get(&record.id).copied().unwrap_or(0);
+        if let Err(e) = process_coop_exit(deps, &record, confirmations).await {
             error!(coop_exit_id = %record.id, "failed to advance coop exit: {e}");
         }
     }
@@ -894,6 +927,7 @@ async fn settle_incomplete(
 async fn process_coop_exit(
     deps: &CoopExitWorkerDeps,
     record: &CoopExitRecord,
+    exit_confirmations: u64,
 ) -> Result<(), BoxError> {
     // A node refuses a confirmed transaction once all its outputs are spent, so a
     // refused broadcast still goes on to the claim.
@@ -912,9 +946,7 @@ async fn process_coop_exit(
         info!(coop_exit_id = %record.id, "coop exit: claimed user leaves");
         leaves_claimed = true;
     }
-    if leaves_claimed
-        && deps.executor.exit_confirmations(record).await? >= EXIT_SETTLED_CONFIRMATIONS
-    {
+    if leaves_claimed && exit_confirmations >= EXIT_SETTLED_CONFIRMATIONS {
         deps.store.set_settled(&record.id).await?;
     }
     Ok(())
@@ -922,26 +954,16 @@ async fn process_coop_exit(
 
 /// Returns `false` when the transfer is missing or not claimable.
 pub async fn claim_user_transfer(
-    transfer_service: &TransferService,
-    incoming: &Arc<dyn IncomingLeafStore>,
-    admission: &Wakeup,
-    leaf_signing_keys: &Arc<dyn LeafSigningKeys>,
+    claim: &ClaimDeps,
     transfer_id: &TransferId,
 ) -> Result<bool, BoxError> {
-    let Some(transfer) = transfer_service.query_transfer(transfer_id).await? else {
+    let Some(transfer) = claim.transfer_service.query_transfer(transfer_id).await? else {
         return Ok(false);
     };
     if !is_claimable(transfer.status) {
         return Ok(false);
     }
-    claim_into_pool(
-        transfer_service,
-        leaf_signing_keys.as_ref(),
-        incoming.as_ref(),
-        admission,
-        &transfer,
-    )
-    .await?;
+    claim_into_pool(claim, &transfer).await?;
     Ok(true)
 }
 
@@ -961,20 +983,21 @@ fn is_claimable(status: TransferStatus) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::repository::{CoopExitRecord, CoopExitStore, InMemoryCoopExitStore};
+    use super::repository::{CoopExitRecord, CoopExitStore};
     use super::{
         BoxError, CoopExitExecutor, CoopExitWorkerDeps, MAX_COOP_EXIT_LEAVES, TransferId,
-        check_leaf_count, connector_tx_weight_wu, process_pending_coop_exits,
+        check_leaf_count, connector_tx_weight, process_pending_coop_exits,
     };
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use std::sync::Arc;
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn the_most_leaves_an_exit_carries_fit_a_relayable_connector_tx() {
         let one_more = MAX_COOP_EXIT_LEAVES.saturating_add(1);
-        assert!(connector_tx_weight_wu(MAX_COOP_EXIT_LEAVES) <= 40_000);
-        assert!(connector_tx_weight_wu(one_more) > 40_000);
+        assert!(connector_tx_weight(MAX_COOP_EXIT_LEAVES) <= bitcoin::Weight::from_wu(40_000));
+        assert!(connector_tx_weight(one_more) > bitcoin::Weight::from_wu(40_000));
         assert!(check_leaf_count(MAX_COOP_EXIT_LEAVES).is_ok());
         assert!(check_leaf_count(one_more).is_err());
     }
@@ -1019,8 +1042,112 @@ mod tests {
         ) -> Result<bool, BoxError> {
             Ok(false)
         }
-        async fn exit_confirmations(&self, _record: &CoopExitRecord) -> Result<u64, BoxError> {
-            Ok(self.confirmations.load(Ordering::SeqCst) as u64)
+        async fn exit_confirmations(
+            &self,
+            records: &[CoopExitRecord],
+        ) -> Result<HashMap<String, u64>, BoxError> {
+            let confirmations = self.confirmations.load(Ordering::SeqCst) as u64;
+            Ok(records
+                .iter()
+                .map(|record| (record.id.clone(), confirmations))
+                .collect())
+        }
+    }
+
+    #[derive(Default)]
+    struct MockStore {
+        requests: Mutex<Vec<CoopExitRecord>>,
+    }
+
+    impl MockStore {
+        fn matching(&self, matches: impl Fn(&CoopExitRecord) -> bool) -> Vec<CoopExitRecord> {
+            let requests = self.requests.lock().unwrap();
+            requests
+                .iter()
+                .filter(|request| matches(request))
+                .cloned()
+                .collect()
+        }
+
+        fn change(&self, id: &str, set: impl FnOnce(&mut CoopExitRecord)) {
+            let mut requests = self.requests.lock().unwrap();
+            let request = requests.iter_mut().find(|request| request.id == id);
+            set(request.unwrap());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CoopExitStore for MockStore {
+        async fn insert(
+            &self,
+            _record: &CoopExitRecord,
+            _leaf_ids: &[String],
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn any_leaf_in_open_request(&self, _leaf_ids: &[String]) -> Result<bool, String> {
+            unimplemented!()
+        }
+
+        async fn abandon(&self, id: &str) -> Result<(), String> {
+            let mut requests = self.requests.lock().unwrap();
+            requests.retain(|request| request.id != id);
+            Ok(())
+        }
+
+        async fn set_completed(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.completed = true);
+            Ok(())
+        }
+
+        async fn set_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
+            let txid = Some(txid.to_string());
+            self.change(id, |request| request.broadcast_txid = txid);
+            Ok(())
+        }
+
+        async fn set_leaves_claimed(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.leaves_claimed = true);
+            Ok(())
+        }
+
+        async fn set_settled(&self, id: &str) -> Result<(), String> {
+            self.change(id, |request| request.settled = true);
+            Ok(())
+        }
+
+        async fn get(&self, _id: &str) -> Result<Option<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_id(
+            &self,
+            _transfer_id: &TransferId,
+        ) -> Result<Option<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_ids(
+            &self,
+            _transfer_ids: &[TransferId],
+        ) -> Result<Vec<CoopExitRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn pending(&self) -> Result<Vec<CoopExitRecord>, String> {
+            Ok(self.matching(|request| request.completed && !request.settled))
+        }
+
+        async fn incomplete_before(
+            &self,
+            cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> Result<Vec<CoopExitRecord>, String> {
+            Ok(self.matching(|request| !request.completed && request.created_at < cutoff))
+        }
+
+        async fn list(&self, _limit: u32) -> Result<Vec<CoopExitRecord>, String> {
+            unimplemented!()
         }
     }
 
@@ -1047,27 +1174,27 @@ mod tests {
 
     #[tokio::test]
     async fn worker_rebroadcasts_until_the_exit_is_buried() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor::default());
         let deps = CoopExitWorkerDeps {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
             executor: Arc::clone(&executor) as Arc<dyn CoopExitExecutor>,
         };
 
-        store.insert(&record("c1"), &[]).await.unwrap();
+        store.requests.lock().unwrap().push(record("c1"));
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 0);
 
-        store.set_completed("c1").await.unwrap();
+        store.requests.lock().unwrap()[0].completed = true;
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 1);
-        let after_broadcast = store.get("c1").await.unwrap().unwrap();
+        let after_broadcast = store.requests.lock().unwrap()[0].clone();
         assert!(after_broadcast.broadcast_txid.is_some());
         assert!(!after_broadcast.leaves_claimed);
 
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 2);
-        assert!(store.get("c1").await.unwrap().unwrap().leaves_claimed);
+        assert!(store.requests.lock().unwrap()[0].leaves_claimed);
 
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 3);
@@ -1075,26 +1202,14 @@ mod tests {
 
         executor.confirmations.store(6, Ordering::SeqCst);
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("c1").await.unwrap().unwrap().settled);
+        assert!(store.requests.lock().unwrap()[0].settled);
         process_pending_coop_exits(&deps).await.unwrap();
         assert_eq!(executor.broadcasts.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
-    async fn a_leaf_backs_one_open_request_at_a_time() {
-        let store = InMemoryCoopExitStore::default();
-        let leaves = vec!["leaf".to_string()];
-        store.insert(&record("c1"), &leaves).await.unwrap();
-        assert!(store.any_leaf_in_open_request(&leaves).await.unwrap());
-        assert!(store.insert(&record("c2"), &leaves).await.is_err());
-
-        store.set_completed("c1").await.unwrap();
-        assert!(!store.any_leaf_in_open_request(&leaves).await.unwrap());
-    }
-
-    #[tokio::test]
     async fn a_refused_broadcast_does_not_hold_up_the_claim() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor {
             refuse_broadcasts: true,
             ..StubExecutor::default()
@@ -1103,17 +1218,19 @@ mod tests {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
             executor: Arc::clone(&executor) as Arc<dyn CoopExitExecutor>,
         };
-        store.insert(&record("c1"), &[]).await.unwrap();
-        store.set_completed("c1").await.unwrap();
+        store.requests.lock().unwrap().push(CoopExitRecord {
+            completed: true,
+            ..record("c1")
+        });
 
         process_pending_coop_exits(&deps).await.unwrap();
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("c1").await.unwrap().unwrap().leaves_claimed);
+        assert!(store.requests.lock().unwrap()[0].leaves_claimed);
     }
 
     #[tokio::test]
     async fn an_incomplete_request_without_a_transfer_is_abandoned_after_its_ttl() {
-        let store = Arc::new(InMemoryCoopExitStore::default());
+        let store = Arc::new(MockStore::default());
         let executor = Arc::new(StubExecutor::default());
         let deps = CoopExitWorkerDeps {
             store: Arc::clone(&store) as Arc<dyn CoopExitStore>,
@@ -1121,11 +1238,11 @@ mod tests {
         };
         let mut old = record("old");
         old.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
-        store.insert(&old, &[]).await.unwrap();
-        store.insert(&record("new"), &[]).await.unwrap();
+        store.requests.lock().unwrap().extend([old, record("new")]);
 
         process_pending_coop_exits(&deps).await.unwrap();
-        assert!(store.get("old").await.unwrap().is_none());
-        assert!(store.get("new").await.unwrap().is_some());
+        let requests = store.requests.lock().unwrap();
+        let ids: Vec<&str> = requests.iter().map(|request| request.id.as_str()).collect();
+        assert_eq!(ids, ["new"]);
     }
 }

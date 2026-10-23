@@ -1,5 +1,6 @@
 #![allow(clippy::needless_raw_string_hashes)]
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -7,10 +8,10 @@ use async_trait::async_trait;
 use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use spark::services::TransferId;
 
-use crate::handover::HandoverReservation;
 use crate::static_deposit::repository::{
     PendingCredit, StaticDepositClaimRecord, StaticDepositClaimStore,
 };
@@ -20,7 +21,7 @@ struct StaticDepositClaimRow {
     id: String,
     user_identity_public_key: Vec<u8>,
     txid: String,
-    vout: i64,
+    vout: i32,
     network: String,
     deposit_address: String,
     credit_amount_sats: i64,
@@ -29,10 +30,8 @@ struct StaticDepositClaimRow {
     encrypted_deposit_secret_key: String,
     quote_signature: String,
     user_signature: String,
-    transfer_id: Option<String>,
-    pending_transfer_id: Option<String>,
-    reservation_id: Option<String>,
-    reserved_leaf_ids: Option<Vec<String>>,
+    transfer_id: Option<Uuid>,
+    pending_transfer_id: Option<Uuid>,
     utxo_swap_id: Option<String>,
     prep_spend_tx: Vec<u8>,
     signed_spend_transaction: Option<Vec<u8>>,
@@ -55,35 +54,20 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             .map(bitcoin::consensus::deserialize)
             .transpose()
             .map_err(|err| format!("invalid signed spend transaction: {err}"))?;
-        let pending_credit = match (row.pending_transfer_id, row.reservation_id) {
-            (Some(transfer_id), Some(id)) => Some(PendingCredit {
-                transfer_id: TransferId::from_str(&transfer_id)
-                    .map_err(|e| format!("invalid pending transfer id: {e}"))?,
-                reservation: HandoverReservation {
-                    id,
-                    leaf_ids: row
-                        .reserved_leaf_ids
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|leaf_id| leaf_id.parse())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| format!("invalid reserved leaf id: {e}"))?,
-                },
-            }),
-            (None, None) => None,
-            _ => {
-                return Err(format!(
-                    "static deposit claim {} has a partial pending credit",
-                    row.id
-                ));
-            }
-        };
+        let pending_credit = row
+            .pending_transfer_id
+            .map(|transfer_id| {
+                TransferId::from_str(&transfer_id.to_string())
+                    .map(|transfer_id| PendingCredit { transfer_id })
+                    .map_err(|e| format!("invalid pending transfer id: {e}"))
+            })
+            .transpose()?;
         Ok(StaticDepositClaimRecord {
             id: row.id,
             user_identity_public_key: PublicKey::from_slice(&row.user_identity_public_key)
                 .map_err(|e| format!("invalid user public key: {e}"))?,
             txid: row.txid,
-            vout: u32::try_from(row.vout).map_err(|e| format!("invalid vout: {e}"))?,
+            vout: row.vout.cast_unsigned(),
             network: spark::Network::from_str(&row.network)
                 .map_err(|e| format!("invalid network: {e}"))?,
             deposit_address: row.deposit_address,
@@ -95,7 +79,7 @@ impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
             encrypted_deposit_secret_key: row.encrypted_deposit_secret_key,
             quote_signature: row.quote_signature,
             user_signature: row.user_signature,
-            transfer_id: row.transfer_id,
+            transfer_id: row.transfer_id.map(|id| id.to_string()),
             pending_credit,
             utxo_swap_id: row.utxo_swap_id,
             spend_tx,
@@ -132,14 +116,13 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
                (id, user_identity_public_key, txid, vout, network, deposit_address,
                 credit_amount_sats, is_instant, deposit_amount_sats,
                 encrypted_deposit_secret_key, quote_signature, user_signature,
-                pending_transfer_id, reservation_id, reserved_leaf_ids, prep_spend_tx)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                       $15, $16)"#,
+                pending_transfer_id, prep_spend_tx)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14)"#,
         )
         .bind(&record.id)
         .bind(record.user_identity_public_key.serialize().to_vec())
         .bind(&record.txid)
-        .bind(i64::from(record.vout))
+        .bind(record.vout.cast_signed())
         .bind(record.network.to_string())
         .bind(&record.deposit_address)
         .bind(sats_to_i64(record.credit_amount_sats)?)
@@ -149,15 +132,6 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .bind(&record.quote_signature)
         .bind(&record.user_signature)
         .bind(credit.map(|credit| credit.transfer_id.to_string()))
-        .bind(credit.map(|credit| credit.reservation.id.clone()))
-        .bind(credit.map(|credit| {
-            credit
-                .reservation
-                .leaf_ids
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        }))
         .bind(bitcoin::consensus::serialize(&record.spend_tx))
         .execute(self.pool.as_ref())
         .await
@@ -186,7 +160,7 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
             r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE txid = $1 AND vout = $2"#,
         )
         .bind(txid)
-        .bind(i64::from(vout))
+        .bind(vout.cast_signed())
         .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
@@ -194,26 +168,43 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .transpose()
     }
 
-    async fn get_by_transfer_id(
+    async fn get_by_transfer_ids(
         &self,
-        transfer_id: &str,
-    ) -> Result<Option<StaticDepositClaimRecord>, String> {
+        transfer_ids: &[String],
+    ) -> Result<Vec<StaticDepositClaimRecord>, String> {
         sqlx::query_as::<_, StaticDepositClaimRow>(
-            r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE transfer_id = $1"#,
+            r#"SELECT * FROM brz_ssp_static_deposit_claims
+               WHERE transfer_id = ANY($1::uuid[])"#,
         )
-        .bind(transfer_id)
-        .fetch_optional(self.pool.as_ref())
+        .bind(transfer_ids)
+        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
+        .into_iter()
         .map(StaticDepositClaimRecord::try_from)
-        .transpose()
+        .collect()
+    }
+
+    async fn transfers_among(&self, transfer_ids: &[String]) -> Result<HashSet<String>, String> {
+        let ids: Vec<(String,)> = sqlx::query_as(
+            r#"SELECT transfer_id::text FROM brz_ssp_static_deposit_claims
+               WHERE transfer_id = ANY($1::uuid[])
+             UNION
+               SELECT pending_transfer_id::text FROM brz_ssp_static_deposit_claims
+               WHERE pending_transfer_id = ANY($1::uuid[])"#,
+        )
+        .bind(transfer_ids)
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(ids.into_iter().map(|(id,)| id).collect())
     }
 
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+               SET transfer_id = $2::uuid,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -242,8 +233,8 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     ) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2, utxo_swap_id = $3,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+               SET transfer_id = $2::uuid, utxo_swap_id = $3,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -264,9 +255,9 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     ) -> Result<(), String> {
         sqlx::query(
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2,
+               SET transfer_id = $2::uuid,
                    signed_spend_transaction = $3,
-                   pending_transfer_id = NULL, reservation_id = NULL, reserved_leaf_ids = NULL,
+                   pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
         )
@@ -327,5 +318,281 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         .into_iter()
         .map(StaticDepositClaimRecord::try_from)
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::PostgresStaticDepositClaimStore;
+    use crate::postgresql::testing::TestDatabase;
+    use crate::static_deposit::repository::scenarios::claims as scenarios;
+
+    struct Fixture {
+        store: PostgresStaticDepositClaimStore,
+        _database: TestDatabase,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            let database = TestDatabase::new().await;
+            Self {
+                store: PostgresStaticDepositClaimStore::new(Arc::clone(&database.pool)),
+                _database: database,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claim_reads_back_as_it_was_stored() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_reads_back_as_it_was_stored(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_the_store_was_never_given_is_not_found() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_the_store_was_never_given_is_not_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn each_claim_is_found_by_its_own_deposit_output() {
+        let fixture = Fixture::new().await;
+        scenarios::each_claim_is_found_by_its_own_deposit_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_the_id_of_a_stored_one_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_the_id_of_a_stored_one_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_second_claim_of_a_deposit_output_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_second_claim_of_a_deposit_output_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_new_claim_is_stored_as_not_yet_credited() {
+        let fixture = Fixture::new().await;
+        scenarios::a_new_claim_is_stored_as_not_yet_credited(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_store_sets_the_times_of_a_new_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::the_store_sets_the_times_of_a_new_claim(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_a_pending_credit_is_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_a_pending_credit_is_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_with_no_credit_is_not_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_with_no_credit_is_not_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_credited_claim_has_its_transfer_and_no_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_credited_claim_has_its_transfer_and_no_pending_credit(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_reserved_claim_has_its_transfer_and_swap_and_no_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_reserved_claim_has_its_transfer_and_swap_and_no_pending_credit(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_spend_is_co_signed_has_its_transfer_and_signed_spend() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_spend_is_co_signed_has_its_transfer_and_signed_spend(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_reserved_claim_keeps_its_swap_when_its_spend_is_co_signed() {
+        let fixture = Fixture::new().await;
+        scenarios::a_reserved_claim_keeps_its_swap_when_its_spend_is_co_signed(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_reads_the_same_however_the_store_finds_it() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_reads_the_same_however_the_store_finds_it(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_id_that_is_not_a_uuid_is_refused() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_id_that_is_not_a_uuid_is_refused(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_stays_pending_until_its_spend_confirms() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_stays_pending_until_its_spend_confirms(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_spend_was_broadcast_has_the_txid_of_the_spend() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_spend_was_broadcast_has_the_txid_of_the_spend(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_deposit_is_lost_is_no_longer_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_whose_deposit_is_lost_is_no_longer_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_no_longer_pending_is_still_found_by_its_output_and_transfer() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_no_longer_pending_is_still_found_by_its_output_and_transfer(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_pending_claims_are_those_the_record_calls_pending() {
+        let fixture = Fixture::new().await;
+        scenarios::the_pending_claims_are_those_the_record_calls_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn pending_claims_are_listed_oldest_first() {
+        let fixture = Fixture::new().await;
+        scenarios::pending_claims_are_listed_oldest_first(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn no_claim_is_found_by_no_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::no_claim_is_found_by_no_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_credited_claim_is_found_by_its_transfer() {
+        let fixture = Fixture::new().await;
+        scenarios::a_credited_claim_is_found_by_its_transfer(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn claims_are_found_by_several_transfers_at_once() {
+        let fixture = Fixture::new().await;
+        scenarios::claims_are_found_by_several_transfers_at_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_of_no_claim_finds_no_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_of_no_claim_finds_no_claim(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_given_twice_finds_its_claim_once() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_given_twice_finds_its_claim_once(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_not_found_by_the_transfer_of_its_pending_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_is_not_found_by_the_transfer_of_its_pending_credit(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn no_credit_is_found_among_no_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::no_credit_is_found_among_no_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_pending_credit_is_found_among_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::a_pending_credit_is_found_among_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_made_credit_is_found_among_transfers() {
+        let fixture = Fixture::new().await;
+        scenarios::a_made_credit_is_found_among_transfers(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn every_credit_among_several_transfers_is_found() {
+        let fixture = Fixture::new().await;
+        scenarios::every_credit_among_several_transfers_is_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_that_is_no_claims_credit_is_left_out() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_that_is_no_claims_credit_is_left_out(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_transfer_given_twice_is_found_as_one_credit() {
+        let fixture = Fixture::new().await;
+        scenarios::a_transfer_given_twice_is_found_as_one_credit(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_pending_credit_is_forgotten_once_another_transfer_credits_its_claim() {
+        let fixture = Fixture::new().await;
+        scenarios::a_pending_credit_is_forgotten_once_another_transfer_credits_its_claim(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_deleted_claim_is_gone() {
+        let fixture = Fixture::new().await;
+        scenarios::a_deleted_claim_is_gone(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn the_deposit_output_of_a_deleted_claim_can_be_claimed_again() {
+        let fixture = Fixture::new().await;
+        scenarios::the_deposit_output_of_a_deleted_claim_can_be_claimed_again(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_to_one_claim_leaves_another_as_it_was() {
+        let fixture = Fixture::new().await;
+        scenarios::a_write_to_one_claim_leaves_another_as_it_was(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_claim_the_store_does_not_have_stores_nothing() {
+        let fixture = Fixture::new().await;
+        scenarios::a_write_to_a_claim_the_store_does_not_have_stores_nothing(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_keeps_the_time_it_was_created() {
+        let fixture = Fixture::new().await;
+        scenarios::a_claim_keeps_the_time_it_was_created(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn each_write_to_a_claim_moves_the_time_it_last_changed() {
+        let fixture = Fixture::new().await;
+        scenarios::each_write_to_a_claim_moves_the_time_it_last_changed(&fixture.store).await;
     }
 }

@@ -23,6 +23,8 @@ pub mod fees;
 pub mod frost;
 pub mod graphql;
 pub mod handover;
+pub mod in_flight;
+pub mod incoming_leaves;
 pub mod internal_server;
 pub mod leaves;
 pub mod lightning;

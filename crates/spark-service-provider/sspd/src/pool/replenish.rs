@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::{Address, OutPoint, Transaction};
+use bitcoin::secp256k1::PublicKey;
+use bitcoin::{Address, FeeRate, OutPoint, Transaction, Weight};
 use futures::{StreamExt, TryStreamExt};
 use spark::tree::TreeNodeId;
 use tokio_util::sync::CancellationToken;
@@ -13,7 +13,7 @@ use crate::tree::builder::{TreeBlueprint, build_tree_blueprint};
 use crate::tree::deposit::CreatedTree;
 use crate::wakeup::Wakeup;
 use crate::{
-    chain::{BroadcastError, ChainClient, ChainRepository},
+    chain::{BroadcastError, ChainClient, ChainRepository, ChainTip},
     fees::{self, FeeRateSource},
     pool::{
         config::{BRANCH_FACTOR, PoolConfig},
@@ -47,13 +47,18 @@ const MIN_REPLENISH_SPACING: Duration = Duration::from_secs(10);
 const MAX_REPLENISH_BACKOFF: Duration = Duration::from_secs(60 * 60);
 
 /// Keeps unconfirmed funding transactions broadcast, bumps them when due, and
-/// funds new trees for what the pool is short of.
+/// funds new trees for what the pool is short of. The loop runs a cycle at
+/// startup, after a new block and after a restock request. It does not run a
+/// cycle when the pool changes: the leaves of a tree funded then would be in the
+/// pool a block sooner at most, and the loop would make more funding transactions
+/// for the same number of leaves.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_replenish_loop<C, R>(
     config: PoolConfig,
     wallet: Arc<SspWallet<R>>,
     chain_client: Arc<C>,
     chain_repository: Arc<R>,
+    chain_tip: ChainTip,
     pool_repo: Arc<PoolRepository>,
     fee_rates: Arc<dyn FeeRateSource>,
     restock: Arc<RestockService>,
@@ -63,44 +68,45 @@ pub async fn run_replenish_loop<C, R>(
     C: ChainClient + Send + Sync + 'static,
     R: ChainRepository + Send + Sync + 'static,
 {
-    info!(
-        "Starting pool replenish loop (interval: {:?})",
-        config.replenish_interval
-    );
-    let mut pool_changes = wallet.spark.tree_store.subscribe_balance_changes();
+    info!("Starting pool replenish loop");
     let mut spacing = MIN_REPLENISH_SPACING;
 
     loop {
-        tokio::select! {
-            () = token.cancelled() => {
-                info!("Replenish loop cancelled");
-                return;
-            }
-            () = chain_advanced.waited() => {}
-            _ = pool_changes.changed() => {}
-            () = tokio::time::sleep(config.replenish_interval) => {}
-        }
-
-        match replenish_once(
+        let failed = match replenish_once(
             &config,
             &wallet,
             &chain_client,
             &chain_repository,
+            &chain_tip,
             &pool_repo,
             &fee_rates,
             &restock,
         )
         .await
         {
-            Ok(()) => spacing = MIN_REPLENISH_SPACING,
+            Ok(()) => {
+                spacing = MIN_REPLENISH_SPACING;
+                false
+            }
             Err(e) => {
                 spacing = spacing.saturating_mul(2).min(MAX_REPLENISH_BACKOFF);
                 error!("Replenish cycle failed, trying again in {spacing:?}: {e}");
+                true
             }
-        }
+        };
         tokio::select! {
             () = token.cancelled() => return,
             () = tokio::time::sleep(spacing) => {}
+        }
+        if failed {
+            continue;
+        }
+        tokio::select! {
+            () = token.cancelled() => {
+                info!("Replenish loop cancelled");
+                return;
+            }
+            () = chain_advanced.waited() => {}
         }
     }
 }
@@ -125,42 +131,72 @@ fn change_output(deposit: &DepositTx) -> Result<(OutPoint, &bitcoin::TxOut), Box
     Ok((OutPoint { txid, vout }, output))
 }
 
-async fn funding_state<R: ChainRepository>(
-    chain_repository: &R,
-    network: bitcoin::Network,
-    deposit: &DepositTx,
-) -> Result<Funding, BoxError> {
-    let txid = deposit.tx.compute_txid();
-    let (change, output) = change_output(deposit)?;
-    let address = Address::from_script(&output.script_pubkey, network)?;
-    let txos = chain_repository.get_txos_for_address(&address).await?;
-    if txos.iter().any(|txo| txo.outpoint == change) {
-        return Ok(Funding::Confirmed);
+struct FundingRecord {
+    confirmed: HashSet<OutPoint>,
+    spenders: Vec<crate::chain::Spender>,
+}
+
+impl FundingRecord {
+    async fn read<R: ChainRepository>(
+        chain_repository: &R,
+        network: bitcoin::Network,
+        deposits: &[DepositTx],
+    ) -> Result<Self, BoxError> {
+        let mut addresses = Vec::with_capacity(deposits.len());
+        let mut outpoints = Vec::new();
+        for deposit in deposits {
+            let (change, output) = change_output(deposit)?;
+            addresses.push(Address::from_script(&output.script_pubkey, network)?);
+            outpoints.push(change);
+            outpoints.extend(deposit.tx.input.iter().map(|i| i.previous_output));
+        }
+        if deposits.is_empty() {
+            return Ok(Self {
+                confirmed: HashSet::new(),
+                spenders: Vec::new(),
+            });
+        }
+        let txos = chain_repository.get_txos_for_addresses(&addresses).await?;
+        Ok(Self {
+            confirmed: txos.iter().map(|txo| txo.outpoint).collect(),
+            spenders: chain_repository.get_spenders(&outpoints).await?,
+        })
     }
-    let inputs: Vec<OutPoint> = deposit.tx.input.iter().map(|i| i.previous_output).collect();
-    let spenders = chain_repository.get_spenders(&inputs).await?;
-    if spenders.iter().any(|spender| spender.txid != txid) {
-        return Ok(Funding::Replaced);
+
+    fn funding_state(&self, deposit: &DepositTx) -> Result<Funding, BoxError> {
+        let txid = deposit.tx.compute_txid();
+        let (change, _) = change_output(deposit)?;
+        if self.confirmed.contains(&change) {
+            return Ok(Funding::Confirmed);
+        }
+        let replaced = deposit.tx.input.iter().any(|input| {
+            self.spenders
+                .iter()
+                .any(|spender| spender.outpoint == input.previous_output && spender.txid != txid)
+        });
+        if replaced {
+            return Ok(Funding::Replaced);
+        }
+        Ok(Funding::Unconfirmed)
     }
-    Ok(Funding::Unconfirmed)
 }
 
 /// Returns whether the deposit's trees can still reach the pool.
 async fn attend_deposit<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &C,
-    chain_repository: &R,
+    record: &FundingRecord,
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<bool, BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
     R: ChainRepository + Send + Sync + 'static,
 {
     let txid = deposit.tx.compute_txid();
-    match funding_state(chain_repository, wallet.onchain.network(), deposit).await? {
+    match record.funding_state(deposit)? {
         Funding::Replaced => {
             pool_repo.retire_deposit(deposit).await?;
             warn!("funding tx {txid} can no longer confirm: one of its coins was spent elsewhere");
@@ -174,9 +210,7 @@ where
             }
         }
         Funding::Confirmed => {
-            if let Err(e) =
-                settle_bumps(chain_client, chain_repository, pool_repo, deposit, height).await
-            {
+            if let Err(e) = settle_bumps(chain_client, record, pool_repo, deposit, height).await {
                 warn!("could not settle the fee bumps of funding tx {txid}: {e}");
             }
         }
@@ -190,6 +224,7 @@ async fn replenish_once<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &Arc<C>,
     chain_repository: &Arc<R>,
+    chain_tip: &ChainTip,
     pool_repo: &PoolRepository,
     fee_rates: &Arc<dyn FeeRateSource>,
     restock: &RestockService,
@@ -198,18 +233,22 @@ where
     C: ChainClient + Send + Sync + 'static,
     R: ChainRepository + Send + Sync + 'static,
 {
-    let height = chain_repository
-        .get_tip()
-        .await?
-        .map_or(0, |tip| tip.height);
-    let fee_rate = fee_rates.sat_per_kw().await?;
+    let height = chain_tip.record().map_or(0, |tip| tip.height);
+    let fee_rate = fee_rates.fee_rate().await?;
 
     let mut pending: HashMap<u64, u32> = HashMap::new();
-    for deposit in pool_repo.open_deposits().await? {
+    let deposits = pool_repo.open_deposits().await?;
+    let record = FundingRecord::read(
+        chain_repository.as_ref(),
+        wallet.onchain.network(),
+        &deposits,
+    )
+    .await?;
+    for deposit in deposits {
         if attend_deposit(
             wallet,
             chain_client.as_ref(),
-            chain_repository.as_ref(),
+            &record,
             pool_repo,
             &deposit,
             height,
@@ -228,14 +267,18 @@ where
     let available_sats: u64 = available.iter().map(|u| u.value).sum();
     // Charged as if every coin were spent, with change, since the funding
     // transaction's inputs are not selected yet.
-    let base_fee = fees::fee_sats(
-        fee_rate,
-        tx_builder::funding_tx_weight_wu(available.len(), 1),
-    )
-    .saturating_add(fees::P2TR_DUST_SATS);
-    let output_fee = fees::fee_sats(fee_rate, fees::P2TR_OUTPUT_WU);
+    let base_fee = fees::fee_sats(fee_rate, fees::p2tr_tx_weight(available.len(), 1))
+        .saturating_add(fees::P2TR_DUST_SATS);
+    let output_fee = fees::fee_sats(fee_rate, fees::P2TR_OUTPUT);
 
-    let leaves = wallet.spark.tree_store.get_leaves().await?;
+    let counts = wallet.spark.leaf_store.counts().await?;
+    // The pool has these leaves already. The store counts them as available
+    // once the SSP has checked their outputs with bitcoind.
+    for (denomination, count) in counts.unchecked {
+        let pending = pending.entry(denomination).or_default();
+        *pending = pending.saturating_add(count);
+    }
+    let leaves = counts.available;
     let requested = restock.pending();
     let plan = compute_trees_needed(
         &leaves,
@@ -284,7 +327,7 @@ async fn keep_confirming<C, R>(
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<(), BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
@@ -321,22 +364,25 @@ where
 /// Keeps a confirmed funding transaction's latest child broadcast until one of its
 /// children confirms, and drops the others once that child is deep enough that they
 /// can no longer confirm.
-async fn settle_bumps<C, R>(
+async fn settle_bumps<C>(
     chain_client: &C,
-    chain_repository: &R,
+    record: &FundingRecord,
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
 ) -> Result<(), BoxError>
 where
     C: ChainClient + Send + Sync + 'static,
-    R: ChainRepository + Send + Sync + 'static,
 {
     let Some(latest) = &deposit.latest_bump else {
         return Ok(());
     };
     let (change, _) = change_output(deposit)?;
-    match chain_repository.get_spenders(&[change]).await?.first() {
+    let spender = record
+        .spenders
+        .iter()
+        .find(|spender| spender.outpoint == change);
+    match spender {
         None => rebroadcast(chain_client, &latest.tx).await,
         Some(spender) => {
             let confirmations = height
@@ -352,18 +398,24 @@ where
     Ok(())
 }
 
-fn bump_due(deposit: &DepositTx, height: u64, fee_rate: u64) -> bool {
-    let weight = deposit.tx.weight().to_wu();
+fn bump_due(deposit: &DepositTx, height: u64, fee_rate: FeeRate) -> bool {
+    let weight = deposit.tx.weight();
     let (waited_from, paid_sats, paid_weight) = match &deposit.latest_bump {
         Some(bump) => (
             bump.height,
             deposit.fee_sats.saturating_add(bump.fee_sats),
-            weight.saturating_add(bump.tx.weight().to_wu()),
+            weight.checked_add(bump.tx.weight()).unwrap_or(Weight::MAX),
         ),
         None => (deposit.stored_height, deposit.fee_sats, weight),
     };
+    let paid_rate = FeeRate::from_sat_per_kwu(
+        paid_sats
+            .saturating_mul(1000)
+            .checked_div(paid_weight.to_wu())
+            .unwrap_or(u64::MAX),
+    );
     height >= waited_from.saturating_add(BUMP_AFTER_BLOCKS)
-        && paid_sats < fees::fee_sats(fee_rate, paid_weight)
+        && tx_builder::bump_due(paid_rate, fee_rate)
 }
 
 /// Stores a child raising the funding transaction's fee rate, before anything
@@ -374,7 +426,7 @@ async fn bump_funding<R>(
     pool_repo: &PoolRepository,
     deposit: &DepositTx,
     height: u64,
-    fee_rate: u64,
+    fee_rate: FeeRate,
 ) -> Result<FundingBump, BoxError>
 where
     R: ChainRepository + Send + Sync + 'static,
@@ -402,14 +454,16 @@ where
     }
     let reused_sats: u64 = reused.iter().map(|u| u.value).sum();
 
-    let weight = deposit.tx.weight().to_wu();
+    let weight = deposit.tx.weight();
     let replaces = deposit.latest_bump.as_ref().map(|bump| ReplacedChild {
         fee_sats: bump.fee_sats,
-        weight_wu: bump.tx.weight().to_wu(),
+        weight: bump.tx.weight(),
     });
     let base_inputs = reused.len().saturating_add(1);
-    let fee =
-        |inputs: usize| tx_builder::bump_fee(fee_rate, weight, deposit.fee_sats, inputs, replaces);
+    let fee = |inputs: usize| {
+        let bump_weight = tx_builder::bump_tx_weight(inputs);
+        tx_builder::bump_fee(fee_rate, weight, deposit.fee_sats, bump_weight, replaces)
+    };
     let short = |extra: usize| {
         fee(base_inputs.saturating_add(extra))
             .saturating_add(fees::P2TR_DUST_SATS)
@@ -424,11 +478,13 @@ where
     let fee_sats = fee(base_inputs.saturating_add(extra.len()));
 
     let others: Vec<Utxo> = reused.into_iter().chain(extra).collect();
-    let coins: Vec<&Utxo> = std::iter::once(&change).chain(&others).collect();
-    let keys = keys_for(wallet, &coins).await?;
+    let coins: Vec<Utxo> = std::iter::once(change.clone())
+        .chain(others.iter().cloned())
+        .collect();
+    let keys = wallet.onchain.keys_for(&coins).await?;
     // Paid to the change address, so a child the node refuses uses up no address.
     let tx = tx_builder::build_bump_tx(&change, &others, &change.address, fee_sats, &|a| {
-        key_for(&keys, a)
+        tx_builder::key_for(&keys, a)
     })?;
     let bump = FundingBump {
         tx,
@@ -442,35 +498,6 @@ where
         bump.tx.compute_txid()
     );
     Ok(bump)
-}
-
-async fn keys_for<R>(
-    wallet: &SspWallet<R>,
-    coins: &[&Utxo],
-) -> Result<HashMap<Address, SecretKey>, BoxError>
-where
-    R: ChainRepository + Send + Sync + 'static,
-{
-    let mut keys = HashMap::new();
-    for coin in coins {
-        if !keys.contains_key(&coin.address) {
-            let key = wallet
-                .onchain
-                .derive_keypair_for_address(&coin.address)
-                .await?;
-            keys.insert(coin.address.clone(), key);
-        }
-    }
-    Ok(keys)
-}
-
-fn key_for(
-    keys: &HashMap<Address, SecretKey>,
-    address: &Address,
-) -> Result<SecretKey, tx_builder::TxBuildError> {
-    keys.get(address)
-        .copied()
-        .ok_or_else(|| tx_builder::TxBuildError::Signing(format!("no key for {address}")))
 }
 
 struct PlannedTree {
@@ -487,7 +514,7 @@ async fn fund_trees<C, R>(
     wallet: &SspWallet<R>,
     chain_client: &C,
     pool_repo: &PoolRepository,
-    fee_rate: u64,
+    fee_rate: FeeRate,
     height: u64,
     specs: &[TreeSpec],
     restock: &RestockService,
@@ -511,10 +538,10 @@ where
     let need = |inputs: usize| tx_builder::funding_need(&destinations, inputs, fee_rate);
     let (inputs, held) = wallet.onchain.select_coins(&need).await?;
     let (change_address, _) = wallet.onchain.next_address().await?;
-    let keys = keys_for(wallet, &inputs.iter().collect::<Vec<_>>()).await?;
+    let keys = wallet.onchain.keys_for(&inputs).await?;
     let tx =
         tx_builder::build_funding_tx(&inputs, &destinations, &change_address, fee_rate, &|a| {
-            key_for(&keys, a)
+            tx_builder::key_for(&keys, a)
         })?;
     let txid = tx.compute_txid();
     let total_sats: u64 = destinations.iter().map(|d| d.amount).sum();
@@ -524,9 +551,11 @@ where
     );
 
     // The chain monitor has to see the outputs to tell when the trees confirm.
-    for tree in &planned {
-        wallet.onchain.register_watch_address(&tree.address).await?;
-    }
+    let tree_addresses: Vec<Address> = planned.iter().map(|tree| tree.address.clone()).collect();
+    wallet
+        .onchain
+        .register_watch_addresses(&tree_addresses)
+        .await?;
 
     let created = create_trees(wallet, &planned, &tx).await?;
 
