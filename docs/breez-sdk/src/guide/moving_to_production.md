@@ -4,6 +4,8 @@
 
 Before moving to production, we strongly recommend verifying that these use cases are correctly implemented. Here is a checklist you can use to ensure that your application is production ready.
 
+- **Use the latest SDK version**: Go to production on the latest released version of the Breez SDK, and keep it updated frequently afterward. New releases ship bug fixes, security patches, and compatibility updates for changes in the network. Older versions may stop working correctly as the network evolves. Check the release notes when you upgrade for any breaking changes or migration steps.
+
 - **Add logging**: Add sufficient logging into your application to diagnose any issues users are having. Include log entries from the Breez SDK up to and including **DEBUG** level. For more information see [Adding logging](logging.md).
   > ⚠️ Proper logging is a prerequisite for troubleshooting. If logging is not implemented (or is implemented incorrectly), the Breez team will not be able to assist in diagnosing or resolving reported issues.
 
