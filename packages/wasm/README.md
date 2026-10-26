@@ -1,12 +1,13 @@
-# Breez SDK - Spark
+# Breez SDK
+
+## **Overview**
+
+The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin and stablecoins into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
 
 ## **What is the Breez SDK?**
 
-The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
+It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability and third-party fiat on-ramps.
 
-## **What is the Breez SDK - Spark?**
-
-It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps.
 
 ## Installation
 
@@ -24,7 +25,7 @@ yarn add @breeztech/breez-sdk-spark
 
 ## Usage
 
-Head over to the Breez SDK - Spark [documentation](https://sdk-doc-spark.breez.technology/) to start implementing Lightning in your app.
+Head over to the Breez SDK [documentation](https://docs.breez.technology/) to start implementing instant bitcoin and stablecoins in your app or service.
 
 ### Web
 
