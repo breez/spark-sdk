@@ -43,12 +43,21 @@ pub struct WalletSetup {
 }
 
 /// Derived seeds plus the credential observed in the same assertion.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeriveSeedsOutput {
     pub seeds: Vec<Vec<u8>>,
     /// Absent when the provider does not surface it.
     pub credential_id: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for DeriveSeedsOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeriveSeedsOutput")
+            .field("seeds", &"<redacted>")
+            .field("credential_id", &self.credential_id)
+            .finish()
+    }
 }
 
 /// A newly created credential, plus the PRF outputs when the platform
@@ -59,12 +68,21 @@ pub struct DeriveSeedsOutput {
 /// but is not yet resolvable. Absent means the platform returned no PRF
 /// results at create (or dropped one of a pair), so the caller derives
 /// through [`super::PrfProvider::derive_seeds`] as before.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CreatePasskeyOutput {
     pub credential: PasskeyCredential,
     /// One output per requested salt, in request order.
     pub seeds: Option<Vec<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for CreatePasskeyOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatePasskeyOutput")
+            .field("credential", &self.credential)
+            .field("seeds", &self.seeds.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// A passkey credential from a register or sign-in ceremony.
@@ -170,5 +188,34 @@ impl PasskeyConfig {
         proxy
             .validate()
             .map_err(|e| super::PasskeyError::InvalidConfig(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_seeds() {
+        let secret = vec![0xab; 32];
+        let wallet = Wallet {
+            seed: Seed::Entropy(secret.clone()),
+            label: "Default".to_string(),
+        };
+        let derived = DeriveSeedsOutput {
+            seeds: vec![secret.clone()],
+            credential_id: None,
+        };
+        let created = CreatePasskeyOutput {
+            credential: PasskeyCredential::from_credential_id(vec![1]),
+            seeds: Some(vec![secret]),
+        };
+        for rendered in [
+            format!("{wallet:?}"),
+            format!("{derived:?}"),
+            format!("{created:?}"),
+        ] {
+            assert!(!rendered.contains("171"), "{rendered}");
+        }
     }
 }

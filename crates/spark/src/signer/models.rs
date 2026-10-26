@@ -5,7 +5,7 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 use k256::{PublicKey as k256PublicKey, Scalar};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SecretShare {
     /// Number of shares required to recover the secret
     pub threshold: usize,
@@ -15,6 +15,16 @@ pub struct SecretShare {
 
     /// Share value (y-coordinate)
     pub share: Scalar,
+}
+
+impl std::fmt::Debug for SecretShare {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretShare")
+            .field("threshold", &self.threshold)
+            .field("index", &self.index)
+            .field("share", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -92,4 +102,23 @@ pub struct AggregateFrostRequest<'a> {
     pub public_key: &'a PublicKey,
     pub self_signature: &'a SignatureShare,
     pub adaptor_public_key: Option<&'a PublicKey>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_share_debug_redacts_share() {
+        let share = Scalar::from(0xdead_beef_u64);
+        let rendered = format!(
+            "{:?}",
+            SecretShare {
+                threshold: 2,
+                index: Scalar::ONE,
+                share,
+            }
+        );
+        assert!(!rendered.contains(&format!("{share:?}")), "{rendered}");
+    }
 }

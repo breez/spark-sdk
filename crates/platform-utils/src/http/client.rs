@@ -100,6 +100,12 @@ pub async fn read_capped_text(
     Ok(encoding.decode(&buf).0.into_owned())
 }
 
+/// `url` without its query string or fragment, which can carry secrets
+/// (LNURL `k1`, invoices, comments).
+fn loggable_url(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
 /// Sends `req` and reads its response through the [`MAX_RESPONSE_BYTES`] cap.
 async fn send(req: reqwest::RequestBuilder) -> Result<HttpResponse, HttpError> {
     let response = req.send().await?;
@@ -108,7 +114,6 @@ async fn send(req: reqwest::RequestBuilder) -> Result<HttpResponse, HttpError> {
     check_redirect(status, &headers)?;
     let body = read_capped_text(response, MAX_RESPONSE_BYTES).await?;
     tracing::debug!("Received response, status: {status}");
-    tracing::trace!("raw response body: {body}");
 
     Ok(HttpResponse {
         status,
@@ -251,7 +256,7 @@ impl HttpClient for ReqwestHttpClient {
         url: String,
         headers: Option<HashMap<String, String>>,
     ) -> Result<HttpResponse, HttpError> {
-        tracing::debug!("Making GET request to: {url}");
+        tracing::debug!("Making GET request to: {}", loggable_url(&url));
         let mut req = self
             .client
             .get(&url)
@@ -272,7 +277,7 @@ impl HttpClient for ReqwestHttpClient {
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
     ) -> Result<HttpResponse, HttpError> {
-        tracing::debug!("Making POST request to: {url}");
+        tracing::debug!("Making POST request to: {}", loggable_url(&url));
         let mut req = self
             .client
             .post(&url)
@@ -296,7 +301,7 @@ impl HttpClient for ReqwestHttpClient {
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
     ) -> Result<HttpResponse, HttpError> {
-        tracing::debug!("Making DELETE request to: {url}");
+        tracing::debug!("Making DELETE request to: {}", loggable_url(&url));
         let mut req = self
             .client
             .delete(&url)
@@ -326,6 +331,16 @@ mod tests {
 
     /// Filler byte the oversized bodies are built from.
     const FILL: u8 = b'a';
+
+    #[test]
+    fn loggable_url_drops_query_and_fragment() {
+        assert_eq!(
+            loggable_url("https://x.com/cb?k1=secret&pr=lnbc1#frag"),
+            "https://x.com/cb"
+        );
+        assert_eq!(loggable_url("https://x.com/cb#frag"), "https://x.com/cb");
+        assert_eq!(loggable_url("https://x.com/cb"), "https://x.com/cb");
+    }
 
     /// Size of each body write the one-shot server makes.
     const BLOCK: usize = 64 * 1024;

@@ -48,7 +48,7 @@ pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
 
 /// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
 /// passphrase or as raw entropy bytes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Seed {
     /// A BIP-39 mnemonic phrase with an optional passphrase.
@@ -60,6 +60,19 @@ pub enum Seed {
     },
     /// Raw entropy bytes.
     Entropy(Vec<u8>),
+}
+
+impl fmt::Debug for Seed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Seed::Mnemonic { passphrase, .. } => f
+                .debug_struct("Mnemonic")
+                .field("mnemonic", &"<redacted>")
+                .field("passphrase", &passphrase.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            Seed::Entropy(_) => f.debug_tuple("Entropy").field(&"<redacted>").finish(),
+        }
+    }
 }
 
 impl Seed {
@@ -3886,6 +3899,20 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn seed_debug_redacts_secrets() {
+        let mnemonic = Seed::Mnemonic {
+            mnemonic: "abandon ability able".to_string(),
+            passphrase: Some("hunter2".to_string()),
+        };
+        let rendered = format!("{mnemonic:?}");
+        assert!(!rendered.contains("abandon"), "{rendered}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+
+        let entropy = format!("{:?}", Seed::Entropy(vec![0xab; 16]));
+        assert!(!entropy.contains("171"), "{entropy}");
+    }
 
     #[test_all]
     fn debug_fmt_redacts_the_preimage_of_a_bolt11_receive() {

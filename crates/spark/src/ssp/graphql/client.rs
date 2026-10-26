@@ -54,7 +54,6 @@ where
 
     let status_code = response.status;
     let text = &response.body;
-    tracing::trace!("Response: {text:?}");
     if !response.is_success() {
         return Err(GraphQLError::Network {
             reason: text.clone(),

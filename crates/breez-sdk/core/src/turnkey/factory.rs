@@ -173,6 +173,14 @@ mod tests {
         sk.public_key(&secp)
     }
 
+    #[test]
+    fn config_debug_redacts_api_private_key() {
+        let config = test_config(None);
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains(&config.api_private_key), "{rendered}");
+        assert!(rendered.contains(&config.api_public_key), "{rendered}");
+    }
+
     #[tokio::test]
     async fn signet_turnkey_signers_fail_before_contacting_turnkey() {
         for identity in [None, Some(hex::encode(identity_pubkey().serialize()))] {
