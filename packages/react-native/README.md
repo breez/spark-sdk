@@ -1,4 +1,4 @@
-# Breez SDK - Spark
+# Breez SDK
 
  ## **Overview**
 
