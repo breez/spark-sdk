@@ -32,13 +32,13 @@ jobs:
             python-version: "3.12"
           - platform: react-native
             runner: macos-latest
-            node-version: "22"
+            node-version: "24"
             ios-targets: true
           - platform: swift
             runner: macos-latest
           - platform: wasm
             runner: ubuntu-latest
-            node-version: "22"
+            node-version: "24"
     steps:
       - uses: actions/checkout@v4
 
