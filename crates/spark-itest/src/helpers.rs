@@ -22,7 +22,7 @@ use spark_wallet::{
     SparkWalletConfig, WalletBuilder, WalletEvent, WalletLeaf, is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::backend::Backend;
 use crate::faucet::RegtestFaucet;
@@ -319,6 +319,8 @@ pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture)
         }
     }
 
+    sync_until_available(wallet, &leaves).await?;
+
     // Check that balance increased by the deposit amount
     let final_balance = wallet.get_balance().await?;
     info!("Final balance: {}", final_balance);
@@ -396,7 +398,32 @@ pub async fn deposit_with_amount(
         }
     }
 
-    Ok(())
+    sync_until_available(wallet, &leaves).await
+}
+
+/// Syncs `wallet` until it lists each of `leaves` as available. The other
+/// operators can mark a deposit's leaf available after the coordinator has, and
+/// they reject a transfer of the leaf until then.
+pub async fn sync_until_available(wallet: &SparkWallet, leaves: &[WalletLeaf]) -> Result<()> {
+    wait_for(
+        || async {
+            if let Err(e) = wallet.sync().await {
+                warn!("Sync failed: {e:?}");
+                return false;
+            }
+            wallet.list_leaves().await.is_ok_and(|listed| {
+                leaves.iter().all(|leaf| {
+                    listed
+                        .available
+                        .iter()
+                        .any(|available| available.id == leaf.id)
+                })
+            })
+        },
+        60,
+        "every operator to mark the leaves available",
+    )
+    .await
 }
 
 /// Funds `wallet` through its static deposit address and returns the credited

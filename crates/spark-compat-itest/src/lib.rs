@@ -175,14 +175,17 @@ macro_rules! version_module {
             }
 
             /// Polls `sync()` (which refreshes leaves and claims pending
-            /// transfers) until the balance equals `expected`.
+            /// transfers) until the available leaves add up to `expected`.
             pub async fn await_balance(wallet: &SparkWallet, expected: u64) -> Result<()> {
                 crate::wait_for(
                     || async {
                         if wallet.sync().await.is_err() {
                             return false;
                         }
-                        wallet.get_balance().await.is_ok_and(|b| b == expected)
+                        wallet
+                            .list_leaves()
+                            .await
+                            .is_ok_and(|leaves| leaves.available_balance() == expected)
                     },
                     60,
                     &format!("balance == {expected}"),
