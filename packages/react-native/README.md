@@ -1,12 +1,12 @@
 # Breez SDK - Spark
 
+ ## **Overview**
+
+The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin and stablecoins into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
+
 ## **What is the Breez SDK?**
 
-The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning into their apps and services. It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
-
-## **What is the Breez SDK - Spark?**
-
-It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps.
+It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability and third-party fiat on-ramps.
 
 ## Installation
 
@@ -40,7 +40,7 @@ Then add the plugin to your `app.json` or `app.config.js`:
 
 #### Plugin Options
 
-To enable [Passkey](https://sdk-doc-spark.breez.technology/guide/passkey.html) support, set `enablePasskey` to `true`. This adds `webcredentials:keys.breez.technology` to the iOS Associated Domains entitlement:
+To enable [Passkey](https://docs.breez.technology/guide/passkey.html) support, set `enablePasskey` to `true`. This adds `webcredentials:keys.breez.technology` to the iOS Associated Domains entitlement:
 
 ```json
 {
@@ -66,7 +66,7 @@ npx expo run:android
 
 ## Usage
 
-Head over to the Breez SDK - Spark [documentation](https://sdk-doc-spark.breez.technology/) to start implementing Lightning in your app.
+Head over to the Breez SDK [documentation](https://docs.breez.technology/) to start implementing instant bitcoin and stablecoins in your app or service.
 
 ```js
 import { connect, defaultConfig } from '@breeztech/breez-sdk-spark-react-native';
@@ -97,6 +97,6 @@ Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or em
 
 ## Information for Maintainers and Contributors
 
-This repository is used to publish a NPM package providing React Native bindings to the Breez SDK - Spark's [underlying Rust implementation](https://github.com/breez/spark-sdk). The React Native bindings are generated using [UniFFi Bindgen React Native](https://github.com/jhugman/uniffi-bindgen-react-native).
+This repository is used to publish a NPM package providing React Native bindings to the Breez SDK's [underlying Rust implementation](https://github.com/breez/spark-sdk). The React Native bindings are generated using [UniFFi Bindgen React Native](https://github.com/jhugman/uniffi-bindgen-react-native).
 
-Any changes to Breez SDK - Spark, the React Native bindings, and the configuration of this React Native package must be made via the [spark-sdk](https://github.com/breez/spark-sdk) repository.
+Any changes to Breez SDK, the React Native bindings, and the configuration of this React Native package must be made via the [spark-sdk](https://github.com/breez/spark-sdk) repository.
