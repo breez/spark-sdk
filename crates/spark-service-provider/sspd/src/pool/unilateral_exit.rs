@@ -700,7 +700,7 @@ mod tests {
     struct Stored {
         unilateral_exit_store: PostgresUnilateralExitStore,
         chain: ChainRepository,
-        pool: Arc<sqlx::PgPool>,
+        pool: Arc<deadpool_postgres::Pool>,
         _database: crate::postgresql::testing::TestDatabase,
     }
 
@@ -785,10 +785,10 @@ mod tests {
         }
 
         async fn recorded_spends(&self) -> i64 {
-            sqlx::query_scalar("SELECT COUNT(*) FROM brz_ssp_onchain_wallet_spends")
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap()
+            let client = self.pool.get().await.unwrap();
+            let sql = "SELECT COUNT(*) FROM brz_ssp_onchain_wallet_spends";
+            let row = crate::postgresql::query_one(&client, sql, &[]).await;
+            row.unwrap().get(0)
         }
     }
 
@@ -829,11 +829,10 @@ mod tests {
             to_broadcast,
             [(txid, replacement.clone())].into_iter().collect()
         );
-        let spending_txids: Vec<String> =
-            sqlx::query_scalar("SELECT spending_txid FROM brz_ssp_onchain_wallet_spends")
-                .fetch_all(&*stored.pool)
-                .await
-                .unwrap();
+        let client = stored.pool.get().await.unwrap();
+        let sql = "SELECT spending_txid FROM brz_ssp_onchain_wallet_spends";
+        let rows = crate::postgresql::query(&client, sql, &[]).await.unwrap();
+        let spending_txids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
         assert_eq!(spending_txids, [replacement.compute_txid().to_string()]);
         assert_eq!(replacement.input[0].previous_output, wallet_output);
     }

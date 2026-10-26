@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
 use bitcoin::{OutPoint, Transaction, Txid};
-use sqlx::PgPool;
+use deadpool_postgres::{Pool, PoolError};
 
+use super::{execute, query};
 use crate::wallet::onchain::{forget_spends, record_spends};
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnilateralExitStoreError {
+    #[error("no database connection: {0}")]
+    Connection(#[from] PoolError),
+
     #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] tokio_postgres::Error),
 
     #[error("invalid unilateral exit data: {0}")]
     Invalid(String),
@@ -40,26 +44,30 @@ fn wallet_inputs(parent: &Txid, child: &Transaction) -> Vec<OutPoint> {
 }
 
 pub struct PostgresUnilateralExitStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresUnilateralExitStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 
     pub async fn cpfp_children(&self) -> Result<Vec<StoredCpfpChild>, UnilateralExitStoreError> {
-        let rows: Vec<(String, Vec<u8>)> =
-            sqlx::query_as("SELECT parent_tx_id, raw FROM brz_ssp_unilateral_exit_cpfp_children")
-                .fetch_all(&*self.pool)
-                .await?;
-        rows.into_iter()
-            .map(|(parent, raw)| {
+        let rows = query(
+            &self.pool.get().await?,
+            "SELECT parent_tx_id, raw FROM brz_ssp_unilateral_exit_cpfp_children",
+            &[],
+        )
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let parent: &str = row.try_get(0)?;
+                let raw: &[u8] = row.try_get(1)?;
                 Ok(StoredCpfpChild {
                     parent: parent
                         .parse()
                         .map_err(|e| invalid(format!("transaction id {parent}: {e}")))?,
-                    child: bitcoin::consensus::deserialize(&raw)
+                    child: bitcoin::consensus::deserialize(raw)
                         .map_err(|e| invalid(format!("stored CPFP child: {e}")))?,
                 })
             })
@@ -73,25 +81,27 @@ impl PostgresUnilateralExitStore {
         parent: &Txid,
         child: &Transaction,
     ) -> Result<(), UnilateralExitStoreError> {
-        let mut db = self.pool.begin().await?;
-        let stored = sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        let stored = execute(
+            &db,
             r"INSERT INTO brz_ssp_unilateral_exit_cpfp_children (parent_tx_id, tx_id, raw)
                VALUES ($1, $2, $3)
                ON CONFLICT (parent_tx_id) DO NOTHING",
+            &[
+                &parent.to_string(),
+                &child.compute_txid().to_string(),
+                &bitcoin::consensus::serialize(child),
+            ],
         )
-        .bind(parent.to_string())
-        .bind(child.compute_txid().to_string())
-        .bind(bitcoin::consensus::serialize(child))
-        .execute(&mut *db)
-        .await?
-        .rows_affected();
+        .await?;
         if stored == 0 {
             return Err(invalid(format!(
                 "transaction {parent} has a CPFP child already"
             )));
         }
         let inputs = wallet_inputs(parent, child);
-        record_spends(&mut db, &child.compute_txid(), &inputs).await?;
+        record_spends(&db, &child.compute_txid(), &inputs).await?;
         db.commit().await?;
         Ok(())
     }
@@ -105,26 +115,28 @@ impl PostgresUnilateralExitStore {
         earlier: &Txid,
         child: &Transaction,
     ) -> Result<(), UnilateralExitStoreError> {
-        let mut db = self.pool.begin().await?;
-        let replaced = sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        let replaced = execute(
+            &db,
             r"UPDATE brz_ssp_unilateral_exit_cpfp_children SET tx_id = $3, raw = $4
                WHERE parent_tx_id = $1 AND tx_id = $2",
+            &[
+                &parent.to_string(),
+                &earlier.to_string(),
+                &child.compute_txid().to_string(),
+                &bitcoin::consensus::serialize(child),
+            ],
         )
-        .bind(parent.to_string())
-        .bind(earlier.to_string())
-        .bind(child.compute_txid().to_string())
-        .bind(bitcoin::consensus::serialize(child))
-        .execute(&mut *db)
-        .await?
-        .rows_affected();
+        .await?;
         if replaced == 0 {
             return Err(invalid(format!(
                 "transaction {earlier} is not the CPFP child stored for {parent}"
             )));
         }
-        forget_spends(&mut db, &[*earlier]).await?;
+        forget_spends(&db, &[*earlier]).await?;
         let inputs = wallet_inputs(parent, child);
-        record_spends(&mut db, &child.compute_txid(), &inputs).await?;
+        record_spends(&db, &child.compute_txid(), &inputs).await?;
         db.commit().await?;
         Ok(())
     }
@@ -141,12 +153,15 @@ impl PostgresUnilateralExitStore {
             return Ok(());
         }
         let ids: Vec<String> = children.iter().map(ToString::to_string).collect();
-        let mut db = self.pool.begin().await?;
-        sqlx::query("DELETE FROM brz_ssp_unilateral_exit_cpfp_children WHERE tx_id = ANY($1)")
-            .bind(&ids)
-            .execute(&mut *db)
-            .await?;
-        forget_spends(&mut db, children).await?;
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        execute(
+            &db,
+            "DELETE FROM brz_ssp_unilateral_exit_cpfp_children WHERE tx_id = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+        forget_spends(&db, children).await?;
         db.commit().await?;
         Ok(())
     }

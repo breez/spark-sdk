@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
-use sqlx::PgPool;
+use deadpool_postgres::Pool;
 
+use super::{execute, query_opt};
 use crate::static_deposit::repository::{StaticDepositAddress, StaticDepositAddressStore};
 
 pub struct PostgresStaticDepositAddressStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresStaticDepositAddressStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
@@ -19,14 +20,18 @@ impl PostgresStaticDepositAddressStore {
 #[async_trait]
 impl StaticDepositAddressStore for PostgresStaticDepositAddressStore {
     async fn get(&self, address: &str) -> Result<Option<StaticDepositAddress>, String> {
-        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r"SELECT user_identity_public_key, user_signing_public_key, verifying_public_key
                FROM brz_ssp_static_deposit_addresses
                WHERE address = $1",
+            &[&address],
         )
-        .bind(address)
-        .fetch_optional(&*self.pool)
         .await
+        .and_then(|row| {
+            row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?, row.try_get(2)?)))
+                .transpose()
+        })
         .map_err(|e| e.to_string())?;
         row.map(|(identity, signing, verifying)| {
             Ok(StaticDepositAddress {
@@ -43,18 +48,20 @@ impl StaticDepositAddressStore for PostgresStaticDepositAddressStore {
     }
 
     async fn insert(&self, address: &StaticDepositAddress) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r"INSERT INTO brz_ssp_static_deposit_addresses
                    (address, user_identity_public_key, user_signing_public_key,
                     verifying_public_key)
                VALUES ($1, $2, $3, $4)
                ON CONFLICT (address) DO NOTHING",
+            &[
+                &address.address,
+                &address.user_identity_public_key.serialize().as_slice(),
+                &address.user_signing_public_key.serialize().as_slice(),
+                &address.verifying_public_key.serialize().as_slice(),
+            ],
         )
-        .bind(&address.address)
-        .bind(address.user_identity_public_key.serialize().as_slice())
-        .bind(address.user_signing_public_key.serialize().as_slice())
-        .bind(address.verifying_public_key.serialize().as_slice())
-        .execute(&*self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(())

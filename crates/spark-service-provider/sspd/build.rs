@@ -1,6 +1,4 @@
 fn main() {
-    println!("cargo:rerun-if-changed=src/postgresql/migrations");
-
     tonic_build::configure()
         .emit_rerun_if_changed(true)
         .build_server(true)

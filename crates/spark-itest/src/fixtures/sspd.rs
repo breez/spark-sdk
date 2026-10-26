@@ -174,8 +174,8 @@ impl SspdFixture {
             format!("0.0.0.0:{INTERNAL_PORT}"),
             "--network".to_string(),
             "regtest".to_string(),
-            // Safe over a restored database: the dump carries sqlx's record of
-            // applied migrations.
+            // Safe over a restored database: the dump carries the daemon's record
+            // of applied migrations.
             "--auto-migrate".to_string(),
             // The default chain poll is a minute, too slow for tests that wait on
             // blocks they mine.

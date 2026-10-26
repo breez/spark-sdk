@@ -10,24 +10,28 @@ use std::sync::Arc;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{OutPoint, Txid};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::{GenericClient, Pool, PoolError};
 use spark::services::{TransferId, csv_timelock};
 use spark::tree::{LeafPedigree, TreeNode, TreeNodeId};
-use sqlx::{PgConnection, PgPool};
+use tokio_postgres::error::SqlState;
 use tracing::info;
 use uuid::Uuid;
 
-use super::ChainRepository;
+use super::{ChainRepository, DatabaseError, execute, query, transfer_uuid};
 use crate::chain::{ChainRepositoryError, OutputStates, Spender};
 
-use rows::{Compare, Compared, Rows, Selected, Wanted, Which, node_uuid, transfer_uuid};
+use rows::{Compare, Compared, Rows, Selected, Wanted, Which, node_uuid};
 pub use rows::{Dispute, ExitChainStep, Reported};
 pub use unilateral_exit::MatureTransaction;
 pub use unilateral_exit::RefundOutput;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LeafStoreError {
+    #[error("no database connection: {0}")]
+    Connection(#[from] PoolError),
+
     #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] tokio_postgres::Error),
 
     #[error("chain record error: {0}")]
     Chain(#[from] ChainRepositoryError),
@@ -260,13 +264,13 @@ const MAX_SELECTION: i64 = 256;
 const RESERVE_ATTEMPTS: usize = 5;
 
 pub struct PostgresLeafStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
     identity: PublicKey,
     chain: Arc<ChainRepository>,
 }
 
 impl PostgresLeafStore {
-    pub fn new(pool: Arc<PgPool>, identity: PublicKey, chain: Arc<ChainRepository>) -> Self {
+    pub fn new(pool: Arc<Pool>, identity: PublicKey, chain: Arc<ChainRepository>) -> Self {
         Self {
             pool,
             identity,
@@ -278,8 +282,8 @@ impl PostgresLeafStore {
         url: &str,
         identity: PublicKey,
         network: bitcoin::Network,
-    ) -> Result<Self, LeafStoreError> {
-        let pool = Arc::new(PgPool::connect(url).await?);
+    ) -> Result<Self, DatabaseError> {
+        let pool = Arc::new(super::connect(url, 10).await?);
         let chain = Arc::new(ChainRepository::new(Arc::clone(&pool), network));
         Ok(Self::new(pool, identity, chain))
     }
@@ -293,7 +297,7 @@ impl PostgresLeafStore {
 
     pub async fn insert_leaves(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         pedigrees: &[LeafPedigree],
     ) -> Result<(), LeafStoreError> {
         let mut rows = Rows::default();
@@ -308,7 +312,7 @@ impl PostgresLeafStore {
 
     pub async fn observe(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         nodes: &[TreeNode],
         observed_at: DateTime<Utc>,
     ) -> Result<(), LeafStoreError> {
@@ -324,8 +328,9 @@ impl PostgresLeafStore {
                 rows.node(node)?;
             }
         }
-        let mut db = self.pool.begin().await?;
-        rows.write(&mut db, &self.chain).await?;
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        rows.write(&db, &self.chain).await?;
         db.commit().await?;
         self.wake_spend_check();
         Ok(())
@@ -336,8 +341,8 @@ impl PostgresLeafStore {
         if node_txids.is_empty() {
             return Ok(stored);
         }
-        let mut db = self.pool.acquire().await?;
-        stored.chains = rows::stored_chains(&mut db, node_txids).await?;
+        let db = self.pool.get().await?;
+        stored.chains = rows::stored_chains(&db, node_txids).await?;
         let inputs: HashSet<OutPoint> = stored
             .chains
             .values()
@@ -354,7 +359,7 @@ impl PostgresLeafStore {
         let funding: Vec<Txid> = funding.into_iter().collect();
         (stored.states, stored.funding_heights) = self
             .chain
-            .output_states_and_tx_heights(&mut db, &inputs, &funding)
+            .output_states_and_tx_heights(&db, &inputs, &funding)
             .await?;
         Ok(stored)
     }
@@ -364,12 +369,16 @@ impl PostgresLeafStore {
         txids: &[Txid],
     ) -> Result<HashSet<Txid>, LeafStoreError> {
         let ids: Vec<String> = txids.iter().map(ToString::to_string).collect();
-        let stored: Vec<(String,)> =
-            sqlx::query_as("SELECT tx_id FROM brz_ssp_spark_txs WHERE tx_id = ANY($1)")
-                .bind(&ids)
-                .fetch_all(&*self.pool)
-                .await?;
-        stored.iter().map(|(id,)| rows::txid(id)).collect()
+        let stored = query(
+            &self.pool.get().await?,
+            "SELECT tx_id FROM brz_ssp_spark_txs WHERE tx_id = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+        stored
+            .iter()
+            .map(|row| rows::txid(row.try_get(0)?))
+            .collect()
     }
 
     pub async fn claimed(
@@ -378,21 +387,21 @@ impl PostgresLeafStore {
         leaves: &[LeafPedigree],
         queried_at: DateTime<Utc>,
     ) -> Result<bool, LeafStoreError> {
-        let mut db = self.pool.begin().await?;
-        let first = sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        let first = execute(
+            &db,
             r"INSERT INTO brz_ssp_spark_claimed_transfers (transfer_id) VALUES ($1)
                ON CONFLICT (transfer_id) DO NOTHING",
+            &[&transfer_uuid(transfer_id)],
         )
-        .bind(transfer_uuid(transfer_id)?)
-        .execute(&mut *db)
-        .await?
-        .rows_affected();
+        .await?;
         if first == 0 {
             return Ok(false);
         }
-        self.insert_leaves(&mut db, leaves).await?;
+        self.insert_leaves(&db, leaves).await?;
         let reported: Vec<TreeNode> = leaves.iter().map(|p| p.leaf.clone()).collect();
-        rows::observe(&mut db, &reported, &[], queried_at, true).await?;
+        rows::observe(&db, &reported, &[], queried_at, true).await?;
         db.commit().await?;
         self.wake_spend_check();
         for leaf in &reported {
@@ -409,25 +418,21 @@ impl PostgresLeafStore {
         limit: usize,
     ) -> Result<(Vec<LeafPedigree>, Option<RenewalCursor>), LeafStoreError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let mut db = self.pool.acquire().await?;
-        let selected = rows::select_at_or_below(
-            &mut db,
-            RENEW_TIMELOCK_THRESHOLD,
-            (cursor.0, cursor.1),
-            limit,
-        )
-        .await?;
+        let db = self.pool.get().await?;
+        let selected =
+            rows::select_at_or_below(&db, RENEW_TIMELOCK_THRESHOLD, (cursor.0, cursor.1), limit)
+                .await?;
         let next = selected
             .last()
             .filter(|_| i64::try_from(selected.len()).is_ok_and(|looked_at| looked_at == limit))
             .map(|last| RenewalCursor(last.refund_timelock, last.node_id));
-        let states = self.states(&mut db, &selected).await?;
+        let states = self.states(&db, &selected).await?;
         let ids: Vec<Uuid> = selected
             .iter()
             .filter(|leaf| chain_status(&leaf.chain, &states).is_none())
             .map(|leaf| leaf.node_id)
             .collect();
-        Ok((self.pedigrees_of(&mut db, &ids).await?, next))
+        Ok((self.pedigrees_of(&db, &ids).await?, next))
     }
 
     pub async fn renewed(
@@ -436,11 +441,12 @@ impl PostgresLeafStore {
         after: &[LeafPedigree],
         queried_at: DateTime<Utc>,
     ) -> Result<(), LeafStoreError> {
-        let mut db = self.pool.begin().await?;
-        rows::remove_leaves(&mut db, before).await?;
-        self.insert_leaves(&mut db, after).await?;
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        rows::remove_leaves(&db, before).await?;
+        self.insert_leaves(&db, after).await?;
         let leaves: Vec<TreeNode> = after.iter().map(|pedigree| pedigree.leaf.clone()).collect();
-        rows::observe(&mut db, &leaves, &[], queried_at, true).await?;
+        rows::observe(&db, &leaves, &[], queried_at, true).await?;
         db.commit().await?;
         self.wake_spend_check();
         for (old, new) in before.iter().zip(&leaves) {
@@ -479,8 +485,8 @@ impl PostgresLeafStore {
         unreported: &[Uuid],
         queried_at: DateTime<Utc>,
     ) -> Result<(), LeafStoreError> {
-        let mut db = self.pool.acquire().await?;
-        rows::observe(&mut db, reported, unreported, queried_at, false).await?;
+        let db = self.pool.get().await?;
+        rows::observe(&db, reported, unreported, queried_at, false).await?;
         Ok(())
     }
 
@@ -492,9 +498,9 @@ impl PostgresLeafStore {
             .iter()
             .map(node_uuid)
             .collect::<Result<Vec<Uuid>, _>>()?;
-        let mut db = self.pool.acquire().await?;
-        let compared = rows::compare(&mut db, &self.identity, Compare::Nodes(&ids)).await?;
-        self.disputes(&mut db, compared).await
+        let db = self.pool.get().await?;
+        let compared = rows::compare(&db, &self.identity, Compare::Nodes(&ids)).await?;
+        self.disputes(&db, compared).await
     }
 
     pub async fn available_among(
@@ -505,10 +511,10 @@ impl PostgresLeafStore {
             .iter()
             .map(node_uuid)
             .collect::<Result<Vec<Uuid>, _>>()?;
-        let mut db = self.pool.acquire().await?;
-        let compared = rows::compare(&mut db, &self.identity, Compare::Nodes(&ids)).await?;
+        let db = self.pool.get().await?;
+        let compared = rows::compare(&db, &self.identity, Compare::Nodes(&ids)).await?;
         let states = self
-            .states(&mut db, compared.iter().map(|(leaf, _)| leaf))
+            .states(&db, compared.iter().map(|(leaf, _)| leaf))
             .await?;
         compared
             .into_iter()
@@ -524,23 +530,22 @@ impl PostgresLeafStore {
 
     pub async fn all_disputes(&self) -> Result<Vec<DisputeDetails>, LeafStoreError> {
         const PAGE: i64 = 1000;
-        let mut db = self.pool.acquire().await?;
+        let db = self.pool.get().await?;
         let mut disputes = Vec::new();
         let mut after = Uuid::nil();
         loop {
-            let compared =
-                rows::compare(&mut db, &self.identity, Compare::After(after, PAGE)).await?;
+            let compared = rows::compare(&db, &self.identity, Compare::After(after, PAGE)).await?;
             let Some((last, _)) = compared.last() else {
                 return Ok(disputes);
             };
             after = last.node_id;
-            disputes.extend(self.disputes(&mut db, compared).await?);
+            disputes.extend(self.disputes(&db, compared).await?);
         }
     }
 
     async fn disputes(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         compared: Vec<(Selected, Compared)>,
     ) -> Result<Vec<DisputeDetails>, LeafStoreError> {
         let states = self
@@ -574,7 +579,7 @@ impl PostgresLeafStore {
 
     async fn states<'a>(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         leaves: impl IntoIterator<Item = &'a Selected>,
     ) -> Result<OutputStates, LeafStoreError> {
         let outpoints: HashSet<OutPoint> = leaves
@@ -594,27 +599,30 @@ impl PostgresLeafStore {
         denominations: &[u64],
         transfer_id: &TransferId,
     ) -> Result<Option<Vec<TreeNode>>, LeafStoreError> {
-        let transfer = transfer_uuid(transfer_id)?;
+        let transfer = transfer_uuid(transfer_id);
         let mut wanted: BTreeMap<u64, i64> = BTreeMap::new();
         for denomination in denominations {
             let count = wanted.entry(*denomination).or_default();
             *count = count.saturating_add(1);
         }
         for _ in 0..RESERVE_ATTEMPTS {
-            let mut db = self.pool.begin().await?;
+            let mut client = self.pool.get().await?;
+            let db = client.transaction().await?;
             // Postgres makes a second caller for the same transfer wait here
             // until the first caller's database transaction ends. The second
             // caller then finds the leaves the first caller reserved.
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-                .bind(transfer)
-                .execute(&mut *db)
-                .await?;
+            execute(
+                &db,
+                "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+                &[&transfer.to_string()],
+            )
+            .await?;
             let already_reserved =
-                rows::leaves(&mut db, &self.identity, Which::Transfer(transfer)).await?;
+                rows::leaves(&db, &self.identity, Which::Transfer(transfer)).await?;
             if !already_reserved.is_empty() {
                 return Ok(Some(already_reserved));
             }
-            let Some(selected) = self.select(&mut db, &wanted).await? else {
+            let Some(selected) = self.select(&db, &wanted).await? else {
                 return Ok(None);
             };
             // Postgres returns fewer leaves than the store selected when
@@ -625,7 +633,7 @@ impl PostgresLeafStore {
                 refunds: &selected,
                 transfer,
             };
-            let leaves = rows::leaves(&mut db, &self.identity, reserving).await?;
+            let leaves = rows::leaves(&db, &self.identity, reserving).await?;
             if leaves.len() == selected.len() {
                 db.commit().await?;
                 for leaf in &leaves {
@@ -641,7 +649,7 @@ impl PostgresLeafStore {
     /// transaction ends.
     async fn select(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         wanted: &BTreeMap<u64, i64>,
     ) -> Result<Option<Vec<String>>, LeafStoreError> {
         let mut still: BTreeMap<u64, Wanted> = wanted
@@ -710,23 +718,27 @@ impl PostgresLeafStore {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Vec<TreeNode>, LeafStoreError> {
-        let transfer = transfer_uuid(transfer_id)?;
-        let mut db = self.pool.acquire().await?;
-        rows::leaves(&mut db, &self.identity, Which::Transfer(transfer)).await
+        let transfer = transfer_uuid(transfer_id);
+        let db = self.pool.get().await?;
+        rows::leaves(&db, &self.identity, Which::Transfer(transfer)).await
     }
 
     pub async fn reservations(&self) -> Result<Vec<Reservation>, LeafStoreError> {
-        let rows: Vec<(Uuid, i64, i64, DateTime<Utc>)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"SELECT r.transfer_id, COUNT(*), SUM(l.value)::bigint, MIN(r.reserved_at)
                FROM brz_ssp_spark_reservations r
                JOIN brz_ssp_spark_leaves l ON l.refund_tx_id = r.refund_tx_id
                GROUP BY r.transfer_id
                ORDER BY MIN(r.reserved_at), r.transfer_id",
+            &[],
         )
-        .fetch_all(&*self.pool)
         .await?;
-        rows.into_iter()
-            .map(|(transfer, leaves, value, reserved_at)| {
+        rows.iter()
+            .map(|row| {
+                let transfer: Uuid = row.try_get(0)?;
+                let leaves: i64 = row.try_get(1)?;
+                let value: i64 = row.try_get(2)?;
                 Ok(Reservation {
                     transfer_id: transfer
                         .to_string()
@@ -734,7 +746,7 @@ impl PostgresLeafStore {
                         .map_err(|e| rows::invalid(format!("transfer id {transfer}: {e}")))?,
                     leaves: u32::try_from(leaves).unwrap_or(u32::MAX),
                     value: value.cast_unsigned(),
-                    reserved_at,
+                    reserved_at: row.try_get(3)?,
                 })
             })
             .collect()
@@ -744,18 +756,20 @@ impl PostgresLeafStore {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Vec<TreeNodeId>, LeafStoreError> {
-        let released: Vec<(Uuid, String)> = sqlx::query_as(
+        let released = query(
+            &self.pool.get().await?,
             r"DELETE FROM brz_ssp_spark_reservations r
                USING brz_ssp_spark_leaves l
                WHERE l.refund_tx_id = r.refund_tx_id AND r.transfer_id = $1
                RETURNING l.node_id, l.refund_tx_id",
+            &[&transfer_uuid(transfer_id)],
         )
-        .bind(transfer_uuid(transfer_id)?)
-        .fetch_all(&*self.pool)
         .await?;
         released
-            .into_iter()
-            .map(|(leaf_id, refund_txid)| {
+            .iter()
+            .map(|row| {
+                let leaf_id: Uuid = row.try_get(0)?;
+                let refund_txid: &str = row.try_get(1)?;
                 info!(%leaf_id, %transfer_id, %refund_txid, "released a pool leaf a transfer had reserved");
                 rows::node_id(leaf_id)
             })
@@ -765,7 +779,8 @@ impl PostgresLeafStore {
     /// The leaves reserved for `transfer_id` are no longer the SSP's once the
     /// operators have applied the transfer's key tweak.
     pub async fn transferred(&self, transfer_id: &TransferId) -> Result<(), LeafStoreError> {
-        let transferred: Vec<(Uuid, String)> = sqlx::query_as(
+        let transferred = query(
+            &self.pool.get().await?,
             r"WITH transferred AS (
                    DELETE FROM brz_ssp_spark_leaves l
                    USING brz_ssp_spark_reservations reservation
@@ -776,11 +791,12 @@ impl PostgresLeafStore {
                INSERT INTO brz_ssp_spark_transferred_leaves (refund_tx_id, node_id, transfer_id)
                SELECT refund_tx_id, node_id, $1 FROM transferred
                RETURNING node_id, refund_tx_id",
+            &[&transfer_uuid(transfer_id)],
         )
-        .bind(transfer_uuid(transfer_id)?)
-        .fetch_all(&*self.pool)
         .await?;
-        for (leaf_id, refund_txid) in transferred {
+        for row in &transferred {
+            let leaf_id: Uuid = row.try_get(0)?;
+            let refund_txid: &str = row.try_get(1)?;
             info!(%leaf_id, %transfer_id, %refund_txid, "transferred a pool leaf");
         }
         Ok(())
@@ -792,7 +808,7 @@ impl PostgresLeafStore {
         let (unchecked_ids, unchecked_indices) = ids(&unchecked);
         // For a leaf that is both exiting and unchecked, MIN(how) is 'exiting',
         // the lower of the two strings.
-        let rows: Vec<(i64, String, i64)> = sqlx::query_as(&format!(
+        let sql = format!(
             r"WITH spent_outputs (tx_id, output_index) AS (
                    SELECT * FROM UNNEST($2::text[], $3::int[])
                ), unchecked_outputs (tx_id, output_index) AS (
@@ -817,19 +833,25 @@ impl PostgresLeafStore {
             ),
             exiting = refunds_spending("spent_outputs"),
             unchecked = refunds_spending("unchecked_outputs"),
-        ))
-        .bind(self.identity.serialize().as_slice())
-        .bind(&spent_ids)
-        .bind(&spent_indices)
-        .bind(&unchecked_ids)
-        .bind(&unchecked_indices)
-        .fetch_all(&*self.pool)
+        );
+        let rows = query(
+            &self.pool.get().await?,
+            &sql,
+            &[
+                &self.identity.serialize().as_slice(),
+                &spent_ids,
+                &spent_indices,
+                &unchecked_ids,
+                &unchecked_indices,
+            ],
+        )
         .await?;
         let mut counts = PoolCounts::default();
         let mut unavailable: HashMap<u64, u32> = HashMap::new();
-        for (value, how, count) in rows {
-            let value = value.cast_unsigned();
-            let count = u32::try_from(count).unwrap_or(u32::MAX);
+        for row in &rows {
+            let value = row.try_get::<_, i64>(0)?.cast_unsigned();
+            let how: &str = row.try_get(1)?;
+            let count = u32::try_from(row.try_get::<_, i64>(2)?).unwrap_or(u32::MAX);
             if how == "total" {
                 counts.available.insert(value, count);
                 continue;
@@ -850,8 +872,8 @@ impl PostgresLeafStore {
     }
 
     pub async fn leaves(&self) -> Result<Vec<TreeNode>, LeafStoreError> {
-        let mut db = self.pool.acquire().await?;
-        rows::leaves(&mut db, &self.identity, Which::All).await
+        let db = self.pool.get().await?;
+        rows::leaves(&db, &self.identity, Which::All).await
     }
 
     pub async fn node_ids(
@@ -860,15 +882,16 @@ impl PostgresLeafStore {
         limit: usize,
     ) -> Result<Vec<TreeNodeId>, LeafStoreError> {
         let after = after.map(node_uuid).transpose()?.unwrap_or(Uuid::nil());
-        let ids: Vec<(Uuid,)> = sqlx::query_as(
+        let ids = query(
+            &self.pool.get().await?,
             r"SELECT node_id FROM brz_ssp_spark_leaves
                WHERE node_id > $1 ORDER BY node_id LIMIT $2",
+            &[&after, &i64::try_from(limit).unwrap_or(i64::MAX)],
         )
-        .bind(after)
-        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
-        .fetch_all(&*self.pool)
         .await?;
-        ids.into_iter().map(|(id,)| rows::node_id(id)).collect()
+        ids.iter()
+            .map(|row| rows::node_id(row.try_get(0)?))
+            .collect()
     }
 
     pub async fn pedigrees(
@@ -879,13 +902,13 @@ impl PostgresLeafStore {
             .iter()
             .map(node_uuid)
             .collect::<Result<Vec<Uuid>, _>>()?;
-        let mut db = self.pool.acquire().await?;
-        self.pedigrees_of(&mut db, &ids).await
+        let db = self.pool.get().await?;
+        self.pedigrees_of(&db, &ids).await
     }
 
     async fn pedigrees_of(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         ids: &[Uuid],
     ) -> Result<Vec<LeafPedigree>, LeafStoreError> {
         if ids.is_empty() {
@@ -909,7 +932,8 @@ impl PostgresLeafStore {
         // To go through each node only once, however many leaves share it,
         // Postgres goes up from all the leaves together, and then back down
         // from each node whose parent the store does not have.
-        let ids: Vec<(Uuid,)> = sqlx::query_as(
+        let ids = query(
+            &self.pool.get().await?,
             r"WITH RECURSIVE above AS (
                    SELECT node.node_id, node.parent_node_id, node.node_tx_id
                    FROM brz_ssp_spark_leaves l
@@ -941,10 +965,12 @@ impl PostgresLeafStore {
                SELECT l.node_id
                FROM brz_ssp_spark_leaves l
                JOIN below ON below.node_id = l.node_id",
+            &[],
         )
-        .fetch_all(&*self.pool)
         .await?;
-        ids.into_iter().map(|(id,)| rows::node_id(id)).collect()
+        ids.iter()
+            .map(|row| rows::node_id(row.try_get(0)?))
+            .collect()
     }
 }
 
@@ -962,8 +988,6 @@ fn refund_txid(leaf: &TreeNode) -> String {
         .unwrap_or_default()
 }
 
-fn is_foreign_key_violation(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .is_some_and(sqlx::error::DatabaseError::is_foreign_key_violation)
+fn is_foreign_key_violation(error: &tokio_postgres::Error) -> bool {
+    error.code() == Some(&SqlState::FOREIGN_KEY_VIOLATION)
 }
