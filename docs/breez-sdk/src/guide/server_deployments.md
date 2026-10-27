@@ -17,6 +17,6 @@ A service can run both, as separate SDK instances with separate configs.
 
 ## Key management
 
-By default the server holds the wallet's seed. [Using Turnkey](turnkey.md) moves signing into a Turnkey secure enclave: the server holds an API credential instead of key material, and Turnkey policies decide what that credential may sign. It works with either configuration above.
+By default the server holds the wallet's seed. [Using Turnkey](turnkey.md) moves signing into a Turnkey secure enclave: the server holds an API credential instead of key material (apart from the [keys exported from Turnkey](turnkey.md#key-exports)), and Turnkey policies decide what that credential may sign and export. It works with either configuration above.
 
 When the server must not be able to send on its own, pair it with [Client signing](client_signing.md): the server prepares and publishes each payment, and the user signs it. With Turnkey, a policy can require the user's own credential for the transfer approval; see [User-approved payments](turnkey.md#user-approved-payments).
