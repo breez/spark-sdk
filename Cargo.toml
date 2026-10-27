@@ -110,7 +110,7 @@ debug = false
 debug = "line-tables-only"
 
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
