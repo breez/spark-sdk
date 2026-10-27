@@ -240,10 +240,7 @@ mod docs_url {
     /// keep linking to these sections, so their ids must not change.
     macro_rules! errors_page {
         ($section:literal) => {
-            concat!(
-                "https://sdk-doc-spark.breez.technology/guide/errors.html#",
-                $section
-            )
+            concat!("https://docs.breez.technology/guide/errors.html#", $section)
         };
     }
 
