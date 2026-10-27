@@ -12,7 +12,7 @@ use super::{ChainClient, ChainError};
 
 /// Fees quoted seconds apart should agree, and the fee market does not move fast
 /// enough for a fresher rate to be worth a call to bitcoind.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Deep enough that the estimate is a market rate rather than the next-block
 /// spike.
@@ -20,7 +20,7 @@ const DEFAULT_CONF_TARGET: u32 = 6;
 
 /// How old the last rate can be while sspd still gives it out. An older rate
 /// may no longer match the market.
-const STALE_AFTER: Duration = Duration::from_secs(10 * 60);
+const STALE_AFTER: Duration = Duration::from_mins(10);
 
 /// sspd refreshes the fee rate from bitcoind's estimate on a timer, so a caller
 /// gets the rate without a call to bitcoind.
@@ -169,12 +169,12 @@ mod tests {
         );
 
         bitcoind.failing.store(true, Ordering::SeqCst);
-        tokio::time::sleep(STALE_AFTER.saturating_sub(Duration::from_secs(120))).await;
+        tokio::time::sleep(STALE_AFTER.saturating_sub(Duration::from_mins(2))).await;
         assert_eq!(
             rates.fee_rate().await.unwrap(),
             FeeRate::from_sat_per_kwu(2_000)
         );
-        tokio::time::sleep(Duration::from_secs(180)).await;
+        tokio::time::sleep(Duration::from_mins(3)).await;
         assert!(rates.fee_rate().await.is_err());
 
         token.cancel();

@@ -34,7 +34,7 @@ use super::send::EXPECTED_HTLC_TIMELOCK_BLOCKS;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Blocks wake the sweeper.
-const SWEEP_BACKUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const SWEEP_BACKUP_INTERVAL: Duration = Duration::from_mins(10);
 
 /// BIP-341's point with no known discrete logarithm, which spark uses as the HTLC
 /// output's internal key.

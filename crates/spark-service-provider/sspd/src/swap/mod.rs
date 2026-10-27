@@ -28,7 +28,7 @@ use crate::wakeup::Wakeup;
 use self::repository::{SwapDetail, SwapLeaf, SwapRecord};
 use self::select::swap_denominations;
 
-const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
+const SWAP_EXPIRY_DURATION: Duration = Duration::from_mins(2);
 
 #[async_trait::async_trait]
 pub trait SwapStore: Send + Sync {
