@@ -963,6 +963,11 @@ async fn test_completed_exit_rerun_builds_nothing(#[case] backend: SignerBackend
             .all(|t| matches!(t.status, ExitTransactionStatus::Confirmed { .. })),
         "every step of it, the sweep included"
     );
+    let verdict = check(&sdk, checked.recovery).await?;
+    assert!(
+        matches!(verdict, RecoveryVerdict::Done),
+        "read back as the check returned it, the exit is still finished: {verdict:?}"
+    );
     Ok(())
 }
 
@@ -3957,6 +3962,20 @@ async fn test_watchtower_exited_funds_are_recovered() -> Result<()> {
     })
     .await
     .context("the watchtower spent an output the exit builds on")?;
+    // An app stores the recovery that check_recover_funds returns. For that
+    // stored recovery, check_recover_funds returns Redo too.
+    let stored = sdk
+        .sdk
+        .check_recover_funds(CheckRecoverFundsRequest {
+            recovery: started.clone(),
+        })
+        .await?
+        .recovery;
+    let verdict = check(&sdk, stored).await?;
+    assert!(
+        matches!(verdict, RecoveryVerdict::Redo { .. }),
+        "{verdict:?}"
+    );
     for selection in [
         ExitLeafSelection::All,
         ExitLeafSelection::Specific {
