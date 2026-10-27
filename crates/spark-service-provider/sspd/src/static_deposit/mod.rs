@@ -48,7 +48,7 @@ use self::repository::{
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Blocks and claims wake the worker.
-const STATIC_DEPOSIT_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const STATIC_DEPOSIT_BACKUP_INTERVAL: Duration = Duration::from_mins(1);
 
 const INSTANT_QUOTE_LIFETIME: chrono::Duration = chrono::Duration::hours(1);
 

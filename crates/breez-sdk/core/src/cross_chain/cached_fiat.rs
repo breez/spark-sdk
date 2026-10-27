@@ -23,7 +23,7 @@ use crate::utils::time::now_ms;
 
 /// Default cache TTL. Long enough to amortize repeated fetches in a session,
 /// short enough to bound fiat-rate drift between estimate and quote.
-pub(crate) const DEFAULT_FIAT_CACHE_TTL: Duration = Duration::from_mins(1);
+pub(crate) const DEFAULT_FIAT_CACHE_TTL: Duration = Duration::from_secs(60);
 
 const RATES_KEY: &str = "fiat_rates";
 const CURRENCIES_KEY: &str = "fiat_currencies";

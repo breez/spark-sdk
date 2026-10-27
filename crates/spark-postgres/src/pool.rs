@@ -368,7 +368,7 @@ fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolC
 /// the `Option` getters backing the other three.
 fn apply_tcp_liveness_defaults(connection_string: &str, pg_config: &mut PgConfig) {
     if !connection_string.contains("keepalives_idle") {
-        pg_config.keepalives_idle(Duration::from_mins(1));
+        pg_config.keepalives_idle(Duration::from_secs(60));
     }
     if pg_config.get_keepalives_interval().is_none() {
         pg_config.keepalives_interval(Duration::from_secs(10));
@@ -632,7 +632,7 @@ mod tests {
         let url = "postgres://u:p@h:5432/db";
         let mut cfg: PgConfig = url.parse().expect("valid");
         apply_tcp_liveness_defaults(url, &mut cfg);
-        assert_eq!(cfg.get_keepalives_idle(), Duration::from_mins(1));
+        assert_eq!(cfg.get_keepalives_idle(), Duration::from_secs(60));
         assert_eq!(cfg.get_keepalives_interval(), Some(Duration::from_secs(10)));
         assert_eq!(cfg.get_keepalives_retries(), Some(3));
         assert_eq!(cfg.get_tcp_user_timeout(), Some(&Duration::from_secs(30)));
@@ -645,7 +645,7 @@ mod tests {
         let mut cfg: PgConfig = url.parse().expect("valid");
         apply_tcp_liveness_defaults(url, &mut cfg);
         // Every value supplied in the URL must survive untouched.
-        assert_eq!(cfg.get_keepalives_idle(), Duration::from_mins(10));
+        assert_eq!(cfg.get_keepalives_idle(), Duration::from_secs(600));
         assert_eq!(cfg.get_keepalives_interval(), Some(Duration::from_secs(20)));
         assert_eq!(cfg.get_keepalives_retries(), Some(9));
         assert_eq!(cfg.get_tcp_user_timeout(), Some(&Duration::from_secs(5)));

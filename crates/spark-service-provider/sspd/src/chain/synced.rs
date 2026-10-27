@@ -10,7 +10,7 @@ use super::{BlockHeader, ChainTip, SyncState};
 /// new blocks or while bitcoind returns errors. So sspd stays synced through a
 /// few blocks in a row and through a short outage of bitcoind, but not through
 /// a long outage.
-const GRACE: Duration = Duration::from_secs(60);
+const GRACE: Duration = Duration::from_mins(1);
 
 #[derive(Clone, Copy, Default)]
 enum Waiting {
@@ -96,7 +96,7 @@ mod tests {
         assert!(!synced.is_synced());
 
         synced.waiting();
-        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::time::advance(Duration::from_hours(1)).await;
         assert!(synced.is_synced());
 
         synced.stopped();

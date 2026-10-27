@@ -16,7 +16,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// A new swap wakes the loop. While a swap is left unsettled, it tries again
 /// after `CLAIM_RETRY_DELAY`, doubling up to the backup interval.
-const CLAIM_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const CLAIM_BACKUP_INTERVAL: Duration = Duration::from_mins(1);
 const CLAIM_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub struct SwapClaimDeps {

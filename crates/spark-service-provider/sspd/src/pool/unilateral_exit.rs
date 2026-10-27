@@ -32,7 +32,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Between blocks, the loop runs a pass this often to bring the fee rates up to
 /// date.
-const UNILATERAL_EXIT_INTERVAL: Duration = Duration::from_secs(60);
+const UNILATERAL_EXIT_INTERVAL: Duration = Duration::from_mins(1);
 
 const NO_DEADLINE_CONF_TARGET: u32 = 144;
 
