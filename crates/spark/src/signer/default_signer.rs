@@ -159,6 +159,12 @@ impl DefaultSigner {
     }
 }
 
+impl Drop for DefaultSigner {
+    fn drop(&mut self) {
+        self.master.private_key.non_secure_erase();
+    }
+}
+
 impl DefaultSigner {
     /// Derives the raw secret key at `path` under the master.
     fn derive_at(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
@@ -697,6 +703,17 @@ pub(crate) mod tests {
                 "splitting into {n} must be refused"
             );
         }
+    }
+
+    #[async_test_all]
+    async fn test_clone_keeps_signing_after_original_is_dropped() {
+        let signer = create_test_signer();
+        let path = "m/0'".parse::<DerivationPath>().unwrap();
+        let public_key = signer.derive_public_key(&path).await.unwrap();
+        let clone = signer.clone();
+        drop(signer);
+
+        assert_eq!(clone.derive_public_key(&path).await.unwrap(), public_key);
     }
 
     #[async_test_all]
