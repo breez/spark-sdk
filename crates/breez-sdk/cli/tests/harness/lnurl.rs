@@ -13,7 +13,7 @@ const IMAGE: &str = "breez-lnurl-built:latest";
 const POSTGRES_IMAGE: &str = "postgres:16-alpine";
 const HTTP_PORT: u16 = 8080;
 const POSTGRES_PORT: u16 = 5432;
-const START_TIMEOUT: Duration = Duration::from_mins(2);
+const START_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 pub struct LnurlFixture {
     container_id: String,

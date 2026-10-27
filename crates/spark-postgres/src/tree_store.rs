@@ -126,7 +126,7 @@ const TREE_STORE_LOCK_PREFIX: &[u8] = b"breez-spark-sdk:tree:";
 
 /// Default timeout for reservations. Reservations older than this are considered stale
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
-const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_mins(5);
+const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
@@ -2830,7 +2830,7 @@ mod tests {
 
         // Wait for all with global timeout
         let mut successes = 0;
-        let timeout = tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => {
@@ -2891,7 +2891,7 @@ mod tests {
         }
 
         // Wait for all with global timeout
-        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
@@ -2968,7 +2968,7 @@ mod tests {
         }
 
         // Wait for all with global timeout
-        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
@@ -3029,7 +3029,7 @@ mod tests {
         // Wait for all with timeout
         let mut successes = 0;
         let mut insufficient = 0;
-        let timeout_result = tokio::time::timeout(std::time::Duration::from_mins(2), async {
+        let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(2 * 60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, status))) => {

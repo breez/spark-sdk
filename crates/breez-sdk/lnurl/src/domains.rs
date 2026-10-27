@@ -5,7 +5,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::repository::{DomainConfig, LnurlRepository, LnurlRepositoryError};
 
-const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Allowed domains mapped to their own Breez API key, or `None` when the domain
 /// has none and falls back to the configured default. The api key is exchanged

@@ -59,7 +59,7 @@ const MAX_COMMENT_LENGTH: usize = 255;
 const METADATA_SIGNATURE_HEADER: &str = "x-breez-signature";
 const METADATA_TIMESTAMP_HEADER: &str = "x-breez-timestamp";
 /// How often the accumulated legacy signed-message counts are logged.
-const LEGACY_REPORT_INTERVAL: Duration = Duration::from_mins(1);
+const LEGACY_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {

@@ -84,7 +84,7 @@ pub struct DomainConfig {
 }
 
 /// How often expired signed-message claims are pruned.
-const CLAIM_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
+const CLAIM_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// Start the background pruner for expired signed-message claims and for
 /// registration-log rows that have aged out of the counting window.

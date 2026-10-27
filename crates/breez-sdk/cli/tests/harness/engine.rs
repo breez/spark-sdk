@@ -12,7 +12,7 @@ use super::{FaucetFund, Scenario, Step, assert, faucet, interpolate};
 
 /// Marker-wait ceiling for a single command; commands that need longer
 /// (claims, syncs) wrap in `retry` at the scenario level.
-const STEP_TIMEOUT: Duration = Duration::from_mins(2);
+const STEP_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 /// Run a scenario by file stem, skipping (Ok) when its requirements are not
 /// met. All scenarios need network access to the remote regtest operators,

@@ -37,7 +37,7 @@ const MAX_ERROR_BODY_READ: usize = 64 * 1024;
 const WEBHOOK_TIMEOUT_SECS: u64 = 30;
 
 /// How often to run the webhook delivery cleanup (1 hour).
-const CLEANUP_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_hours(1);
+const CLEANUP_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(60 * 60);
 
 /// Per-domain concurrency limiter for webhook delivery.
 pub(crate) type DomainSemaphores = Arc<Mutex<HashMap<String, Arc<Semaphore>>>>;
@@ -92,7 +92,7 @@ async fn webhook_delivery_processor<DB>(
                     return;
                 }
             }
-            () = tokio::time::sleep(tokio::time::Duration::from_mins(1)) => {}
+            () = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
         }
 
         process_pending_webhook_deliveries(&db, &http_client, &domain_semaphores, &config_cache)
@@ -317,7 +317,10 @@ fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();
     }
-    let end = s.floor_char_boundary(max_len);
+    let end = (0..=max_len)
+        .rev()
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(0);
     format!("{}...", &s[..end])
 }
 

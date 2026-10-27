@@ -13,7 +13,7 @@ use clap::Subcommand;
 use crate::command::print_value;
 
 const PULL_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-const PULL_RETRY_WINDOW: Duration = Duration::from_mins(10);
+const PULL_RETRY_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Debug)]
 pub struct TokenAllowanceLimitArg(TokenAllowanceLimit);

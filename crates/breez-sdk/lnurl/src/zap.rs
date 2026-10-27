@@ -76,7 +76,7 @@ pub fn start_background_processor<DB>(
                         return;
                     }
                 }
-                () = tokio::time::sleep(tokio::time::Duration::from_mins(1)) => {}
+                () = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
             }
 
             process_pending_zap_receipts(&db, nostr_keys.as_ref()).await;

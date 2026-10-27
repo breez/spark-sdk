@@ -2,6 +2,7 @@
 name = "spark-itest"
 version.workspace = true
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
