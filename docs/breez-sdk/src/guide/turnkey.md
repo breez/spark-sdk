@@ -40,7 +40,7 @@ The server's API credential is allowed to run all Spark signing activities. Ever
 
 ### User-approved payments
 
-The policy allows the server's credential to run everything except the transfer approval activity (`SPARK_PREPARE_TRANSFER`), which requires the end user's own Turnkey credential (for example a passkey registered with Turnkey). The server then drives the send with the [Client signing](client_signing.md) flow: it prepares the payment and builds the package, the user approves and signs the one item that needs their credential, and the server publishes it. The rest of the signing (`SPARK_SIGN_FROST`) stays with the server under policy, so a payment can never be sent without the user, and sending needs no key export on either side.
+The policy allows the server's credential to run everything except the transfer approval activity (`SPARK_PREPARE_TRANSFER`), which requires the end user's own Turnkey credential (for example a passkey registered with Turnkey). The server then drives the send with the [Client signing](client_signing.md) flow: it prepares the payment and builds the package, the user approves and signs the one item that needs their credential, and the server publishes it. The rest of the signing (`SPARK_SIGN_FROST`) stays with the server under policy, so a payment can never be sent without the user, and no key leaves Turnkey on either side, except the static deposit key for [Bitcoin deposits](#key-exports).
 
 ## Key exports
 
