@@ -115,6 +115,7 @@ make fmt-fix            # Fix formatting
 make clippy-check       # Run clippy lints (cargo + WASM)
 make clippy-fix         # Fix clippy issues
 make wasm-js-lint       # Run ESLint on the JS files under crates/breez-sdk/wasm/js
+make msrv-check         # Type-check every clippy pass with the MSRV toolchain
 ```
 
 ## Architecture
@@ -265,7 +266,7 @@ The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely as it is the s
 
 ## Workspace Configuration
 
-- Rust edition 2024, MSRV 1.88
+- Rust edition 2024, MSRV 1.88: every crate manifest contains `rust-version.workspace = true`, so clippy lints against 1.88 and cargo prefers dependency versions that support it
 - Clippy: pedantic + suspicious + complexity + perf warnings enabled
 - Release builds use LTO and `opt-level = "z"` for size optimization
 - Uses `cargo xtask` for build automation (aliased in `.cargo/config.toml`)
