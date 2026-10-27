@@ -9,7 +9,7 @@ Pod::Spec.new do |spec|
   spec.summary             = "Swift bindings to the Breez Spark SDK"
   spec.homepage            = "https://breez.technology"
   spec.authors             = { "Breez" => "contact@breez.technology" }
-  spec.documentation_url   = "https://sdk-doc-spark.breez.technology"
+  spec.documentation_url   = "https://docs.breez.technology"
 
   # This will ensure the source files in Classes/ are included in the native
   # builds of apps using this FFI plugin. Podspec does not support relative
