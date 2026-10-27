@@ -110,7 +110,7 @@ debug = false
 debug = "line-tables-only"
 
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
@@ -162,7 +162,7 @@ arithmetic_side_effects = "warn"
 [workspace.dependencies]
 aes = "0.8.4"
 anyhow = "1.0.98"
-async-graphql = { version = "7", features = ["chrono", "uuid"] }
+async-graphql = { version = "7.2", features = ["chrono", "uuid"] }
 async-trait = "0.1.88"
 axum = "0.8"
 base64 = "0.22.1"
