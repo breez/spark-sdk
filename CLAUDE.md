@@ -41,7 +41,7 @@ make wasm-test          # Run WASM tests (browser + Node.js)
 make itest              # Integration tests (requires Docker)
 make breez-itest        # Breez integration tests (requires faucet credentials)
 make cli-itest          # Shared CLI scenarios via the Rust CLI (faucet credentials; Docker for lnurl)
-make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node 22)
+make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node >= 22)
 make swift-itest        # Same scenarios via the swift CLI port (macOS)
 make kotlin-itest       # Same scenarios via the kotlin-multiplatform CLI port (JVM)
 ```
@@ -55,14 +55,11 @@ Run a single test:
 cargo test <test_name> -p <package>
 ```
 
-**Node.js version**: `make wasm-test` (and any target depending on `wasm-test-node`)
-requires Node.js 22. `better-sqlite3`'s native bindings fail to build on Node 23+
-(uses removed `v8::AccessorGetterCallback` API). If `node --version` reports >=23,
-switch first:
-
-```bash
-nvm use 22 || nvm install 22  # then re-run the make target
-```
+**Node.js version**: the WASM targets (`make wasm-test`, `make wasm-itest` and the
+wasm snippet checks) need Node.js 22 or later, the npm package's minimum. CI runs
+them on Node 24. `better-sqlite3` stays on 12.x: with 13.x, Node 22.0 to 22.13
+crashes at the first open, Linux needs glibc 2.34, and npm drops the library on
+lockfile installs without a C++ toolchain (npm/cli#9837).
 
 ## Itest Operator
 

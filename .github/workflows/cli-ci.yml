@@ -65,7 +65,7 @@ jobs:
             runner: ubuntu-latest
           - lang: react-native
             runner: ubuntu-latest
-            node-version: "22"
+            node-version: "24"
           - lang: swift
             runner: macos-latest
             # Behavioral scenarios ride along here to reuse the local
