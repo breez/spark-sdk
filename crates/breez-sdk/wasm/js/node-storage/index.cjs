@@ -18,7 +18,7 @@ try {
     Database = require("better-sqlite3");
   } catch (fallbackError) {
     throw new Error(
-      `better-sqlite3 not found. Please install it in your project: npm install better-sqlite3@^9.2.2\n` +
+      `better-sqlite3 not found. Please install it in your project: npm install better-sqlite3@^12.2.0\n` +
         `Original error: ${error.message}\nFallback error: ${fallbackError.message}`
     );
   }
