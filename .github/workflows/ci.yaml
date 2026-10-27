@@ -37,6 +37,25 @@ jobs:
       - name: Run Clippy
         run: make cargo-clippy-check
 
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The CLI's `fido2` feature pulls in hidapi, whose build script needs
+      # libudev on Linux.
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Check with the MSRV toolchain
+        run: make msrv-check
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

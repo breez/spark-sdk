@@ -34,6 +34,9 @@ cargo-clippy-check:
 wasm-clippy-check:
 	cargo xtask wasm-clippy
 
+msrv-check:
+	cargo xtask msrv-check
+
 fix: fmt-fix clippy-fix
 
 fmt-fix:

@@ -150,6 +150,9 @@ enum Commands {
         rest: Vec<String>,
     },
 
+    /// Type-check what the clippy passes lint, with the MSRV toolchain
+    MsrvCheck {},
+
     /// Check formatting
     Fmt {
         /// Check only, do not write changes
@@ -238,6 +241,7 @@ fn main() -> Result<()> {
         } => wasm_test_cmd(package, browser, node, rest),
         Commands::Clippy { fix, rest } => clippy_cmd(fix, rest),
         Commands::WasmClippy { fix, rest } => wasm_clippy_cmd(fix, rest),
+        Commands::MsrvCheck {} => msrv_check_cmd(),
         Commands::Fmt { check } => fmt_cmd(check),
         Commands::Build {
             release,
@@ -862,17 +866,7 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
     run_clippy("--tests", &rest)?;
 
     for (package, features) in FEATURE_CLIPPY_PASSES {
-        let selection = match features {
-            ClippyFeatures::All => vec!["--all-features".to_string()],
-            ClippyFeatures::Only(list) => vec![format!("--features={}", list.join(","))],
-            ClippyFeatures::NoDefault(list) => {
-                let mut args = vec!["--no-default-features".to_string()];
-                if !list.is_empty() {
-                    args.push(format!("--features={}", list.join(",")));
-                }
-                args
-            }
-        };
+        let selection = feature_selection(features);
         let selection_desc = selection.join(" ");
         let mut c = Command::new("cargo");
         c.arg("clippy")
@@ -887,6 +881,92 @@ fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
             .with_context(|| format!("failed to run cargo clippy -p {package} {selection_desc}"))?;
         if !status.success() {
             bail!("clippy {package} {selection_desc} failed");
+        }
+    }
+    Ok(())
+}
+
+/// The cargo arguments that turn on a clippy pass's features.
+fn feature_selection(features: &ClippyFeatures) -> Vec<String> {
+    match features {
+        ClippyFeatures::All => vec!["--all-features".to_string()],
+        ClippyFeatures::Only(list) => vec![format!("--features={}", list.join(","))],
+        ClippyFeatures::NoDefault(list) => {
+            let mut args = vec!["--no-default-features".to_string()];
+            if !list.is_empty() {
+                args.push(format!("--features={}", list.join(",")));
+            }
+            args
+        }
+    }
+}
+
+/// Type-checks every target and feature set that the clippy passes lint, with
+/// the toolchain of the workspace MSRV. Clippy flags library items newer than
+/// the MSRV only outside test code, and it cannot see language features or the
+/// rust-version of dependencies.
+fn msrv_check_cmd() -> Result<()> {
+    let sh = Shell::new()?;
+    let meta = workspace_metadata()?;
+    let msrvs: HashSet<String> = meta
+        .packages
+        .iter()
+        .filter(|p| meta.workspace_members.contains(&p.id))
+        .filter_map(|p| p.rust_version.as_ref())
+        .map(|v| format!("{}.{}", v.major, v.minor))
+        .collect();
+    let Ok([msrv]) = <[String; 1]>::try_from(msrvs.into_iter().collect::<Vec<_>>()) else {
+        bail!("the workspace packages do not share one rust-version");
+    };
+    let target = "wasm32-unknown-unknown";
+    cmd!(
+        sh,
+        "rustup toolchain install {msrv} --profile minimal --target {target}"
+    )
+    .run()?;
+
+    let mut passes = vec![
+        [
+            vec!["--workspace".to_string(), "--all-targets".to_string()],
+            workspace_exclude_wasm(),
+        ]
+        .concat(),
+    ];
+    for (package, features) in FEATURE_CLIPPY_PASSES {
+        let package_args = vec![
+            "-p".to_string(),
+            (*package).to_string(),
+            "--all-targets".to_string(),
+        ];
+        passes.push([package_args, feature_selection(features)].concat());
+    }
+    for pkg in packages_wasm_capable(&meta) {
+        passes.push(vec![
+            "-p".to_string(),
+            pkg.name,
+            "--all-targets".to_string(),
+            "--target".to_string(),
+            target.to_string(),
+        ]);
+    }
+
+    for args in passes {
+        let desc = args.join(" ");
+        let mut c = Command::new("cargo");
+        c.arg(format!("+{msrv}"))
+            .args(["check", "--locked"])
+            .args(&args);
+        if cfg!(target_os = "macos")
+            && let Some((clang_path, llvm_ar_path)) = detect_brew_llvm_paths(&sh)
+        {
+            c.env("CC_wasm32_unknown_unknown", &clang_path);
+            c.env("AR_wasm32_unknown_unknown", &llvm_ar_path);
+        }
+        let status = c
+            .status()
+            .with_context(|| format!("failed to run cargo +{msrv} check {desc}"))?;
+        if !status.success() {
+            bail!("cargo +{msrv} check {desc} failed");
         }
     }
     Ok(())
