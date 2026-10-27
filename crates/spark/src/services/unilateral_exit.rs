@@ -547,7 +547,7 @@ pub struct UnilateralExitQuote {
     pub single_utxo_funding_sat: u64,
     /// CPFP children's fees, paid by the funding UTXOs.
     pub cpfp_fee_sat: u64,
-    /// The fan-out's fee, paid by the funding UTXO. Zero for a single branch.
+    /// The fan-out's fee, paid by the funding UTXO. Zero for a single entry.
     pub fanout_fee_sat: u64,
     /// The fees paid out of the leaves' value before the sweep: the sum of each
     /// selected leaf's `refund_fee`.

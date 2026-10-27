@@ -3344,9 +3344,9 @@ pub enum CpfpFundingStrategy {
 
 /// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when
 /// what is left of its funds exceeds what recovering it costs. That cost leaves
-/// out the shared fan-out fee, so funding several unilateral exits from one UTXO
-/// adds `fanout_fee_sats` on top: compare `recoverable_value_sats` with
-/// `total_fee_sats`, or fund one UTXO per branch to avoid the fan-out.
+/// out the shared fan-out fee, which you also pay when you fund several
+/// `funding.per_branch` entries from one UTXO: compare `recoverable_value_sats`
+/// with `total_fee_sats`, or fund one UTXO per entry to avoid the fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ExitLeafSelection {
@@ -3731,8 +3731,10 @@ pub enum RecoveryTxKind {
     /// operators. Pays its fee from the leaf's value: no CPFP child, no
     /// dependencies, no timelock.
     Cooperative,
-    /// Splits the caller's funding into one output per branch. Present only
-    /// when the funding couldn't be matched one-to-one to branches.
+    /// Splits the caller's funding into one output per `funding.per_branch`
+    /// entry: per branch, or under `CpfpFundingStrategy::PerNode` per
+    /// transaction. Present only when the funding couldn't be matched
+    /// one-to-one to the entries.
     FanOut,
     /// A tree node transaction (root, intermediate, or leaf node).
     Node,
