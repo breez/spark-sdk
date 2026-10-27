@@ -36,6 +36,7 @@ impl BreezSdk {
             sync_coordinator: params.sync_coordinator,
             claim_guards: super::deposits::ClaimGuards::default(),
             initial_synced_watcher,
+            last_sync_error: Arc::default(),
             input_parser: params.input_parser,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             token_converter: params.token_converter,

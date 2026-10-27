@@ -508,6 +508,17 @@ impl From<serde_json::Error> for SdkError {
     }
 }
 
+impl From<SparkWalletError> for crate::SyncError {
+    fn from(e: SparkWalletError) -> Self {
+        let message = e.to_string();
+        if e.is_operator_unavailable() {
+            Self::Network { message }
+        } else {
+            Self::Generic { message }
+        }
+    }
+}
+
 impl From<SparkWalletError> for SdkError {
     fn from(e: SparkWalletError) -> Self {
         match e {
