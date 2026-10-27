@@ -124,6 +124,7 @@ fun main(args: Array<String>) {
     var rpId: String? = null
     var serverMode = false
     var lnurlDomain: String? = null
+    var realTimeSyncServerUrl: String? = null
     var proxyAddress: String? = null
     var proxyUser: String? = null
     var proxyPassword: String? = null
@@ -201,6 +202,10 @@ fun main(args: Array<String>) {
                 i++
                 if (i < args.size) lnurlDomain = args[i]
             }
+            "--real-time-sync-server-url" -> {
+                i++
+                if (i < args.size) realTimeSyncServerUrl = args[i]
+            }
             "--proxy" -> {
                 i++
                 if (i < args.size) proxyAddress = args[i]
@@ -235,6 +240,7 @@ fun main(args: Array<String>) {
                 println("  --rpid <ID>                                  Relying party ID for FIDO2 provider (requires --passkey)")
                 println("  --server-mode                                Run in server mode (no background tasks)")
                 println("  --lnurl-domain <DOMAIN>                      LNURL server domain for lightning address registration")
+                println("  --real-time-sync-server-url <URL>            Real-time sync server URL (overrides network default)")
                 println("  --proxy <HOST:PORT>                          Route connections through a SOCKS5 proxy")
                 println("  --proxy-user <USER>                          Username for SOCKS5 authentication (requires --proxy-password)")
                 println("  --proxy-password <PASS>                      Password for SOCKS5 authentication (requires --proxy-user)")
@@ -371,6 +377,7 @@ fun main(args: Array<String>) {
             stableBalanceConfig,
             passkeyConfig,
             lnurlDomain,
+            realTimeSyncServerUrl,
             proxy,
         )
     }
@@ -388,6 +395,7 @@ suspend fun runInteractiveMode(
     stableBalanceConfig: StableBalanceConfig?,
     passkeyConfig: PasskeyConfig?,
     lnurlDomain: String?,
+    realTimeSyncServerUrl: String?,
     proxy: ProxyConfig?,
 ) {
     // Init logging
@@ -421,6 +429,9 @@ suspend fun runInteractiveMode(
     }
     if (lnurlDomain != null) {
         config.lnurlDomain = lnurlDomain
+    }
+    if (realTimeSyncServerUrl != null) {
+        config.realTimeSyncServerUrl = realTimeSyncServerUrl
     }
 
     // Resolve seed: passkey or mnemonic
@@ -471,6 +482,7 @@ suspend fun runInteractiveMode(
     val issuerRegistry = buildIssuerRegistry()
     val contactsRegistry = buildContactsRegistry()
     val webhooksRegistry = buildWebhooksRegistry()
+    val tokenAllowancesRegistry = buildTokenAllowancesRegistry()
     val stableBalanceRegistry = buildStableBalanceRegistry()
 
     // Build completion list
@@ -484,6 +496,8 @@ suspend fun runInteractiveMode(
     allCommands.add("contacts")
     allCommands.addAll(WEBHOOKS_COMMAND_NAMES.map { "webhooks $it" })
     allCommands.add("webhooks")
+    allCommands.addAll(TOKEN_ALLOWANCES_COMMAND_NAMES.map { "token-allowances $it" })
+    allCommands.add("token-allowances")
     allCommands.addAll(STABLE_BALANCE_COMMAND_NAMES.map { "stable-balance $it" })
     allCommands.add("stable-balance")
     allCommands.addAll(listOf("exit", "quit", "help"))
@@ -529,7 +543,7 @@ suspend fun runInteractiveMode(
         }
 
         if (trimmed == "help") {
-            printHelp(commandRegistry, advancedRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, stableBalanceRegistry)
+            printHelp(commandRegistry, advancedRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, tokenAllowancesRegistry, stableBalanceRegistry)
             continue
         }
 
@@ -543,6 +557,7 @@ suspend fun runInteractiveMode(
                 "issuer" -> dispatchIssuerCommand(cmdArgs, tokenIssuer, issuerRegistry, lineReader)
                 "contacts" -> dispatchContactsCommand(cmdArgs, sdk, contactsRegistry, lineReader)
                 "webhooks" -> dispatchWebhooksCommand(cmdArgs, sdk, webhooksRegistry, lineReader)
+                "token-allowances" -> dispatchTokenAllowancesCommand(cmdArgs, sdk, tokenAllowancesRegistry, lineReader)
                 "stable-balance" -> dispatchStableBalanceCommand(cmdArgs, sdk, stableBalanceRegistry, lineReader)
                 else -> {
                     val cmd = commandRegistry[cmdName]
@@ -573,6 +588,7 @@ fun printHelp(
     issuerRegistry: Map<String, IssuerCliCommand>,
     contactsRegistry: Map<String, ContactsCliCommand>,
     webhooksRegistry: Map<String, WebhooksCliCommand>,
+    tokenAllowancesRegistry: Map<String, TokenAllowancesCliCommand>,
     stableBalanceRegistry: Map<String, StableBalanceCliCommand>,
 ) {
     println()
@@ -585,6 +601,7 @@ fun printHelp(
     println("  %-40s %s".format("issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)"))
     println("  %-40s %s".format("contacts <subcommand>", "Contacts commands (use 'contacts help' for details)"))
     println("  %-40s %s".format("webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)"))
+    println("  %-40s %s".format("token-allowances <subcommand>", "Token allowance commands (use 'token-allowances help' for details)"))
     println("  %-40s %s".format("stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)"))
     println("  %-40s %s".format("exit / quit", "Exit the CLI"))
     println("  %-40s %s".format("help", "Show this help message"))

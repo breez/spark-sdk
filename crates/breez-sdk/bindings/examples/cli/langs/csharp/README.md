@@ -49,6 +49,7 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | `--rpid` | - | Relying party ID for FIDO2 provider (requires `--passkey`) |
 | `--server-mode` | - | Run in server mode (background tasks disabled; drive `sync` manually) |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--real-time-sync-server-url` | network default | Real-time sync server URL (e.g. a local data-sync service) |
 | `--proxy` | - | Route connections through a SOCKS5 proxy (`HOST:PORT`, e.g. `127.0.0.1:9050`) |
 | `--proxy-user` | - | SOCKS5 username (requires `--proxy` and `--proxy-password`) |
 | `--proxy-password` | - | SOCKS5 password (requires `--proxy` and `--proxy-user`) |
@@ -93,7 +94,9 @@ Once inside the REPL, type `help` for all commands:
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`
+
+**Token Allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`, `pull-payment`
 
 **Advanced**: `advanced <subcommand>` (expert-only commands for building raw transactions), including `advanced recover-funds` and `advanced check-recover-funds`
 

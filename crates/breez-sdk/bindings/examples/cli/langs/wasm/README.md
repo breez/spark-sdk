@@ -66,6 +66,7 @@ node src/main.js [OPTIONS]
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 | `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--real-time-sync-server-url` | network default | Real-time sync server URL (overrides network default) |
 | `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` |
 | `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
 | `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
@@ -98,17 +99,19 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `pay-batch`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
+
+**Token Allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`
 
 **Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 

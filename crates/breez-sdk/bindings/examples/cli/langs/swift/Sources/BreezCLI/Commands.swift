@@ -105,6 +105,7 @@ let commandNames: [String] = [
     "get-user-settings",
     "set-user-settings",
     "get-spark-status",
+    "pull-payment",
 ]
 
 // MARK: - Registry
@@ -144,6 +145,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "get-user-settings":                 CommandEntry(name: "get-user-settings", description: "Get user settings", run: handleGetUserSettings),
         "set-user-settings":                 CommandEntry(name: "set-user-settings", description: "Update user settings", run: handleSetUserSettings),
         "get-spark-status":                  CommandEntry(name: "get-spark-status", description: "Get Spark network service status", run: handleGetSparkStatus),
+        "pull-payment":                      CommandEntry(name: "pull-payment", description: "Pull a payment from a wallet that granted an allowance", run: handlePullPayment),
     ]
 }
 
@@ -160,6 +162,7 @@ func printHelp(_ registry: [String: CommandEntry]) {
     print("  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
     print("  \("contacts <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Contacts commands (use 'contacts help' for details)")
     print("  \("webhooks <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Webhook commands (use 'webhooks help' for details)")
+    print("  \("token-allowances <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token allowance commands (use 'token-allowances help' for details)")
     print("  \("stable-balance <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Stable balance commands (use 'stable-balance help' for details)")
     print("  \("exit / quit".padding(toLength: 40, withPad: " ", startingAt: 0))Exit the CLI")
     print("  \("help".padding(toLength: 40, withPad: " ", startingAt: 0))Show this help message")
@@ -1275,6 +1278,60 @@ func handleSetUserSettings(_ sdk: BreezSdk, _ args: [String]) async throws {
         sparkMasterIdentityPublicKey: sparkMasterIdentityPublicKey
     ))
     print("User settings updated")
+}
+
+// --- pull-payment ---
+
+func handlePullPayment(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    let receiverStrs = fp.getAll("r", "receiver")
+    guard fp.positional.count >= 2, !receiverStrs.isEmpty else {
+        print("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]")
+        print("Receiver format: amount or address:amount")
+        return
+    }
+
+    let payerAddress = fp.positional[0]
+    let tokenIdentifier = fp.positional[1]
+
+    var receivers: [PullReceiver] = []
+    for raw in receiverStrs {
+        let parts = raw.split(separator: ":", maxSplits: 1).map(String.init)
+        if parts.count == 2 {
+            guard let amount = BInt(parts[1]) else {
+                print("Error: Invalid amount in receiver '\(raw)'")
+                return
+            }
+            receivers.append(PullReceiver(amount: amount, receiverAddress: parts[0]))
+        } else {
+            guard let amount = BInt(raw) else {
+                print("Error: Invalid amount in receiver '\(raw)'")
+                return
+            }
+            receivers.append(PullReceiver(amount: amount, receiverAddress: nil))
+        }
+    }
+
+    let prepareResponse = try await sdk.preparePullPayment(
+        request: PreparePullPaymentRequest(
+            payerAddress: payerAddress,
+            tokenIdentifier: tokenIdentifier,
+            receivers: receivers
+        ))
+
+    print("Pulling \(prepareResponse.amount) base units of \(prepareResponse.tokenIdentifier) from \(prepareResponse.payerAddress)")
+    for receiver in prepareResponse.receivers {
+        print("  \(receiver.amount) to \(receiver.receiverAddress ?? "")")
+    }
+
+    let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
+    if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
+        print("Pull cancelled")
+        return
+    }
+
+    let response = try await pullUntilSettled(sdk: sdk, prepareResponse: prepareResponse)
+    printValue(response)
 }
 
 // --- get-spark-status ---

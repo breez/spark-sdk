@@ -87,17 +87,19 @@ The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
+
+**Token allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`
 
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 

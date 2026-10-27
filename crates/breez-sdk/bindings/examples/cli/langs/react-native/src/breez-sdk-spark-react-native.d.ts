@@ -157,8 +157,15 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const DomainAssociation: any;
   export type DomainAssociation = any;
 
+  // --- token allowances ---
+  export const TokenAllowanceLimit: any;
+  export type TokenAllowanceLimit = any;
+  export const TokenAllowanceRole: any;
+  export type TokenAllowanceRole = any;
+
   // --- types only ---
   export type BatchRecipient = any;
+  export type PullReceiver = any;
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
   export type SdkEvent = any;

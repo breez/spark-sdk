@@ -58,6 +58,7 @@ var CommandNames = []string{
 	"set-user-settings",
 	"get-spark-status",
 	"pay-batch",
+	"pull-payment",
 }
 
 // BuildCommandRegistry returns a map of command name → Command.
@@ -96,6 +97,7 @@ func BuildCommandRegistry() map[string]Command {
 		"set-user-settings":                    {Name: "set-user-settings", Description: "Update user settings", Run: handleSetUserSettings},
 		"get-spark-status":                     {Name: "get-spark-status", Description: "Get Spark network service status", Run: handleGetSparkStatus},
 		"pay-batch":                            {Name: "pay-batch", Description: "Pay several recipients with one token transaction", Run: handlePayBatch},
+		"pull-payment":                         {Name: "pull-payment", Description: "Pull a payment from a wallet that granted this wallet an allowance", Run: handlePullPayment},
 	}
 }
 
@@ -116,6 +118,7 @@ func PrintHelp(registry map[string]Command) {
 	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
 	fmt.Printf("  %-40s %s\n", "webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)")
 	fmt.Printf("  %-40s %s\n", "stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)")
+	fmt.Printf("  %-40s %s\n", "token-allowances <subcommand>", "Token allowance commands (use 'token-allowances help' for details)")
 	fmt.Printf("  %-40s %s\n", "exit / quit", "Exit the CLI")
 	fmt.Printf("  %-40s %s\n", "help", "Show this help message")
 	fmt.Println()
@@ -700,6 +703,85 @@ func handlePayBatch(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 		return err
 	}
 	printValue(response.Payments)
+	return nil
+}
+
+// --- pull-payment ---
+
+func parsePullReceiver(s string) (breez_sdk_spark.PullReceiver, error) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) == 2 {
+		amount, ok := new(big.Int).SetString(parts[1], 10)
+		if !ok {
+			return breez_sdk_spark.PullReceiver{}, fmt.Errorf("invalid amount in receiver '%s'", s)
+		}
+		addr := parts[0]
+		return breez_sdk_spark.PullReceiver{Amount: amount, ReceiverAddress: &addr}, nil
+	}
+	amount, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return breez_sdk_spark.PullReceiver{}, fmt.Errorf("invalid amount in receiver '%s'", s)
+	}
+	return breez_sdk_spark.PullReceiver{Amount: amount}, nil
+}
+
+func handlePullPayment(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("pull-payment", flag.ContinueOnError)
+	var receiverArgs stringSliceFlag
+	fs.Var(&receiverArgs, "r", "Receiver: amount (this wallet) or address:amount (repeatable)")
+	fs.Var(&receiverArgs, "receiver", "Receiver")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 2 || len(receiverArgs) == 0 {
+		fmt.Println("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]")
+		fmt.Println("  Each receiver: amount (this wallet) or address:amount")
+		return nil
+	}
+
+	var receivers []breez_sdk_spark.PullReceiver
+	for _, raw := range receiverArgs {
+		r, err := parsePullReceiver(raw)
+		if err != nil {
+			return err
+		}
+		receivers = append(receivers, r)
+	}
+
+	prepareResponse, err := sdk.PreparePullPayment(breez_sdk_spark.PreparePullPaymentRequest{
+		PayerAddress:    positional[0],
+		TokenIdentifier: positional[1],
+		Receivers:       receivers,
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	fmt.Printf("Pulling %v base units of %s from %s\n",
+		prepareResponse.Amount, prepareResponse.TokenIdentifier, prepareResponse.PayerAddress)
+	for _, r := range prepareResponse.Receivers {
+		addr := ""
+		if r.ReceiverAddress != nil {
+			addr = *r.ReceiverAddress
+		}
+		fmt.Printf("  %v to %s\n", r.Amount, addr)
+	}
+
+	line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		return fmt.Errorf("pull cancelled")
+	}
+
+	response, pullErr := pullUntilSettled(sdk, prepareResponse)
+	if pullErr != nil {
+		return pullErr
+	}
+	printValue(response)
 	return nil
 }
 

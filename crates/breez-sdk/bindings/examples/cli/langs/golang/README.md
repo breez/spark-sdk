@@ -69,6 +69,7 @@ make clean            Remove binary
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
 | `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
+| `--real-time-sync-server-url` | network default | Real-time sync server URL, overrides the network default |
 | `--proxy` | - | Route every connection through a SOCKS5 proxy, as `HOST:PORT` (e.g. `127.0.0.1:9050` for a local Tor daemon) |
 | `--proxy-user` | - | Username for SOCKS5 authentication (requires `--proxy` and `--proxy-password`) |
 | `--proxy-password` | - | Password for SOCKS5 authentication (requires `--proxy` and `--proxy-user`) |
@@ -85,7 +86,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`, `prepare-payment-link`
 
@@ -98,6 +99,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 
 **Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
+
+**Token Allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`
 
 **Advanced**: `advanced recover-funds`, `advanced check-recover-funds`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state` (expert-only)
 
