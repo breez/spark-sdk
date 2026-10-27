@@ -1523,7 +1523,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
+source = "git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2#4dff8864c35b5d8c2543b725e2ef675efeb756b2"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1538,8 +1538,8 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2)",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4794,7 +4794,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
+source = "git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2#4dff8864c35b5d8c2543b725e2ef675efeb756b2"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -5700,13 +5700,13 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5#aea35af1628d1fb259ebf85266f96215cfdabcb5"
+source = "git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2#4dff8864c35b5d8c2543b725e2ef675efeb756b2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "encoding_rs",
  "futures",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=aea35af1628d1fb259ebf85266f96215cfdabcb5)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=4dff8864c35b5d8c2543b725e2ef675efeb756b2)",
  "mime",
  "reqwest",
  "serde",
