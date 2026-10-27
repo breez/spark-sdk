@@ -29,6 +29,10 @@ If the invoice also contains a Spark address, the payment can be sent directly v
 
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
+#### Lightning address and Cash App
+
+Lightning addresses are paid with [LNURL-Pay](lnurl_pay.md) rather than {{#name prepare_send_payment}}. This is also how to pay a Cash App user: a Cash App username prefixed with `$` (e.g. `$alice`) [parses](parse.md) to the user's Lightning address, `alice@cash.app`. A wallet holding a [stable balance](./stable_balance.md) converts it to Bitcoin for the payment automatically.
+
 ### Bitcoin
 
 For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
