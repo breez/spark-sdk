@@ -791,6 +791,28 @@ fn check_feature_clippy_coverage() -> Result<()> {
     Ok(())
 }
 
+/// Fails when a workspace package has no `rust-version`. Clippy takes the MSRV
+/// from it, so without one clippy lints the package as if every Rust release
+/// were available and suggests APIs that the workspace MSRV lacks.
+fn check_rust_version_declared() -> Result<()> {
+    let meta = workspace_metadata()?;
+    let missing: Vec<&str> = meta
+        .packages
+        .iter()
+        .filter(|p| meta.workspace_members.contains(&p.id) && p.rust_version.is_none())
+        .map(|p| p.name.as_str())
+        .collect();
+
+    if !missing.is_empty() {
+        bail!(
+            "these packages have no rust-version, so clippy lints them without the \
+             workspace MSRV: {}. Add `rust-version.workspace = true` to their [package].",
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Expands `seeds` into every feature of `pkg` they enable, directly or through
 /// another feature.
 fn expand_features(pkg: &Package, seeds: Vec<String>) -> HashSet<String> {
@@ -808,6 +830,7 @@ fn expand_features(pkg: &Package, seeds: Vec<String>) -> HashSet<String> {
 }
 
 fn clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
+    check_rust_version_declared()?;
     check_feature_clippy_coverage()?;
     let exclude_args = workspace_exclude_wasm();
 
