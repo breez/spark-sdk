@@ -547,6 +547,17 @@ impl Payment {
     }
 }
 
+impl From<&spark_wallet::QuotedLightningSend> for crate::LightningFeeQuote {
+    fn from(quote: &spark_wallet::QuotedLightningSend) -> Self {
+        Self {
+            serialized_manifest: hex::encode(&quote.issued_quote.serialized_manifest),
+            issuer_signature: hex::encode(&quote.issued_quote.issuer_signature),
+            expires_at: quote.expires_at,
+            payment_msats: quote.payment_msats,
+        }
+    }
+}
+
 impl From<Network> for SparkNetwork {
     fn from(network: Network) -> Self {
         match network {
@@ -841,6 +852,7 @@ mod tests {
 
     fn receiver(key: PublicKey, amount_sats: u64, completed: bool) -> TransferReceiver {
         TransferReceiver {
+            id: String::new(),
             identity_public_key: key,
             amount_sats,
             completed,

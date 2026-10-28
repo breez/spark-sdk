@@ -13,7 +13,7 @@ use tracing::info;
 
 /// Each test funds one wallet and its scenarios share it: the dev faucet is
 /// rate limited.
-const RECEIVES_FUNDING_SATS: u64 = 60_000;
+const RECEIVES_FUNDING_SATS: u64 = 80_000;
 const SENDS_FUNDING_SATS: u64 = 30_000;
 
 fn quoting() -> DevWalletOptions {
@@ -334,45 +334,28 @@ async fn a_quoted_send_pays_an_amountless_invoice(dev: &DevEnv, payer: &SdkInsta
     check_fee_shares(dev, &send.sent.id, send.quoted_fee).await
 }
 
-/// A quote fixes every amount it pays, so it cannot land on a requested total:
-/// a fees-included send goes unquoted and spends exactly that total.
-async fn a_fees_included_send_is_not_quoted_and_spends_the_total(
+/// A fees-included send to an amountless invoice is quoted GROSS: the quote
+/// pins what the wallet spends and pays the invoice what is left.
+async fn a_fees_included_send_is_quoted_gross_and_spends_the_total(
     dev: &DevEnv,
     payer: &SdkInstance,
 ) -> Result<()> {
     let mut payee = dev.wallet(DevWalletOptions::default()).await?;
-    let before = balance(payer).await?;
 
-    let response = invoice(&payee, None, None).await?;
-    let prepare_response = payer
-        .sdk
-        .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input {
-                input: response.payment_request,
-            },
-            amount: Some(4_000),
-            token_identifier: None,
-            conversion_options: None,
-            fee_policy: Some(FeePolicy::FeesIncluded),
-        })
-        .await?;
-    let SendPaymentMethod::Bolt11Invoice { fee_quote, .. } = &prepare_response.payment_method
-    else {
-        bail!("not a Lightning send");
-    };
-    assert!(fee_quote.is_none(), "a fees-included send was quoted");
-    let sent = pay(payer, prepare_response).await?;
+    let send = quoted_send(
+        payer,
+        &mut payee,
+        None,
+        Some(4_000),
+        Some(FeePolicy::FeesIncluded),
+    )
+    .await?;
 
-    let sent = settled(payer, &sent.id).await?;
-    let received = received(&mut payee).await?;
-    info!(
-        "Fees-included send: amount {} fees {}; received {}",
-        sent.amount, sent.fees, received.amount
-    );
-    assert_eq!(before - balance(payer).await?, 4_000);
-    assert_eq!(sent.amount + sent.fees, 4_000);
-    assert_eq!(received.amount, sent.amount);
-    Ok(())
+    assert_eq!(send.debited, 4_000);
+    assert_eq!(send.sent.amount + send.sent.fees, 4_000);
+    assert_eq!(u64::try_from(send.sent.fees)?, send.quoted_fee);
+    assert_eq!(send.received.amount, send.sent.amount);
+    check_fee_shares(dev, &send.sent.id, send.quoted_fee).await
 }
 
 async fn a_quoted_send_pays_a_quoted_invoice(dev: &DevEnv, payer: &SdkInstance) -> Result<()> {
@@ -477,23 +460,43 @@ async fn a_refused_quoted_commit_is_committed_again(
     Ok(())
 }
 
-async fn a_quoted_send_refuses_an_idempotency_key(dev: &DevEnv, payer: &SdkInstance) -> Result<()> {
-    let payee = dev.wallet(DevWalletOptions::default()).await?;
+/// The caller's idempotency key becomes the quoted transfer, so a retry with
+/// the same key finds the payment instead of paying again.
+async fn a_quoted_send_commits_its_idempotency_key(
+    dev: &DevEnv,
+    payer: &SdkInstance,
+) -> Result<()> {
+    let mut payee = dev.wallet(DevWalletOptions::default()).await?;
+    let key = uuid::Uuid::now_v7().to_string();
+    let before = balance(payer).await?;
 
     let response = invoice(&payee, Some(1_000), None).await?;
     let prepare_response = prepare(payer, &response.payment_request, None).await?;
-    let result = payer
-        .sdk
-        .send_payment(SendPaymentRequest {
+    let SendPaymentMethod::Bolt11Invoice { fee_quote, .. } = &prepare_response.payment_method
+    else {
+        bail!("not a Lightning send");
+    };
+    assert!(fee_quote.is_some(), "the send was not quoted");
+    let send = |prepare_response: PrepareSendPaymentResponse| {
+        payer.sdk.send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
-            idempotency_key: Some(uuid::Uuid::now_v7().to_string()),
+            idempotency_key: Some(key.clone()),
         })
-        .await;
+    };
+    let sent = send(prepare_response.clone()).await?.payment;
+    assert_eq!(sent.id, key, "the send did not commit the idempotency key");
+    let sent = settled(payer, &sent.id).await?;
+    assert_eq!(received(&mut payee).await?.amount, 1_000);
+    let debited = before - balance(payer).await?;
 
-    assert!(
-        matches!(result, Err(SdkError::InvalidInput(_))),
-        "{result:?}"
+    let retried = send(prepare_response).await?.payment;
+    assert_eq!(retried.id, key);
+    assert_eq!(retried.amount, sent.amount);
+    assert_eq!(
+        before - balance(payer).await?,
+        debited,
+        "the retry paid again"
     );
     Ok(())
 }
@@ -517,6 +520,46 @@ async fn send_over_spark(from: &SdkInstance, to: &SdkInstance, amount_sats: u64)
     pay(from, prepare_response).await?;
     wait_for_balance(&to.sdk, Some(initial + amount_sats), None, 120).await?;
     Ok(())
+}
+
+/// A wallet that quotes an invoice for another one attests to it; the payee,
+/// which made no request of its own, still sees the receive complete.
+async fn a_receive_quoted_for_another_wallet_completes_for_its_payee(
+    dev: &DevEnv,
+    payer: &SdkInstance,
+) -> Result<()> {
+    let creator = dev.wallet(quoting()).await?;
+    let mut payee = dev.wallet(DevWalletOptions::default()).await?;
+    let payee_key = payee
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .identity_pubkey;
+
+    let response = creator
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "dev delegated quoted receive".to_string(),
+                amount_sats: Some(10_000),
+                expiry_secs: None,
+                payment_hash: None,
+                receiver_identity_public_key: Some(payee_key),
+                fee_policy: None,
+            },
+        })
+        .await?;
+    let fee = fixed_fee(&response.fee);
+    assert!(fee > 0, "the receive was not quoted");
+    let prepare_response = prepare(payer, &response.payment_request, None).await?;
+    pay(payer, prepare_response).await?;
+
+    let payment = received(&mut payee).await?;
+    assert_eq!(payment.amount, 10_000);
+    assert_eq!(u64::try_from(payment.fees)?, fee);
+    check_fee_shares(dev, &payment.id, fee).await
 }
 
 /// A quoted HODL invoice for 10,000 sats net: the payer pays, the HTLC is
@@ -640,6 +683,7 @@ async fn quoted_receives_on_dev() -> Result<()> {
     an_amountless_quoted_receive_takes_a_rate_of_what_is_sent(&dev, &payer).await?;
     a_receive_with_a_spark_address_is_not_quoted(&dev).await?;
     a_quoted_hodl_receive_is_claimed_by_its_payee(&dev, &payer).await?;
+    a_receive_quoted_for_another_wallet_completes_for_its_payee(&dev, &payer).await?;
     a_hodl_receive_for_another_wallet_is_rejected(&dev).await
 }
 
@@ -655,10 +699,10 @@ async fn quoted_sends_on_dev() -> Result<()> {
 
     a_quoted_send_pays_the_invoice_and_the_fee(&dev, &payer).await?;
     a_quoted_send_pays_an_amountless_invoice(&dev, &payer).await?;
-    a_fees_included_send_is_not_quoted_and_spends_the_total(&dev, &payer).await?;
+    a_fees_included_send_is_quoted_gross_and_spends_the_total(&dev, &payer).await?;
     a_quoted_send_pays_a_quoted_invoice(&dev, &payer).await?;
     a_quoted_send_pays_a_quoted_amountless_invoice(&dev, &payer).await?;
-    a_quoted_send_refuses_an_idempotency_key(&dev, &payer).await?;
+    a_quoted_send_commits_its_idempotency_key(&dev, &payer).await?;
     a_refused_quoted_commit_is_committed_again(&dev, &funder).await
 }
 
@@ -766,5 +810,87 @@ async fn a_commit_after_the_quote_expires_on_dev() -> Result<()> {
     if outcome.starts_with("completed") {
         assert_eq!(received(&mut payee).await?.amount, 2_000);
     }
+    Ok(())
+}
+
+/// A commit the SSP keeps refusing strands the leaves until the operators
+/// release them, about an hour later. The SDK backs off between commits, stops
+/// once the SSP's retry window has passed, and records the payment failed when
+/// the leaves come back. Runs for over an hour, so only when asked for.
+#[test_log::test(tokio::test)]
+#[ignore = "waits about an hour for stranded leaves to return"]
+async fn a_refused_commit_fails_once_the_leaves_return_on_dev() -> Result<()> {
+    let Some(dev) = DevEnv::from_env() else {
+        return Ok(());
+    };
+    let proxy = SspFaultProxy::start(
+        &dev.spark_config.ssp_config.base_url,
+        "RequestLightningSend",
+    )
+    .await?;
+    proxy.rewrite_requests(|body| {
+        if let Some(total) = body.pointer_mut("/variables/input/committed_quote/total_sats") {
+            *total = serde_json::json!(total.as_u64().unwrap_or_default() + 1);
+        }
+    });
+    let payer = dev
+        .wallet(DevWalletOptions {
+            partner_jwt: true,
+            ssp_base_url: Some(proxy.base_url()),
+            ..Default::default()
+        })
+        .await?;
+    dev.fund(&payer, 10_000).await?;
+    let payee = dev.wallet(DevWalletOptions::default()).await?;
+    let before = balance(&payer).await?;
+
+    let response = invoice(&payee, Some(2_000), None).await?;
+    let prepare_response = prepare(&payer, &response.payment_request, None).await?;
+    let result = pay(&payer, prepare_response).await;
+    info!("Refused commit: {:?}", result.as_ref().err());
+    assert!(result.is_err(), "the tampered commit was accepted");
+
+    let started = std::time::Instant::now();
+    let outcome = wait_for(
+        || async {
+            payer.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let send = payer
+                .sdk
+                .list_payments(ListPaymentsRequest {
+                    type_filter: Some(vec![PaymentType::Send]),
+                    ..Default::default()
+                })
+                .await?
+                .payments
+                .into_iter()
+                .next();
+            let after = balance(&payer).await?;
+            let status = send.as_ref().map(|p| p.status);
+            info!(
+                "After {}s: send {status:?}, balance {after} of {before}, commits {}",
+                started.elapsed().as_secs(),
+                proxy.forwarded()
+            );
+            match status {
+                Some(PaymentStatus::Failed) if after == before => Ok(()),
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    bail!("send {status:?}, balance {after} of {before}")
+                }
+            }
+        },
+        100 * 60,
+    )
+    .await;
+    let commits = proxy.forwarded();
+    info!(
+        "Stranded leaves: {:?} after {}s, {commits} commits",
+        outcome.as_ref().err(),
+        started.elapsed().as_secs()
+    );
+    outcome?;
+    // Backing off from 30s doubling to 15 minutes, then stopping at the
+    // 45-minute window, keeps the commits to about a dozen.
+    assert!(commits <= 15, "{commits} commits");
     Ok(())
 }

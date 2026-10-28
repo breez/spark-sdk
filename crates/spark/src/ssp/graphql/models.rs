@@ -646,6 +646,9 @@ pub struct IssuedQuote {
 pub struct LightningQuote {
     pub issued_quote: IssuedQuote,
     pub attribution_status: SparkFeeAttributionStatus,
+    /// The payment a send quote prices, which its signature binds. `None` on
+    /// a receive quote.
+    pub payment_msats: Option<u64>,
 }
 
 /// A receive quote committed into a lightning receive request.

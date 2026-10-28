@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use spark_wallet::TransferId;
+use spark_wallet::{SendQuoteAmount, TransferId};
 use tracing::info;
 
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     SendPaymentOptions,
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
-    sdk::{BreezSdk, PendingLightningSend, issued_quote},
+    sdk::{BreezSdk, PendingLightningSend, issued_quote, payments::send_quote_amount},
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer, ExternalSignedQuote},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::fee_overpayment,
@@ -46,13 +46,17 @@ pub(super) async fn send(
     // (send-all-with-conversion via LNURL — overpays the invoice to drain the wallet).
     let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
 
-    // A quote prices the Lightning route for exactly the amount it names, so
-    // it is committed only for a Lightning send of that amount: never under an
-    // override, which overpays the invoice, nor for a fees-included total.
-    let quote =
-        fee_quote.filter(|_| !is_spark_route && amount_override.is_none() && !is_fees_included);
-    let amount_to_send = if quote.is_some() {
-        invoice_details.amount_msat.is_none().then_some(amount)
+    // A quote prices the Lightning route for exactly the amounts it names, so
+    // it is committed only for a Lightning send of those.
+    // TODO: a fees-included LNURL send overpays a fixed-amount invoice by its
+    // override and goes unquoted: a GROSS quote on such an invoice pays the
+    // excess to the payee, not to fees.
+    let quote = fee_quote.filter(|_| !is_spark_route && amount_override.is_none());
+    let amount_to_send = if let Some(quote) = quote {
+        invoice_details
+            .amount_msat
+            .is_none()
+            .then_some(u128::from(quote.payment_msats / 1000))
     } else if is_fees_included
         && (invoice_details.amount_msat.is_none() || amount_override.is_some())
     {
@@ -108,19 +112,16 @@ pub(super) async fn send(
 
     let payment = match quote {
         Some(fee_quote) => {
-            // The quote fixes the transfer id, so it cannot carry the caller's
-            // idempotency key as the id an unquoted send would.
-            if transfer_id.is_some() {
-                return Err(SdkError::InvalidInput(
-                    "An idempotency key is not supported for a send priced by a fee quote"
-                        .to_string(),
-                ));
-            }
             sdk.lightning_sender
                 .pay_and_persist_quoted_lightning_invoice(
                     &invoice_details.invoice.bolt11,
                     fee_quote,
-                    amount_to_send_sats,
+                    send_quote_amount(
+                        invoice_details,
+                        request.prepare_response.fee_policy,
+                        amount,
+                    )?,
+                    transfer_id,
                     displayed_amount,
                     completion_timeout_secs.unwrap_or(0).into(),
                 )
@@ -170,6 +171,7 @@ pub(super) async fn send_signed(
             amount_sats: Some(amount_to_send),
             displayed_amount: u128::from(amount_to_send),
             fee_quote: None,
+            recorded_at: 0,
         })
         .await;
 
@@ -212,7 +214,12 @@ pub(super) async fn send_signed_quoted(
 ) -> Result<SendPaymentResponse, SdkError> {
     let quote = sdk
         .spark_wallet
-        .verify_lightning_send_quote(bolt11, &issued_quote(fee_quote)?, Some(amount_sat))
+        .verify_lightning_send_quote(
+            bolt11,
+            &issued_quote(fee_quote)?,
+            fee_quote.payment_msats,
+            SendQuoteAmount::Payment(amount_sat),
+        )
         .await?;
     if prepare_transfer.transfer_id()? != quote.transfer_id {
         return Err(SdkError::InvalidInput(
@@ -235,6 +242,7 @@ pub(super) async fn send_signed_quoted(
             amount_sats: quote.amount_to_send,
             displayed_amount,
             fee_quote: Some(fee_quote.clone()),
+            recorded_at: 0,
         })
         .await;
 

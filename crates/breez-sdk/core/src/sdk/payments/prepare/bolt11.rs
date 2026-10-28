@@ -1,4 +1,4 @@
-use spark_wallet::{QuotedLightningSend, SparkAddress};
+use spark_wallet::{QuotedLightningSend, SendQuoteAmount, SparkAddress};
 use tracing::warn;
 
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     token_conversion::ConversionAmount,
 };
 
-use super::super::{conversion, validation};
+use super::super::{conversion, send_quote_amount, validation};
 
 /// Validates a Bolt11 invoice request.
 fn validate_request(
@@ -135,27 +135,19 @@ pub(super) async fn prepare(
     .await
 }
 
-/// A partner fee quote for paying `invoice`, for `amount_sats` when it carries
-/// no amount of its own. `None`, logged, when there is none to be had:
-/// attribution must never block a send, which then goes unquoted.
+/// A partner fee quote for paying `invoice` for `amount`. `None`, logged, when
+/// there is none to be had: attribution must never block a send, which then
+/// goes unquoted.
 async fn send_fee_quote(
     sdk: &BreezSdk,
     invoice: &str,
-    amount_sats: Option<u64>,
+    amount: SendQuoteAmount,
 ) -> Option<QuotedLightningSend> {
     sdk.spark_wallet
-        .fetch_lightning_send_quote(invoice, amount_sats)
+        .fetch_lightning_send_quote(invoice, amount, None)
         .await
         .inspect_err(|e| warn!("Sending without a fee quote: {e}"))
         .ok()
-}
-
-fn lightning_fee_quote(quote: &QuotedLightningSend) -> LightningFeeQuote {
-    LightningFeeQuote {
-        serialized_manifest: hex::encode(&quote.issued_quote.serialized_manifest),
-        issuer_signature: hex::encode(&quote.issued_quote.issuer_signature),
-        expires_at: quote.expires_at,
-    }
 }
 
 fn invoice_amount_sats(amount_msat: u64) -> u64 {
@@ -182,16 +174,10 @@ async fn prepare_sats_denominated(
             .map(|msat| u128::from(invoice_amount_sats(msat))))
         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-    let fee_quote = match (invoice.amount_msat, fee_policy) {
-        _ if !sdk.quote_lightning_sends => None,
-        (Some(_), _) => send_fee_quote(sdk, input, None).await,
-        (None, FeePolicy::FeesExcluded) => {
-            send_fee_quote(sdk, input, Some(amount.try_into()?)).await
-        }
-        // TODO: fees-included sends go unquoted. A quote fixes every edge exactly,
-        // so it cannot land on a requested total; that needs a quote taking a
-        // target total from Lightspark.
-        (None, FeePolicy::FeesIncluded) => None,
+    let fee_quote = if sdk.quote_lightning_sends {
+        send_fee_quote(sdk, input, send_quote_amount(invoice, fee_policy, amount)?).await
+    } else {
+        None
     };
     let lightning_fee_sats = match &fee_quote {
         Some(quote) => quote.total_sats.saturating_sub(quote.amount_sats),
@@ -226,7 +212,7 @@ async fn prepare_sats_denominated(
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
             lightning_fee_sats,
-            fee_quote: fee_quote.as_ref().map(lightning_fee_quote),
+            fee_quote: fee_quote.as_ref().map(LightningFeeQuote::from),
         },
         amount,
         token_identifier,

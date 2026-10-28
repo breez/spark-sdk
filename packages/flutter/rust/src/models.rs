@@ -1173,6 +1173,7 @@ pub struct _LightningFeeQuote {
     pub serialized_manifest: String,
     pub issuer_signature: String,
     pub expires_at: u64,
+    pub payment_msats: u64,
 }
 
 #[frb(mirror(SendPaymentMethod))]

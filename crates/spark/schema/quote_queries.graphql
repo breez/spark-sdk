@@ -15,5 +15,6 @@ mutation LightningSendQuote($input: LightningSendQuoteInput!) {
       issuer_signature
     }
     attribution_status
+    payment_msats
   }
 }

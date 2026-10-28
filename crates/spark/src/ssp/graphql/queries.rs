@@ -115,7 +115,7 @@ pub struct LightningReceiveQuote;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("SparkFeeAttributionStatus")
+    extern_enums("SparkAmountBasis", "SparkFeeAttributionStatus")
 )]
 pub struct LightningSendQuote;
 

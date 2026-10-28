@@ -770,9 +770,19 @@ input LightningSendQuoteInput {
   encoded_invoice: String!
 
   """
-  The amount to pay in sats, bound into the quote's signature. Set it only when the invoice carries no amount, and send the same amount when committing the quote.
+  The amount in satoshis. Required unless the invoice carries an amount and the basis is NET, and on NET it must equal the invoice amount when both are given.
   """
   amount_sats: Long = null
+
+  """
+  Which quantity amount_sats pins. NET (the default) keeps it the payment and quotes the fees on top. GROSS makes it the total the wallet spends and derives the payment from it.
+  """
+  amount_basis: SparkAmountBasis! = NET
+
+  """
+  An optional transfer id committed by the quote, as a canonical lowercase-hyphenated UUID. If not provided, one is generated on behalf of the quote.
+  """
+  transfer_id: String = null
 }
 
 type LightningSendQuoteOutput {
@@ -783,6 +793,11 @@ type LightningSendQuoteOutput {
   Whether the x-partner-jwt resolved to a fee attribution, and if not, why. Advisory: the applied markup lives in the signed manifest's fees.
   """
   attribution_status: SparkFeeAttributionStatus!
+
+  """
+  The payment this quote prices, in millisatoshis. The issuer signature binds this exact value.
+  """
+  payment_msats: Long!
 }
 
 input LightningSendFeeEstimateInput {

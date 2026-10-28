@@ -357,3 +357,22 @@ impl BreezSdk {
         polling::finalize_payment(self, payment).await
     }
 }
+
+/// What a send quote prices for a Lightning payment of `amount`: the invoice's
+/// own amount, or on an amountless invoice the payment (fees on top) or the
+/// total spent (fees included).
+pub(in crate::sdk) fn send_quote_amount(
+    invoice: &crate::Bolt11InvoiceDetails,
+    fee_policy: crate::FeePolicy,
+    amount: u128,
+) -> Result<spark_wallet::SendQuoteAmount, crate::error::SdkError> {
+    Ok(match (invoice.amount_msat, fee_policy) {
+        (Some(_), _) => spark_wallet::SendQuoteAmount::Invoice,
+        (None, crate::FeePolicy::FeesExcluded) => {
+            spark_wallet::SendQuoteAmount::Payment(amount.try_into()?)
+        }
+        (None, crate::FeePolicy::FeesIncluded) => {
+            spark_wallet::SendQuoteAmount::Total(amount.try_into()?)
+        }
+    })
+}

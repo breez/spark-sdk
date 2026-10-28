@@ -311,6 +311,7 @@ impl TransferService {
             .query_all_transfers(TransferFilter {
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 participant: Some(Participant::SenderIdentityPublicKey(
                     self.spark_signer
                         .get_identity_public_key()
@@ -703,6 +704,8 @@ impl TransferService {
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let own = self.spark_signer.get_identity_public_key().await?;
+        let transfer = &transfer.scoped_to(&own);
         let claim_lock = self.claim_locks.acquire(&transfer.id);
         self.claim_transfer_locked(&claim_lock, transfer, config)
             .await
@@ -1341,6 +1344,8 @@ impl TransferService {
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
+                // A payment's amount and fees read every receiver's part.
+                include_all_participants: true,
                 order: order.into(),
                 transfer_ids: transfer_ids.iter().map(|id| id.to_string()).collect(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
@@ -1512,6 +1517,7 @@ impl TransferService {
                 )),
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;

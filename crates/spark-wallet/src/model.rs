@@ -120,12 +120,10 @@ impl WalletTransfer {
         };
         let is_ssp_transfer = value.receiver_identity_public_key == ssp_public_key
             || value.sender_identity_public_key == ssp_public_key;
-        // The operators show a receiver only its own row and leaves, so a
-        // share is a row for less than the transfer's total.
+        let total_value_sat = value.total_sats();
         let own_share = value
-            .receivers
-            .iter()
-            .find(|r| r.identity_public_key == our_public_key && r.amount_sats < value.total_value)
+            .receiver(&our_public_key)
+            .filter(|r| r.amount_sats < total_value_sat)
             .map(|r| TransferShare {
                 amount_sat: r.amount_sats,
                 claimed: r.completed,
@@ -135,7 +133,7 @@ impl WalletTransfer {
             sender_id: value.sender_identity_public_key,
             receiver_id: value.receiver_identity_public_key,
             status: value.status,
-            total_value_sat: value.total_value,
+            total_value_sat,
             expiry_time: value
                 .expiry_time
                 .and_then(|t| UNIX_EPOCH.checked_add(Duration::from_secs(t))),
@@ -537,6 +535,7 @@ mod tests {
 
     fn split_transfer(ssp: PublicKey, payee: PublicKey, ours: PublicKey) -> Transfer {
         let receiver = |identity_public_key, amount_sats| TransferReceiver {
+            id: String::new(),
             identity_public_key,
             amount_sats,
             completed: false,

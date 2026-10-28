@@ -499,13 +499,55 @@ pub struct Transfer {
     pub transfer_type: TransferType,
     pub spark_invoice: Option<String>,
     /// The receivers with the part each gets. A payment that also pays out
-    /// fees has several, but the operators show a receiver only its own.
+    /// fees has several; a query without `include_all_participants` shows a
+    /// receiver only its own.
     pub receivers: Vec<TransferReceiver>,
+}
+
+impl Transfer {
+    /// What the transfer carries in all: its receivers' parts when the
+    /// operators show them, and the deprecated total otherwise.
+    pub fn total_sats(&self) -> u64 {
+        if self.receivers.is_empty() {
+            return self.total_value;
+        }
+        let parts = self
+            .receivers
+            .iter()
+            .fold(0u64, |sum, r| sum.saturating_add(r.amount_sats));
+        // A view narrowed to one receiver still reports the whole in the
+        // deprecated total.
+        parts.max(self.total_value)
+    }
+
+    /// `receiver`'s part, when the operators show it.
+    pub fn receiver(&self, receiver: &PublicKey) -> Option<&TransferReceiver> {
+        self.receivers
+            .iter()
+            .find(|r| r.identity_public_key == *receiver)
+    }
+
+    /// The transfer as `receiver` claims it: only the leaves naming its
+    /// receiver row, or every leaf when the leaves name no receiver. The
+    /// operators reject a claim of anything but a receiver's whole own set.
+    pub fn scoped_to(&self, receiver: &PublicKey) -> Transfer {
+        let own_id = self.receiver(receiver).map(|r| r.id.clone());
+        let mut scoped = self.clone();
+        scoped
+            .leaves
+            .retain(|leaf| match (&leaf.transfer_receiver_id, &own_id) {
+                (Some(leaf_receiver), Some(own)) => leaf_receiver == own,
+                _ => true,
+            });
+        scoped
+    }
 }
 
 /// One receiver of a transfer and its part of the transfer's value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferReceiver {
+    /// What this receiver's leaves name as their `transfer_receiver_id`.
+    pub id: String,
     pub identity_public_key: PublicKey,
     pub amount_sats: u64,
     /// Whether this receiver has claimed its part.
@@ -517,6 +559,7 @@ impl TryFrom<operator_rpc::spark::TransferReceiver> for TransferReceiver {
 
     fn try_from(receiver: operator_rpc::spark::TransferReceiver) -> Result<Self, Self::Error> {
         Ok(TransferReceiver {
+            id: receiver.id.clone(),
             identity_public_key: PublicKey::from_slice(&receiver.identity_public_key).map_err(
                 |_| ServiceError::Generic("Invalid transfer receiver public key".to_string()),
             )?,
@@ -630,6 +673,7 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             sender_identity_public_key,
             receiver_identity_public_key,
             status,
+            #[allow(deprecated)]
             total_value: transfer.total_value,
             expiry_time,
             leaves,
@@ -650,6 +694,9 @@ pub struct TransferLeaf {
     pub intermediate_refund_tx: Transaction,
     pub intermediate_direct_refund_tx: Option<Transaction>,
     pub intermediate_direct_from_cpfp_refund_tx: Option<Transaction>,
+    /// The receiver of a transfer with several receivers this leaf goes to.
+    /// `None` when the operators name none.
+    pub transfer_receiver_id: Option<String>,
 }
 
 impl TransferLeaf {
@@ -727,6 +774,7 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
             intermediate_refund_tx,
             intermediate_direct_refund_tx,
             intermediate_direct_from_cpfp_refund_tx,
+            transfer_receiver_id: Some(leaf.transfer_receiver_id).filter(|id| !id.is_empty()),
         })
     }
 }
@@ -2193,5 +2241,94 @@ mod tests {
             "transfer type",
         );
         assert_eq!(transfer_type, TransferType::PreimageSwap);
+    }
+}
+
+#[cfg(test)]
+mod transfer_receiver_tests {
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+    use super::{Transfer, TransferId, TransferReceiver, TransferStatus, TransferType};
+
+    fn key(seed: u8) -> PublicKey {
+        SecretKey::from_slice(&[seed; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    fn receiver(id: &str, seed: u8, amount_sats: u64) -> TransferReceiver {
+        TransferReceiver {
+            id: id.to_string(),
+            identity_public_key: key(seed),
+            amount_sats,
+            completed: false,
+        }
+    }
+
+    fn transfer(total_value: u64, receivers: Vec<TransferReceiver>) -> Transfer {
+        Transfer {
+            id: TransferId::generate(),
+            sender_identity_public_key: key(9),
+            receiver_identity_public_key: key(1),
+            status: TransferStatus::SenderKeyTweaked,
+            total_value,
+            expiry_time: None,
+            leaves: Vec::new(),
+            created_time: None,
+            updated_time: None,
+            transfer_type: TransferType::PreimageSwap,
+            spark_invoice: None,
+            receivers,
+        }
+    }
+
+    fn leaf(id: &str, receiver_id: Option<&str>) -> super::TransferLeaf {
+        super::TransferLeaf {
+            leaf: crate::tree::tests::create_test_tree_node(id, 1_000),
+            secret_cipher: Vec::new(),
+            signature: None,
+            intermediate_refund_tx: bitcoin::Transaction {
+                version: bitcoin::transaction::Version::TWO,
+                lock_time: bitcoin::absolute::LockTime::ZERO,
+                input: Vec::new(),
+                output: Vec::new(),
+            },
+            intermediate_direct_refund_tx: None,
+            intermediate_direct_from_cpfp_refund_tx: None,
+            transfer_receiver_id: receiver_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_receiver_claims_only_its_own_leaves() {
+        let mut shared = transfer(0, vec![receiver("a", 1, 1_000), receiver("b", 2, 1_000)]);
+        shared.leaves = vec![leaf("leaf-a", Some("a")), leaf("leaf-b", Some("b"))];
+
+        let scoped = shared.scoped_to(&key(2));
+
+        let ids: Vec<String> = scoped
+            .leaves
+            .iter()
+            .map(|l| l.leaf.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["leaf-b".to_string()]);
+    }
+
+    #[test]
+    fn leaves_naming_no_receiver_are_all_claimed() {
+        let mut single = transfer(2_000, vec![receiver("a", 1, 2_000)]);
+        single.leaves = vec![leaf("leaf-1", None), leaf("leaf-2", None)];
+
+        assert_eq!(single.scoped_to(&key(1)).leaves.len(), 2);
+    }
+
+    #[test]
+    fn the_total_is_every_receivers_part() {
+        let full = transfer(0, vec![receiver("a", 1, 10_000), receiver("b", 2, 200)]);
+        assert_eq!(full.total_sats(), 10_200);
+        // A view narrowed to one receiver keeps the whole in the deprecated total.
+        let narrowed = transfer(10_200, vec![receiver("b", 2, 200)]);
+        assert_eq!(narrowed.total_sats(), 10_200);
+        assert_eq!(transfer(5_000, Vec::new()).total_sats(), 5_000);
     }
 }

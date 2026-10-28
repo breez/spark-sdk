@@ -352,17 +352,24 @@ impl GraphQLClient {
         )
     }
 
-    /// Request a signed fee quote for paying `encoded_invoice`, for
-    /// `amount_sats` when the invoice carries no amount.
+    /// Request a signed fee quote for paying `encoded_invoice`. `amount_sats`
+    /// is read on `amount_basis`: the payment on NET, needed only when the
+    /// invoice carries no amount, or the total spent on GROSS.
+    /// `transfer_id` is the transfer the quote commits, chosen by the SSP when
+    /// unset.
     pub async fn lightning_send_quote(
         &self,
         encoded_invoice: &str,
         amount_sats: Option<u64>,
+        amount_basis: ReceiveAmountBasis,
+        transfer_id: Option<String>,
     ) -> GraphQLResult<LightningQuote> {
         let vars = lightning_send_quote::Variables {
             input: lightning_send_quote::LightningSendQuoteInput {
                 encoded_invoice: encoded_invoice.to_string(),
                 amount_sats,
+                amount_basis,
+                transfer_id,
             },
         };
 
@@ -370,11 +377,13 @@ impl GraphQLClient {
             .post_query::<queries::LightningSendQuote, _>(vars)
             .await?
             .lightning_send_quote;
-        lightning_quote(
+        let mut lightning_quote = lightning_quote(
             &quote.issued_quote.serialized_manifest,
             &quote.issued_quote.issuer_signature,
             quote.attribution_status,
-        )
+        )?;
+        lightning_quote.payment_msats = Some(quote.payment_msats);
+        Ok(lightning_quote)
     }
 
     /// [`request_lightning_receive`](Self::request_lightning_receive) committing
@@ -681,6 +690,7 @@ fn lightning_quote(
             issuer_signature: decode("issuer_signature", issuer_signature)?,
         },
         attribution_status,
+        payment_msats: None,
     })
 }
 
@@ -1219,6 +1229,7 @@ mod tests {
             LightningQuote {
                 issued_quote: issued_quote(),
                 attribution_status: SparkFeeAttributionStatus::Attributed,
+                payment_msats: None,
             }
         );
         let body = &http.bodies()[0];
@@ -1239,42 +1250,61 @@ mod tests {
         let (client, http) = client_answering(
             r#"{"data":{"lightning_send_quote":{
                 "issued_quote":{"serialized_manifest":"0801","issuer_signature":"3044"},
-                "attribution_status":"NOT_PROVIDED"}}}"#,
+                "attribution_status":"NOT_PROVIDED","payment_msats":1000000}}}"#,
         )
         .await;
 
-        let quote = client.lightning_send_quote("lnbcrt1", None).await.unwrap();
+        let quote = client
+            .lightning_send_quote("lnbcrt1", None, ReceiveAmountBasis::Net, None)
+            .await
+            .unwrap();
 
         assert_eq!(quote.issued_quote, issued_quote());
         assert_eq!(
             quote.attribution_status,
             SparkFeeAttributionStatus::NotProvided
         );
+        assert_eq!(quote.payment_msats, Some(1_000_000));
         let body = &http.bodies()[0];
         assert_eq!(body["operationName"], "LightningSendQuote");
         assert_eq!(
             body["variables"]["input"],
-            serde_json::json!({ "encoded_invoice": "lnbcrt1", "amount_sats": null })
+            serde_json::json!({
+                "encoded_invoice": "lnbcrt1",
+                "amount_sats": null,
+                "amount_basis": "NET",
+                "transfer_id": null,
+            })
         );
     }
 
     #[async_test_all]
-    async fn a_send_quote_for_an_amountless_invoice_names_the_amount() {
+    async fn a_send_quote_for_a_total_names_it_and_the_transfer() {
         let (client, http) = client_answering(
             r#"{"data":{"lightning_send_quote":{
                 "issued_quote":{"serialized_manifest":"0801","issuer_signature":"3044"},
-                "attribution_status":"ATTRIBUTED"}}}"#,
+                "attribution_status":"ATTRIBUTED","payment_msats":4912000}}}"#,
         )
         .await;
 
         client
-            .lightning_send_quote("lnbcrt1", Some(5_000))
+            .lightning_send_quote(
+                "lnbcrt1",
+                Some(5_000),
+                ReceiveAmountBasis::Gross,
+                Some("01a182d9-7e67-7ac1-a035-808c916b6dbe".to_string()),
+            )
             .await
             .unwrap();
 
         assert_eq!(
             http.bodies()[0]["variables"]["input"],
-            serde_json::json!({ "encoded_invoice": "lnbcrt1", "amount_sats": 5_000 })
+            serde_json::json!({
+                "encoded_invoice": "lnbcrt1",
+                "amount_sats": 5_000,
+                "amount_basis": "GROSS",
+                "transfer_id": "01a182d9-7e67-7ac1-a035-808c916b6dbe",
+            })
         );
     }
 

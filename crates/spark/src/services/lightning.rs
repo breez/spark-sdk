@@ -283,6 +283,18 @@ struct AcceptedReceiveQuote {
     fee: ReceiveQuoteFee,
 }
 
+/// What a send quote prices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendQuoteAmount {
+    /// The invoice's own amount, the fees on top.
+    Invoice,
+    /// What an amountless invoice is paid, the fees on top.
+    Payment(u64),
+    /// What the wallet spends in all on an amountless invoice: the payment is
+    /// what is left after the fees.
+    Total(u64),
+}
+
 /// A send quote checked against the invoice it pays, ready to fund.
 #[derive(Debug, Clone)]
 pub struct QuotedLightningSend {
@@ -290,8 +302,9 @@ pub struct QuotedLightningSend {
     /// The transfer the quote is single-use for: the send is keyed on it.
     pub transfer_id: TransferId,
     pub payment_hash: sha256::Hash,
-    /// What the invoice is paid: its own amount, or the one the quote was
-    /// issued for on an amountless invoice.
+    /// The payment the quote prices, which its signature binds.
+    pub payment_msats: u64,
+    /// `payment_msats` in sats, rounded up.
     pub amount_sats: u64,
     /// The amount of an amountless invoice, which the SSP is told again when
     /// the send is committed. `None` for an invoice that carries its own.
@@ -952,22 +965,34 @@ impl LightningService {
         .map(Some)
     }
 
-    /// Asks the SSP for a fee quote on paying `invoice` and checks it.
-    /// `amount_sats` is what to pay an amountless invoice, and must be unset
-    /// for an invoice that carries its own amount.
+    /// Asks the SSP for a fee quote on paying `invoice` for `amount`, committing
+    /// `transfer_id` when set, and checks it.
     pub async fn fetch_lightning_send_quote(
         &self,
         invoice: &str,
-        amount_sats: Option<u64>,
+        amount: SendQuoteAmount,
+        transfer_id: Option<&TransferId>,
     ) -> Result<QuotedLightningSend, ServiceError> {
+        let (amount_sats, basis) = match amount {
+            SendQuoteAmount::Invoice => (None, ReceiveAmountBasis::Net),
+            SendQuoteAmount::Payment(sats) => (Some(sats), ReceiveAmountBasis::Net),
+            SendQuoteAmount::Total(sats) => (Some(sats), ReceiveAmountBasis::Gross),
+        };
         let invoice_has_amount = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?
             .amount_milli_satoshis()
             .is_some_and(|msat| msat > 0);
-        // The SSP refuses an amount beside the invoice's own.
+        // The SSP refuses a payment amount beside the invoice's own.
+        let amount_sats =
+            amount_sats.filter(|_| !invoice_has_amount || basis == ReceiveAmountBasis::Gross);
         let quote = self
             .ssp_client
-            .lightning_send_quote(invoice, amount_sats.filter(|_| !invoice_has_amount))
+            .lightning_send_quote(
+                invoice,
+                amount_sats,
+                basis,
+                transfer_id.map(ToString::to_string),
+            )
             .await?;
         if quote.attribution_status != SparkFeeAttributionStatus::Attributed {
             debug!(
@@ -975,21 +1000,29 @@ impl LightningService {
                 quote.attribution_status
             );
         }
-        self.verify_lightning_send_quote(invoice, &quote.issued_quote, amount_sats)
-            .await
+        let payment_msats = quote
+            .payment_msats
+            .ok_or_else(|| QuoteError::invalid("the send quote names no payment"))?;
+        let quoted = self
+            .verify_lightning_send_quote(invoice, &quote.issued_quote, payment_msats, amount)
+            .await?;
+        if transfer_id.is_some_and(|id| *id != quoted.transfer_id) {
+            return Err(QuoteError::invalid("the quote commits another transfer").into());
+        }
+        Ok(quoted)
     }
 
     /// Checks a send quote before any leaf is funded against it: the SSP signed
-    /// it for this invoice and amount, it is for this network and unexpired,
-    /// and this wallet is its sole sender. Re-run on a quote carried over from
-    /// elsewhere, since only the SSP signature vouches for it. `amount_sats`
-    /// is what an amountless invoice is paid; on an invoice that carries its
-    /// own amount it may only repeat it.
+    /// it for this invoice and `payment_msats`, which is the payment `amount`
+    /// asks for, it is for this network and unexpired, and this wallet is its
+    /// sole sender. Re-run on a quote carried over from elsewhere, since only
+    /// the SSP signature vouches for it.
     pub async fn verify_lightning_send_quote(
         &self,
         invoice: &str,
         issued_quote: &IssuedQuote,
-        amount_sats: Option<u64>,
+        payment_msats: u64,
+        amount: SendQuoteAmount,
     ) -> Result<QuotedLightningSend, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
@@ -998,38 +1031,60 @@ impl LightningService {
                 "Invoice network does not match".to_string(),
             ));
         }
-        let (amount_msat, amount_to_send) = match decoded_invoice
+        let manifest = decode_manifest(issued_quote)?;
+        let total_sats = manifest_gross_sats(&manifest)?;
+        let invoice_msats = decoded_invoice
             .amount_milli_satoshis()
-            .filter(|msat| *msat > 0)
-        {
-            Some(msat) => {
-                if amount_sats.is_some_and(|sats| sats != msat.div_ceil(1000)) {
-                    return Err(
-                        QuoteError::invalid("the amount differs from the invoice's own").into(),
-                    );
-                }
-                (msat, None)
+            .filter(|msat| *msat > 0);
+        let expected_msats = match (invoice_msats, amount) {
+            (Some(msats), SendQuoteAmount::Invoice) => Some(msats),
+            (Some(msats), SendQuoteAmount::Payment(sats)) if sats == msats.div_ceil(1000) => {
+                Some(msats)
             }
-            None => {
-                let sats = amount_sats.filter(|sats| *sats > 0).ok_or_else(|| {
-                    QuoteError::invalid("an amountless invoice is quoted for an amount")
-                })?;
-                (sats.saturating_mul(1000), Some(sats))
+            (None, SendQuoteAmount::Payment(sats)) if sats > 0 => Some(sats.saturating_mul(1000)),
+            (None, SendQuoteAmount::Total(sats)) => {
+                if total_sats != sats {
+                    return Err(QuoteError::invalid(format!(
+                        "the quote spends {total_sats} sats, not the {sats} asked for"
+                    ))
+                    .into());
+                }
+                None
+            }
+            _ => {
+                return Err(
+                    QuoteError::invalid("the quoted amount does not fit the invoice").into(),
+                );
             }
         };
-        let amount_sats = amount_msat.div_ceil(1000);
+        if expected_msats.is_some_and(|msats| msats != payment_msats) || payment_msats == 0 {
+            return Err(QuoteError::invalid(format!(
+                "the quote prices a payment of {payment_msats} msat"
+            ))
+            .into());
+        }
+        // An amountless invoice is paid the amount the commit names, in sats.
+        let amount_to_send = match invoice_msats {
+            Some(_) => None,
+            None if payment_msats.is_multiple_of(1000) => Some(payment_msats / 1000),
+            None => {
+                return Err(
+                    QuoteError::invalid("an amountless invoice is paid in whole satoshis").into(),
+                );
+            }
+        };
+        let amount_sats = payment_msats.div_ceil(1000);
         let payment_hash = *decoded_invoice.payment_hash();
 
         verify_identity_signature(
             &send_issuance_digest(
                 &issued_quote.serialized_manifest,
                 &payment_hash.to_byte_array(),
-                amount_msat,
+                payment_msats,
             )?,
             &issued_quote.issuer_signature,
             &self.ssp_client.identity_public_key(),
         )?;
-        let manifest = decode_manifest(issued_quote)?;
         self.check_quote_terms(&manifest)?;
         let sender = self.spark_signer.get_identity_public_key().await?;
         validate_quoted_send_manifest(&manifest, amount_sats, &sender)?;
@@ -1039,9 +1094,10 @@ impl LightningService {
             transfer_id: TransferId::from_str(&manifest.transfer_id)
                 .map_err(|e| QuoteError::invalid(format!("quote transfer id: {e}")))?,
             payment_hash,
+            payment_msats,
             amount_sats,
             amount_to_send,
-            total_sats: manifest_gross_sats(&manifest)?,
+            total_sats,
             buckets: manifest_send_buckets(&manifest)?,
             expires_at: quote_expiry(&manifest)?,
             manifest,
@@ -2513,13 +2569,14 @@ mod quoted_payment_tests {
             .to_vec()
     }
 
-    fn send_quote_response(manifest: &[u8], signature: &[u8]) -> Value {
+    fn send_quote_response(manifest: &[u8], signature: &[u8], payment_msats: u64) -> Value {
         json!({"data": {"lightning_send_quote": {
             "issued_quote": {
                 "serialized_manifest": hex::encode(manifest),
                 "issuer_signature": hex::encode(signature),
             },
             "attribution_status": "ATTRIBUTED",
+            "payment_msats": payment_msats,
         }}})
     }
 
@@ -2537,7 +2594,7 @@ mod quoted_payment_tests {
             "LightningSendQuote" => {
                 let manifest = manifest(quote_for.lock().unwrap().unwrap());
                 let signature = issue(signer_seed, &manifest, payment_hash, signed_msats);
-                send_quote_response(&manifest, &signature)
+                send_quote_response(&manifest, &signature, signed_msats)
             }
             other => panic!("unexpected {other}"),
         }))
@@ -2552,7 +2609,11 @@ mod quoted_payment_tests {
             quoting_service(|me| send_manifest(me, 600), SSP_SEED, INVOICE_MSATS).await;
 
         let quote = service
-            .fetch_lightning_send_quote(&bolt11(payment_hash, Some(INVOICE_MSATS)), None)
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                SendQuoteAmount::Invoice,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2584,7 +2645,11 @@ mod quoted_payment_tests {
     ) {
         let (service, _, payment_hash) = quoting_service(manifest, signer_seed, signed_msats).await;
         let result = service
-            .fetch_lightning_send_quote(&bolt11(payment_hash, invoice_msats), amount_sats)
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, invoice_msats),
+                amount_sats.map_or(SendQuoteAmount::Invoice, SendQuoteAmount::Payment),
+                None,
+            )
             .await;
         assert!(result.is_err(), "{result:?}");
     }
@@ -2663,6 +2728,83 @@ mod quoted_payment_tests {
         .await;
     }
 
+    /// A send quote on an amountless invoice whose SSP prices `payment_msats`,
+    /// recording what each quote request asked for.
+    async fn amountless_quoting_service(
+        payment_msats: u64,
+    ) -> (LightningService, Arc<ScriptedSsp>, sha256::Hash) {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let identity = Arc::new(Mutex::new(None::<PublicKey>));
+        let quote_for = Arc::clone(&identity);
+        let (service, ssp, me) = service(Box::new(move |op, _| match op {
+            "LightningSendQuote" => {
+                let manifest = send_manifest(quote_for.lock().unwrap().unwrap(), 600);
+                let signature = issue(SSP_SEED, &manifest, payment_hash, payment_msats);
+                send_quote_response(&manifest, &signature, payment_msats)
+            }
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        *identity.lock().unwrap() = Some(me);
+        (service, ssp, payment_hash)
+    }
+
+    #[async_test_all]
+    async fn a_total_is_quoted_gross_and_pays_what_is_left_after_fees() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Total(101_500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let (_, input) = &ssp.operations()[0];
+        assert_eq!(input["amount_basis"], "GROSS");
+        assert_eq!(input["amount_sats"], 101_500);
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.amount_to_send, Some(100_000));
+    }
+
+    #[async_test_all]
+    async fn a_quote_spending_other_than_the_total_is_refused() {
+        let (service, _, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Total(101_000),
+                None,
+            )
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[async_test_all]
+    async fn a_quote_commits_the_transfer_asked_for() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+        let invoice = bolt11(payment_hash, Some(INVOICE_MSATS));
+        let asked = TransferId::from_str("0197f9a0-0000-7000-8000-000000000002").unwrap();
+
+        let quote = service
+            .fetch_lightning_send_quote(&invoice, SendQuoteAmount::Invoice, Some(&asked))
+            .await
+            .unwrap();
+        assert_eq!(quote.transfer_id, asked);
+        assert_eq!(ssp.operations()[0].1["transfer_id"], asked.to_string());
+
+        // The scripted SSP commits its own transfer whatever it is asked.
+        let other = TransferId::generate();
+        let result = service
+            .fetch_lightning_send_quote(&invoice, SendQuoteAmount::Invoice, Some(&other))
+            .await;
+        assert!(result.is_err(), "{result:?}");
+    }
+
     #[async_test_all]
     async fn an_amountless_invoice_is_quoted_for_the_amount_sent() {
         let payment_hash = sha256::Hash::hash(b"quoted send");
@@ -2672,7 +2814,7 @@ mod quoted_payment_tests {
             "LightningSendQuote" => {
                 let manifest = send_manifest(quote_for.lock().unwrap().unwrap(), 600);
                 let signature = issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS);
-                send_quote_response(&manifest, &signature)
+                send_quote_response(&manifest, &signature, INVOICE_MSATS)
             }
             other => panic!("unexpected {other}"),
         }))
@@ -2680,7 +2822,11 @@ mod quoted_payment_tests {
         *identity.lock().unwrap() = Some(me);
 
         let quote = service
-            .fetch_lightning_send_quote(&bolt11(payment_hash, None), Some(100_000))
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Payment(100_000),
+                None,
+            )
             .await
             .unwrap();
 

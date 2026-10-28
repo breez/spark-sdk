@@ -208,17 +208,19 @@ impl ServiceProvider {
             .await?)
     }
 
-    /// Request a signed fee quote for paying `encoded_invoice`, for
-    /// `amount_sats` when the invoice carries no amount.
+    /// Request a signed fee quote for paying `encoded_invoice`, with
+    /// `amount_sats` read on `amount_basis`, committing `transfer_id` when set.
     #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn lightning_send_quote(
         &self,
         encoded_invoice: &str,
         amount_sats: Option<u64>,
+        amount_basis: ReceiveAmountBasis,
+        transfer_id: Option<String>,
     ) -> ServiceProviderResult<LightningQuote> {
         Ok(self
             .gql_client
-            .lightning_send_quote(encoded_invoice, amount_sats)
+            .lightning_send_quote(encoded_invoice, amount_sats, amount_basis, transfer_id)
             .await?)
     }
 

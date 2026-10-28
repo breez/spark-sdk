@@ -143,15 +143,15 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
                 return build_spark_package(sdk, prepare_response, &receiver, None).await;
             }
             if let Some(fee_quote) = fee_quote {
-                let amount_sats = match invoice_details.amount_msat {
-                    Some(_) => None,
-                    None => Some(prepare_response.amount.try_into()?),
-                };
                 return build_quoted_lightning_package(
                     sdk,
                     invoice_details,
                     fee_quote,
-                    amount_sats,
+                    super::send_quote_amount(
+                        invoice_details,
+                        prepare_response.fee_policy,
+                        prepare_response.amount,
+                    )?,
                     completion_timeout_secs,
                 )
                 .await;
@@ -290,13 +290,18 @@ pub(in crate::sdk) async fn build_quoted_lightning_package(
     sdk: &BreezSdk,
     invoice_details: &crate::Bolt11InvoiceDetails,
     fee_quote: &LightningFeeQuote,
-    amount_sats: Option<u64>,
+    amount: spark_wallet::SendQuoteAmount,
     completion_timeout_secs: Option<u32>,
 ) -> Result<UnsignedTransferPackage, SdkError> {
     let bolt11 = &invoice_details.invoice.bolt11;
     let quote = sdk
         .spark_wallet
-        .verify_lightning_send_quote(bolt11, &issued_quote(fee_quote)?, amount_sats)
+        .verify_lightning_send_quote(
+            bolt11,
+            &issued_quote(fee_quote)?,
+            fee_quote.payment_msats,
+            amount,
+        )
         .await?;
     let prep = sdk
         .spark_wallet

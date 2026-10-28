@@ -1423,6 +1423,7 @@ pub struct LightningFeeQuote {
     pub serialized_manifest: String,
     pub issuer_signature: String,
     pub expires_at: u64,
+    pub payment_msats: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentMethod)]

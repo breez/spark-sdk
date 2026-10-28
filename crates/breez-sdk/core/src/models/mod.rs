@@ -2109,6 +2109,10 @@ pub struct LightningFeeQuote {
     pub issuer_signature: String,
     /// When the quote expires, in seconds since the epoch.
     pub expires_at: u64,
+    /// The payment the quote prices, in millisatoshis, which its signature
+    /// binds.
+    #[serde(default)]
+    pub payment_msats: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

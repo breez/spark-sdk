@@ -28,6 +28,7 @@ use spark::operator::rpc::spark::{
     query_nodes_request::Source as QueryNodesSource,
 };
 use spark::quote::ReceiveAmountBasis;
+use spark::services::SendQuoteAmount;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -731,16 +732,17 @@ impl SparkWallet {
         self.finalize_pay_lightning(lightning_payment).await
     }
 
-    /// Asks the SSP for a fee quote on paying `invoice` and checks it, for
-    /// `amount_sats` when the invoice carries no amount.
+    /// Asks the SSP for a fee quote on paying `invoice` for `amount`, committing
+    /// `transfer_id` when set, and checks it.
     pub async fn fetch_lightning_send_quote(
         &self,
         invoice: &str,
-        amount_sats: Option<u64>,
+        amount: SendQuoteAmount,
+        transfer_id: Option<&TransferId>,
     ) -> Result<QuotedLightningSend, SparkWalletError> {
         Ok(self
             .lightning_service
-            .fetch_lightning_send_quote(invoice, amount_sats)
+            .fetch_lightning_send_quote(invoice, amount, transfer_id)
             .await?)
     }
 
@@ -750,11 +752,12 @@ impl SparkWallet {
         &self,
         invoice: &str,
         issued_quote: &IssuedQuote,
-        amount_sats: Option<u64>,
+        payment_msats: u64,
+        amount: SendQuoteAmount,
     ) -> Result<QuotedLightningSend, SparkWalletError> {
         Ok(self
             .lightning_service
-            .verify_lightning_send_quote(invoice, issued_quote, amount_sats)
+            .verify_lightning_send_quote(invoice, issued_quote, payment_msats, amount)
             .await?)
     }
 
