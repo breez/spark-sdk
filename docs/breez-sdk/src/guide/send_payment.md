@@ -41,23 +41,7 @@ Fee quotes are short lived. If one is close to expiry by the time you send, the 
 
 #### Silent payment address
 
-A silent payment address ([BIP352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki)) is a reusable address for on-chain payments. Each payment to it has its own one-time taproot output, and an observer of the chain cannot link those outputs to the address. The recipient can therefore share the address publicly.
-
-The SDK can send to silent payment addresses, but it cannot receive silent payments. It recognizes only version 0 addresses:
-
-- `sp1q...` on mainnet
-- `tsp1q...` on signet
-- `sprt1q...` on regtest (BIP352 has no prefix for regtest, so the SDK uses `sprt`)
-
-See [Parsing inputs](parse.md) for how {{#name parse}} reports a silent payment address, including one in a BIP21 URI or in the URI it looks up for a BIP353 name.
-
-Send to a silent payment address the same way as to a [Bitcoin address](#bitcoin): pass the silent payment address as the payment request to {{#name prepare_send_payment}} and set the amount. The response's {{#name payment_method}} is {{#enum SendPaymentMethod::BitcoinAddress}}, which contains an on-chain fee quote with a fee for each confirmation speed. Then call {{#name send_payment}} with the [confirmation speed](#bitcoin-1) of your choice. The payout is a taproot output, so it must be at least 330 sats (the taproot dust limit).
-
-Before the SDK hands any funds to the Spark service provider, it checks a proof from the provider that the withdrawal transaction pays the silent payment address. If the SDK cannot verify the proof, it fails the payment without handing over any funds.
-
-The SDK records the payment as a withdrawal. Like every withdrawal, the payment has {{#enum PaymentDetails::Withdraw}} details: the id of the withdrawal transaction ({{#name tx_id}}), the index of the payout output in that transaction ({{#name vout}}) and the destination address ({{#name destination_address}}), which for this payment is the silent payment address. A block explorer shows a one-time taproot address for the payout, not the silent payment address.
-
-To [refund a deposit](onchain_refunds.md) or [recover funds](recover_funds.md), pass a regular Bitcoin address: the SDK rejects a silent payment address as the destination.
+You send to a silent payment address ([BIP352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki)) the same way as to a Bitcoin address: the prepare response's {{#name payment_method}} is {{#enum SendPaymentMethod::BitcoinAddress}}.
 
 ### Spark
 
