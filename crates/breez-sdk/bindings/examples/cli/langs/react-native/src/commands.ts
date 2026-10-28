@@ -11,7 +11,8 @@
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
  *   get-spark-status, advanced (subcommand), issuer (subcommand),
- *   contacts (subcommand), webhooks (subcommand)
+ *   contacts (subcommand), token-allowances (subcommand), pull-payment,
+ *   webhooks (subcommand)
  */
 
 import {
@@ -49,12 +50,14 @@ import type {
   TokenIssuerInterface,
   CrossChainRoutePair,
   CrossChainAddressDetails,
+  PullReceiver,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
 import { dispatchAdvancedCommand } from './advanced'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
+import { dispatchTokenAllowancesCommand } from './token_allowances'
 import { dispatchWebhooksCommand } from './webhooks'
 import { dispatchStableBalanceCommand } from './stable_balance'
 
@@ -210,6 +213,8 @@ export const COMMAND_NAMES = [
   'advanced',
   'issuer',
   'contacts',
+  'token-allowances',
+  'pull-payment',
   'webhooks',
   'stable-balance',
 ]
@@ -258,6 +263,8 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'advanced', description: 'Expert-only commands (use "advanced help" for details)', run: handleAdvanced },
     { name: 'issuer', description: 'Token issuer commands (use "issuer help" for details)', run: handleIssuer },
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
+    { name: 'token-allowances', description: 'Token allowance commands (use "token-allowances help" for details)', run: handleTokenAllowances },
+    { name: 'pull-payment', description: 'Pull a payment from a wallet that granted this wallet an allowance', run: handlePullPayment },
     { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
     { name: 'stable-balance', description: 'Stable balance commands (use "stable-balance help" for details)', run: handleStableBalance },
   ]
@@ -1507,6 +1514,101 @@ async function handleIssuer(_sdk: BreezSdkInterface, tokenIssuer: TokenIssuerInt
 
 async function handleContacts(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchContactsCommand(args, sdk)
+}
+
+// --- token-allowances (delegation) ---
+
+async function handleTokenAllowances(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchTokenAllowancesCommand(args, sdk)
+}
+
+// --- pull-payment ---
+
+function parsePullReceiver(s: string): PullReceiver {
+  const colonIdx = s.indexOf(':')
+  if (colonIdx === -1) {
+    return { amount: BigInt(s), receiverAddress: undefined }
+  }
+  const address = s.substring(0, colonIdx)
+  const amountStr = s.substring(colonIdx + 1)
+  return { amount: BigInt(amountStr), receiverAddress: address || undefined }
+}
+
+async function handlePullPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = positionalArgs(args)
+  if (positional.length < 2) {
+    return 'Usage: pull-payment <payer_address> <token_identifier> -r <[address:]amount> [-r ...]'
+  }
+
+  const payerAddress = positional[0]
+  const tokenIdentifier = positional[1]
+  const receiverArgs = parseRepeatedFlag(args, '-r', '--receiver')
+
+  if (receiverArgs.length === 0) {
+    return 'Error: at least one -r/--receiver is required'
+  }
+
+  const receivers: PullReceiver[] = receiverArgs.map(parsePullReceiver)
+
+  const prepareResponse = await sdk.preparePullPayment({
+    payerAddress,
+    tokenIdentifier,
+    receivers,
+  })
+
+  const lines: string[] = []
+  lines.push(
+    `Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} from ${prepareResponse.payerAddress}`
+  )
+  for (const receiver of prepareResponse.receivers) {
+    lines.push(`  ${receiver.amount} to ${receiver.receiverAddress ?? ''}`)
+  }
+
+  const PULL_RETRY_INTERVAL_MS = 5000
+  const PULL_RETRY_WINDOW_MS = 10 * 60 * 1000
+  const deadline = Number(prepareResponse.expiryTime) * 1000 + PULL_RETRY_WINDOW_MS
+
+  let lastResult: any
+  let lastError: any
+
+  while (true) {
+    try {
+      lastResult = await sdk.pullPayment({ prepareResponse })
+      lastError = undefined
+    } catch (e: unknown) {
+      lastError = e
+      lastResult = undefined
+    }
+
+    const now = Date.now()
+
+    if (lastResult && lastResult.status !== PaymentStatus.Pending) {
+      break
+    }
+    if (lastError) {
+      const msg = lastError instanceof Error ? lastError.message : String(lastError)
+      const isRetryable = msg.includes('NetworkError') || msg.includes('SparkError')
+      if (!isRetryable) break
+    }
+    if (now >= deadline) break
+
+    if (lastResult) {
+      lines.push(`The pull ${lastResult.txHash} is pending, checking again in ${PULL_RETRY_INTERVAL_MS / 1000}s`)
+    } else if (lastError) {
+      const msg = lastError instanceof Error ? lastError.message : String(lastError)
+      lines.push(`Sending the pull failed (${msg}), trying again in ${PULL_RETRY_INTERVAL_MS / 1000}s`)
+    }
+
+    await new Promise<void>(resolve => setTimeout(() => resolve(), PULL_RETRY_INTERVAL_MS))
+  }
+
+  if (lastError) {
+    const msg = lastError instanceof Error ? lastError.message : String(lastError)
+    return lines.join('\n') + '\n' + `Error: ${msg}`
+  }
+
+  lines.push(formatValue(lastResult))
+  return lines.join('\n')
 }
 
 // --- webhooks (delegation) ---

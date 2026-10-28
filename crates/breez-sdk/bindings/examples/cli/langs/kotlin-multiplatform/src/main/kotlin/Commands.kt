@@ -1,5 +1,6 @@
 import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
+import kotlinx.coroutines.delay
 import org.jline.reader.LineReader
 
 /**
@@ -45,6 +46,7 @@ val COMMAND_NAMES = listOf(
     "recommended-fees",
     "get-tokens-metadata",
     "fetch-conversion-limits",
+    "pull-payment",
     "get-user-settings",
     "set-user-settings",
     "get-spark-status",
@@ -62,6 +64,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "receive" to CliCommand("receive", "Receive a payment", ::handleReceive),
         "pay" to CliCommand("pay", "Pay the given payment request", ::handlePay),
         "pay-batch" to CliCommand("pay-batch", "Pay several recipients with one token transaction", ::handlePayBatch),
+        "pull-payment" to CliCommand("pull-payment", "Pull a payment from a wallet that granted an allowance", ::handlePullPayment),
         "lnurl-pay" to CliCommand("lnurl-pay", "Pay using LNURL", ::handleLnurlPay),
         "lnurl-withdraw" to CliCommand("lnurl-withdraw", "Withdraw using LNURL", ::handleLnurlWithdraw),
         "lnurl-auth" to CliCommand("lnurl-auth", "Authenticate using LNURL", ::handleLnurlAuth),
@@ -618,6 +621,95 @@ suspend fun handlePayBatch(sdk: BreezSdk, reader: LineReader, args: List<String>
 
     val response = sdk.sendBatch(SendBatchRequest(prepareResponse = prepareResponse))
     printValue(response.payments)
+}
+
+// --- pull-payment ---
+
+suspend fun handlePullPayment(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val receiverStrs = fp.getAll("r", "receiver")
+
+    if (fp.positional.size < 2 || receiverStrs.isEmpty()) {
+        println("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]")
+        println("Each receiver: amount (this wallet) or address:amount")
+        return
+    }
+
+    val payerAddress = fp.positional[0]
+    val tokenIdentifier = fp.positional[1]
+
+    val receivers = receiverStrs.map { s ->
+        val parts = s.split(":", limit = 2)
+        if (parts.size == 1) {
+            val amount = try {
+                BigInteger.parseString(parts[0])
+            } catch (e: Exception) {
+                println("Error: Invalid amount in receiver '$s'")
+                return
+            }
+            PullReceiver(amount = amount, receiverAddress = null)
+        } else {
+            val amount = try {
+                BigInteger.parseString(parts[1])
+            } catch (e: Exception) {
+                println("Error: Invalid amount in receiver '$s'")
+                return
+            }
+            PullReceiver(amount = amount, receiverAddress = parts[0])
+        }
+    }
+
+    val prepareResponse = sdk.preparePullPayment(
+        PreparePullPaymentRequest(
+            payerAddress = payerAddress,
+            tokenIdentifier = tokenIdentifier,
+            receivers = receivers,
+        )
+    )
+
+    println("Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} from ${prepareResponse.payerAddress}")
+    for (receiver in prepareResponse.receivers) {
+        println("  ${receiver.amount} to ${receiver.receiverAddress ?: ""}")
+    }
+    val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
+    if (line != "y") {
+        println("Pull cancelled")
+        return
+    }
+
+    val response = pullUntilSettled(sdk, prepareResponse)
+    printValue(response)
+}
+
+private const val PULL_RETRY_INTERVAL_MS = 5_000L
+private const val PULL_RETRY_WINDOW_SECS = 600L
+
+private fun mayStillSettle(e: Exception): Boolean {
+    val name = e::class.qualifiedName ?: e::class.simpleName ?: ""
+    return "NetworkError" in name || "SparkError" in name
+}
+
+suspend fun pullUntilSettled(
+    sdk: BreezSdk,
+    prepareResponse: PreparePullPaymentResponse,
+): PullPaymentResponse {
+    val deadlineSecs = prepareResponse.expiryTime.toLong() + PULL_RETRY_WINDOW_SECS
+    while (true) {
+        val nowSecs = System.currentTimeMillis() / 1000
+        try {
+            val response = sdk.pullPayment(PullPaymentRequest(prepareResponse = prepareResponse))
+            if (response.status != PaymentStatus.PENDING || nowSecs >= deadlineSecs) {
+                return response
+            }
+            println("The pull ${response.txHash} is pending, checking again in ${PULL_RETRY_INTERVAL_MS / 1000}s")
+        } catch (e: Exception) {
+            if (!mayStillSettle(e) || nowSecs >= deadlineSecs) {
+                throw e
+            }
+            println("Sending the pull failed (${e.message}), trying again in ${PULL_RETRY_INTERVAL_MS / 1000}s")
+        }
+        delay(PULL_RETRY_INTERVAL_MS)
+    }
 }
 
 // --- lnurl-pay ---

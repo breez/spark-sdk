@@ -13,6 +13,7 @@ import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
 import 'stable_balance.dart';
+import 'token_allowances.dart';
 import 'webhooks.dart';
 
 /// Parses `HOST:PORT` into a [ProxyConfig]. Splits from the right so an IPv6
@@ -46,6 +47,7 @@ Future<void> runCli({
   CliPasskeyConfig? passkeyConfig,
   bool serverMode = false,
   String? lnurlDomain,
+  String? realTimeSyncServerUrl,
   ProxyConfig? proxy,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
@@ -95,6 +97,10 @@ Future<void> runCli({
 
   if (lnurlDomain != null) {
     config = config.copyWith(lnurlDomain: lnurlDomain);
+  }
+
+  if (realTimeSyncServerUrl != null) {
+    config = config.copyWith(realTimeSyncServerUrl: realTimeSyncServerUrl);
   }
 
   if (proxy != null) {
@@ -192,6 +198,7 @@ Future<void> _runRepl(
     ...contactsCommandNames,
     ...webhookCommandNames,
     ...stableBalanceCommandNames,
+    ...tokenAllowanceCommandNames,
     'exit',
     'quit',
     'help',
@@ -231,6 +238,8 @@ Future<void> _runRepl(
         await dispatchWebhookCommand(cmdArgs, sdk);
       } else if (cmdName == 'stable-balance') {
         await dispatchStableBalanceCommand(cmdArgs, sdk);
+      } else if (cmdName == 'token-allowances') {
+        await dispatchTokenAllowanceCommand(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -276,6 +285,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   );
   stdout.writeln(
     '  ${'stable-balance <subcommand>'.padRight(40)} Stable balance commands (use \'stable-balance help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'token-allowances <subcommand>'.padRight(40)} Token allowance commands (use \'token-allowances help\' for details)',
   );
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');

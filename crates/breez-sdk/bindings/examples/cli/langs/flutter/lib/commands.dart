@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 
 import 'cli.dart';
 import 'serialization.dart';
+import 'token_allowances.dart';
 
 /// All top-level command names (used for help text).
 const commandNames = [
@@ -17,6 +18,7 @@ const commandNames = [
   'receive',
   'pay',
   'pay-batch',
+  'pull-payment',
   'lnurl-pay',
   'lnurl-withdraw',
   'lnurl-auth',
@@ -63,6 +65,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'receive': CommandEntry('Receive a payment', _handleReceive),
     'pay': CommandEntry('Pay the given payment request', _handlePay),
     'pay-batch': CommandEntry('Pay several recipients with one token transaction', _handlePayBatch),
+    'pull-payment': CommandEntry(
+      'Pull a payment from a wallet that granted an allowance',
+      _handlePullPayment,
+    ),
     'lnurl-pay': CommandEntry('Pay using LNURL', _handleLnurlPay),
     'lnurl-withdraw': CommandEntry('Withdraw using LNURL', _handleLnurlWithdraw),
     'lnurl-auth': CommandEntry('Authenticate using LNURL', _handleLnurlAuth),
@@ -634,6 +640,83 @@ Future<void> _handlePayBatch(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
 
   final response = await sdk.sendBatch(request: SendBatchRequest(prepareResponse: prepareResponse));
   printValue(response.payments);
+}
+
+// --- pull-payment ---
+
+PullReceiver? _parsePullReceiver(String s) {
+  final colonIdx = s.lastIndexOf(':');
+  if (colonIdx < 0) {
+    final amount = BigInt.tryParse(s);
+    if (amount == null) {
+      print("Invalid receiver '$s': expected an amount or 'address:amount'");
+      return null;
+    }
+    return PullReceiver(receiverAddress: null, amount: amount);
+  }
+  final address = s.substring(0, colonIdx);
+  final amountStr = s.substring(colonIdx + 1);
+  final amount = BigInt.tryParse(amountStr);
+  if (amount == null) {
+    print("Invalid amount in receiver '$s'");
+    return null;
+  }
+  return PullReceiver(receiverAddress: address.isNotEmpty ? address : null, amount: amount);
+}
+
+Future<void> _handlePullPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  final parser = _parser('pull-payment')
+    ..addMultiOption('receiver', abbr: 'r', help: 'amount or address:amount (repeatable)');
+  final results = _parseArgs(
+    parser,
+    args,
+    'pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver>...]',
+  );
+  if (results == null) return;
+
+  if (results.rest.length < 2) {
+    print('Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver>...]');
+    return;
+  }
+  final payerAddress = results.rest[0];
+  final tokenIdentifier = results.rest[1];
+
+  final receiverStrs = results.multiOption('receiver');
+  if (receiverStrs.isEmpty) {
+    print('At least one --receiver (-r) is required');
+    return;
+  }
+
+  final receivers = <PullReceiver>[];
+  for (final s in receiverStrs) {
+    final r = _parsePullReceiver(s);
+    if (r == null) return;
+    receivers.add(r);
+  }
+
+  final prepareResponse = await sdk.preparePullPayment(
+    request: PreparePullPaymentRequest(
+      payerAddress: payerAddress,
+      tokenIdentifier: tokenIdentifier,
+      receivers: receivers,
+    ),
+  );
+
+  print(
+    'Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} '
+    'from ${prepareResponse.payerAddress}',
+  );
+  for (final receiver in prepareResponse.receivers) {
+    print('  ${receiver.amount} to ${receiver.receiverAddress ?? ''}');
+  }
+  final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+  if (answer.toLowerCase() != 'y') {
+    print('Pull cancelled');
+    return;
+  }
+
+  final response = await pullUntilSettled(sdk, prepareResponse);
+  printValue(response);
 }
 
 // --- lnurl-pay ---

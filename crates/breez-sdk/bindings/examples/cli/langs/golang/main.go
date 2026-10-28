@@ -196,6 +196,7 @@ func main() {
 	proxyAddr := flag.String("proxy", "", "Route every connection through a SOCKS5 proxy, as HOST:PORT (e.g. 127.0.0.1:9050 for a local Tor daemon)")
 	proxyUser := flag.String("proxy-user", "", "Username for SOCKS5 authentication (requires --proxy-password)")
 	proxyPassword := flag.String("proxy-password", "", "Password for SOCKS5 authentication (requires --proxy-user)")
+	realTimeSyncServerURL := flag.String("real-time-sync-server-url", "", "Real-time sync server URL, overrides the network default")
 	flag.Parse()
 
 	resolvedDir := expandPath(*dataDir)
@@ -260,6 +261,9 @@ func main() {
 		config.LnurlDomain = lnurlDomain
 	}
 	config.Proxy = proxy
+	if *realTimeSyncServerURL != "" {
+		config.RealTimeSyncServerUrl = realTimeSyncServerURL
+	}
 
 	// Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
 	// other networks fails config validation). Enable with default slippage so
@@ -400,6 +404,7 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 	allCommands = append(allCommands, ContactCommandNames...)
 	allCommands = append(allCommands, WebhookCommandNames...)
 	allCommands = append(allCommands, StableBalanceCommandNames...)
+	allCommands = append(allCommands, TokenAllowanceCommandNames...)
 	allCommands = append(allCommands, "exit", "quit", "help")
 
 	// Build prefix completer items
@@ -480,6 +485,8 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 			DispatchWebhookCommand(cmdArgs, sdk, rl)
 		} else if cmdName == "stable-balance" {
 			DispatchStableBalanceCommand(cmdArgs, sdk, rl)
+		} else if cmdName == "token-allowances" {
+			DispatchTokenAllowanceCommand(cmdArgs, sdk, rl)
 		} else if cmd, ok := registry[cmdName]; ok {
 			if err := cmd.Run(sdk, rl, cmdArgs); err != nil {
 				fmt.Printf("Error: %v\n", err)

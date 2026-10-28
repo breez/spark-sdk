@@ -84,7 +84,7 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`, `pull-payment`
 
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
@@ -170,6 +170,26 @@ webhooks unregister <webhook_id>
 ```
 
 Event types: `lightning-receive`, `lightning-send`, `coop-exit`, `static-deposit`.
+
+### Token Allowances
+
+Grant, revoke, and list token allowances:
+
+```
+token-allowances create <spender_address> <token_identifier> <expiry_time> --max-per-payment <amount|unlimited> --max-total <amount|unlimited> [-r <recipient> ...]
+token-allowances revoke <allowance_id>
+token-allowances list [owner|spender] [--counterparty-address <addr>] [--token-identifier <id>] [--include-inactive] [--offset <n>] [--limit <n>]
+```
+
+### Pull Payment
+
+Pull a payment from a wallet that granted this wallet a token allowance:
+
+```
+pull-payment <payer_address> <token_identifier> -r <[address:]amount> [-r ...]
+```
+
+Receivers are given as `amount` (pulls to this wallet) or `address:amount`. The command retries pending pulls until they settle or expire.
 
 ### Payment Filtering
 

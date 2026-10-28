@@ -63,6 +63,11 @@ Future<void> main(List<String> arguments) async {
         )
         ..addOption('lnurl-domain', help: 'LNURL server domain for lightning address registration')
         ..addOption(
+          'real-time-sync-server-url',
+          help: 'Real-time sync server URL. Overrides the network default.',
+          valueHelp: 'URL',
+        )
+        ..addOption(
           'proxy',
           help: 'Route every connection through a SOCKS5 proxy, as HOST:PORT',
           valueHelp: 'HOST:PORT',
@@ -215,6 +220,7 @@ Future<void> main(List<String> arguments) async {
     passkeyConfig: passkeyConfig,
     serverMode: results.flag('server-mode'),
     lnurlDomain: results.option('lnurl-domain'),
+    realTimeSyncServerUrl: results.option('real-time-sync-server-url'),
     proxy: proxy,
   );
 

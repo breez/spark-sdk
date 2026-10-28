@@ -70,6 +70,10 @@ make clean            Remove build artifacts
 | `--rpid` | | Relying party ID for FIDO2 provider (requires `--passkey`) |
 | `--server-mode` | | Run in server mode (no background tasks) |
 | `--lnurl-domain` | network default | LNURL server domain for lightning address registration; accepts a plain domain or an `http://host:port` test server URL |
+| `--real-time-sync-server-url` | network default | Real-time sync server URL (overrides network default) |
+| `--proxy` | | Route connections through a SOCKS5 proxy (`HOST:PORT`) |
+| `--proxy-user` | | Username for SOCKS5 authentication (requires `--proxy-password`) |
+| `--proxy-password` | | Password for SOCKS5 authentication (requires `--proxy-user`) |
 
 ## Environment Variables
 
@@ -113,13 +117,15 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
-**Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
+**Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
-**On-chain**: `claim-deposit`, `fetch-claim-deposit-quote`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
+**On-chain**: `claim-deposit`, `fetch-claim-deposit-quote`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`, `bridge-from-cash-app`, `bridge-to-cash-app`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+
+**Token allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 

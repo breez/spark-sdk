@@ -53,6 +53,7 @@ public static class CommandNames
         "fetch-conversion-limits",
         "get-user-settings",
         "set-user-settings",
+        "pull-payment",
         "get-spark-status",
     };
 }
@@ -110,6 +111,12 @@ public static class Commands
                 Name = "pay-batch",
                 Description = "Pay several recipients with one token transaction",
                 Run = HandlePayBatch
+            },
+            ["pull-payment"] = new()
+            {
+                Name = "pull-payment",
+                Description = "Pull a payment from a wallet that granted this wallet an allowance",
+                Run = HandlePullPayment
             },
             ["lnurl-pay"] = new()
             {
@@ -287,6 +294,7 @@ public static class Commands
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
         Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");
         Console.WriteLine($"  {"stable-balance <subcommand>",-40} Stable balance commands (use 'stable-balance help' for details)");
+        Console.WriteLine($"  {"token-allowances <subcommand>",-40} Token allowance commands (use 'token-allowances help' for details)");
         Console.WriteLine($"  {"exit / quit",-40} Exit the CLI");
         Console.WriteLine($"  {"help",-40} Show this help message");
         Console.WriteLine();
@@ -836,6 +844,104 @@ public static class Commands
         );
 
         Serialization.PrintValue(response.payments);
+    }
+
+    // --- pull-payment ---
+
+    private static async Task HandlePullPayment(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var receiverStrs = GetAllFlags(args, "-r", "--receiver");
+        var positional = GetPositionalArgs(args);
+
+        if (positional.Length < 2 || receiverStrs.Length == 0)
+        {
+            Console.WriteLine("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]");
+            Console.WriteLine("  receiver format: amount (this wallet) or address:amount");
+            return;
+        }
+
+        var payerAddress = positional[0];
+        var tokenIdentifier = positional[1];
+
+        var receivers = new List<PullReceiver>();
+        foreach (var s in receiverStrs)
+        {
+            var colonIdx = s.LastIndexOf(':');
+            string? receiverAddress = null;
+            string amountStr;
+            if (colonIdx >= 0)
+            {
+                receiverAddress = s[..colonIdx];
+                amountStr = s[(colonIdx + 1)..];
+            }
+            else
+            {
+                amountStr = s;
+            }
+
+            if (!BigInteger.TryParse(amountStr, out var amount))
+            {
+                Console.Error.WriteLine($"Invalid amount in receiver '{s}'");
+                return;
+            }
+
+            receivers.Add(new PullReceiver(
+                amount: amount,
+                receiverAddress: receiverAddress
+            ));
+        }
+
+        var prepareResponse = await sdk.PreparePullPayment(
+            request: new PreparePullPaymentRequest(
+                payerAddress: payerAddress,
+                tokenIdentifier: tokenIdentifier,
+                receivers: receivers.ToArray()
+            )
+        );
+
+        Console.WriteLine($"Pulling {prepareResponse.amount} base units of {prepareResponse.tokenIdentifier} from {prepareResponse.payerAddress}");
+        foreach (var receiver in prepareResponse.receivers)
+        {
+            Console.WriteLine($"  {receiver.amount} to {receiver.receiverAddress ?? ""}");
+        }
+
+        var line = readline("Do you want to continue (y/n) [y]: ");
+        if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
+        {
+            Console.WriteLine("Pull cancelled");
+            return;
+        }
+
+        var retryInterval = TimeSpan.FromSeconds(5);
+        var retryWindow = TimeSpan.FromMinutes(10);
+        var deadline = DateTimeOffset.FromUnixTimeSeconds((long)prepareResponse.expiryTime).Add(retryWindow);
+
+        while (true)
+        {
+            try
+            {
+                var response = await sdk.PullPayment(
+                    request: new PullPaymentRequest(prepareResponse: prepareResponse)
+                );
+
+                if (response.status == PaymentStatus.Pending && DateTimeOffset.UtcNow < deadline)
+                {
+                    Console.WriteLine($"The pull {response.txHash} is pending, checking again in {(int)retryInterval.TotalSeconds}s");
+                    await Task.Delay(retryInterval);
+                    continue;
+                }
+
+                Serialization.PrintValue(response);
+                return;
+            }
+            catch (SdkException ex) when (
+                (ex is SdkException.NetworkException || ex is SdkException.SparkException)
+                && DateTimeOffset.UtcNow < deadline)
+            {
+                Console.WriteLine($"Sending the pull failed ({ex.Message}), trying again in {(int)retryInterval.TotalSeconds}s");
+                await Task.Delay(retryInterval);
+            }
+        }
     }
 
     // --- lnurl-pay ---
