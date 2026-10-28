@@ -160,6 +160,9 @@ pub enum InvoicePreimage {
     /// The signer generates the preimage. The operators receive its shares, so the
     /// SSP can settle a payment while the receiver is offline.
     FromSigner,
+    /// A preimage the receiver supplies. The operators receive its shares, as with a
+    /// signer-generated preimage.
+    FromCaller(Preimage),
     /// The hash of a preimage the receiver keeps. The operators receive no shares,
     /// so the SSP holds the HTLC until the receiver provides the preimage, or until
     /// the HTLC expires.
@@ -503,6 +506,14 @@ impl LightningService {
                     Some(encrypted_preimage_shares),
                 )
             }
+            InvoicePreimage::FromCaller(preimage) => (
+                preimage.compute_hash(),
+                Some(encrypt_preimage_shares(
+                    &self.operator_pool,
+                    self.split_secret_threshold,
+                    &preimage,
+                )?),
+            ),
             InvoicePreimage::Hodl(payment_hash) => (payment_hash, None),
         };
 
