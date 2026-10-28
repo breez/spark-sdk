@@ -85,6 +85,7 @@ pub(super) async fn receive_payment(
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            preimage,
         } => {
             receive_bolt11_invoice(
                 sdk,
@@ -93,6 +94,7 @@ pub(super) async fn receive_payment(
                 expiry_secs,
                 payment_hash,
                 receiver_identity_public_key,
+                preimage,
             )
             .await
         }
@@ -360,6 +362,7 @@ pub(super) async fn receive_bolt11_invoice(
     expiry_secs: Option<u32>,
     payment_hash: Option<String>,
     receiver_identity_public_key: Option<String>,
+    preimage: Option<String>,
 ) -> Result<ReceivePaymentResponse, SdkError> {
     let receive = receive_bolt11_invoice_inner(
         sdk,
@@ -368,6 +371,7 @@ pub(super) async fn receive_bolt11_invoice(
         expiry_secs,
         payment_hash,
         receiver_identity_public_key,
+        preimage,
     )
     .await?;
     Ok(ReceivePaymentResponse {
@@ -388,16 +392,28 @@ pub(super) async fn receive_bolt11_invoice_inner(
     expiry_secs: Option<u32>,
     payment_hash: Option<String>,
     receiver_identity_public_key: Option<String>,
+    preimage: Option<String>,
 ) -> Result<LightningReceivePayment, SdkError> {
     let receiver_identity_public_key = receiver_identity_public_key
         .map(|key| PublicKey::from_str(&key))
         .transpose()
         .map_err(|_| SdkError::InvalidInput("Invalid receiver identity public key".to_string()))?;
+    if payment_hash.is_some() && preimage.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Set either a payment hash or a preimage, not both".to_string(),
+        ));
+    }
     let (invoice_preimage, include_spark_address) = if let Some(payment_hash_hex) = payment_hash {
         let hash = sha256::Hash::from_str(&payment_hash_hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
         // No Spark address: a payer who pays by a direct Spark transfer bypasses the hold.
         (InvoicePreimage::Hodl(hash), false)
+    } else if let Some(preimage_hex) = preimage {
+        let preimage = Preimage::from_hex(&preimage_hex).map_err(|_| {
+            SdkError::InvalidInput("Invalid preimage: expected 32 hex-encoded bytes".to_string())
+        })?;
+        // No Spark address: a payer who pays by a direct Spark transfer never learns the preimage.
+        (InvoicePreimage::FromCaller(preimage), false)
     } else {
         (
             InvoicePreimage::FromSigner,

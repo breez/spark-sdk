@@ -292,6 +292,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?

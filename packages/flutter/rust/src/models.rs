@@ -1095,6 +1095,7 @@ pub enum _ReceivePaymentMethod {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
+        preimage: Option<String>,
     },
     CrossChain {
         route: CrossChainRoutePair,

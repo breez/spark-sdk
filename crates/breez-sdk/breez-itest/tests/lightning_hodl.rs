@@ -39,6 +39,7 @@ async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> R
                 expiry_secs: None,
                 payment_hash: Some(payment_hash.clone()),
                 receiver_identity_public_key: Some(alice_identity_pubkey),
+                preimage: None,
             },
         })
         .await?
