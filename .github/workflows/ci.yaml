@@ -88,7 +88,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Verify post-ubrn patches are in sync
         working-directory: packages/react-native
@@ -409,7 +409,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Install wasm-pack
         run: which wasm-pack || cargo install wasm-pack
@@ -451,7 +451,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Run ESLint
         run: make wasm-js-lint
@@ -469,6 +469,11 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Run Tests
         run: make wasm-test

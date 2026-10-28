@@ -10,7 +10,7 @@
     "./errors": "./errors.cjs"
   },
   "dependencies": {
-    "better-sqlite3": "^9.2.2"
+    "better-sqlite3": "^12.2.0"
   },
   "engines": {
     "node": ">=16.0.0"

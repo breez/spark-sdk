@@ -1,6 +1,6 @@
 # Introduction
 
-The SDK docs are live at [https://sdk-doc-spark.breez.technology](https://sdk-doc-spark.breez.technology).
+The SDK docs are live at [https://docs.breez.technology](https://docs.breez.technology).
 
 ## Contributions
 

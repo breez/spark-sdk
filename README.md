@@ -19,40 +19,40 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 
 <table>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/lnurl.html"><b>Fully-featured Lightning</b></a><br>Lightning addresses, invoices, LNURL-Pay, -Withdraw, -Auth, and -Verify.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/install.html"><b>Languages &amp; Frameworks</b></a><br>Kotlin, Swift, JS, React Native, Flutter, Go, Python, C#, and WASM.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/lnurl.html"><b>Fully-featured Lightning</b></a><br>Lightning addresses, invoices, LNURL-Pay, -Withdraw, -Auth, and -Verify.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/install.html"><b>Languages &amp; Frameworks</b></a><br>Kotlin, Swift, JS, React Native, Flutter, Go, Python, C#, and WASM.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/passkey.html"><b>Passkey Login</b></a><br>Seedless onboarding and restore, no recovery phrase needed.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/cross_chain.html"><b>USDT &amp; USDC</b></a><br>Users can send/receive stablecoins from their BTC or stable balance.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/passkey.html"><b>Passkey Login</b></a><br>Seedless onboarding and restore, no recovery phrase needed.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/cross_chain.html"><b>USDT &amp; USDC</b></a><br>Users can send/receive stablecoins from their BTC or stable balance.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/cash_app_to_usdc_usdt.html"><b>Cash App to USDC/USDT</b></a><br>Users pay from Cash App and the recipient gets USDC or USDT on their chain.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/stable_balance.html"><b>Stable Balance</b></a><br>Users can hold their balance in USD to avoid BTC price volatility.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/cash_app_to_usdc_usdt.html"><b>Cash App to USDC/USDT</b></a><br>Users pay from Cash App and the recipient gets USDC or USDT on their chain.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/stable_balance.html"><b>Stable Balance</b></a><br>Users can hold their balance in USD to avoid BTC price volatility.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/onchain_claims.html#how-deposits-are-claimed"><b>Instant Deposits</b></a><br>Claim on-chain deposits in seconds, no confirmations needed.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/onchain_claims.html"><b>Automatic Claims</b></a><br>On-chain deposits are claimed automatically within the fee limits you set.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/onchain_claims.html#how-deposits-are-claimed"><b>Instant Deposits</b></a><br>Claim on-chain deposits in seconds, no confirmations needed.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/onchain_claims.html"><b>Automatic Claims</b></a><br>On-chain deposits are claimed automatically within the fee limits you set.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/config.html#real-time-sync-server-url"><b>Multi-device/app Sync</b></a><br>Users can access their balance from multiple devices and apps.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/contacts.html"><b>Contacts API</b></a><br>Save and reuse Lightning addresses, synced across devices.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/config.html#real-time-sync-server-url"><b>Multi-device/app Sync</b></a><br>Users can access their balance from multiple devices and apps.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/contacts.html"><b>Contacts API</b></a><br>Save and reuse Lightning addresses, synced across devices.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/customizing.html#with-storage"><b>Caching &amp; Persistence</b></a><br>Out-of-the-box caching and persistence for a smooth UX.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/tokens.html"><b>Spark Tokens</b></a><br>Issue, send, receive, and convert Spark tokens (BTKN).</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/customizing.html#with-storage"><b>Caching &amp; Persistence</b></a><br>Out-of-the-box caching and persistence for a smooth UX.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/tokens.html"><b>Spark Tokens</b></a><br>Issue, send, receive, and convert Spark tokens (BTKN).</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/external_signer.html"><b>External Signer</b></a><br>Bring your own key management.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/turnkey.html"><b>Turnkey Signer</b></a><br>A built-in signer for server-side, non-custodial embedded wallets.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/external_signer.html"><b>External Signer</b></a><br>Bring your own key management.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/turnkey.html"><b>Turnkey Signer</b></a><br>A built-in signer for server-side, non-custodial embedded wallets.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/buy_bitcoin.html"><b>Integrated On-ramps</b></a><br>Let users buy bitcoin directly via Cash App and MoonPay.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/fiat_currencies.html"><b>Fiat Currencies</b></a><br>Real-time exchange rates to display value in fiat currencies.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/buy_bitcoin.html"><b>Integrated On-ramps</b></a><br>Let users buy bitcoin directly via Cash App and MoonPay.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/fiat_currencies.html"><b>Fiat Currencies</b></a><br>Real-time exchange rates to display value in fiat currencies.</td>
 </tr>
 <tr>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/server_mode.html"><b>Multi-user Server Mode</b></a><br>Run multiple user balances from a single backend server.</td>
-<td width="50%" valign="top"><a href="https://sdk-doc-spark.breez.technology/guide/recover_funds.html"><b>Unilateral Exit</b></a><br>Users can always withdraw to the Bitcoin blockchain without the Spark operators.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/server_mode.html"><b>Multi-user Server Mode</b></a><br>Run multiple user balances from a single backend server.</td>
+<td width="50%" valign="top"><a href="https://docs.breez.technology/guide/recover_funds.html"><b>Unilateral Exit</b></a><br>Users can always withdraw to the Bitcoin blockchain without the Spark operators.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><a href="https://github.com/breez/spark-sdk"><b>Open-source</b></a><br>Free and open-source, available to any developer at any scale.</td>
@@ -62,7 +62,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 
 ## Getting Started 
 
-Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start integrating instant bitcoin and stablecoins into your app or service.
+Head over to the [Breez SDK documentation](https://docs.breez.technology/) to start integrating instant bitcoin and stablecoins into your app or service.
 
 You'll need an API key to use the Breez SDK. It's free: [complete this simple form to request one](https://breez.technology/request-api-key/#contact-us-form-sdk).
 

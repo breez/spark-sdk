@@ -127,11 +127,12 @@ fn check_doc_snippets_wasm_cmd(skip_binding_gen: bool) -> Result<()> {
     }
 
     // Run tsc
-    let status = Command::new("tsc")
+    let status = Command::new("yarn")
+        .arg("tsc")
         .current_dir(&doc_snippets_dir)
         .status()?;
     if !status.success() {
-        anyhow::bail!("Doc snippet check failed: `tsc` failed");
+        anyhow::bail!("Doc snippet check failed: `yarn tsc` failed");
     }
 
     // Run yarn run lint

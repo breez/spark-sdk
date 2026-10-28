@@ -33,7 +33,9 @@ use internal_api::{
 };
 
 const GRAPHQL_PORT: u16 = 8080;
-const INTERNAL_PORT: u16 = 59050;
+/// Outside Linux's ephemeral port range: a daemon whose own outbound connection
+/// took this port could not then listen on it.
+const INTERNAL_PORT: u16 = 8081;
 const POSTGRES_PORT: u16 = 5432;
 const POSTGRES_USER: &str = "postgres";
 const POSTGRES_PASSWORD: &str = "postgres";
