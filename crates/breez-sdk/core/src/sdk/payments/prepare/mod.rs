@@ -141,7 +141,7 @@ pub(crate) mod test_helpers {
             payment_hash: "test_hash".to_string(),
             payment_secret: "test_secret".to_string(),
             routing_hints: vec![],
-            timestamp: 0,
+            timestamp: crate::utils::time::now_secs(),
         }
     }
 }

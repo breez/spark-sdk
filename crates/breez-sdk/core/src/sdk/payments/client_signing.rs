@@ -13,7 +13,7 @@ use crate::{
         TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
-    sdk::payments::send,
+    sdk::payments::{send, validation},
     sdk::token_allowances::{
         address_of, decode_prepare_response, decode_pull_context, describes_pull, pull_receivers,
     },
@@ -100,6 +100,7 @@ pub(in crate::sdk) async fn build_unsigned_transfer_package(
             spark_transfer_fee_sats,
             lightning_fee_sats,
         } => {
+            validation::validate_bolt11_invoice_not_expired(invoice_details)?;
             let (prefer_spark, completion_timeout_secs) = match options {
                 Some(BuildTransferPackageOptions::Bolt11Invoice {
                     prefer_spark,

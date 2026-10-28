@@ -15,6 +15,7 @@ fn validate_request(
     invoice_details: &Bolt11InvoiceDetails,
     request: &PrepareSendPaymentRequest,
 ) -> Result<(), SdkError> {
+    validation::validate_bolt11_invoice_not_expired(invoice_details)?;
     validation::validate_amount(request.amount)?;
     validation::validate_fee_policy_for_conversion(
         request.fee_policy,
@@ -292,6 +293,35 @@ mod tests {
         assert_eq!(invoice_amount_sats(0), 0);
         assert_eq!(invoice_amount_sats(1_000), 1);
         assert_eq!(invoice_amount_sats(1_000_000), 1_000);
+    }
+
+    // ---- Expiry ----
+
+    fn expired_invoice() -> crate::Bolt11InvoiceDetails {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.timestamp = crate::utils::time::now_secs().saturating_sub(7200);
+        invoice.expiry = 3600;
+        invoice
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_expired_invoice_rejected() {
+        let result = validate_request(&expired_invoice(), &create_test_request());
+        let Err(SdkError::InvalidInput(msg)) = result else {
+            panic!("Expected InvalidInput error, got {result:?}");
+        };
+        assert_eq!(msg, "Invoice has expired");
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_expired_invoice_rejected_before_other_checks() {
+        let mut invoice = expired_invoice();
+        invoice.amount_msat = Some(1_000);
+        let result = validate_request(&invoice, &create_bitcoin_amount_request(5));
+        let Err(SdkError::InvalidInput(msg)) = result else {
+            panic!("Expected InvalidInput error, got {result:?}");
+        };
+        assert_eq!(msg, "Invoice has expired");
     }
 
     // ---- Token identifier requires ToBitcoin conversion ----
