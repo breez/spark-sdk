@@ -250,7 +250,8 @@ func serverModeRequestHandler(sdk: BreezSdk) async throws -> String {
                 amountSats: 5_000,
                 expirySecs: 3600,
                 paymentHash: nil,
-                receiverIdentityPublicKey: nil
+                receiverIdentityPublicKey: nil,
+                preimage: nil
             )
         ))
 

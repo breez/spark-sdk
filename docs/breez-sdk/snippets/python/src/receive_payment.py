@@ -23,6 +23,7 @@ async def receive_lightning(sdk: BreezSdk):
             expiry_secs=optional_expiry_secs,
             payment_hash=None,
             receiver_identity_public_key=optional_receiver_identity_public_key,
+            preimage=None,
         )
         request = ReceivePaymentRequest(payment_method=payment_method)
         response = await sdk.receive_payment(request=request)
