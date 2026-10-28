@@ -1,7 +1,6 @@
 import 'package:args/args.dart';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-import 'cli.dart';
 import 'serialization.dart';
 
 /// Token allowance subcommand names (used for tab completion).
