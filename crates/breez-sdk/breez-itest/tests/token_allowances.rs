@@ -25,6 +25,11 @@ async fn issue_token(instance: &SdkInstance) -> Result<String> {
     Ok(metadata.identifier)
 }
 
+async fn create_public_payer(env: &Environment) -> Result<SdkInstance> {
+    env.create_wallet_with(|config| config.private_enabled_default = false)
+        .await
+}
+
 async fn spark_address(instance: &SdkInstance) -> Result<String> {
     Ok(instance
         .sdk
@@ -232,13 +237,12 @@ async fn wait_for_token_send(sdk: &BreezSdk, tx_hash: &str) -> Result<Vec<Paymen
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_02_spender_pulls_into_own_wallet_and_retries(
     #[future] env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
     let owner_address = spark_address(&owner).await?;
@@ -276,11 +280,10 @@ async fn test_02_spender_pulls_into_own_wallet_and_retries(
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_03_one_pull_pays_several_receivers(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let spender = env.create_wallet().await?;
     let seller = env.create_wallet().await?;
     let platform = env.create_wallet().await?;
@@ -321,11 +324,10 @@ async fn test_03_one_pull_pays_several_receivers(#[future] env: Result<Environme
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_04_allowlist_limits_receivers(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let spender = env.create_wallet().await?;
     let settlement = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
@@ -367,11 +369,10 @@ async fn test_04_allowlist_limits_receivers(#[future] env: Result<Environment>) 
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_05_pull_fails_after_payer_spends(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let spender = env.create_wallet().await?;
     let sink = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
@@ -533,11 +534,10 @@ async fn test_06_refusals(#[future] env: Result<Environment>) -> Result<()> {
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_07_client_signed_pull(#[future] env: Result<Environment>) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let token_identifier = issue_token(&owner).await?;
     let owner_address = spark_address(&owner).await?;
 
@@ -602,13 +602,12 @@ async fn test_07_client_signed_pull(#[future] env: Result<Environment>) -> Resul
 }
 
 #[rstest]
-#[ignore = "the regtest operators hide a private-mode payer's token outputs from the spender"]
 #[test_log::test(tokio::test)]
 async fn test_08_operators_refuse_pull_over_total_limit(
     #[future] env: Result<Environment>,
 ) -> Result<()> {
     let env = env.await?;
-    let owner = env.create_wallet().await?;
+    let owner = create_public_payer(&env).await?;
     let spender = env.create_wallet().await?;
     let token_identifier = issue_token(&owner).await?;
     let owner_address = spark_address(&owner).await?;

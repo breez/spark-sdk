@@ -11,6 +11,8 @@ An allowance names the spender by its Spark address, and sets:
 
 The owner can revoke an allowance at any time. An allowance doesn't reserve funds: a pull fails if the owner's balance is too low. In the owner's history, a pull shows up as an ordinary outgoing payment.
 
+The owner's wallet must have Spark private mode off, because private mode hides its tokens from the spender and pulls fail with {{#enum TokenAllowanceErrorReason::PayerInsufficientFunds}}. The SDK turns private mode on for new wallets by default: to turn it off, call {{#name update_user_settings}} with {{#name spark_private_mode_enabled}} set to `false` (see [User settings](user_settings.md#updating-the-user-settings)).
+
 Granting and revoking need the device clock to be within about a minute of the network's time.
 
 ## Granting an allowance
