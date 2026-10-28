@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bitcoin::{
-    Amount, Block, BlockHash, OutPoint, ScriptBuf, Transaction, TxOut,
+    Amount, Block, BlockHash, FeeRate, OutPoint, ScriptBuf, Transaction, TxOut,
     consensus::{deserialize, encode::serialize_hex},
     hashes::hex::FromHex,
 };
@@ -11,12 +12,19 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::trace;
 
-use crate::chain::{BroadcastError, ChainClient, ChainError};
+use crate::chain::SyncState;
+use crate::chain::{BlockHeader, BroadcastError, ChainClient, ChainError, OutputSpend};
+use crate::chain::{RequestChainClient, UnspentOutput};
 
 use super::{
-    EstimateSmartFeeResponse, GetBlockchainInfoResponse, GetMempoolInfoResponse, GetTxOutResponse,
-    RpcError, RpcReply, RpcRequest, SubmitPackageResponse,
+    EstimateSmartFeeResponse, GetBlockHeaderResponse, GetBlockchainInfoResponse,
+    GetMempoolInfoResponse, GetTxOutResponse, GetTxSpendingPrevoutResponse, RpcError, RpcReply,
+    RpcRequest, SubmitPackageResponse,
 };
+
+/// The index from which bitcoind reads a confirmed spend for
+/// `gettxspendingprevout`, as `getindexinfo` names it.
+const SPENDER_INDEX: &str = "txospenderindex";
 
 /// Bitcoin Core's error for broadcasting a transaction that has an output in the
 /// UTXO set. Matched by code, since the message has changed between versions.
@@ -28,15 +36,11 @@ const RPC_INVALID_PARAMETER: i64 = -8;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct UnspentOutput {
-    pub tx_out: TxOut,
-    /// Zero while the output is only in the mempool.
-    pub confirmations: u64,
-}
-
 pub struct ChainInfo {
     pub network: bitcoin::Network,
     pub pruned: bool,
+    /// Whether bitcoind runs with `-txospenderindex`.
+    pub spender_index: bool,
 }
 
 #[derive(Debug)]
@@ -130,9 +134,11 @@ impl BitcoindClient {
         let network = bitcoin::Network::from_core_arg(&info.chain).map_err(|e| {
             ChainError::General(format!("unknown chain {}: {e}", info.chain).into())
         })?;
+        let indexes: HashMap<String, Value> = self.call("getindexinfo", json!([])).await?;
         Ok(ChainInfo {
             network,
             pruned: info.pruned,
+            spender_index: indexes.contains_key(SPENDER_INDEX),
         })
     }
 
@@ -158,22 +164,10 @@ impl BitcoindClient {
                         .map_err(|e| ChainError::General(Box::new(e)))?,
                 },
                 confirmations: output.confirmations,
+                best_block: output.bestblock.parse()?,
             })
         })
         .transpose()
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::graphql::RegtestFunder for BitcoindClient {
-    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, String> {
-        // bitcoind's sendtoaddress takes BTC. Any amount up to the 21e14 sat supply
-        // converts to f64 exactly.
-        #[allow(clippy::cast_precision_loss)]
-        let amount_btc = amount_sats as f64 / 100_000_000.0;
-        self.call::<_, String>("sendtoaddress", json!([address, amount_btc]))
-            .await
-            .map_err(|e| e.to_string())
     }
 }
 
@@ -190,32 +184,48 @@ impl ChainClient for BitcoindClient {
         let hexes: Vec<String> = txs.iter().map(serialize_hex).collect();
         let response: SubmitPackageResponse = self.call("submitpackage", json!([hexes])).await?;
         if response.package_msg == "success" {
-            Ok(())
-        } else {
-            Err(BroadcastError::UnknownError(response.package_msg))
+            return Ok(());
         }
+        // bitcoind's reason for refusing the package is often only that a
+        // transaction failed.
+        let mut reasons: Vec<String> = response
+            .tx_results
+            .into_values()
+            .filter_map(|result| result.error)
+            .collect();
+        reasons.sort();
+        reasons.dedup();
+        reasons.insert(0, response.package_msg);
+        Err(BroadcastError::UnknownError(reasons.join(": ")))
     }
 
-    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<u64, ChainError> {
+    async fn estimate_fee_rate(&self, conf_target: u32) -> Result<FeeRate, ChainError> {
         let estimate: EstimateSmartFeeResponse = self
             .call("estimatesmartfee", json!([conf_target.clamp(1, 1008)]))
             .await?;
         // A node without enough fee history answers with no `feerate`; the least
         // it relays then is the rate a transaction has to pay to be accepted.
-        let btc_per_kvb = if let Some(feerate) = estimate.feerate {
+        let per_kvb = if let Some(feerate) = estimate.feerate {
             feerate
         } else {
             let info: GetMempoolInfoResponse = self.call("getmempoolinfo", json!([])).await?;
             info.mempoolminfee
         };
-        // 1 BTC/kvB == 25_000_000 sat/kw.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let sat_per_kw = (btc_per_kvb * 25_000_000.0).ceil() as u64;
-        Ok(sat_per_kw)
+        // A virtual byte is four weight units.
+        Ok(FeeRate::from_sat_per_kwu(per_kvb.to_sat().div_ceil(4)))
     }
 
-    async fn get_blockheight(&self) -> Result<u64, ChainError> {
-        Ok(self.call("getblockcount", json!([])).await?)
+    async fn sync_state(&self) -> Result<SyncState, ChainError> {
+        let info: GetBlockchainInfoResponse = self.call("getblockchaininfo", json!([])).await?;
+        Ok(SyncState {
+            height: info.blocks,
+            synced: !info.initialblockdownload && info.headers <= info.blocks,
+        })
+    }
+
+    async fn get_best_block_hash(&self) -> Result<BlockHash, ChainError> {
+        let hash: String = self.call("getbestblockhash", json!([])).await?;
+        Ok(hash.parse()?)
     }
 
     async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {
@@ -235,6 +245,53 @@ impl ChainClient for BitcoindClient {
         Ok(deserialize(&raw)?)
     }
 
+    async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
+        if outpoints.is_empty() {
+            return Ok(Vec::new());
+        }
+        let outputs: Vec<Value> = outpoints
+            .iter()
+            .map(|outpoint| json!({"txid": outpoint.txid.to_string(), "vout": outpoint.vout}))
+            .collect();
+        // `mempool_only` is off explicitly. With the default, bitcoind without the
+        // index reports only the spends in its mempool.
+        let found: Vec<GetTxSpendingPrevoutResponse> = self
+            .call(
+                "gettxspendingprevout",
+                json!([outputs, {"mempool_only": false}]),
+            )
+            .await?;
+        let mut heights: HashMap<BlockHash, u64> = HashMap::new();
+        let mut spends = Vec::new();
+        for output in found {
+            let Some(spender) = output.spendingtxid else {
+                continue;
+            };
+            let block = match output.blockhash {
+                None => None,
+                Some(hash) => {
+                    let hash: BlockHash = hash.parse()?;
+                    let height = if let Some(height) = heights.get(&hash) {
+                        *height
+                    } else {
+                        let header: GetBlockHeaderResponse = self
+                            .call("getblockheader", json!([hash.to_string()]))
+                            .await?;
+                        heights.insert(hash, header.height);
+                        header.height
+                    };
+                    Some(BlockHeader { hash, height })
+                }
+            };
+            spends.push(OutputSpend {
+                outpoint: OutPoint::new(output.txid.parse()?, output.vout),
+                spender: spender.parse()?,
+                block,
+            });
+        }
+        Ok(spends)
+    }
+
     async fn wait_for_block_height(
         &self,
         height: u64,
@@ -249,6 +306,27 @@ impl ChainClient for BitcoindClient {
             )
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestChainClient for BitcoindClient {
+    async fn unspent_output(
+        &self,
+        outpoint: &OutPoint,
+    ) -> Result<Option<UnspentOutput>, ChainError> {
+        BitcoindClient::unspent_output(self, outpoint).await
+    }
+
+    async fn get_spends(&self, outpoints: &[OutPoint]) -> Result<Vec<OutputSpend>, ChainError> {
+        ChainClient::get_spends(self, outpoints).await
+    }
+
+    async fn send_to_address(&self, address: &str, amount_sats: u64) -> Result<String, ChainError> {
+        let amount_btc = Amount::from_sat(amount_sats).to_btc();
+        Ok(self
+            .call::<_, String>("sendtoaddress", json!([address, amount_btc]))
+            .await?)
     }
 }
 

@@ -24,6 +24,14 @@ service Pool {
     rpc RequestRestock(RequestRestockRequest) returns (RequestRestockResponse);
     rpc PoolStatus(PoolStatusRequest) returns (PoolStatusResponse);
     rpc SubscribePoolEvents(SubscribePoolEventsRequest) returns (stream PoolEvent);
+    // The refund outputs of the leaves the SSP exited unilaterally, while they
+    // are unspent on chain.
+    rpc ListRefundOutputs(ListRefundOutputsRequest) returns (ListRefundOutputsResponse);
+    // Sweeps those outputs into the onchain wallet.
+    rpc SweepRefundOutputs(SweepRefundOutputsRequest) returns (SweepRefundOutputsResponse);
+    // The unreserved leaves that only one of the SSP and the operators would use.
+    rpc ListDisputes(ListDisputesRequest) returns (ListDisputesResponse);
+    rpc ListReservations(ListReservationsRequest) returns (ListReservationsResponse);
 }
 
 service OnchainWallet {
@@ -35,8 +43,19 @@ service OnchainWallet {
 message GetInfoRequest {}
 
 message GetInfoResponse {
-    uint64 block_height = 1;
     string network = 2;
+    // The block sspd's record of the chain is at. Unset while the record has
+    // no block.
+    optional uint64 block_height = 1;
+    optional string block_hash = 3;
+    // Whether sspd is synced: its record of the chain is at bitcoind's tip, and
+    // bitcoind reports that it is synced itself.
+    bool synced = 4;
+    // While sspd is not synced, what bitcoind last reported: its height, and
+    // whether it is synced itself. Unset until bitcoind has reported them
+    // since sspd started.
+    optional uint64 bitcoind_block_height = 5;
+    optional bool bitcoind_synced = 6;
 }
 
 
@@ -251,4 +270,83 @@ message LeavesAvailable {
     string deposit_address = 1;
     // The value of each leaf added, one entry per leaf.
     repeated uint64 denominations = 2;
+}
+
+message RefundOutput {
+    string leaf_id = 1;
+    string txid = 2;
+    uint32 vout = 3;
+    uint64 value_sats = 4;
+    // The height the leaf's refund confirmed at.
+    uint64 block_height = 5;
+    // The unconfirmed transaction with the output as an input.
+    optional string spending_txid = 6;
+}
+
+message ListRefundOutputsRequest {}
+
+message ListRefundOutputsResponse {
+    repeated RefundOutput outputs = 1;
+}
+
+message SweepRefundOutputsRequest {
+    // Without it, the daemon uses its own estimate.
+    optional uint64 fee_rate_sat_per_vbyte = 1;
+    // Also sweeps the outputs that are inputs of an unconfirmed transaction.
+    // Bitcoin Core accepts the new transaction only at a higher fee rate than
+    // the unconfirmed transaction's.
+    bool replace_unconfirmed = 2;
+}
+
+message SweepRefundOutputsResponse {
+    repeated string txids = 1;
+    uint32 output_count = 2;
+    // The value of the transactions' outputs, which are the onchain wallet's.
+    uint64 value_sats = 3;
+    uint64 fee_sats = 4;
+}
+
+message Dispute {
+    string leaf_id = 1;
+    // How the SSP and the operators differ on the leaf: `unreported`,
+    // `status`, `owner`, `refund`, or `exiting` for a leaf the operators
+    // report as AVAILABLE while the SSP finds it exiting.
+    string difference = 2;
+    uint64 value_sats = 3;
+    // The refund the SSP has for the leaf, and its timelock in blocks.
+    string refund_txid = 4;
+    uint32 refund_timelock = 5;
+    optional string operator_status = 6;
+    optional string operator_refund_txid = 7;
+    optional string operator_reported_since = 8;
+    // The SSP finds the leaf exiting because of this confirmed spend.
+    optional string spent_txid = 9;
+    optional uint32 spent_vout = 10;
+    optional string spending_txid = 11;
+    optional uint64 spending_block_height = 12;
+}
+
+message ListDisputesRequest {}
+
+message ListDisputesResponse {
+    repeated Dispute disputes = 1;
+}
+
+message Reservation {
+    string transfer_id = 1;
+    uint32 leaf_count = 2;
+    uint64 value_sats = 3;
+    string reserved_at = 4;
+    // The kind of record that has the transfer id: `swap`,
+    // `lightning_receive` or `static_deposit`. Unset when no record has it.
+    optional string record = 5;
+}
+
+message ListReservationsRequest {
+    // Only the reservations that belong to no record.
+    bool orphaned_only = 1;
+}
+
+message ListReservationsResponse {
+    repeated Reservation reservations = 1;
 }

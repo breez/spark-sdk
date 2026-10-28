@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 /// Denominations below this get deeper trees. A tree is funded by one output worth
 /// `denomination * leaves`, which the smallest denominations would otherwise make
 /// dust.
@@ -14,7 +12,6 @@ pub struct PoolConfig {
     /// Target number of leaves of each denomination.
     pub leaves_per_denomination: u32,
     pub max_denomination_power: u32,
-    pub replenish_interval: Duration,
 }
 
 impl PoolConfig {

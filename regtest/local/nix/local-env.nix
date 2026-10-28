@@ -261,7 +261,8 @@ let
           ${words [
             "exec bitcoind -regtest"
             ''-datadir="$SPARK_LOCAL_DIR/bitcoind"''
-            "-printtoconsole -server -txindex -addresstype=bech32 -fallbackfee=0.00000253"
+            "-printtoconsole -server -txindex -txospenderindex -addresstype=bech32"
+            "-fallbackfee=0.00000253"
             ''-bind=127.0.0.1 -port="$BITCOIND_P2P_PORT" -rpcport="$BITCOIND_RPC_PORT"''
             ''-rpcuser="$BITCOIND_RPC_USER" -rpcpassword="$BITCOIND_RPC_PASSWORD"''
             "-rpcbind=127.0.0.1 -rpcallowip=127.0.0.1"
@@ -373,6 +374,8 @@ let
           ''--bitcoind-rpc-user="$BITCOIND_RPC_USER"''
           ''--leaves-per-denomination="$LEAVES_PER_DENOMINATION"''
           ''--max-denomination-power="$MAX_DENOMINATION_POWER"''
+          # The operators' non_static_confirmation_threshold is also 1.
+          "--deposit-confirmations=1"
           ''--ldk-server-url="127.0.0.1:$LDK_GRPC_PORT"''
           ''--ldk-server-cert-path="$SPARK_LOCAL_DIR/ldk/tls.crt"''
         ];

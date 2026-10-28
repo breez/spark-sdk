@@ -1,15 +1,15 @@
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use spark::services::{TransferId, TransferService, TransferStatus};
-use spark::tree::TreeNodeId;
+use spark::services::TransferStatus;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::leaves::{IncomingLeafStore, LeafSigningKeys, claim_into_pool, release_reserved_leaves};
+use crate::in_flight::InFlight;
+use crate::leaves::{ClaimDeps, claim_into_pool};
+use crate::pool::operator_view;
 use crate::swap::SwapStore;
-use crate::swap::repository::{SwapDetail, SwapLeaf};
+use crate::swap::repository::{SwapLeaf, SwapRecord};
 use crate::wakeup::Wakeup;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -21,11 +21,8 @@ const CLAIM_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub struct SwapClaimDeps {
     pub swap_repo: Arc<dyn SwapStore>,
-    pub tree_store: Arc<dyn spark::tree::TreeStore>,
-    pub transfer_service: Arc<TransferService>,
-    pub incoming: Arc<dyn IncomingLeafStore>,
-    pub admission: Wakeup,
-    pub leaf_signing_keys: Arc<dyn LeafSigningKeys>,
+    pub claim: Arc<ClaimDeps>,
+    pub requests: Arc<InFlight>,
     pub wakeup: Wakeup,
 }
 
@@ -62,21 +59,28 @@ pub async fn claim_pending_swaps(deps: &SwapClaimDeps) -> Result<bool, BoxError>
         return Ok(false);
     }
 
-    let futures = swaps.into_iter().map(|swap| claim_one_swap(deps, swap));
+    let futures = swaps.iter().map(|swap| claim_one_swap(deps, swap));
     for result in futures::future::join_all(futures).await {
         if let Err(e) = result {
             error!("failed to claim swap: {e}");
         }
     }
-    Ok(!deps.swap_repo.get_unclaimed_swaps().await?.is_empty())
+    Ok(deps.swap_repo.has_unclaimed_swaps().await?)
 }
 
-async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), BoxError> {
-    let swap = &detail.swap;
-    let transfer_id = TransferId::from_str(&swap.user_transfer_id)
-        .map_err(|e| format!("invalid user transfer id {}: {e}", swap.user_transfer_id))?;
-
-    let Some(transfer) = deps.transfer_service.query_transfer(&transfer_id).await? else {
+async fn claim_one_swap(deps: &SwapClaimDeps, swap: &SwapRecord) -> Result<(), BoxError> {
+    // While the swap service serves the request for this swap, it may be
+    // creating the counter transfer with the leaves that the claim loop would
+    // release here.
+    let Some(_request) = deps.requests.start(&swap.id) else {
+        return Ok(());
+    };
+    let Some(transfer) = deps
+        .claim
+        .transfer_service
+        .query_transfer(&swap.user_transfer_id)
+        .await?
+    else {
         return Ok(());
     };
 
@@ -87,13 +91,13 @@ async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), 
         transfer.status,
         TransferStatus::Expired | TransferStatus::Returned
     ) {
-        let outbound = detail
-            .outbound
-            .iter()
-            .map(|leaf| TreeNodeId::from_str(&leaf.leaf_id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("invalid outbound leaf id: {e}"))?;
-        release_reserved_leaves(deps.tree_store.as_ref(), &swap.reservation_id, &outbound).await?;
+        operator_view::release(
+            &deps.claim.operator_pool,
+            deps.claim.network,
+            &deps.claim.leaf_store,
+            &swap.counter_transfer_id,
+        )
+        .await?;
         deps.swap_repo.delete_swap(&swap.id).await?;
         info!(swap_id = %swap.id, "Swap never went through; its leaves are back in the pool");
         return Ok(());
@@ -103,21 +107,15 @@ async fn claim_one_swap(deps: &SwapClaimDeps, detail: SwapDetail) -> Result<(), 
         return Ok(());
     }
 
-    // The counter transfer went through, but the swap request may not have
-    // finalized its reservation.
-    deps.tree_store
-        .finalize_reservation(&swap.reservation_id, None)
+    // The operators have made the counter transfer, but the swap service may
+    // not have marked its leaves transferred.
+    deps.claim
+        .leaf_store
+        .transferred(&swap.counter_transfer_id)
         .await?;
 
     info!(swap_id = %swap.id, status = %transfer.status, "Claiming user leaves for swap");
-    let claimed = claim_into_pool(
-        &deps.transfer_service,
-        deps.leaf_signing_keys.as_ref(),
-        deps.incoming.as_ref(),
-        &deps.admission,
-        &transfer,
-    )
-    .await?;
+    let claimed = claim_into_pool(&deps.claim, &transfer).await?;
 
     let inbound: Vec<SwapLeaf> = claimed
         .iter()

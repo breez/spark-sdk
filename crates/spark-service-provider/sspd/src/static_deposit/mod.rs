@@ -5,7 +5,7 @@ pub mod repository;
 
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fees::{self, FeeRateSource};
@@ -13,8 +13,8 @@ use crate::frost::{SignedShare, operator_commitments, sign_share};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, XOnlyPublicKey, ecdsa::Signature};
 use bitcoin::{
-    Address, Amount, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
-    Witness, taproot,
+    Address, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut,
+    Txid, Witness, taproot,
 };
 use spark::bitcoin::sighash_from_tx;
 use spark::operator::OperatorPool;
@@ -24,23 +24,25 @@ use spark::services::{
     LeafKeyTweak, ServiceError, TransferId, TransferService, UtxoSwapRequestType,
     serialize_instant_static_deposit_claim_payload, serialize_static_deposit_claim_payload,
 };
-use spark::signer::{LeafSigningKey, SecretSource, Signer};
-use spark::tree::{
-    LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNodeId, TreeStore,
-};
+use spark::signer::{SecretSource, Signer};
+use spark::tree::TreeNode;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::graphql::types::{ClaimStaticDepositInput, CreateClaimInstantStaticDepositInput};
-use crate::handover::{HandoverOutcome, HandoverReservation, is_refusal, observe_handover};
-use crate::leaves::{LeafSigningKeys, release_reserved_leaves};
+use crate::handover::{HandoverOutcome, is_refusal, observe_handover};
+use crate::in_flight::InFlight;
+use crate::leaves::{self, LeafSigningKeys};
+use crate::pool::operator_view;
+use crate::postgresql::{LeafStoreError, PostgresLeafStore};
 use crate::swap::select::decompose_into_powers_of_two;
 use crate::wakeup::Wakeup;
 
 use self::repository::{
     InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore, PendingCredit,
-    StaticDepositClaimRecord, StaticDepositClaimStore,
+    StaticDepositAddress, StaticDepositAddressStore, StaticDepositClaimRecord,
+    StaticDepositClaimStore,
 };
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -60,20 +62,18 @@ const INSTANT_SECONDARY_CREDIT_AMOUNT_SATS: u64 = 0;
 /// confirmations.
 const INSTANT_CLAIM_MIN_CONFIRMATIONS: u64 = 1;
 
-const SPEND_TX_WEIGHT_WU: u64 = fees::TX_OVERHEAD_WU + fees::P2TR_INPUT_WU + fees::P2TR_OUTPUT_WU;
-
 /// Headroom for the fee rate rising between a quote and its claim, which builds the
 /// deposit spend at the rate then.
 const QUOTE_FEE_MARGIN_PERCENT: u64 = 20;
 
 #[must_use]
-pub fn spend_tx_fee_sats(sat_per_kw: u64) -> u64 {
-    fees::fee_sats(sat_per_kw, SPEND_TX_WEIGHT_WU)
+pub fn spend_tx_fee_sats(fee_rate: FeeRate) -> u64 {
+    fees::fee_sats(fee_rate, fees::p2tr_tx_weight(1, 1))
 }
 
 #[must_use]
-pub fn claim_fee_sats(sat_per_kw: u64) -> u64 {
-    let spend_cost = spend_tx_fee_sats(sat_per_kw);
+pub fn claim_fee_sats(fee_rate: FeeRate) -> u64 {
+    let spend_cost = spend_tx_fee_sats(fee_rate);
     spend_cost.saturating_add(
         spend_cost
             .saturating_mul(QUOTE_FEE_MARGIN_PERCENT)
@@ -87,8 +87,8 @@ pub fn claim_fee_sats(sat_per_kw: u64) -> u64 {
 const INSTANT_CLAIM_PREMIUM_BASIS_POINTS: u64 = 10;
 
 #[must_use]
-pub fn instant_claim_fee_sats(sat_per_kw: u64, deposit_sats: u64) -> u64 {
-    claim_fee_sats(sat_per_kw).saturating_add(
+pub fn instant_claim_fee_sats(fee_rate: FeeRate, deposit_sats: u64) -> u64 {
+    claim_fee_sats(fee_rate).saturating_add(
         deposit_sats
             .saturating_mul(INSTANT_CLAIM_PREMIUM_BASIS_POINTS)
             .div_ceil(10_000),
@@ -105,8 +105,8 @@ fn max_credit_sats(deposit_sats: u64, claim_fee_sats: u64) -> Option<u64> {
 pub enum StaticDepositError {
     #[error("signer error: {0}")]
     Signer(#[from] spark::signer::SignerError),
-    #[error("tree store error: {0}")]
-    TreeStore(#[from] spark::tree::TreeServiceError),
+    #[error("leaf store error: {0}")]
+    LeafStore(#[from] LeafStoreError),
     #[error("spark service error: {0}")]
     Service(#[from] spark::services::ServiceError),
     #[error("operator rpc error: {0}")]
@@ -123,6 +123,9 @@ pub enum StaticDepositError {
     InvalidUserSignature,
     #[error("an earlier claim of this deposit is still settling; retry later")]
     ClaimSettling,
+    /// The SSP could not fetch the deposit output. Its log has the reason.
+    #[error("the SSP could not serve the request")]
+    Unavailable,
 }
 
 pub struct StaticDepositQuote {
@@ -145,8 +148,18 @@ pub trait StaticDepositChain: Send + Sync {
         txid: &Txid,
         vout: u32,
     ) -> Result<Option<DepositOutput>, BoxError>;
+    /// As [`Self::deposit_output`], for a user's request. sspd makes this call
+    /// through the call queue, and fails it when sspd is not synced with bitcoind
+    /// or bitcoind returns no result in time.
+    async fn requested_deposit_output(
+        &self,
+        txid: &Txid,
+        vout: u32,
+    ) -> Result<Option<DepositOutput>, BoxError>;
     async fn new_address(&self) -> Result<Address, BoxError>;
-    async fn is_confirmed(&self, tx: &Transaction) -> Result<bool, BoxError>;
+    /// The ids of the transactions among `txs` that are in a block of the chain
+    /// record.
+    async fn confirmed_among(&self, txs: &[Transaction]) -> Result<HashSet<Txid>, BoxError>;
     /// A transaction the node already has is not an error.
     async fn broadcast(&self, tx: &Transaction) -> Result<(), BoxError>;
 }
@@ -180,7 +193,6 @@ impl PendingCreditSettler for StaticDepositService {
             &credit.transfer_id,
         )
         .await?;
-        let reservation = &credit.reservation;
         match outcome {
             HandoverOutcome::Committed if record.is_instant => {
                 // The coordinator answers a retry of a reservation it committed with
@@ -200,16 +212,14 @@ impl PendingCreditSettler for StaticDepositService {
                 self.reserve(record, credit, request).await?;
             }
             HandoverOutcome::Committed => {
-                self.tree_store
-                    .finalize_reservation(&reservation.id, None)
-                    .await?;
+                self.leaf_store.transferred(&credit.transfer_id).await?;
                 self.store
                     .set_transfer_id(&record.id, &credit.transfer_id.to_string())
                     .await?;
                 info!(claim_id = %record.id, transfer_id = %credit.transfer_id, "static deposit: the user was credited but the claim's answer was lost; the deposit is swept instead");
             }
             HandoverOutcome::RolledBack { settled: true } => {
-                self.forget(record, reservation).await?;
+                self.forget(record, credit).await?;
                 info!(claim_id = %record.id, "static deposit: the operators rolled the credit back; its leaves are back in the pool");
             }
             HandoverOutcome::Undetermined { held: false } => {
@@ -224,12 +234,18 @@ impl PendingCreditSettler for StaticDepositService {
                     )
                     .await?;
                     if matches!(outcome, HandoverOutcome::Undetermined { held: false }) {
-                        self.forget(record, reservation).await?;
+                        self.forget(record, credit).await?;
                         info!(claim_id = %record.id, "static deposit: another swap claimed the deposit; the credit's leaves are back in the pool");
                     }
                     return Ok(());
                 }
-                let leaves = reservation.leaves(self.tree_store.as_ref()).await?;
+                // The service may have stored the claim without having reserved
+                // its leaves.
+                let Some(leaves) = self.reserved_leaves(record, credit).await? else {
+                    self.forget(record, credit).await?;
+                    info!(claim_id = %record.id, "static deposit: the pool cannot back a credit no operator has seen, so the SSP abandons the claim");
+                    return Ok(());
+                };
                 if record.is_instant {
                     // The operators credit an INSTANT claim before its deposit
                     // confirms, and the deposit can be replaced meanwhile.
@@ -239,7 +255,7 @@ impl PendingCreditSettler for StaticDepositService {
                         .await?
                         .is_none()
                     {
-                        self.forget(record, reservation).await?;
+                        self.forget(record, credit).await?;
                         info!(claim_id = %record.id, "static deposit: the deposit is gone; the credit's leaves are back in the pool");
                         return Ok(());
                     }
@@ -270,39 +286,12 @@ pub trait StaticDepositSpendCosigner: Send + Sync {
     async fn cosign_spend(&self, record: &StaticDepositClaimRecord) -> Result<bool, BoxError>;
 }
 
-#[derive(Default)]
-struct ClaimCalls(std::sync::Mutex<HashSet<String>>);
-
-impl ClaimCalls {
-    fn start(&self, id: &str) -> Option<ClaimCall<'_>> {
-        let mut running = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        running.insert(id.to_string()).then(|| ClaimCall {
-            calls: self,
-            id: id.to_string(),
-        })
-    }
-}
-
-struct ClaimCall<'a> {
-    calls: &'a ClaimCalls,
-    id: String,
-}
-
-impl Drop for ClaimCall<'_> {
-    fn drop(&mut self) {
-        self.calls
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.id);
-    }
-}
-
 pub struct StaticDepositService {
     store: Arc<dyn StaticDepositClaimStore>,
     instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
+    addresses: Arc<dyn StaticDepositAddressStore>,
     transfer_service: Arc<TransferService>,
-    tree_store: Arc<dyn TreeStore>,
+    leaf_store: Arc<PostgresLeafStore>,
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     chain: Arc<dyn StaticDepositChain>,
@@ -311,7 +300,7 @@ pub struct StaticDepositService {
     accept_unconfirmed_deposits: bool,
     largest_denomination: u64,
     wakeup: Wakeup,
-    calls: ClaimCalls,
+    calls: InFlight,
 }
 
 impl StaticDepositService {
@@ -319,8 +308,9 @@ impl StaticDepositService {
     pub fn new(
         store: Arc<dyn StaticDepositClaimStore>,
         instant_quote_store: Arc<dyn InstantStaticDepositQuoteStore>,
+        addresses: Arc<dyn StaticDepositAddressStore>,
         transfer_service: Arc<TransferService>,
-        tree_store: Arc<dyn TreeStore>,
+        leaf_store: Arc<PostgresLeafStore>,
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         chain: Arc<dyn StaticDepositChain>,
@@ -333,8 +323,9 @@ impl StaticDepositService {
         Self {
             store,
             instant_quote_store,
+            addresses,
             transfer_service,
-            tree_store,
+            leaf_store,
             operator_pool,
             signer,
             chain,
@@ -343,15 +334,15 @@ impl StaticDepositService {
             accept_unconfirmed_deposits,
             largest_denomination,
             wakeup,
-            calls: ClaimCalls::default(),
+            calls: InFlight::default(),
         }
     }
 
-    pub async fn claim_by_transfer_id(
+    pub async fn claims_by_transfer_ids(
         &self,
-        transfer_id: &str,
-    ) -> Result<Option<StaticDepositClaimRecord>, String> {
-        self.store.get_by_transfer_id(transfer_id).await
+        transfer_ids: &[String],
+    ) -> Result<Vec<StaticDepositClaimRecord>, String> {
+        self.store.get_by_transfer_ids(transfer_ids).await
     }
 
     pub async fn quote(
@@ -492,10 +483,8 @@ impl StaticDepositService {
         }
         let spend_tx = self.spend_tx(&txid, vout, deposit_value, fee_sats).await?;
 
-        let reservation = self.reserve_leaves(credit_amount_sats).await?;
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation::from(&reservation),
         };
         let now = chrono::Utc::now();
         let record = StaticDepositClaimRecord {
@@ -523,17 +512,14 @@ impl StaticDepositService {
             updated_at: now,
         };
         let call = self.calls.start(&record.id);
-        if let Err(e) = self.store.insert(&record).await {
-            self.cancel_unless_stored(&record, &reservation).await;
-            return Err(StaticDepositError::Store(e));
-        }
+        let leaves = self.store_and_reserve(&record, &credit).await?;
         let request = match self
-            .build_swap_request(&record, &credit.transfer_id, &reservation)
+            .build_swap_request(&record, &credit.transfer_id, &leaves)
             .await
         {
             Ok(request) => request,
             Err(e) => {
-                self.abandon(&record, &reservation).await;
+                self.abandon(&record, &credit).await;
                 return Err(e);
             }
         };
@@ -561,14 +547,10 @@ impl StaticDepositService {
             Err(e) if is_refusal(&e) => return Err(self.refused(record, credit, e).await),
             Err(e) => return Err(e.into()),
         };
-        let reservation_id = &credit.reservation.id;
-        if let Err(e) = self
-            .tree_store
-            .finalize_reservation(reservation_id, None)
-            .await
-        {
-            error!(%reservation_id, "failed to finalize reservation: {e:?}");
-        }
+        // The service marks the leaves transferred before it records the result.
+        // If this call fails, the claim still has its pending credit, and the
+        // worker marks the leaves transferred when it settles that credit.
+        self.leaf_store.transferred(&credit.transfer_id).await?;
 
         let transfer_id = credit.transfer_id.to_string();
         match signed_spend_transaction(record, &response.spend_tx_signature) {
@@ -616,7 +598,7 @@ impl StaticDepositService {
                 HandoverOutcome::Undetermined { held: false }
                 | HandoverOutcome::RolledBack { settled: true },
             ) => {
-                if let Err(e) = self.forget(record, &credit.reservation).await {
+                if let Err(e) = self.forget(record, credit).await {
                     error!(claim_id = %record.id, "failed to give up a refused claim: {e}");
                 }
             }
@@ -631,12 +613,13 @@ impl StaticDepositService {
     async fn forget(
         &self,
         record: &StaticDepositClaimRecord,
-        reservation: &HandoverReservation,
+        credit: &PendingCredit,
     ) -> Result<(), StaticDepositError> {
-        release_reserved_leaves(
-            self.tree_store.as_ref(),
-            &reservation.id,
-            &reservation.leaf_ids,
+        operator_view::release(
+            &self.operator_pool,
+            record.network,
+            &self.leaf_store,
+            &credit.transfer_id,
         )
         .await?;
         self.store
@@ -783,10 +766,8 @@ impl StaticDepositService {
             .spend_tx(&txid, vout, quote.deposit_amount_sats, fee_sats)
             .await?;
 
-        let reservation = self.reserve_leaves(quote.credit_amount_sats).await?;
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation::from(&reservation),
         };
         let now = chrono::Utc::now();
         let record = StaticDepositClaimRecord {
@@ -814,18 +795,15 @@ impl StaticDepositService {
             updated_at: now,
         };
         let call = self.calls.start(&record.id);
-        if let Err(e) = self.store.insert(&record).await {
-            self.cancel_unless_stored(&record, &reservation).await;
-            return Err(StaticDepositError::Store(e));
-        }
+        let leaves = self.store_and_reserve(&record, &credit).await?;
         let request = match self
-            .build_credit_transfer(&record, &credit.transfer_id, &reservation)
+            .build_credit_transfer(&record, &credit.transfer_id, &leaves)
             .await
             .and_then(|transfer| reserve_request(&record, transfer))
         {
             Ok(request) => request,
             Err(e) => {
-                self.abandon(&record, &reservation).await;
+                self.abandon(&record, &credit).await;
                 return Err(e);
             }
         };
@@ -853,14 +831,10 @@ impl StaticDepositService {
             Err(e) if is_refusal(&e) => return Err(self.refused(record, credit, e).await),
             Err(e) => return Err(e.into()),
         };
-        let reservation_id = &credit.reservation.id;
-        if let Err(e) = self
-            .tree_store
-            .finalize_reservation(reservation_id, None)
-            .await
-        {
-            error!(%reservation_id, "failed to finalize reservation: {e:?}");
-        }
+        // The service marks the leaves transferred before it records the result.
+        // If this call fails, the claim still has its pending credit, and the
+        // worker marks the leaves transferred when it settles that credit.
+        self.leaf_store.transferred(&credit.transfer_id).await?;
 
         let transfer_id = response
             .transfer
@@ -880,12 +854,18 @@ impl StaticDepositService {
         &self,
         record: &StaticDepositClaimRecord,
         transfer_id: &TransferId,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<crate::operator_rpc::InitiateStaticDepositUtxoSwapRequest, StaticDepositError> {
         let transfer = self
-            .build_credit_transfer(record, transfer_id, reservation)
+            .build_credit_transfer(record, transfer_id, leaves)
             .await?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         Ok(crate::operator_rpc::InitiateStaticDepositUtxoSwapRequest {
             on_chain_utxo: Some(deposit_utxo(record)?),
             ssp_signature: decode_signature(&record.quote_signature, "quote_signature")?,
@@ -924,9 +904,9 @@ impl StaticDepositService {
         &self,
         record: &StaticDepositClaimRecord,
         transfer_id: &TransferId,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<pb::StartTransferRequest, StaticDepositError> {
-        let leaf_key_tweaks = self.build_leaf_key_tweaks(reservation).await?;
+        let leaf_key_tweaks = self.build_leaf_key_tweaks(leaves).await?;
         let mut prepared = self
             .transfer_service
             .prepare_transfer_request(
@@ -1047,9 +1027,12 @@ impl StaticDepositService {
         vout: u32,
     ) -> Result<DepositOutput, StaticDepositError> {
         self.chain
-            .deposit_output(txid, vout)
+            .requested_deposit_output(txid, vout)
             .await
-            .map_err(|e| StaticDepositError::Chain(e.to_string()))?
+            .map_err(|e| {
+                warn!(%txid, vout, "could not fetch the deposit output for a request: {e}");
+                StaticDepositError::Unavailable
+            })?
             .ok_or_else(|| {
                 StaticDepositError::InvalidInput(format!("{txid}:{vout} is not an unspent output"))
             })
@@ -1077,14 +1060,15 @@ impl StaticDepositService {
             })?,
         );
         let share_public_key = self.signer.public_key_from_secret(&share).await?;
-        let address =
-            query_deposit_address(&self.operator_pool, user, deposit_address, network).await?;
-        let address_key = PublicKey::from_slice(&address.user_signing_public_key).map_err(|e| {
-            StaticDepositError::InvalidInput(format!(
-                "the operators reported an invalid deposit address key: {e}"
-            ))
-        })?;
-        if share_public_key != address_key {
+        let address = confirmed_deposit_address(
+            &self.operator_pool,
+            self.addresses.as_ref(),
+            user,
+            deposit_address,
+            network,
+        )
+        .await?;
+        if share_public_key != address.user_signing_public_key {
             return Err(StaticDepositError::InvalidInput(
                 "the deposit key share is not the key of the deposit address".to_string(),
             ));
@@ -1096,84 +1080,67 @@ impl StaticDepositService {
         Ok(claim_fee_sats(self.fee_rate().await?))
     }
 
-    async fn fee_rate(&self) -> Result<u64, StaticDepositError> {
+    async fn fee_rate(&self) -> Result<FeeRate, StaticDepositError> {
         self.fee_rates
-            .sat_per_kw()
+            .fee_rate()
             .await
             .map_err(|e| StaticDepositError::Chain(e.to_string()))
     }
 
-    async fn reserve_leaves(&self, amount: u64) -> Result<LeavesReservation, StaticDepositError> {
-        let denominations = decompose_into_powers_of_two(amount, self.largest_denomination);
-        let target = TargetAmounts::new_exact_denominations(denominations);
-        match self
-            .tree_store
-            .try_reserve_leaves(Some(&target), true, ReservationPurpose::Payment)
-            .await?
-        {
-            ReserveResult::Success(reservation) => Ok(reservation),
-            ReserveResult::InsufficientFunds | ReserveResult::WaitForPending { .. } => {
-                Err(StaticDepositError::InsufficientPool { amount })
-            }
-        }
-    }
-
-    async fn abandon(&self, record: &StaticDepositClaimRecord, reservation: &LeavesReservation) {
-        self.cancel_reservation(reservation).await;
-        if let Err(e) = self.store.delete(&record.id).await {
-            error!(claim_id = %record.id, "failed to delete an abandoned claim: {e}");
-        }
-    }
-
-    /// The insert may have committed without its answer arriving; a stored claim
-    /// keeps its reservation for the worker to settle.
-    async fn cancel_unless_stored(
+    /// Stores the claim before it reserves the claim's leaves, so that a
+    /// reservation's transfer id is always that of a stored claim.
+    async fn store_and_reserve(
         &self,
         record: &StaticDepositClaimRecord,
-        reservation: &LeavesReservation,
-    ) {
-        match self.store.get_by_utxo(&record.txid, record.vout).await {
-            Ok(Some(stored)) if stored.id == record.id => {}
-            Ok(_) => self.cancel_reservation(reservation).await,
+        credit: &PendingCredit,
+    ) -> Result<Vec<TreeNode>, StaticDepositError> {
+        self.store
+            .insert(record)
+            .await
+            .map_err(StaticDepositError::Store)?;
+        match self.reserved_leaves(record, credit).await {
+            Ok(Some(leaves)) => Ok(leaves),
+            Ok(None) => {
+                self.abandon(record, credit).await;
+                Err(StaticDepositError::InsufficientPool {
+                    amount: record.credit_amount_sats,
+                })
+            }
             Err(e) => {
-                error!(claim_id = %record.id, "could not tell whether a claim was stored, so its leaves stay reserved: {e}");
+                self.abandon(record, credit).await;
+                Err(e)
             }
         }
     }
 
-    async fn cancel_reservation(&self, reservation: &LeavesReservation) {
-        if let Err(e) = self
-            .tree_store
-            .cancel_reservation(&reservation.id, &reservation.leaves)
-            .await
-        {
-            error!(reservation_id = %reservation.id, "failed to cancel reservation: {e:?}");
+    /// The leaves reserved for the credit. The function reserves them if none are
+    /// reserved yet, and returns `None` when the pool is short of them.
+    async fn reserved_leaves(
+        &self,
+        record: &StaticDepositClaimRecord,
+        credit: &PendingCredit,
+    ) -> Result<Option<Vec<TreeNode>>, StaticDepositError> {
+        let denominations =
+            decompose_into_powers_of_two(record.credit_amount_sats, self.largest_denomination);
+        Ok(self
+            .leaf_store
+            .reserve(&denominations, &credit.transfer_id)
+            .await?)
+    }
+
+    async fn abandon(&self, record: &StaticDepositClaimRecord, credit: &PendingCredit) {
+        if let Err(e) = self.forget(record, credit).await {
+            error!(claim_id = %record.id, "failed to abandon a claim: {e}");
         }
     }
 
     async fn build_leaf_key_tweaks(
         &self,
-        reservation: &LeavesReservation,
+        leaves: &[TreeNode],
     ) -> Result<Vec<LeafKeyTweak>, StaticDepositError> {
-        let mut leaf_key_tweaks = Vec::with_capacity(reservation.leaves.len());
-        for node in &reservation.leaves {
-            let signing_leaf_id = self
-                .key_resolver
-                .get_signing_leaf_id(&node.id.to_string())
-                .await
-                .map_err(|e| StaticDepositError::InvalidInput(format!("key resolver error: {e}")))?
-                .map(|id| id.parse::<TreeNodeId>())
-                .transpose()
-                .map_err(|e| StaticDepositError::InvalidInput(format!("invalid leaf id: {e}")))?
-                .unwrap_or_else(|| node.id.clone());
-            leaf_key_tweaks.push(LeafKeyTweak {
-                node: node.clone(),
-                signing_key: LeafSigningKey {
-                    derived_from: signing_leaf_id,
-                },
-            });
-        }
-        Ok(leaf_key_tweaks)
+        leaves::leaf_key_tweaks(self.key_resolver.as_ref(), leaves)
+            .await
+            .map_err(|e| StaticDepositError::InvalidInput(format!("key resolver error: {e}")))
     }
 }
 
@@ -1332,6 +1299,75 @@ async fn query_deposit_address(
         })
 }
 
+/// An address always has the same user and keys, so the SSP queries the
+/// coordinator for an address only until it has stored what the coordinator
+/// reports.
+async fn confirmed_deposit_address(
+    operator_pool: &OperatorPool,
+    addresses: &dyn StaticDepositAddressStore,
+    user: &PublicKey,
+    deposit_address: &str,
+    network: spark::Network,
+) -> Result<StaticDepositAddress, StaticDepositError> {
+    if let Some(recorded) = addresses
+        .get(deposit_address)
+        .await
+        .map_err(StaticDepositError::Store)?
+    {
+        return (recorded.user_identity_public_key == *user)
+            .then_some(recorded)
+            .ok_or_else(|| {
+                StaticDepositError::InvalidInput(format!(
+                    "{deposit_address} is not one of the user's static deposit addresses"
+                ))
+            });
+    }
+    let reported = query_deposit_address(operator_pool, user, deposit_address, network).await?;
+    let confirmed = confirm_deposit_address(&reported, user, deposit_address, network)?;
+    addresses
+        .insert(&confirmed)
+        .await
+        .map_err(StaticDepositError::Store)?;
+    Ok(confirmed)
+}
+
+fn confirm_deposit_address(
+    reported: &pb::DepositAddressQueryResult,
+    user: &PublicKey,
+    deposit_address: &str,
+    network: spark::Network,
+) -> Result<StaticDepositAddress, StaticDepositError> {
+    let user_signing_public_key = PublicKey::from_slice(&reported.user_signing_public_key)
+        .map_err(|e| {
+            StaticDepositError::InvalidInput(format!(
+                "the operators reported an invalid deposit address key: {e}"
+            ))
+        })?;
+    let invalid = |e: &dyn std::fmt::Display| {
+        StaticDepositError::InvalidInput(format!("invalid deposit address: {e}"))
+    };
+    let script = Address::from_str(deposit_address)
+        .map_err(|e| invalid(&e))?
+        .require_network(network.into())
+        .map_err(|e| invalid(&e))?
+        .script_pubkey();
+    let verifying_public_key = PublicKey::from_slice(&reported.verifying_public_key)
+        .ok()
+        .filter(|key| p2tr_script(key) == script)
+        .ok_or_else(|| {
+            StaticDepositError::InvalidInput(
+                "the operators reported a verifying key that is not the deposit address's"
+                    .to_string(),
+            )
+        })?;
+    Ok(StaticDepositAddress {
+        address: deposit_address.to_string(),
+        user_identity_public_key: *user,
+        user_signing_public_key,
+        verifying_public_key,
+    })
+}
+
 /// The deposit output, built from the claim's address and amount.
 fn deposit_prevout(record: &StaticDepositClaimRecord) -> Result<TxOut, StaticDepositError> {
     let invalid = |e: &dyn std::fmt::Display| {
@@ -1365,27 +1401,19 @@ impl SignedSpend {
 async fn sign_spend(
     operator_pool: &OperatorPool,
     signer: &Arc<dyn Signer>,
+    addresses: &dyn StaticDepositAddressStore,
     record: &StaticDepositClaimRecord,
 ) -> Result<SignedSpend, StaticDepositError> {
     let prevout = deposit_prevout(record)?;
-    let address = query_deposit_address(
+    let verifying_key = confirmed_deposit_address(
         operator_pool,
+        addresses,
         &record.user_identity_public_key,
         &record.deposit_address,
         record.network,
     )
-    .await?;
-    // The operators report the verifying key. The SSP signs with it only when it
-    // is the key of the deposit's script.
-    let verifying_key = PublicKey::from_slice(&address.verifying_public_key)
-        .ok()
-        .filter(|key| p2tr_script(key) == prevout.script_pubkey)
-        .ok_or_else(|| {
-            StaticDepositError::InvalidInput(
-                "the operators reported a verifying key that is not the deposit address's"
-                    .to_string(),
-            )
-        })?;
+    .await?
+    .verifying_public_key;
     let sighash = sighash_from_tx(&record.spend_tx, 0, &prevout).map_err(ServiceError::from)?;
 
     let commitments = operator_commitments(&operator_pool.get_coordinator().client, 1, 1)
@@ -1461,6 +1489,7 @@ fn is_already_claimed(error: &OperatorRpcError) -> bool {
 
 pub struct SparkStaticDepositSpendCosigner {
     store: Arc<dyn StaticDepositClaimStore>,
+    addresses: Arc<dyn StaticDepositAddressStore>,
     operator_pool: Arc<OperatorPool>,
     signer: Arc<dyn Signer>,
     chain: Arc<dyn StaticDepositChain>,
@@ -1469,12 +1498,14 @@ pub struct SparkStaticDepositSpendCosigner {
 impl SparkStaticDepositSpendCosigner {
     pub fn new(
         store: Arc<dyn StaticDepositClaimStore>,
+        addresses: Arc<dyn StaticDepositAddressStore>,
         operator_pool: Arc<OperatorPool>,
         signer: Arc<dyn Signer>,
         chain: Arc<dyn StaticDepositChain>,
     ) -> Self {
         Self {
             store,
+            addresses,
             operator_pool,
             signer,
             chain,
@@ -1558,7 +1589,13 @@ impl SparkStaticDepositSpendCosigner {
                 "instant claim record is not reserved (no utxo swap id)".to_string(),
             )
         })?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         let request = crate::operator_rpc::ClaimInstantStaticDepositUtxoSwapRequest {
             on_chain_utxo: Some(deposit_utxo(record)?),
             utxo_swap_id,
@@ -1586,7 +1623,13 @@ impl SparkStaticDepositSpendCosigner {
             .signer
             .sign_message_ecdsa(&identity_path(), &statement)
             .await?;
-        let spend = sign_spend(&self.operator_pool, &self.signer, record).await?;
+        let spend = sign_spend(
+            &self.operator_pool,
+            &self.signer,
+            self.addresses.as_ref(),
+            record,
+        )
+        .await?;
         let request = crate::operator_rpc::SignStaticDepositSweepTxRequest {
             network: record.network.to_proto_network() as i32,
             raw_tx: bitcoin::consensus::serialize(&record.spend_tx),
@@ -1669,8 +1712,29 @@ pub async fn process_pending_static_deposit_claims(
     {
         deps.quotes.delete_created_before(expired).await?;
     }
-    for record in deps.store.pending().await? {
-        if let Err(e) = process_static_deposit_claim(deps, &record, new_block).await {
+    let pending = deps.store.pending().await?;
+    // When the worker cannot read which spends confirmed, it broadcasts them
+    // again and checks in a later pass.
+    let spends: Vec<Transaction> = pending
+        .iter()
+        .filter(|record| record.pending_credit.is_none())
+        .filter(|record| new_block || record.spend_broadcast_txid.is_none())
+        .filter_map(|record| record.signed_spend_transaction.clone())
+        .collect();
+    let confirmed = if spends.is_empty() {
+        HashSet::new()
+    } else {
+        deps.chain
+            .confirmed_among(&spends)
+            .await
+            .unwrap_or_else(|e| {
+                error!("could not read which deposit spends confirmed: {e}");
+                HashSet::new()
+            })
+    };
+    for record in pending {
+        let advanced = process_static_deposit_claim(deps, &record, new_block, &confirmed);
+        if let Err(e) = advanced.await {
             error!(claim_id = %record.id, "failed to advance static deposit claim: {e}");
         }
     }
@@ -1681,6 +1745,7 @@ async fn process_static_deposit_claim(
     deps: &StaticDepositWorkerDeps,
     record: &StaticDepositClaimRecord,
     new_block: bool,
+    confirmed: &HashSet<Txid>,
 ) -> Result<(), BoxError> {
     if let Some(credit) = &record.pending_credit {
         return deps.credit_settler.settle(record, credit).await;
@@ -1704,7 +1769,7 @@ async fn process_static_deposit_claim(
     let Some(spend_tx) = &record.signed_spend_transaction else {
         return Err(format!("static deposit claim {} has no signed spend", record.id).into());
     };
-    if deps.chain.is_confirmed(spend_tx).await? {
+    if confirmed.contains(&spend_tx.compute_txid()) {
         deps.store.set_spend_confirmed(&record.id).await?;
         info!(claim_id = %record.id, "static deposit: deposit-spend confirmed");
         return Ok(());
@@ -1723,27 +1788,28 @@ async fn process_static_deposit_claim(
 #[cfg(test)]
 mod tests {
     use super::repository::{
-        InMemoryInstantStaticDepositQuoteStore, InMemoryStaticDepositClaimStore,
-        StaticDepositClaimRecord, StaticDepositClaimStore,
+        InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore, StaticDepositClaimRecord,
+        StaticDepositClaimStore,
     };
     use super::{
-        BoxError, ClaimCalls, DepositOutput, HandoverReservation, PendingCredit,
-        PendingCreditSettler, StaticDepositChain, StaticDepositSpendCosigner,
-        StaticDepositWorkerDeps, TransferId, build_spend_tx, deposit_prevout, is_already_claimed,
-        max_credit_sats, p2tr_script, process_pending_static_deposit_claims,
-        signed_spend_transaction, sweep_statement,
+        BoxError, DepositOutput, PendingCredit, PendingCreditSettler, StaticDepositChain,
+        StaticDepositSpendCosigner, StaticDepositWorkerDeps, TransferId, build_spend_tx,
+        deposit_prevout, is_already_claimed, max_credit_sats, p2tr_script,
+        process_pending_static_deposit_claims, signed_spend_transaction, sweep_statement,
     };
+    use super::{StaticDepositError, confirm_deposit_address, pb};
     use crate::frost::sign_share;
     use crate::frost::testing::TestOperator;
     use bitcoin::hashes::Hash as _;
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-    use bitcoin::{Address, Transaction, Txid};
+    use bitcoin::{Address, Transaction, Txid, Witness};
     use spark::bitcoin::sighash_from_tx;
     use spark::operator::rpc::OperatorRpcError;
     use spark::signer::{DefaultSigner, SecretSource, Signer};
+    use std::collections::HashSet;
     use std::str::FromStr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     fn pubkey(byte: u8) -> PublicKey {
         let secp = Secp256k1::new();
@@ -1761,10 +1827,9 @@ mod tests {
 
     #[test]
     fn spend_tx_weight_matches_the_built_tx() {
-        let tx = build_spend_tx(&Txid::all_zeros(), 0, 10_000, 300, &address(1));
-        // Signing adds the segwit marker and flag, and one key-path signature.
-        let signed = tx.weight().to_wu() + 2 + crate::fees::P2TR_KEY_PATH_WITNESS_WU;
-        assert_eq!(signed, super::SPEND_TX_WEIGHT_WU);
+        let mut tx = build_spend_tx(&Txid::all_zeros(), 0, 10_000, 300, &address(1));
+        tx.input[0].witness = Witness::from_slice(&[[0u8; 64]]);
+        assert_eq!(tx.weight(), crate::fees::p2tr_tx_weight(1, 1));
     }
 
     #[test]
@@ -1804,12 +1869,23 @@ mod tests {
             Ok(None)
         }
 
+        async fn requested_deposit_output(
+            &self,
+            txid: &Txid,
+            vout: u32,
+        ) -> Result<Option<DepositOutput>, BoxError> {
+            self.deposit_output(txid, vout).await
+        }
+
         async fn new_address(&self) -> Result<Address, BoxError> {
             Ok(address(3))
         }
 
-        async fn is_confirmed(&self, _tx: &Transaction) -> Result<bool, BoxError> {
-            Ok(self.confirmed.load(Ordering::SeqCst))
+        async fn confirmed_among(&self, txs: &[Transaction]) -> Result<HashSet<Txid>, BoxError> {
+            if !self.confirmed.load(Ordering::SeqCst) {
+                return Ok(HashSet::new());
+            }
+            Ok(txs.iter().map(Transaction::compute_txid).collect())
         }
 
         async fn broadcast(&self, _tx: &Transaction) -> Result<(), BoxError> {
@@ -1862,14 +1938,134 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MockClaimStore {
+        claims: Mutex<Vec<StaticDepositClaimRecord>>,
+    }
+
+    impl MockClaimStore {
+        fn write(&self, id: &str, change: impl FnOnce(&mut StaticDepositClaimRecord)) {
+            let mut claims = self.claims.lock().unwrap();
+            change(claims.iter_mut().find(|claim| claim.id == id).unwrap());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl StaticDepositClaimStore for MockClaimStore {
+        async fn insert(&self, _record: &StaticDepositClaimRecord) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn get(&self, id: &str) -> Result<Option<StaticDepositClaimRecord>, String> {
+            let claims = self.claims.lock().unwrap();
+            Ok(claims.iter().find(|claim| claim.id == id).cloned())
+        }
+
+        async fn get_by_utxo(
+            &self,
+            _txid: &str,
+            _vout: u32,
+        ) -> Result<Option<StaticDepositClaimRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn get_by_transfer_ids(
+            &self,
+            _transfer_ids: &[String],
+        ) -> Result<Vec<StaticDepositClaimRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn transfers_among(
+            &self,
+            _transfer_ids: &[String],
+        ) -> Result<HashSet<String>, String> {
+            unimplemented!()
+        }
+
+        async fn set_transfer_id(&self, _id: &str, _transfer_id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn delete(&self, _id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn set_reserved(
+            &self,
+            _id: &str,
+            _transfer_id: &str,
+            _utxo_swap_id: &str,
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn set_signed_spend_transaction(
+            &self,
+            id: &str,
+            _transfer_id: &str,
+            transaction: &Transaction,
+        ) -> Result<(), String> {
+            self.write(id, |claim| {
+                claim.signed_spend_transaction = Some(transaction.clone());
+            });
+            Ok(())
+        }
+
+        async fn set_spend_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
+            self.write(id, |claim| {
+                claim.spend_broadcast_txid = Some(txid.to_string());
+            });
+            Ok(())
+        }
+
+        async fn set_spend_confirmed(&self, id: &str) -> Result<(), String> {
+            self.write(id, |claim| claim.spend_confirmed = true);
+            Ok(())
+        }
+
+        async fn set_deposit_lost(&self, _id: &str) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn pending(&self) -> Result<Vec<StaticDepositClaimRecord>, String> {
+            let claims = self.claims.lock().unwrap();
+            Ok(claims
+                .iter()
+                .filter(|claim| claim.is_pending())
+                .cloned()
+                .collect())
+        }
+    }
+
+    struct MockQuoteStore;
+
+    #[async_trait::async_trait]
+    impl InstantStaticDepositQuoteStore for MockQuoteStore {
+        async fn insert(&self, _record: &InstantStaticDepositQuoteRecord) -> Result<(), String> {
+            unimplemented!()
+        }
+
+        async fn get(&self, _id: &str) -> Result<Option<InstantStaticDepositQuoteRecord>, String> {
+            unimplemented!()
+        }
+
+        async fn delete_created_before(
+            &self,
+            _time: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     fn deps(
-        store: &Arc<InMemoryStaticDepositClaimStore>,
+        store: &Arc<MockClaimStore>,
         chain: &Arc<StubChain>,
         cosigner: Arc<dyn StaticDepositSpendCosigner>,
     ) -> StaticDepositWorkerDeps {
         StaticDepositWorkerDeps {
             store: Arc::clone(store) as Arc<dyn StaticDepositClaimStore>,
-            quotes: Arc::new(InMemoryInstantStaticDepositQuoteStore::default()),
+            quotes: Arc::new(MockQuoteStore),
             chain: Arc::clone(chain) as Arc<dyn StaticDepositChain>,
             spend_cosigner: cosigner,
             credit_settler: Arc::new(StubCreditSettler::default()),
@@ -1880,7 +2076,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_hands_every_pending_credit_to_the_settler() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let settler = Arc::new(StubCreditSettler::default());
         let deps = StaticDepositWorkerDeps {
@@ -1893,31 +2089,17 @@ mod tests {
         };
         let credit = PendingCredit {
             transfer_id: TransferId::generate(),
-            reservation: HandoverReservation {
-                id: "reservation".to_string(),
-                leaf_ids: Vec::new(),
-            },
         };
         for id in ["a", "b"] {
             let mut pending = record(id);
             pending.pending_credit = Some(credit.clone());
-            store.insert(&pending).await.unwrap();
+            store.claims.lock().unwrap().push(pending);
         }
 
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
         assert_eq!(settler.settled.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn a_claim_call_is_running_until_its_guard_drops() {
-        let calls = ClaimCalls::default();
-        let call = calls.start("claim").expect("nothing is running");
-        assert!(calls.start("claim").is_none());
-        assert!(calls.start("other").is_some());
-        drop(call);
-        assert!(calls.start("claim").is_some());
     }
 
     #[test]
@@ -2037,7 +2219,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_broadcasts_the_spend_until_it_confirms() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let cosigner = Arc::new(StubCosigner::confirmed(&store, false));
         let deps = deps(
@@ -2046,19 +2228,16 @@ mod tests {
             Arc::clone(&cosigner) as Arc<dyn StaticDepositSpendCosigner>,
         );
 
-        let claim = record("s1");
-        store.insert(&claim).await.unwrap();
-        store.set_transfer_id("s1", "transfer-1").await.unwrap();
+        let mut claim = record("s1");
+        claim.transfer_id = Some("transfer-1".to_string());
+        store.claims.lock().unwrap().push(claim.clone());
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
         assert_eq!(cosigner.calls.load(Ordering::SeqCst), 1);
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 0);
 
-        store
-            .set_signed_spend_transaction("s1", "transfer-1", &claim.spend_tx)
-            .await
-            .unwrap();
+        store.claims.lock().unwrap()[0].signed_spend_transaction = Some(claim.spend_tx.clone());
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
@@ -2071,7 +2250,7 @@ mod tests {
             .unwrap();
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 2);
         assert_eq!(cosigner.calls.load(Ordering::SeqCst), 1);
-        let broadcast = store.get("s1").await.unwrap().unwrap();
+        let broadcast = store.claims.lock().unwrap()[0].clone();
         assert!(broadcast.spend_broadcast_txid.is_some());
         assert!(!broadcast.spend_confirmed);
 
@@ -2079,19 +2258,20 @@ mod tests {
         process_pending_static_deposit_claims(&deps, true)
             .await
             .unwrap();
-        assert!(store.get("s1").await.unwrap().unwrap().spend_confirmed);
-        assert!(store.pending().await.unwrap().is_empty());
+        let confirmed = store.claims.lock().unwrap()[0].clone();
+        assert!(confirmed.spend_confirmed);
+        assert!(!confirmed.is_pending());
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 2);
     }
 
     struct StubCosigner {
-        store: Arc<InMemoryStaticDepositClaimStore>,
+        store: Arc<MockClaimStore>,
         confirmed: AtomicBool,
         calls: AtomicUsize,
     }
 
     impl StubCosigner {
-        fn confirmed(store: &Arc<InMemoryStaticDepositClaimStore>, confirmed: bool) -> Self {
+        fn confirmed(store: &Arc<MockClaimStore>, confirmed: bool) -> Self {
             Self {
                 store: Arc::clone(store),
                 confirmed: AtomicBool::new(confirmed),
@@ -2117,7 +2297,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_runs_deferred_claim_before_broadcasting() {
-        let store = Arc::new(InMemoryStaticDepositClaimStore::default());
+        let store = Arc::new(MockClaimStore::default());
         let chain = Arc::new(StubChain::default());
         let claimer = Arc::new(StubCosigner::confirmed(&store, false));
         let deps = deps(
@@ -2128,11 +2308,9 @@ mod tests {
 
         let mut rec = record("i1");
         rec.is_instant = true;
-        store.insert(&rec).await.unwrap();
-        store
-            .set_reserved("i1", "transfer-i1", "swap-i1")
-            .await
-            .unwrap();
+        rec.transfer_id = Some("transfer-i1".to_string());
+        rec.utxo_swap_id = Some("swap-i1".to_string());
+        store.claims.lock().unwrap().push(rec);
 
         process_pending_static_deposit_claims(&deps, false)
             .await
@@ -2146,19 +2324,63 @@ mod tests {
             .unwrap();
         assert_eq!(claimer.calls.load(Ordering::SeqCst), 2);
         assert_eq!(chain.broadcasts.load(Ordering::SeqCst), 1);
-        assert!(
-            store
-                .get("i1")
-                .await
-                .unwrap()
-                .unwrap()
-                .spend_broadcast_txid
-                .is_some()
-        );
+        let broadcast = store.claims.lock().unwrap()[0].clone();
+        assert!(broadcast.spend_broadcast_txid.is_some());
 
         process_pending_static_deposit_claims(&deps, false)
             .await
             .unwrap();
         assert_eq!(claimer.calls.load(Ordering::SeqCst), 2);
+    }
+
+    fn reported_address(
+        verifying: &PublicKey,
+        user_signing: &PublicKey,
+        reported_verifying: &PublicKey,
+    ) -> (String, pb::DepositAddressQueryResult) {
+        let address = Address::p2tr(
+            &Secp256k1::new(),
+            verifying.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        )
+        .to_string();
+        let reported = pb::DepositAddressQueryResult {
+            deposit_address: address.clone(),
+            user_signing_public_key: user_signing.serialize().to_vec(),
+            verifying_public_key: reported_verifying.serialize().to_vec(),
+            ..Default::default()
+        };
+        (address, reported)
+    }
+
+    fn public_key(byte: u8) -> PublicKey {
+        SecretKey::from_slice(&[byte; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    #[test]
+    fn an_address_is_confirmed_with_the_keys_the_operators_report() {
+        let (user, user_signing, verifying) = (public_key(1), public_key(2), public_key(3));
+        let (address, reported) = reported_address(&verifying, &user_signing, &verifying);
+
+        let confirmed =
+            confirm_deposit_address(&reported, &user, &address, spark::Network::Regtest).unwrap();
+
+        assert_eq!(confirmed.address, address);
+        assert_eq!(confirmed.user_identity_public_key, user);
+        assert_eq!(confirmed.user_signing_public_key, user_signing);
+        assert_eq!(confirmed.verifying_public_key, verifying);
+    }
+
+    #[test]
+    fn an_address_whose_reported_verifying_key_is_another_is_not_confirmed() {
+        let (user, user_signing) = (public_key(1), public_key(2));
+        let (address, reported) = reported_address(&public_key(3), &user_signing, &public_key(4));
+
+        let refused = confirm_deposit_address(&reported, &user, &address, spark::Network::Regtest);
+
+        assert!(matches!(refused, Err(StaticDepositError::InvalidInput(_))));
     }
 }

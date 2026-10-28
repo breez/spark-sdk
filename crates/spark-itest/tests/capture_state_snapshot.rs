@@ -23,7 +23,7 @@ async fn ensure_state_snapshot() -> Result<()> {
     // restored pool is also read back, and a stale one is rebuilt.
     let signer = DefaultSigner::new(&hex::decode(SSPD_WALLET_SEED_HEX)?, spark::Network::Regtest)?;
     let identity = derive_identity_public_key(&signer).await?;
-    if let Err(e) = state_snapshot::verify(&identity.serialize()).await {
+    if let Err(e) = state_snapshot::verify(identity).await {
         info!("Rebuilding the state snapshot: {e}");
         return capture().await;
     }

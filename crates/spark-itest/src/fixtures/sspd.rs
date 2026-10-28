@@ -89,17 +89,15 @@ impl Drop for SspdFixture {
 }
 
 impl SspdFixture {
-    pub async fn tree_store(&self) -> Result<spark_postgres::PostgresTreeStore> {
+    pub async fn leaf_store(&self) -> Result<sspd_lib::postgresql::PostgresLeafStore> {
         let port = self.postgres.get_host_port_ipv4(POSTGRES_PORT).await?;
         let url = format!(
             "postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@127.0.0.1:{port}/{POSTGRES_DB}"
         );
-        spark_postgres::PostgresTreeStore::from_config(
-            spark_postgres::PostgresStorageConfig::with_defaults(&url),
-            &self.identity_public_key.serialize(),
-        )
-        .await
-        .context("opening the daemon's tree store")
+        let network = bitcoin::Network::Regtest;
+        sspd_lib::postgresql::PostgresLeafStore::connect(&url, self.identity_public_key, network)
+            .await
+            .context("opening the daemon's leaf store")
     }
 
     /// `wallet_seed_hex` has to be [`crate::fixtures::setup::SSPD_WALLET_SEED_HEX`]
@@ -196,6 +194,10 @@ impl SspdFixture {
             MAX_DENOMINATION_POWER.to_string(),
             "--receive-leaf-transfer-expiry-seconds".to_string(),
             RECEIVE_LEAF_TRANSFER_EXPIRY_SECS.to_string(),
+            // The operators' `non_static_confirmation_threshold` in
+            // `so.config.yaml`.
+            "--deposit-confirmations".to_string(),
+            "1".to_string(),
         ];
 
         if let Some(ldk) = ldk {

@@ -7,11 +7,21 @@ use tracing::{error, info, warn};
 use crate::chain::{AddressUtxo, BlockHeader, ChainClient, ChainRepository, SpentTxo, Txo};
 use crate::wakeup::Wakeup;
 
-use super::ChainError;
+use super::ChainTip;
+use super::{ChainError, Synced};
 
 /// How far below the node's tip a new chain record starts. The record's first block
 /// is never undone, so this assumes no reorg is that deep.
 const BIRTHDAY_DEPTH: u64 = 20;
+
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+struct StoredTip {
+    height: u64,
+    /// Whether bitcoind reported that it is synced, and the stored tip is at or
+    /// above the height bitcoind reported.
+    at_synced_tip: bool,
+}
 
 pub struct ChainMonitor<C, R>
 where
@@ -23,6 +33,8 @@ where
     chain_repository: Arc<R>,
     poll_interval: Duration,
     chain_advanced: Vec<Wakeup>,
+    chain_tip: ChainTip,
+    synced: Synced,
 }
 
 impl<C, R> ChainMonitor<C, R>
@@ -36,6 +48,8 @@ where
         chain_repository: Arc<R>,
         poll_interval: Duration,
         chain_advanced: Vec<Wakeup>,
+        chain_tip: ChainTip,
+        synced: Synced,
     ) -> Self {
         Self {
             network,
@@ -43,34 +57,35 @@ where
             chain_repository,
             poll_interval,
             chain_advanced,
+            chain_tip,
+            synced,
         }
     }
 
     /// Follows the chain until `token` is cancelled.
     pub async fn start(self: Arc<Self>, token: CancellationToken) {
+        let mut retry = INITIAL_RETRY_DELAY;
         loop {
             let mut changed = false;
-            let synced = self.sync(&token, &mut changed).await;
+            let stored_tip = self.sync(&token, &mut changed).await;
             if changed {
                 for wakeup in &self.chain_advanced {
                     wakeup.wake();
                 }
             }
             let wait = async {
-                match synced {
-                    Ok(tip_height) => {
-                        if let Err(e) = self
-                            .chain_client
-                            .wait_for_block_height(tip_height.saturating_add(1), self.poll_interval)
-                            .await
-                        {
+                match stored_tip {
+                    Ok(stored_tip) => {
+                        if let Err(e) = self.wait_for_block(&stored_tip).await {
                             warn!("waiting for a new block failed: {e}");
-                            tokio::time::sleep(self.poll_interval).await;
+                            self.back_off(&mut retry).await;
+                        } else {
+                            retry = INITIAL_RETRY_DELAY;
                         }
                     }
                     Err(e) => {
                         error!("chain sync failed, retrying: {e}");
-                        tokio::time::sleep(self.poll_interval).await;
+                        self.back_off(&mut retry).await;
                     }
                 }
             };
@@ -81,11 +96,34 @@ where
         }
     }
 
-    /// Brings the stored chain in line with the node's and returns the stored tip's
-    /// height. Every stored block is its own change, so a sync that stops partway
+    async fn back_off(&self, retry: &mut Duration) {
+        tokio::time::sleep((*retry).min(self.poll_interval)).await;
+        *retry = retry.saturating_mul(2);
+    }
+
+    async fn wait_for_block(&self, stored_tip: &StoredTip) -> Result<(), ChainError> {
+        if stored_tip.at_synced_tip {
+            self.synced.waiting();
+        }
+        let waited = self
+            .chain_client
+            .wait_for_block_height(stored_tip.height.saturating_add(1), self.poll_interval)
+            .await;
+        self.synced.stopped();
+        waited
+    }
+
+    /// Brings the stored chain in line with bitcoind's and returns the stored
+    /// tip. Every stored block is its own change, so a sync that stops partway
     /// leaves a record the next one continues from.
-    async fn sync(&self, token: &CancellationToken, changed: &mut bool) -> Result<u64, ChainError> {
-        let node_height = self.chain_client.get_blockheight().await?;
+    async fn sync(
+        &self,
+        token: &CancellationToken,
+        changed: &mut bool,
+    ) -> Result<StoredTip, ChainError> {
+        let bitcoind = self.chain_client.sync_state().await?;
+        let node_height = bitcoind.height;
+        self.chain_tip.set_bitcoind_sync_state(bitcoind);
         let stored_tip = if let Some(tip) = self.chain_repository.get_tip().await? {
             tip
         } else {
@@ -102,13 +140,13 @@ where
             info!(%hash, "chain record starts at block {height}");
             birthday
         };
+        self.chain_tip.stored_is(Some(stored_tip.clone()));
 
         let Some(fork) = self.rewind(stored_tip, changed).await? else {
-            return Ok(self
-                .chain_repository
-                .get_tip()
-                .await?
-                .map_or(0, |tip| tip.height));
+            return Ok(StoredTip {
+                height: self.chain_tip.record().map_or(0, |tip| tip.height),
+                at_synced_tip: false,
+            });
         };
 
         let mut tip = fork;
@@ -127,7 +165,10 @@ where
             *changed = true;
             tip = header;
         }
-        Ok(tip.height)
+        Ok(StoredTip {
+            height: tip.height,
+            at_synced_tip: bitcoind.synced && tip.height >= node_height,
+        })
     }
 
     /// Undoes the stored blocks the node's chain does not have, from the top down,
@@ -154,16 +195,39 @@ where
                     return Ok(None);
                 }
             }
-            for hash in stored.iter().filter(|hash| Some(**hash) != kept) {
-                info!(%hash, "block {height} left the chain, undoing it");
-                self.chain_repository.undo_block(*hash).await?;
-                *changed = true;
+            if stored.iter().any(|hash| Some(*hash) != kept) {
+                let tip = self.tip_without(height, kept).await?;
+                self.chain_tip.writing(tip);
+                for hash in stored.iter().filter(|hash| Some(**hash) != kept) {
+                    info!(%hash, "block {height} left the chain, undoing it");
+                    self.chain_repository.undo_block(*hash).await?;
+                    *changed = true;
+                }
+                self.chain_tip.written();
             }
             if let Some(hash) = kept {
                 return Ok(Some(BlockHeader { hash, height }));
             }
             height = height.saturating_sub(1);
         }
+    }
+
+    /// The stored tip once the monitor has undone every stored block at
+    /// `height` except `kept`.
+    async fn tip_without(
+        &self,
+        height: u64,
+        kept: Option<bitcoin::BlockHash>,
+    ) -> Result<Option<BlockHeader>, ChainError> {
+        if let Some(hash) = kept {
+            return Ok(Some(BlockHeader { hash, height }));
+        }
+        let height = height.saturating_sub(1);
+        let below = self.chain_repository.get_block_hashes(height).await?;
+        Ok(below.first().map(|hash| BlockHeader {
+            hash: *hash,
+            height,
+        }))
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -212,9 +276,11 @@ where
             );
         }
 
+        self.chain_tip.writing(Some(header.clone()));
         self.chain_repository
             .add_block(header, &outputs, &spends)
             .await?;
+        self.chain_tip.written();
         Ok(())
     }
 }
@@ -229,20 +295,23 @@ impl From<super::ChainRepositoryError> for ChainError {
 mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use bitcoin::{
-        BlockHash, CompactTarget, Transaction, TxIn, TxMerkleNode, absolute::LockTime, block,
-        hashes::Hash, script::Builder, transaction,
+        BlockHash, CompactTarget, FeeRate, Transaction, TxIn, TxMerkleNode, absolute::LockTime,
+        block, hashes::Hash, script::Builder, transaction,
     };
 
     use super::*;
-    use crate::chain::{BroadcastError, ChainRepositoryError};
+    use crate::chain::SyncState;
+    use crate::chain::{BroadcastError, ChainRepositoryError, OutputSpend};
 
     #[derive(Default)]
     struct Node {
         blocks: Mutex<HashMap<BlockHash, (Block, u64)>>,
         active: Mutex<BTreeMap<u64, BlockHash>>,
         unavailable: Mutex<Option<BlockHash>>,
+        syncing: AtomicBool,
     }
 
     impl Node {
@@ -321,12 +390,19 @@ mod tests {
             unimplemented!()
         }
 
-        async fn estimate_fee_rate(&self, _conf_target: u32) -> Result<u64, ChainError> {
+        async fn estimate_fee_rate(&self, _conf_target: u32) -> Result<FeeRate, ChainError> {
             unimplemented!()
         }
 
-        async fn get_blockheight(&self) -> Result<u64, ChainError> {
-            Ok(self.height())
+        async fn sync_state(&self) -> Result<SyncState, ChainError> {
+            Ok(SyncState {
+                height: self.height(),
+                synced: !self.syncing.load(Ordering::SeqCst),
+            })
+        }
+
+        async fn get_best_block_hash(&self) -> Result<BlockHash, ChainError> {
+            unimplemented!()
         }
 
         async fn get_block_hash(&self, height: u64) -> Result<Option<BlockHash>, ChainError> {
@@ -338,6 +414,13 @@ mod tests {
                 return Err(ChainError::General("block unavailable".into()));
             }
             Ok(self.blocks.lock().unwrap()[hash].0.clone())
+        }
+
+        async fn get_spends(
+            &self,
+            _outpoints: &[OutPoint],
+        ) -> Result<Vec<OutputSpend>, ChainError> {
+            unimplemented!()
         }
 
         async fn wait_for_block_height(
@@ -412,7 +495,10 @@ mod tests {
                 }))
         }
 
-        async fn add_watch_address(&self, _address: &Address) -> Result<(), ChainRepositoryError> {
+        async fn add_watch_addresses(
+            &self,
+            _addresses: &[Address],
+        ) -> Result<(), ChainRepositoryError> {
             unimplemented!()
         }
 
@@ -423,9 +509,9 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_txos_for_address(
+        async fn get_txos_for_addresses(
             &self,
-            _address: &Address,
+            _addresses: &[Address],
         ) -> Result<Vec<Txo>, ChainRepositoryError> {
             unimplemented!()
         }
@@ -438,22 +524,29 @@ mod tests {
         }
     }
 
-    fn monitor(
+    fn monitor<R: ChainRepository + Sync + Send + 'static>(
         node: &Arc<Node>,
-        store: &Arc<Store>,
+        store: &Arc<R>,
         wakeups: Vec<Wakeup>,
-    ) -> Arc<ChainMonitor<Node, Store>> {
+    ) -> Arc<ChainMonitor<Node, R>> {
         Arc::new(ChainMonitor::new(
             Network::Regtest,
             Arc::clone(node),
             Arc::clone(store),
             Duration::from_millis(10),
             wakeups,
+            ChainTip::default(),
+            Synced::new(),
         ))
     }
 
-    async fn sync(monitor: &ChainMonitor<Node, Store>) -> Result<u64, ChainError> {
-        monitor.sync(&CancellationToken::new(), &mut false).await
+    async fn sync<R: ChainRepository + Sync + Send + 'static>(
+        monitor: &ChainMonitor<Node, R>,
+    ) -> Result<u64, ChainError> {
+        monitor
+            .sync(&CancellationToken::new(), &mut false)
+            .await
+            .map(|stored_tip| stored_tip.height)
     }
 
     fn stored(store: &Store) -> Vec<BlockHash> {
@@ -544,6 +637,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_tip_in_memory_is_the_stored_tip_after_every_sync() {
+        let bitcoind = Arc::new(Node::default());
+        let a = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        let b = bitcoind.mine(a[25], 125, 8, 1);
+        let other = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 2);
+        let store = Arc::new(Store::default());
+        let monitor = monitor(&bitcoind, &store, Vec::new());
+        assert_eq!(monitor.chain_tip.record(), None);
+
+        bitcoind.set_tip(a[29]);
+        sync(&monitor).await.unwrap();
+        assert_eq!(monitor.chain_tip.record().unwrap().hash, a[29]);
+        assert_eq!(monitor.chain_tip.stored(), monitor.chain_tip.record());
+        let reported = monitor.chain_tip.bitcoind_sync_state().unwrap();
+        assert_eq!((reported.height, reported.synced), (129, true));
+
+        // A reorg: the monitor stores two blocks of the new chain, then fails to
+        // get the third.
+        bitcoind.set_tip(b[7]);
+        *bitcoind.unavailable.lock().unwrap() = Some(b[2]);
+        assert!(sync(&monitor).await.is_err());
+        assert_eq!(monitor.chain_tip.record().unwrap().hash, b[1]);
+        assert_eq!(monitor.chain_tip.stored(), store.get_tip().await.unwrap());
+
+        // bitcoind's chain lacks the record's first block.
+        bitcoind.set_tip(other[29]);
+        sync(&monitor).await.unwrap();
+        assert_eq!(monitor.chain_tip.record().unwrap().hash, a[9]);
+        assert_eq!(monitor.chain_tip.stored(), store.get_tip().await.unwrap());
+    }
+
+    #[derive(Default)]
+    struct Checked {
+        store: Store,
+        chain_tip: std::sync::OnceLock<ChainTip>,
+        undo_fails: AtomicBool,
+    }
+
+    impl Checked {
+        fn tip_in_memory(&self) -> Option<BlockHeader> {
+            let chain_tip = self.chain_tip.get()?;
+            assert_eq!(chain_tip.stored(), None);
+            chain_tip.record()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChainRepository for Checked {
+        async fn add_block(
+            &self,
+            block: &BlockHeader,
+            tx_outputs: &[AddressUtxo],
+            tx_inputs: &[SpentTxo],
+        ) -> Result<(), ChainRepositoryError> {
+            assert!(
+                self.tip_in_memory()
+                    .is_none_or(|tip| tip.height < block.height)
+            );
+            self.store.add_block(block, tx_outputs, tx_inputs).await
+        }
+
+        async fn undo_block(&self, hash: BlockHash) -> Result<(), ChainRepositoryError> {
+            let height = self.store.0.lock().unwrap()[&hash];
+            let tip = self.tip_in_memory().unwrap();
+            assert!(tip.height < height || (tip.height == height && tip.hash != hash));
+            if self.undo_fails.swap(false, Ordering::SeqCst) {
+                return Err(ChainRepositoryError::General("no connection".into()));
+            }
+            self.store.undo_block(hash).await
+        }
+
+        async fn get_block_hashes(
+            &self,
+            height: u64,
+        ) -> Result<Vec<BlockHash>, ChainRepositoryError> {
+            self.store.get_block_hashes(height).await
+        }
+
+        async fn get_tip(&self) -> Result<Option<BlockHeader>, ChainRepositoryError> {
+            self.store.get_tip().await
+        }
+
+        async fn get_base(&self) -> Result<Option<BlockHeader>, ChainRepositoryError> {
+            self.store.get_base().await
+        }
+
+        async fn add_watch_addresses(
+            &self,
+            addresses: &[Address],
+        ) -> Result<(), ChainRepositoryError> {
+            self.store.add_watch_addresses(addresses).await
+        }
+
+        async fn filter_watch_addresses(
+            &self,
+            addresses: &[Address],
+        ) -> Result<Vec<Address>, ChainRepositoryError> {
+            self.store.filter_watch_addresses(addresses).await
+        }
+
+        async fn get_txos_for_addresses(
+            &self,
+            addresses: &[Address],
+        ) -> Result<Vec<Txo>, ChainRepositoryError> {
+            self.store.get_txos_for_addresses(addresses).await
+        }
+
+        async fn get_spenders(
+            &self,
+            outpoints: &[OutPoint],
+        ) -> Result<Vec<crate::chain::Spender>, ChainRepositoryError> {
+            self.store.get_spenders(outpoints).await
+        }
+    }
+
+    #[tokio::test]
+    async fn the_tip_in_memory_is_never_ahead_of_the_stored_chain() {
+        let bitcoind = Arc::new(Node::default());
+        let a = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        let b = bitcoind.mine(a[25], 125, 8, 1);
+        let store = Arc::new(Checked::default());
+        let monitor = monitor(&bitcoind, &store, Vec::new());
+        assert!(store.chain_tip.set(monitor.chain_tip.clone()).is_ok());
+
+        bitcoind.set_tip(a[29]);
+        monitor
+            .sync(&CancellationToken::new(), &mut false)
+            .await
+            .unwrap();
+        bitcoind.set_tip(b[7]);
+        monitor
+            .sync(&CancellationToken::new(), &mut false)
+            .await
+            .unwrap();
+        assert_eq!(monitor.chain_tip.record().unwrap().hash, b[7]);
+    }
+
+    #[tokio::test]
+    async fn from_an_undo_that_failed_until_the_next_sync_the_stored_tip_is_not_known() {
+        let bitcoind = Arc::new(Node::default());
+        let a = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        let store = Arc::new(Checked::default());
+        let monitor = monitor(&bitcoind, &store, Vec::new());
+        assert!(store.chain_tip.set(monitor.chain_tip.clone()).is_ok());
+        bitcoind.set_tip(a[29]);
+        sync(&monitor).await.unwrap();
+
+        // bitcoind no longer has the record's tip, and the store fails to undo
+        // it.
+        bitcoind.set_tip(a[28]);
+        store.undo_fails.store(true, Ordering::SeqCst);
+        assert!(sync(&monitor).await.is_err());
+        assert_eq!(store.get_tip().await.unwrap().unwrap().hash, a[29]);
+        assert_eq!(monitor.chain_tip.record().unwrap().hash, a[28]);
+        assert_eq!(monitor.chain_tip.stored(), None);
+
+        sync(&monitor).await.unwrap();
+        assert_eq!(monitor.chain_tip.stored().unwrap().hash, a[28]);
+        assert_eq!(monitor.chain_tip.stored(), store.get_tip().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn only_a_new_block_wakes_the_workers() {
         let node = Arc::new(Node::default());
         let blocks = node.mine(BlockHash::all_zeros(), 99, 30, 0);
@@ -566,6 +821,61 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), wakeup.waited())
             .await
             .expect("a new block did not wake the workers");
+
+        token.cancel();
+        running.await.unwrap();
+    }
+
+    fn slow_monitor(bitcoind: &Arc<Node>, store: &Arc<Store>) -> Arc<ChainMonitor<Node, Store>> {
+        Arc::new(ChainMonitor::new(
+            Network::Regtest,
+            Arc::clone(bitcoind),
+            Arc::clone(store),
+            Duration::from_secs(60),
+            Vec::new(),
+            ChainTip::default(),
+            Synced::new(),
+        ))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_monitor_calls_bitcoind_again_a_second_after_an_error() {
+        let bitcoind = Arc::new(Node::default());
+        let blocks = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        bitcoind.set_tip(blocks[29]);
+        *bitcoind.unavailable.lock().unwrap() = Some(blocks[29]);
+        let store = Arc::new(Store::default());
+        let monitor = slow_monitor(&bitcoind, &store);
+        let token = CancellationToken::new();
+        let running = tokio::spawn(Arc::clone(&monitor).start(token.clone()));
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!stored(&store).contains(&blocks[29]));
+
+        *bitcoind.unavailable.lock().unwrap() = None;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(stored(&store).contains(&blocks[29]));
+
+        token.cancel();
+        running.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sspd_is_synced_while_the_monitor_waits_at_the_tip_of_a_synced_bitcoind() {
+        let bitcoind = Arc::new(Node::default());
+        let blocks = bitcoind.mine(BlockHash::all_zeros(), 99, 30, 0);
+        bitcoind.set_tip(blocks[29]);
+        bitcoind.syncing.store(true, Ordering::SeqCst);
+        let monitor = slow_monitor(&bitcoind, &Arc::new(Store::default()));
+        let token = CancellationToken::new();
+        let running = tokio::spawn(Arc::clone(&monitor).start(token.clone()));
+
+        tokio::time::sleep(Duration::from_secs(90)).await;
+        assert!(!monitor.synced.is_synced(), "bitcoind is still syncing");
+
+        bitcoind.syncing.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(90)).await;
+        assert!(monitor.synced.is_synced());
 
         token.cancel();
         running.await.unwrap();

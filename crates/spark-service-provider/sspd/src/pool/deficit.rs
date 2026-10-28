@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use spark::tree::Leaves;
-
 use super::config::PoolConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,10 +22,11 @@ pub(crate) struct Plan {
 }
 
 /// Plans at most `max_trees` whole trees for the largest deficits first, within
-/// `budget_sats` with `output_fee_sats` charged per tree. `pending_creations`
+/// `budget_sats` with `output_fee_sats` charged per tree. `available` is the
+/// number of usable leaves of each denomination. `pending_creations`
 /// counts towards the target, and `requested` is on top of it.
 pub(crate) fn compute_trees_needed(
-    current_leaves: &Leaves,
+    available: &HashMap<u64, u32>,
     config: &PoolConfig,
     budget_sats: u64,
     output_fee_sats: u64,
@@ -35,21 +34,11 @@ pub(crate) fn compute_trees_needed(
     requested: &HashMap<u64, u32>,
     max_trees: usize,
 ) -> Plan {
-    let mut counts: HashMap<u64, u32> = HashMap::new();
-    for leaf in current_leaves
-        .available
-        .iter()
-        .chain(&current_leaves.available_missing_from_operators)
-    {
-        let count = counts.entry(leaf.value).or_default();
-        *count = count.saturating_add(1);
-    }
-
     let mut deficits: Vec<(u64, u32, u32)> = config
         .denominations()
         .into_iter()
         .filter_map(|denom| {
-            let current = counts.get(&denom).copied().unwrap_or(0);
+            let current = available.get(&denom).copied().unwrap_or(0);
             let pending = pending_creations.get(&denom).copied().unwrap_or(0);
             let short = config
                 .leaves_per_denomination
@@ -95,65 +84,19 @@ pub(crate) fn compute_trees_needed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spark::tree::{TreeNode, TreeNodeId, TreeNodeStatus};
-
-    fn make_leaves(values: &[u64]) -> Leaves {
-        let available = values.iter().map(|&v| make_node(v)).collect();
-        Leaves {
-            available,
-            not_available: vec![],
-            available_missing_from_operators: vec![],
-            reserved_for_payment: vec![],
-            reserved_for_swap: vec![],
+    fn make_leaves(values: &[u64]) -> HashMap<u64, u32> {
+        let mut counts = HashMap::new();
+        for value in values {
+            let count: &mut u32 = counts.entry(*value).or_default();
+            *count = count.saturating_add(1);
         }
-    }
-
-    fn make_node(value: u64) -> TreeNode {
-        use bitcoin::Transaction;
-
-        TreeNode {
-            id: TreeNodeId::generate(),
-            tree_id: String::new(),
-            value,
-            parent_node_id: None,
-            node_tx: Transaction {
-                version: bitcoin::transaction::Version::non_standard(3),
-                lock_time: bitcoin::absolute::LockTime::ZERO,
-                input: vec![],
-                output: vec![],
-            },
-            refund_tx: None,
-            direct_tx: None,
-            direct_refund_tx: None,
-            direct_from_cpfp_refund_tx: None,
-            vout: 0,
-            verifying_public_key: dummy_pubkey(),
-            owner_identity_public_key: None,
-            signing_keyshare: dummy_keyshare(),
-            status: TreeNodeStatus::Available,
-        }
-    }
-
-    fn dummy_pubkey() -> bitcoin::secp256k1::PublicKey {
-        use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-        let secp = Secp256k1::new();
-        let sk = SecretKey::from_slice(&[1u8; 32]).unwrap();
-        PublicKey::from_secret_key(&secp, &sk)
-    }
-
-    fn dummy_keyshare() -> spark::tree::SigningKeyshare {
-        spark::tree::SigningKeyshare {
-            owner_identifiers: vec![],
-            threshold: 2,
-            public_key: dummy_pubkey(),
-        }
+        counts
     }
 
     fn config(target: u32, max_power: u32) -> PoolConfig {
         PoolConfig {
             leaves_per_denomination: target,
             max_denomination_power: max_power,
-            replenish_interval: std::time::Duration::from_secs(60),
         }
     }
 
