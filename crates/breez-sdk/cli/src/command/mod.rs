@@ -1017,6 +1017,7 @@ pub(crate) async fn execute_command(
                         expiry_secs,
                         payment_hash,
                         receiver_identity_public_key: None,
+                        preimage: None,
                     }
                 }
                 ReceivePaymentMethodArg::CrossChain => {

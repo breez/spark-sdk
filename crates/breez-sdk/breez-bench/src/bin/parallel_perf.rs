@@ -258,6 +258,7 @@ async fn main() -> Result<()> {
                     expiry_secs: Some(3600),
                     payment_hash: None,
                     receiver_identity_public_key: None,
+                    preimage: None,
                 },
             })
             .await?

@@ -2053,6 +2053,13 @@ pub enum ReceivePaymentMethod {
         /// Spark identity public key that will receive the payment.
         /// If absent, the connected wallet's identity public key is used.
         receiver_identity_public_key: Option<String>,
+        /// If set, creates an invoice for the hash of this preimage (hex-encoded)
+        /// instead of one the SDK generates. The SSP settles the payment without
+        /// the receiver, and the payer learns the preimage. Use a random value
+        /// below the secp256k1 group order, and a new one for each invoice. The
+        /// invoice never includes a Spark address. Set at most one of this and
+        /// `payment_hash`.
+        preimage: Option<String>,
     },
     CrossChain {
         /// The selected cross-chain route in the receive direction.

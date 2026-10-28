@@ -308,6 +308,7 @@ impl BreezSdk {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
+        preimage: Option<String>,
     ) -> Result<ReceivePaymentResponse, SdkError> {
         receive::receive_bolt11_invoice(
             self,
@@ -316,6 +317,7 @@ impl BreezSdk {
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            preimage,
         )
         .await
     }
@@ -327,6 +329,7 @@ impl BreezSdk {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
+        preimage: Option<String>,
     ) -> Result<LightningReceivePayment, SdkError> {
         receive::receive_bolt11_invoice_inner(
             self,
@@ -335,6 +338,7 @@ impl BreezSdk {
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            preimage,
         )
         .await
     }
