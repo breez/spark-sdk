@@ -12,6 +12,8 @@ To create an invoice for another Spark wallet, set {{#name receiver_identity_pub
 
 **Note:** the payment may fallback to a direct Spark payment (if the payer's client supports this).
 
+To create the invoice with your own preimage, set {{#name preimage}}. Each invoice needs a new random preimage. An invoice with a user-created preimage never includes a Spark address.
+
 {{#tabs receive_payment:receive-payment-lightning-bolt11}}
 
 #### LNURL-Pay & Lightning address
