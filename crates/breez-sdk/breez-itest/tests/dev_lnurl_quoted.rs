@@ -13,6 +13,7 @@ use tracing::info;
 
 const FUNDING_SATS: u64 = 22_000;
 const AMOUNT_SATS: u64 = 10_000;
+const SEND_ALL_FUNDING_SATS: u64 = 5_000;
 
 /// Alice pays Bob's lightning address `AMOUNT_SATS`, and returns the payment
 /// hash of the invoice she paid and Bob's settled receive.
@@ -148,6 +149,110 @@ async fn test_dev_lnurl_quoted_receive() -> Result<()> {
     assert!(received.fees > 0, "a quoted receive carries a fee");
     assert_eq!(received.amount + received.fees, u128::from(AMOUNT_SATS));
     assert_eq!(fee, Some(i64::try_from(received.fees)?));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_dev_lnurl_quoted_send_all() -> Result<()> {
+    let Some(dev) = DevEnv::from_env() else {
+        return Ok(());
+    };
+
+    let mut config = LnurlImageConfig::default()
+        .with_include_spark_address(false)
+        .with_spark_deployment(SparkDeployment::from(&dev.spark_config))
+        .with_partner_jwt(dev.partner_jwt());
+    config.docker_config.image_tag = "dev-quoted".to_string();
+    let lnurl = LnurlFixture::with_config(config).await?;
+    lnurl.set_fee_quoting(false).await?;
+
+    let mut bob = dev
+        .wallet(DevWalletOptions {
+            lnurl_domain: Some(lnurl.http_url().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let address = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobsendall".to_string(),
+            description: None,
+        })
+        .await?
+        .lightning_address;
+
+    let alice = dev
+        .wallet(DevWalletOptions {
+            partner_jwt: true,
+            ..Default::default()
+        })
+        .await?;
+    dev.fund(&alice, SEND_ALL_FUNDING_SATS).await?;
+    let balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .balance_sats;
+
+    // Sends the whole balance with the fees taken out of it.
+    let InputType::LightningAddress(details) = alice.sdk.parse(&address).await? else {
+        bail!("expected a lightning address");
+    };
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: u128::from(balance),
+            pay_request: details.pay_request,
+            comment: None,
+            validate_success_action_url: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+        })
+        .await?;
+    let invoice_sats = prepare_response
+        .invoice_details
+        .amount_msat
+        .unwrap_or_default()
+        / 1000;
+    info!(
+        "Send-all prepared: balance {balance} invoice {invoice_sats} fee {} quoted {}",
+        prepare_response.fee_sats,
+        prepare_response.fee_quote.is_some()
+    );
+    assert!(prepare_response.fee_quote.is_some(), "the send is quoted");
+    assert_eq!(invoice_sats + prepare_response.fee_sats, balance);
+
+    let sent = alice
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response,
+            idempotency_key: None,
+        })
+        .await?
+        .payment;
+    let sent = settled(&alice, &sent.id).await?;
+    let event =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 120).await?;
+    let received = settled(&bob, &event.id).await?;
+    let left = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .balance_sats;
+    info!(
+        "Send-all: sent amount {} fees {}, Bob received {}, Alice holds {left}",
+        sent.amount, sent.fees, received.amount
+    );
+    assert_eq!(left, 0);
+    assert_eq!(sent.amount + sent.fees, u128::from(balance));
+    assert_eq!(sent.amount, u128::from(invoice_sats));
+    assert_eq!(received.amount, u128::from(invoice_sats));
 
     Ok(())
 }

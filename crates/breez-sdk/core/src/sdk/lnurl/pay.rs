@@ -2,13 +2,15 @@ use breez_sdk_common::lnurl::{
     error::LnurlError,
     pay::{CallbackResponse, ValidatedCallbackResponse, validate_lnurl_pay},
 };
-use tracing::info;
+use spark_wallet::SendQuoteAmount;
+use tracing::{info, warn};
 
 use crate::{
-    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayContext, LnurlPayInfo,
-    LnurlPayRequest, LnurlPayRequestDetails, LnurlPayResponse, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, PublishSignedLnurlPayResponse, SendPaymentMethod,
-    SignedTransferPackage, SuccessAction, TransferTarget, UnsignedTransferPackage,
+    ConversionEstimate, ConversionType, FeePolicy, InputType, LightningFeeQuote, LnurlPayContext,
+    LnurlPayInfo, LnurlPayRequest, LnurlPayRequestDetails, LnurlPayResponse,
+    PrepareLnurlPayRequest, PrepareLnurlPayResponse, PublishSignedLnurlPayResponse,
+    SendPaymentMethod, SignedTransferPackage, SuccessAction, TransferTarget,
+    UnsignedTransferPackage,
     error::SdkError,
     events::SdkEvent,
     models::{PrepareSendPaymentResponse, SendPaymentRequest},
@@ -169,6 +171,13 @@ async fn prepare_fees_included(
         )));
     }
 
+    if sdk.quote_lightning_sends && conversion_estimate.is_none() {
+        match prepare_quoted_fees_included(sdk, &request, amount_sats, min_sendable_sats).await {
+            Ok(response) => return Ok(response),
+            Err(e) => warn!("Sending without a fee quote: {e}"),
+        }
+    }
+
     // 2. First query: get invoice for full amount to estimate fees.
     // Note: we don't intend to pay this invoice, it's only for fee estimation.
     let first_data = query_lnurl_invoice(sdk, &request, amount_sats.saturating_mul(1_000)).await?;
@@ -227,9 +236,64 @@ async fn prepare_fees_included(
         success_action: success_data.success_action.map(From::from),
         conversion_estimate,
         fee_policy: FeePolicy::FeesIncluded,
-        // Fees-included sends overpay the invoice to drain the wallet, which
-        // no quote prices.
+        // Unquoted: the send overpays the invoice to spend the whole amount.
         fee_quote: None,
+    })
+}
+
+/// A `FeesIncluded` LNURL pay priced by a send quote. The invoice is sized by
+/// the fees quoted on paying the full amount, and the quote spends exactly
+/// that amount on it: whatever the fees leave beyond the invoice goes to them.
+async fn prepare_quoted_fees_included(
+    sdk: &BreezSdk,
+    request: &PrepareLnurlPayRequest,
+    amount_sats: u64,
+    min_sendable_sats: u64,
+) -> Result<PrepareLnurlPayResponse, SdkError> {
+    let sizing_invoice =
+        query_lnurl_invoice(sdk, request, amount_sats.saturating_mul(1_000)).await?;
+    let sizing_quote = sdk
+        .spark_wallet
+        .fetch_lightning_send_quote(&sizing_invoice.pr, SendQuoteAmount::Invoice, None)
+        .await?;
+    let actual_amount = amount_sats.saturating_sub(
+        sizing_quote
+            .total_sats
+            .saturating_sub(sizing_quote.amount_sats),
+    );
+    if actual_amount < min_sendable_sats {
+        return Err(SdkError::InvalidInput(format!(
+            "Amount after fees ({actual_amount} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+        )));
+    }
+
+    let success_data =
+        query_lnurl_invoice(sdk, request, actual_amount.saturating_mul(1_000)).await?;
+    let quote = sdk
+        .spark_wallet
+        .fetch_lightning_send_quote(&success_data.pr, SendQuoteAmount::Total(amount_sats), None)
+        .await?;
+    let InputType::Bolt11Invoice(invoice_details) = sdk.parse(&success_data.pr).await? else {
+        return Err(SdkError::Generic(
+            "Expected Bolt11 invoice from LNURL".to_string(),
+        ));
+    };
+    let fee_sats = quote.total_sats.saturating_sub(quote.amount_sats);
+    info!(
+        "LNURL FeesIncluded quoted: amount={amount_sats}, receiver_amount={}, fee={fee_sats}",
+        quote.amount_sats
+    );
+
+    Ok(PrepareLnurlPayResponse {
+        amount_sats,
+        comment: request.comment.clone(),
+        pay_request: request.pay_request.clone(),
+        invoice_details,
+        fee_sats,
+        success_action: success_data.success_action.map(From::from),
+        conversion_estimate: None,
+        fee_policy: FeePolicy::FeesIncluded,
+        fee_quote: Some(LightningFeeQuote::from(&quote)),
     })
 }
 
@@ -241,6 +305,10 @@ pub(super) async fn send(
     sdk.maybe_ensure_spark_private_mode_initialized().await?;
 
     let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
+    let has_conversion = request.prepare_response.conversion_estimate.is_some();
+    // Conversions and quoted sends spend the whole prepared amount.
+    let spends_amount =
+        has_conversion || (is_fees_included && request.prepare_response.fee_quote.is_some());
 
     // For FeesIncluded, extract amount from the invoice (set during prepare)
     let receiver_amount_sats: u64 = if is_fees_included {
@@ -254,8 +322,8 @@ pub(super) async fn send(
         request.prepare_response.amount_sats
     };
 
-    // Calculate amount override for FeesIncluded operations
-    let amount_override = if is_fees_included {
+    // Calculate amount override for unquoted FeesIncluded operations
+    let amount_override = if is_fees_included && !spends_amount {
         // Re-estimate current fee for the invoice
         let current_fee = sdk
             .spark_wallet
@@ -286,10 +354,10 @@ pub(super) async fn send(
     };
 
     // For conversions, use FeesIncluded so the send path deducts fees from
-    // the post-conversion balance. For non-conversion FeesIncluded, the LNURL
-    // flow handles fees via invoice sizing and amount_override.
-    let has_conversion = request.prepare_response.conversion_estimate.is_some();
-    let internal_fee_policy = if is_fees_included && has_conversion {
+    // the post-conversion balance, and for quoted sends so the quote spends
+    // the whole amount. Otherwise the LNURL flow handles fees via invoice
+    // sizing and amount_override.
+    let internal_fee_policy = if is_fees_included && spends_amount {
         FeePolicy::FeesIncluded
     } else {
         FeePolicy::FeesExcluded
@@ -307,9 +375,10 @@ pub(super) async fn send(
                 },
                 // For conversions, use the prepare's total amount (before fee
                 // deduction) so the sats_change logic in complete_conversion_and_send
-                // correctly computes the post-conversion amount override.
-                // For non-conversions, use the invoice amount.
-                amount: if has_conversion {
+                // correctly computes the post-conversion amount override, and
+                // for quoted sends the total the quote spends.
+                // Otherwise, use the invoice amount.
+                amount: if spends_amount {
                     u128::from(request.prepare_response.amount_sats)
                 } else {
                     u128::from(receiver_amount_sats)
@@ -425,7 +494,10 @@ pub(super) async fn build_package(
         ));
     }
 
-    let receiver_amount_sats: u64 = if prepare_response.fee_policy == FeePolicy::FeesIncluded {
+    // A fees-included quote spends the whole amount.
+    let receiver_amount_sats: u64 = if prepare_response.fee_policy == FeePolicy::FeesIncluded
+        && prepare_response.fee_quote.is_none()
+    {
         prepare_response
             .invoice_details
             .amount_msat

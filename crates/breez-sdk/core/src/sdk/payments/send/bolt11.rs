@@ -48,9 +48,6 @@ pub(super) async fn send(
 
     // A quote prices the Lightning route for exactly the amounts it names, so
     // it is committed only for a Lightning send of those.
-    // TODO: a fees-included LNURL send overpays a fixed-amount invoice by its
-    // override and goes unquoted: a GROSS quote on such an invoice pays the
-    // excess to the payee, not to fees.
     let quote = fee_quote.filter(|_| !is_spark_route && amount_override.is_none());
     let amount_to_send = if let Some(quote) = quote {
         invoice_details
@@ -100,14 +97,14 @@ pub(super) async fn send(
     // Under FeesIncluded, record the net amount reaching the receiver (the
     // fee-deducted amount_to_send) rather than the gross total, so amount + fees
     // equals what the user paid, consistent with the coop-exit, spark, and
-    // client-signing paths. Other flows keep the requested amount: LNURL runs
-    // internally as FeesExcluded and overpays the fixed invoice to drain the
-    // wallet, but that overpayment is paid to the SSP as fees, not to the
-    // receiver, so the displayed amount must stay the invoice amount.
-    let displayed_amount = if is_fees_included {
-        amount_to_send.unwrap_or(amount)
-    } else {
-        amount
+    // client-signing paths. Other flows keep the requested amount: an unquoted
+    // LNURL send runs internally as FeesExcluded and overpays the fixed invoice,
+    // but that overpayment is paid to the SSP as fees, not to the receiver, so
+    // the displayed amount must stay the invoice amount.
+    let displayed_amount = match quote {
+        Some(quote) if is_fees_included => u128::from(quote.payment_msats.div_ceil(1000)),
+        _ if is_fees_included => amount_to_send.unwrap_or(amount),
+        _ => amount,
     };
 
     let payment = match quote {

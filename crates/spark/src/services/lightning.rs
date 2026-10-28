@@ -290,8 +290,9 @@ pub enum SendQuoteAmount {
     Invoice,
     /// What an amountless invoice is paid, the fees on top.
     Payment(u64),
-    /// What the wallet spends in all on an amountless invoice: the payment is
-    /// what is left after the fees.
+    /// What the wallet spends in all. An amountless invoice is paid what is
+    /// left after the fees. An invoice with its own amount is paid that, and
+    /// the fees take the rest.
     Total(u64),
 }
 
@@ -1042,14 +1043,16 @@ impl LightningService {
                 Some(msats)
             }
             (None, SendQuoteAmount::Payment(sats)) if sats > 0 => Some(sats.saturating_mul(1000)),
-            (None, SendQuoteAmount::Total(sats)) => {
+            // An invoice with its own amount is paid exactly that: what the
+            // total leaves beyond it and the fees goes to the fees.
+            (_, SendQuoteAmount::Total(sats)) => {
                 if total_sats != sats {
                     return Err(QuoteError::invalid(format!(
                         "the quote spends {total_sats} sats, not the {sats} asked for"
                     ))
                     .into());
                 }
-                None
+                invoice_msats
             }
             _ => {
                 return Err(
@@ -2731,8 +2734,8 @@ mod quoted_payment_tests {
         .await;
     }
 
-    /// A send quote on an amountless invoice whose SSP prices `payment_msats`,
-    /// recording what each quote request asked for.
+    /// A send quote whose SSP prices `payment_msats`, recording what each
+    /// quote request asked for.
     async fn amountless_quoting_service(
         payment_msats: u64,
     ) -> (LightningService, Arc<ScriptedSsp>, sha256::Hash) {
@@ -2780,6 +2783,42 @@ mod quoted_payment_tests {
             .fetch_lightning_send_quote(
                 &bolt11(payment_hash, None),
                 SendQuoteAmount::Total(101_000),
+                None,
+            )
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[async_test_all]
+    async fn a_total_on_an_invoice_with_its_own_amount_pays_the_invoice() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                SendQuoteAmount::Total(101_500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let (_, input) = &ssp.operations()[0];
+        assert_eq!(input["amount_basis"], "GROSS");
+        assert_eq!(input["amount_sats"], 101_500);
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.payment_msats, INVOICE_MSATS);
+        assert_eq!(quote.amount_to_send, None);
+    }
+
+    #[async_test_all]
+    async fn a_total_overpaying_an_invoice_with_its_own_amount_is_refused() {
+        let (service, _, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS - 1_000)),
+                SendQuoteAmount::Total(101_500),
                 None,
             )
             .await;
