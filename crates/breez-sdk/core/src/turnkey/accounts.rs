@@ -104,6 +104,19 @@ impl TurnkeyClient {
             .ok_or_else(|| TurnkeyError::UnexpectedResponse("no account address".into()))
     }
 
+    /// Creates the account at `path` with `address_format` (see
+    /// [`Self::create_accounts`]), for a caller that already looked it up.
+    async fn create_account(
+        &self,
+        path: &str,
+        address_format: &'static str,
+    ) -> Result<String, TurnkeyError> {
+        self.create_accounts(path, &[address_format])
+            .await?
+            .pop()
+            .ok_or_else(|| TurnkeyError::UnexpectedResponse("no account address".into()))
+    }
+
     /// Creates the accounts at `path` with `address_formats` in one activity,
     /// returning their addresses in order. A 409 means one of them already
     /// exists, so their addresses are read back.
@@ -238,7 +251,7 @@ impl TurnkeyClient {
         {
             return Ok(public_key);
         }
-        self.ensure_account(&path, ADDRESS_FORMAT_COMPRESSED).await
+        self.create_account(&path, ADDRESS_FORMAT_COMPRESSED).await
     }
 
     /// Internal (untweaked) public key (hex) for a P2TR account at `path`,
@@ -258,7 +271,7 @@ impl TurnkeyClient {
         {
             return Ok(public_key);
         }
-        self.ensure_account(&path, bitcoin_p2tr_format(network))
+        self.create_account(&path, bitcoin_p2tr_format(network))
             .await?;
         self.account_by_path(&path)
             .await?
@@ -857,6 +870,34 @@ mod tests {
             .unwrap();
         assert_eq!(found, address(ADDRESS_FORMAT_BITCOIN_REGTEST_P2TR));
         assert_eq!(wallet.creates(), 0);
+    }
+
+    // A key at a new path costs one lookup before the create.
+    #[tokio::test]
+    async fn new_path_keys_are_looked_up_once() {
+        let wallet = FakeWallet::with(&[]);
+        client(wallet.clone())
+            .compressed_pubkey_at(PATH.to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            *wallet.endpoints.lock().unwrap(),
+            ["get_wallet_account", "create_wallet_accounts"]
+        );
+
+        let wallet = FakeWallet::with(&[]);
+        client(wallet.clone())
+            .p2tr_pubkey_at(PATH.to_string(), Network::Regtest)
+            .await
+            .unwrap();
+        assert_eq!(
+            *wallet.endpoints.lock().unwrap(),
+            [
+                "get_wallet_account",
+                "create_wallet_accounts",
+                "get_wallet_account"
+            ]
+        );
     }
 
     #[tokio::test]
