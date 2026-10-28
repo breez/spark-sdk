@@ -1564,8 +1564,17 @@ pub struct QueryHtlcFilter {
     pub match_role: PreimageRequestRole,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 pub struct Preimage([u8; 32]);
+
+// Writes the hash: the preimage stays secret until its payment settles.
+impl Debug for Preimage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Preimage")
+            .field("hash", &format_args!("{}", self.compute_hash()))
+            .finish()
+    }
+}
 
 impl TryFrom<Vec<u8>> for Preimage {
     type Error = ServiceError;
@@ -2153,5 +2162,18 @@ mod tests {
             "transfer type",
         );
         assert_eq!(transfer_type, TransferType::PreimageSwap);
+    }
+
+    #[test_all]
+    fn debug_fmt_writes_the_hash_not_the_preimage() {
+        let preimage = super::Preimage::try_from(vec![7u8; 32]).unwrap();
+
+        let written = format!("{preimage:?}");
+
+        assert_eq!(
+            written,
+            format!("Preimage {{ hash: {} }}", preimage.compute_hash())
+        );
+        assert!(!written.contains(&preimage.encode_hex()));
     }
 }
