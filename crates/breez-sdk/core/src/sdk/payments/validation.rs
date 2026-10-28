@@ -8,8 +8,8 @@ use breez_sdk_common::input;
 
 use crate::utils::time::try_now_secs;
 use crate::{
-    ConversionOptions, ConversionType, CrossChainRouteFilter, CrossChainRoutePair, FeePolicy,
-    SparkInvoiceDetails,
+    Bolt11InvoiceDetails, ConversionOptions, ConversionType, CrossChainRouteFilter,
+    CrossChainRoutePair, FeePolicy, SparkInvoiceDetails,
     cross_chain::{
         DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
         MIN_CROSS_CHAIN_SLIPPAGE_BPS,
@@ -38,6 +38,16 @@ pub(in crate::sdk) fn validate_spark_invoice_payable(
         )));
     }
 
+    Ok(())
+}
+
+/// Validates that a Bolt11 invoice has not expired.
+pub(in crate::sdk) fn validate_bolt11_invoice_not_expired(
+    details: &Bolt11InvoiceDetails,
+) -> Result<(), SdkError> {
+    if try_now_secs()? > details.timestamp.saturating_add(details.expiry) {
+        return Err(SdkError::InvalidInput("Invoice has expired".to_string()));
+    }
     Ok(())
 }
 

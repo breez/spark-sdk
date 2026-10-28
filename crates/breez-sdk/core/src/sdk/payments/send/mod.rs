@@ -21,7 +21,7 @@ use crate::{
     utils::payments::enrich_payment_conversions,
 };
 
-use super::conversion;
+use super::{conversion, validation};
 
 /// What publishing a signed package produced: one payment per recipient for a
 /// batch package, exactly one for every other kind.
@@ -337,6 +337,13 @@ pub(in crate::sdk) async fn orchestrate_send(
             }
             return Ok(SendPaymentResponse { payment });
         }
+    }
+    // Before conversion, so tokens are not converted for an expired invoice.
+    if let SendPaymentMethod::Bolt11Invoice {
+        invoice_details, ..
+    } = &request.prepare_response.payment_method
+    {
+        validation::validate_bolt11_invoice_not_expired(invoice_details)?;
     }
     let conversion_estimate = request.prepare_response.conversion_estimate.clone();
     // Perform the send payment, with conversion if requested
