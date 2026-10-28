@@ -144,7 +144,7 @@ pub(super) mod tests {
 
     #[test_all]
     fn test_bip374_verify_vectors() {
-        let vectors = include_str!("bip374_test_vectors_verify_proof.csv");
+        let vectors = include_str!("../../../testdata/bip374_test_vectors_verify_proof.csv");
         for line in vectors.lines().skip(1) {
             let fields: Vec<&str> = line.split(',').collect();
             let point = |i: usize| PublicKey::from_str(fields[i]);
