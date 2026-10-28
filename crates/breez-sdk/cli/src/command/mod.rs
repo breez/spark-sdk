@@ -18,9 +18,9 @@ use breez_sdk_spark::{
     ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MaxOnchainFee,
     MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
     PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
-    PrepareSendPaymentRequest, PullReceiver, ReceiveFee, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod,
-    SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    PrepareSendPaymentRequest, PullReceiver, ReceiveFee, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
     SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
     TransferAuthorization, UpdateUserSettingsRequest,
 };

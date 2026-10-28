@@ -8,9 +8,9 @@ use spark::signer::{
     FrostJob, FrostShareResult, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
-    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
+    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer, SignQuoteRequest,
     SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest,
-    SignedSparkInvoice, SignerError, SparkSigner, StartStaticDepositRefundRequest,
+    SignedQuote, SignedSparkInvoice, SignerError, SparkSigner, StartStaticDepositRefundRequest,
     StartWatchtowerExitRecoveryRequest, StartedStaticDepositRefund, StartedWatchtowerExitRecovery,
 };
 use spark::tree::TreeNodeId;
@@ -153,6 +153,14 @@ impl SparkSigner for CountingSparkSigner {
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError> {
         self.inner.prepare_token_transaction(request).await
+    }
+
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError> {
+        self.inner.sign_quote(request).await
+    }
+
+    fn supports_split_transfers(&self) -> bool {
+        self.inner.supports_split_transfers()
     }
 }
 

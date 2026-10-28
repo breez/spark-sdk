@@ -2183,6 +2183,8 @@ mod quoted_payment_tests {
                 Session {
                     token: "token".to_string(),
                     expiration: u64::MAX / 2,
+                    refresh_token: None,
+                    refresh_token_expiration: None,
                 },
             )
             .await
@@ -2215,6 +2217,7 @@ mod quoted_payment_tests {
             1,
             Arc::clone(&operator_pool),
             None,
+            false,
         ));
         let service = LightningService::new(
             operator_pool,
