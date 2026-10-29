@@ -166,7 +166,9 @@ impl ChainQueries {
             .collect()
     }
 
-    async fn tip_height(&mut self) -> Option<u32> {
+    /// The tip height, requested once per call. `None` when the chain service
+    /// failed the request.
+    pub(crate) async fn tip_height(&mut self) -> Option<u32> {
         if matches!(self.tip, Tip::NotRequested) {
             self.tip = match self.chain.tip_height().await {
                 Ok(tip) => Tip::At(tip),

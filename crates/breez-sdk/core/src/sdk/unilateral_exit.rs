@@ -212,7 +212,6 @@ impl BreezSdk {
         queries: &mut ChainQueries,
     ) -> Result<UnilateralBuild, SdkError> {
         let btc_network: bitcoin::Network = self.config.network.into();
-        let chain = self.chain_service.as_ref();
         let dest_script_len = destination.script_pubkey().len();
 
         let supplied = funding_inputs
@@ -362,7 +361,7 @@ impl BreezSdk {
         // A sweep over zero inputs would error: return without one when no refund
         // is on-chain yet. A later run sweeps any refund that surfaces.
         if build.refund_outputs.is_empty() {
-            resolve_statuses(chain, &mut transactions).await?;
+            resolve_statuses(queries, &mut transactions).await?;
             debug!("build_unilateral_exit: no refund outputs to sweep, omitting the sweep");
             return Ok(UnilateralBuild {
                 leaves,
@@ -416,7 +415,7 @@ impl BreezSdk {
             status: sweep_status,
         });
 
-        resolve_statuses(chain, &mut transactions).await?;
+        resolve_statuses(queries, &mut transactions).await?;
         debug!(
             transactions = transactions.len(),
             recoverable_value_sats,
@@ -628,7 +627,7 @@ pub(super) async fn check_recovery_transactions(
         tx.status = status_after_check(tx.status, &check, &txid);
     }
 
-    resolve_statuses(queries.chain_service(), transactions).await?;
+    resolve_statuses(queries, transactions).await?;
     Ok(check.diverged)
 }
 
@@ -976,7 +975,7 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
 /// transaction waiting rather than ready, the direction that never sends a
 /// transaction the mempool would reject.
 pub(super) async fn resolve_statuses(
-    chain: &dyn BitcoinChainService,
+    queries: &mut ChainQueries,
     transactions: &mut [RecoveryTransaction],
 ) -> Result<(), SdkError> {
     let confirmed: HashSet<&str> = transactions
@@ -1005,7 +1004,6 @@ pub(super) async fn resolve_statuses(
             _ => None,
         })
         .collect();
-    let mut tip: Option<u32> = None;
 
     let mut resolved = Vec::with_capacity(transactions.len());
     for (tx, met) in transactions.iter().zip(&met) {
@@ -1028,17 +1026,19 @@ pub(super) async fn resolve_statuses(
         }
         let decoded = deserialize_hex::<Transaction>(&tx.tx_hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))?;
-        let Some(spendable_at) = spendable_at_height(chain, &decoded, &mut heights).await else {
+        let Some(spendable_at) =
+            spendable_at_height(queries.chain_service(), &decoded, &mut heights).await
+        else {
             resolved.push(ExitTransactionStatus::WaitingForTimelock {
                 spendable_at_height: None,
             });
             continue;
         };
-        if tip.is_none() {
-            tip = chain.tip_height().await.ok();
-        }
         // A transaction is accepted while it would be valid in the next block.
-        let matured = tip.is_some_and(|tip| tip.saturating_add(1) >= spendable_at);
+        let matured = queries
+            .tip_height()
+            .await
+            .is_some_and(|tip| tip.saturating_add(1) >= spendable_at);
         resolved.push(if matured {
             ExitTransactionStatus::Ready
         } else {
@@ -1281,6 +1281,8 @@ mod tests {
         },
         error::SignerError,
     };
+    use std::sync::Arc;
+
     use bitcoin::hashes::Hash;
     use spark_wallet::{ChainQuery, ChainResult, ExitBranch, ExitTx};
 
@@ -1902,7 +1904,9 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[1].status, ExitTransactionStatus::Ready);
     }
@@ -1931,8 +1935,54 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
+        assert_eq!(
+            txs[1].status,
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: Some(106)
+            }
+        );
+    }
+
+    /// The chain service fails the tip height. The SDK requests it once for all
+    /// the transactions waiting on a timelock.
+    #[macros::async_test_all]
+    async fn a_failed_tip_height_is_requested_once() {
+        let parent = model_tx(
+            &timelocked_tx(Txid::from_byte_array([9; 32]), 0),
+            None,
+            vec![],
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(100),
+            },
+        );
+        let parent_txid = Txid::from_str(&parent.txid).unwrap();
+        let children: Vec<RecoveryTransaction> = [6, 7, 8]
+            .into_iter()
+            .map(|csv| {
+                model_tx(
+                    &timelocked_tx(parent_txid, csv),
+                    Some(csv),
+                    vec![parent.txid.clone()],
+                    ExitTransactionStatus::WaitingForDependencies,
+                )
+            })
+            .collect();
+        let chain = Arc::new(ChainStub {
+            tip: None,
+            ..Default::default()
+        });
+
+        let mut txs = vec![parent];
+        txs.extend(children);
+        resolve_statuses(&mut ChainQueries::new(chain.clone()), &mut txs)
+            .await
+            .unwrap();
+
+        assert_eq!(chain.requests.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(
             txs[1].status,
             ExitTransactionStatus::WaitingForTimelock {
@@ -1965,7 +2015,9 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[1].status, ExitTransactionStatus::WaitingForDependencies);
     }
@@ -1989,7 +2041,9 @@ mod tests {
             vec![],
             ExitTransactionStatus::WaitingForDependencies,
         )];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[0].status, ExitTransactionStatus::Ready);
     }
@@ -2011,7 +2065,9 @@ mod tests {
             vec![],
             ExitTransactionStatus::WaitingForDependencies,
         )];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(
             txs[0].status,
