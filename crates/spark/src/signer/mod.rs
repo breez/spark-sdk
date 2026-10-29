@@ -2,7 +2,6 @@ mod default_signer;
 mod error;
 mod models;
 mod nonce_store;
-mod secret_sharing;
 mod spark_signer;
 mod spark_signer_adapter;
 #[cfg(test)]

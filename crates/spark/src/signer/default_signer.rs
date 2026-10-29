@@ -19,9 +19,9 @@ use thiserror::Error;
 use crate::signer::nonce_store::NonceStore;
 use crate::signer::{
     CommitAndSignFrostRequest, CommittedFrostShare, EncryptedSecret, SignFrostRequest,
-    secret_sharing,
 };
 use crate::signer::{SecretSource, SecretToSplit};
+use crate::utils::secret_sharing;
 use crate::{
     Network,
     signer::{Signer, SignerError},
