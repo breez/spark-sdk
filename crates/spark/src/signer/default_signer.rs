@@ -16,11 +16,11 @@ use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, VerifyingKey};
 use thiserror::Error;
 
+use crate::signer::SecretSource;
 use crate::signer::nonce_store::NonceStore;
 use crate::signer::{
     CommitAndSignFrostRequest, CommittedFrostShare, EncryptedSecret, SignFrostRequest,
 };
-use crate::signer::{SecretSource, SecretToSplit};
 use crate::utils::secret_sharing;
 use crate::{
     Network,
@@ -507,16 +507,11 @@ impl Signer for DefaultSigner {
 
     async fn split_secret_with_proofs(
         &self,
-        secret: &SecretToSplit,
+        secret: &SecretSource,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
-        let secret_bytes = match secret {
-            SecretToSplit::SecretSource(privkey_source) => {
-                privkey_source.to_secret_key(self)?.secret_bytes().to_vec()
-            }
-            SecretToSplit::Preimage(bytes) => bytes.clone(),
-        };
+        let secret_bytes = secret.to_secret_key(self)?.secret_bytes();
         let secret_as_scalar = secret_sharing::from_bytes_to_scalar(&secret_bytes)?;
         let shares = secret_sharing::split_secret_with_proofs(
             &secret_as_scalar,
