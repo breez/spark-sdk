@@ -1720,6 +1720,21 @@ pub async fn test_update_token_outputs_skips_spent_output(store: &dyn TokenOutpu
         .await
         .unwrap();
     assert_available(store, &[200, 300]).await;
+
+    // The marker also survives a refresh that started after the spend, so the store still skips
+    // the output when the wallet applies the transaction after that refresh.
+    store
+        .set_tokens_outputs(
+            &create_token_outputs(1, vec![200, 300]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+    store
+        .update_token_outputs(&[], &create_token_outputs(1, vec![100, 300]))
+        .await
+        .unwrap();
+    assert_available(store, &[200, 300]).await;
 }
 
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {

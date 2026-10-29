@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
@@ -12,6 +12,8 @@ use crate::token::{
     TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
     select_token_outputs_from,
 };
+
+const SPENT_MARKER_CLEANUP_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Default)]
 pub struct InMemoryTokenOutputStore {
@@ -152,17 +154,24 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             return Ok(());
         }
 
-        // Remove spent entries that operators have had time to process
+        let cleanup_cutoff = refresh_started_at
+            .checked_sub(SPENT_MARKER_CLEANUP_THRESHOLD)
+            .unwrap_or(refresh_started_at);
         state
             .spent_outpoints
-            .retain(|_, spent_at| *spent_at >= refresh_started_at);
+            .retain(|_, spent_at| *spent_at >= cleanup_cutoff);
 
         // Save old pools before replacing
         let old_available = std::mem::take(&mut state.available_token_outputs);
 
         // Build new pools from refresh data, excluding spent outputs
         let now = SystemTime::now();
-        let spent_outpoints: HashSet<OutPoint> = state.spent_outpoints.keys().cloned().collect();
+        let spent_outpoints: HashSet<OutPoint> = state
+            .spent_outpoints
+            .iter()
+            .filter(|(_, spent_at)| **spent_at >= refresh_started_at)
+            .map(|(outpoint, _)| outpoint.clone())
+            .collect();
         for output in &token_outputs.outputs {
             let identifier = &output.output.token_identifier;
             let Some(metadata) = token_outputs.metadata_for(identifier) else {
