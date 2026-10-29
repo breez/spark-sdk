@@ -38,8 +38,7 @@ fn identity_path(account: u32) -> String {
 /// wallet's two identity accounts at the identity path: the compressed one
 /// (ECDSA signWith for operator auth and messages) and the Spark-format one
 /// (Schnorr/FROST signWith for Spark-protocol signing). The keys stay in the
-/// enclave; `create_account` is idempotent, so repeating the unprovisioned path
-/// is safe.
+/// enclave. Existing accounts are looked up, so a repeat init creates nothing.
 ///
 /// A supplied `config.identity_public_key` skips both round-trips. It assumes a
 /// prior unprovisioned init for this wallet already materialized both accounts:
@@ -60,11 +59,10 @@ async fn build_client(
     let client = Arc::new(TurnkeyClient::new(config, http).map_err(to_signer_err)?);
     if config.identity_public_key.is_none() {
         client
-            .create_account(identity_path(account), ADDRESS_FORMAT_COMPRESSED)
-            .await
-            .map_err(to_signer_err)?;
-        client
-            .create_account(identity_path(account), address_format)
+            .ensure_accounts(
+                &identity_path(account),
+                &[ADDRESS_FORMAT_COMPRESSED, address_format],
+            )
             .await
             .map_err(to_signer_err)?;
     }

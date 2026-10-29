@@ -47,7 +47,10 @@ pub(crate) struct CreateWalletAccountsResult {
 pub(crate) struct GetWalletAccountRequest {
     pub organization_id: String,
     pub wallet_id: String,
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +63,8 @@ pub(crate) struct GetWalletAccountResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WalletAccount {
     pub address: String,
+    #[serde(default)]
+    pub address_format: String,
     #[serde(default)]
     pub public_key: Option<String>,
 }

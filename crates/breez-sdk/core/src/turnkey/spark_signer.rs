@@ -16,8 +16,7 @@
 //!
 //! The pubkey maps are a performance memoization only. Each derivation's key is
 //! deterministic and immutable, so caching avoids repeat Turnkey round-trips
-//! (and re-issuing a `CREATE_WALLET_ACCOUNTS` activity for a path already
-//! materialized), and never needs invalidation. They are not persistence:
+//! and never needs invalidation. They are not persistence:
 //! in-memory, lost on restart, rebuilt from Turnkey on demand. Correctness does
 //! not depend on them.
 
@@ -641,7 +640,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(&leaf_id));
         let sign_with = self
             .client
-            .create_account(path, bitcoin_p2tr_format(self.network))
+            .ensure_account(&path, bitcoin_p2tr_format(self.network))
             .await
             .map_err(to_spark_err)?;
         let result = self
