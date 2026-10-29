@@ -93,13 +93,14 @@ mod tests {
 
     use bitcoin::hashes::Hash;
     use bitcoin::{Block, BlockHash, FeeRate, Network, OutPoint, Transaction, Txid};
-    use sqlx::PgPool;
+    use deadpool_postgres::Pool;
 
     use super::*;
     use crate::chain::{
         BlockHeader, BroadcastError, ChainError, ChainRepository as _, OutputSpend, WatchedOutput,
     };
     use crate::postgresql::testing::TestDatabase;
+    use crate::postgresql::{query, query_one};
 
     struct Bitcoind {
         tip: Mutex<BlockHash>,
@@ -161,7 +162,7 @@ mod tests {
     }
 
     struct Fixture {
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         tip: BlockHeader,
         queued: OutPoint,
         _database: TestDatabase,
@@ -197,11 +198,8 @@ mod tests {
         }
 
         async fn watch(&self, output: WatchedOutput) {
-            let mut db = self.pool.acquire().await.unwrap();
-            self.chain()
-                .watch_outputs(&mut db, &[output])
-                .await
-                .unwrap();
+            let db = self.pool.get().await.unwrap();
+            self.chain().watch_outputs(&db, &[output]).await.unwrap();
         }
 
         fn chain(&self) -> ChainRepository {
@@ -226,10 +224,9 @@ mod tests {
         }
 
         async fn count(&self, table: &str) -> i64 {
-            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap()
+            let client = self.pool.get().await.unwrap();
+            let sql = format!("SELECT COUNT(*) FROM {table}");
+            query_one(&client, &sql, &[]).await.unwrap().get(0)
         }
 
         async fn watch_spender(&self) -> OutPoint {
@@ -331,11 +328,10 @@ mod tests {
             [[fixture.queued], [spender_output]]
         );
         assert_eq!(fixture.count("brz_ssp_chain_unchecked_outputs").await, 0);
-        let blocks: Vec<Option<String>> =
-            sqlx::query_scalar("SELECT block_hash FROM brz_ssp_chain_spent_outputs")
-                .fetch_all(&*fixture.pool)
-                .await
-                .unwrap();
+        let client = fixture.pool.get().await.unwrap();
+        let sql = "SELECT block_hash FROM brz_ssp_chain_spent_outputs";
+        let rows = query(&client, sql, &[]).await.unwrap();
+        let blocks: Vec<Option<String>> = rows.iter().map(|row| row.get(0)).collect();
         let tip = Some(fixture.tip.hash.to_string());
         assert_eq!(blocks, [tip.clone(), tip]);
     }

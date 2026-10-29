@@ -11,23 +11,23 @@ use bitcoin::{
     Witness,
 };
 use chrono::{Duration, Utc};
+use deadpool_postgres::Pool;
 use frost_secp256k1_tr::Identifier;
 use spark::services::TransferId;
 use spark::tree::{LeafPedigree, SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{Dispute, LeafStoreError, PostgresLeafStore, RenewalCursor, Reported, exit_chain};
 use crate::chain::ConfirmedOutput;
 use crate::chain::TransactionConfirmations;
 use crate::chain::{BlockHeader, ChainRepository as _, OutputSpend, Spender, SpentTxo};
-use crate::postgresql::ChainRepository;
 use crate::postgresql::testing::TestDatabase;
+use crate::postgresql::{ChainRepository, execute, query_one};
 
 struct Fixture {
     store: Arc<PostgresLeafStore>,
     chain: Arc<ChainRepository>,
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
     _database: TestDatabase,
 }
 
@@ -56,10 +56,9 @@ impl Fixture {
     }
 
     async fn count(&self, table: &str) -> i64 {
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(&*self.pool)
-            .await
-            .unwrap()
+        let client = self.pool.get().await.unwrap();
+        let sql = format!("SELECT COUNT(*) FROM {table}");
+        query_one(&client, &sql, &[]).await.unwrap().get(0)
     }
 
     async fn own(&self, leaves: &[TreeNode]) -> Result<(), LeafStoreError> {
@@ -75,16 +74,18 @@ impl Fixture {
 
     async fn own_pedigrees(&self, pedigrees: &[LeafPedigree]) -> Result<(), LeafStoreError> {
         let leaves: Vec<TreeNode> = pedigrees.iter().map(|p| p.leaf.clone()).collect();
-        let mut db = self.pool.begin().await?;
-        self.store.insert_leaves(&mut db, pedigrees).await?;
-        self.store.observe(&mut db, &leaves, Utc::now()).await?;
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        self.store.insert_leaves(&db, pedigrees).await?;
+        self.store.observe(&db, &leaves, Utc::now()).await?;
         db.commit().await?;
         Ok(())
     }
 
     async fn store_ancestors(&self, pedigrees: &[LeafPedigree]) {
-        let mut db = self.pool.begin().await.unwrap();
-        self.store.insert_leaves(&mut db, pedigrees).await.unwrap();
+        let mut client = self.pool.get().await.unwrap();
+        let db = client.transaction().await.unwrap();
+        self.store.insert_leaves(&db, pedigrees).await.unwrap();
         db.commit().await.unwrap();
     }
 
@@ -145,13 +146,10 @@ impl Fixture {
     }
 
     async fn height(&self, block: BlockHash) -> u64 {
-        let height: i64 =
-            sqlx::query_scalar("SELECT height FROM brz_ssp_chain_blocks WHERE block_hash = $1")
-                .bind(block.to_string())
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap();
-        height.cast_unsigned()
+        let client = self.pool.get().await.unwrap();
+        let sql = "SELECT height FROM brz_ssp_chain_blocks WHERE block_hash = $1";
+        let row = query_one(&client, sql, &[&block.to_string()]).await;
+        row.unwrap().get::<_, i64>(0).cast_unsigned()
     }
 
     fn chain(&self) -> &ChainRepository {
@@ -356,10 +354,10 @@ async fn a_leaf_is_available_only_while_the_operators_agree() {
         leaf: leaf.clone(),
         ancestors: Vec::new(),
     };
-    let mut db = fixture.pool.acquire().await.unwrap();
+    let db = fixture.pool.get().await.unwrap();
     fixture
         .store
-        .insert_leaves(&mut db, std::slice::from_ref(&pedigree))
+        .insert_leaves(&db, std::slice::from_ref(&pedigree))
         .await
         .unwrap();
     fixture.unspent().await;
@@ -367,11 +365,11 @@ async fn a_leaf_is_available_only_while_the_operators_agree() {
 
     let now = Utc::now();
     let observe = async |leaf: &TreeNode, seconds: i64| {
-        let mut db = fixture.pool.acquire().await.unwrap();
+        let db = fixture.pool.get().await.unwrap();
         fixture
             .store
             .observe(
-                &mut db,
+                &db,
                 std::slice::from_ref(leaf),
                 now + Duration::seconds(seconds),
             )
@@ -451,13 +449,10 @@ async fn a_report_rewrites_only_what_changed() {
     let (same, locked) = (root_leaf(1000), root_leaf(1000));
     fixture.own(&[same.clone(), locked.clone()]).await.unwrap();
     let written_at = async |leaf: &TreeNode| -> chrono::DateTime<Utc> {
-        sqlx::query_scalar(
-            "SELECT observed_at FROM brz_ssp_spark_operator_nodes WHERE node_id = $1",
-        )
-        .bind(Uuid::parse_str(&leaf.id.to_string()).unwrap())
-        .fetch_one(&*fixture.pool)
-        .await
-        .unwrap()
+        let client = fixture.pool.get().await.unwrap();
+        let sql = "SELECT observed_at FROM brz_ssp_spark_operator_nodes WHERE node_id = $1";
+        let id = Uuid::parse_str(&leaf.id.to_string()).unwrap();
+        query_one(&client, sql, &[&id]).await.unwrap().get(0)
     };
     let (same_before, locked_before) = (written_at(&same).await, written_at(&locked).await);
 
@@ -485,16 +480,16 @@ async fn a_report_skips_a_leaf_removed_while_it_is_written() {
         leaf: leaf.clone(),
         ancestors: Vec::new(),
     };
-    let mut db = fixture.pool.acquire().await.unwrap();
+    let db = fixture.pool.get().await.unwrap();
     fixture
         .store
-        .insert_leaves(&mut db, std::slice::from_ref(&pedigree))
+        .insert_leaves(&db, std::slice::from_ref(&pedigree))
         .await
         .unwrap();
 
-    let mut removing = fixture.pool.begin().await.unwrap();
-    sqlx::query("DELETE FROM brz_ssp_spark_leaves")
-        .execute(&mut *removing)
+    let mut client = fixture.pool.get().await.unwrap();
+    let removing = client.transaction().await.unwrap();
+    execute(&removing, "DELETE FROM brz_ssp_spark_leaves", &[])
         .await
         .unwrap();
     let store = Arc::clone(&fixture.store);
@@ -520,11 +515,12 @@ async fn a_report_leaves_the_leaves_free_to_be_reserved_and_removed() {
     fixture.own(&[kept.clone(), sent.clone()]).await.unwrap();
     let reservation = reserve(&fixture.store, &[2000]).await.unwrap();
 
-    let mut writing = fixture.pool.begin().await.unwrap();
+    let mut client = fixture.pool.get().await.unwrap();
+    let writing = client.transaction().await.unwrap();
     let mut locked = kept.clone();
     locked.status = TreeNodeStatus::TransferLocked;
     super::rows::observe(
-        &mut writing,
+        &writing,
         &[locked, sent.clone()],
         &[],
         Utc::now() + Duration::seconds(10),
@@ -755,11 +751,12 @@ async fn the_ssp_cannot_store_a_leaf_it_transferred_with_its_old_refund() {
     let reservation = reserve(&fixture.store, &[1000]).await.unwrap();
     fixture.store.transferred(&reservation.id).await.unwrap();
 
-    let mut db = fixture.pool.begin().await.unwrap();
+    let mut client = fixture.pool.get().await.unwrap();
+    let db = client.transaction().await.unwrap();
     let stored = fixture
         .store
         .insert_leaves(
-            &mut db,
+            &db,
             &[LeafPedigree {
                 leaf: leaf.clone(),
                 ancestors: Vec::new(),
@@ -780,11 +777,12 @@ async fn the_store_keeps_its_record_of_a_leaf_over_a_different_one() {
     let mut newer = leaf.clone();
     newer.refund_tx = Some(spend(output(&leaf.node_tx, 0), 1900, &[1000]));
 
-    let mut db = fixture.pool.begin().await.unwrap();
+    let mut client = fixture.pool.get().await.unwrap();
+    let db = client.transaction().await.unwrap();
     let stored = fixture
         .store
         .insert_leaves(
-            &mut db,
+            &db,
             &[LeafPedigree {
                 leaf: newer,
                 ancestors: Vec::new(),
@@ -1075,11 +1073,11 @@ async fn a_renewal_pass_goes_on_from_where_it_was() {
     // request the renewal again and get the renewed leaf back.
     let mut renewed_there = lows[0].clone();
     renewed_there.refund_tx = Some(spend(output(&lows[0].node_tx, 0), 2000, &[1000]));
-    let mut db = fixture.pool.acquire().await.unwrap();
+    let db = fixture.pool.get().await.unwrap();
     let later = Utc::now() + Duration::seconds(10);
     fixture
         .store
-        .observe(&mut db, &[renewed_there], later)
+        .observe(&db, &[renewed_there], later)
         .await
         .unwrap();
 
@@ -1824,11 +1822,10 @@ async fn a_node_reported_as_before_is_not_written_again() {
     };
     fixture.own_pedigrees(&[with_root(&first)]).await.unwrap();
     let xmin = async || -> String {
-        sqlx::query_scalar("SELECT xmin::text FROM brz_ssp_spark_nodes WHERE node_id = $1")
-            .bind(Uuid::parse_str(&root.id.to_string()).unwrap())
-            .fetch_one(&*fixture.pool)
-            .await
-            .unwrap()
+        let client = fixture.pool.get().await.unwrap();
+        let sql = "SELECT xmin::text FROM brz_ssp_spark_nodes WHERE node_id = $1";
+        let id = Uuid::parse_str(&root.id.to_string()).unwrap();
+        query_one(&client, sql, &[&id]).await.unwrap().get(0)
     };
     let before = xmin().await;
 
@@ -1929,9 +1926,9 @@ async fn the_block_of_a_transaction_is_recorded_from_its_confirmations() {
 
     assert_eq!(record(tip, 2).await, 1);
     assert_eq!(chain.tx_heights(&[txid]).await.unwrap()[&txid], 201);
-    let mut db = fixture.pool.acquire().await.unwrap();
+    let db = fixture.pool.get().await.unwrap();
     let (_, heights) = chain
-        .output_states_and_tx_heights(&mut db, &[], &[txid])
+        .output_states_and_tx_heights(&db, &[], &[txid])
         .await
         .unwrap();
     assert_eq!(heights[&txid], 201);

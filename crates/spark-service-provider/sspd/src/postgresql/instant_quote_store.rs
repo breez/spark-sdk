@@ -4,13 +4,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::PgPool;
+use deadpool_postgres::Pool;
+use tokio_postgres::Row;
 
+use super::{execute, query_opt};
 use crate::static_deposit::repository::{
     InstantStaticDepositQuoteRecord, InstantStaticDepositQuoteStore,
 };
 
-#[derive(sqlx::FromRow)]
 struct InstantQuoteRow {
     id: String,
     txid: String,
@@ -22,6 +23,25 @@ struct InstantQuoteRow {
     quote_signature: String,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&Row> for InstantQuoteRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            txid: row.try_get("txid")?,
+            vout: row.try_get("vout")?,
+            network: row.try_get("network")?,
+            deposit_amount_sats: row.try_get("deposit_amount_sats")?,
+            credit_amount_sats: row.try_get("credit_amount_sats")?,
+            destination_address: row.try_get("destination_address")?,
+            quote_signature: row.try_get("quote_signature")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 impl TryFrom<InstantQuoteRow> for InstantStaticDepositQuoteRecord {
@@ -47,11 +67,11 @@ impl TryFrom<InstantQuoteRow> for InstantStaticDepositQuoteRecord {
 }
 
 pub struct PostgresInstantStaticDepositQuoteStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresInstantStaticDepositQuoteStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
@@ -60,38 +80,47 @@ fn sats_to_i64(sats: u64) -> Result<i64, String> {
     i64::try_from(sats).map_err(|e| format!("amount exceeds i64: {e}"))
 }
 
+fn quote(row: &Row) -> Result<InstantStaticDepositQuoteRecord, String> {
+    InstantQuoteRow::try_from(row)
+        .map_err(|e| e.to_string())?
+        .try_into()
+}
+
 #[async_trait]
 impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
     async fn insert(&self, record: &InstantStaticDepositQuoteRecord) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"INSERT INTO brz_ssp_static_deposit_instant_quotes
                (id, txid, vout, network, deposit_amount_sats, credit_amount_sats,
                 destination_address, quote_signature)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+            &[
+                &record.id,
+                &record.txid,
+                &record.vout.cast_signed(),
+                &record.network.to_string(),
+                &sats_to_i64(record.deposit_amount_sats)?,
+                &sats_to_i64(record.credit_amount_sats)?,
+                &record.destination_address,
+                &record.quote_signature,
+            ],
         )
-        .bind(&record.id)
-        .bind(&record.txid)
-        .bind(record.vout.cast_signed())
-        .bind(record.network.to_string())
-        .bind(sats_to_i64(record.deposit_amount_sats)?)
-        .bind(sats_to_i64(record.credit_amount_sats)?)
-        .bind(&record.destination_address)
-        .bind(&record.quote_signature)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn get(&self, id: &str) -> Result<Option<InstantStaticDepositQuoteRecord>, String> {
-        sqlx::query_as::<_, InstantQuoteRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_static_deposit_instant_quotes WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(InstantStaticDepositQuoteRecord::try_from)
+        .as_ref()
+        .map(quote)
         .transpose()
     }
 
@@ -99,11 +128,13 @@ impl InstantStaticDepositQuoteStore for PostgresInstantStaticDepositQuoteStore {
         &self,
         time: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM brz_ssp_static_deposit_instant_quotes WHERE created_at < $1"#)
-            .bind(time)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"DELETE FROM brz_ssp_static_deposit_instant_quotes WHERE created_at < $1"#,
+            &[&time],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 }

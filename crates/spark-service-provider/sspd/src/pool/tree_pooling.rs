@@ -163,7 +163,10 @@ where
     if !confirmed {
         return Ok(Pooling::Unconfirmed);
     }
-    let nodes = pool_repo.tree_nodes(&tree.outpoint).await?;
+    let nodes = pool_repo
+        .tree_nodes(&tree.outpoint)
+        .await?
+        .ok_or("the store has no nodes for the tree")?;
 
     let queried_at = Utc::now();
     let ids: Vec<_> = nodes.leaves.iter().map(|leaf| leaf.id.clone()).collect();

@@ -4,22 +4,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::{Address, Amount, BlockHash, Network, OutPoint, TxOut, address::NetworkUnchecked};
-use futures::TryStreamExt;
-use sqlx::{PgConnection, PgPool, Row, postgres::PgRow};
+use deadpool_postgres::{GenericClient, Pool, PoolError};
+use tokio_postgres::Row;
 use tracing::instrument;
 
+use super::{execute, query, query_opt};
 use crate::chain::{self, AddressUtxo, BlockHeader, ChainRepositoryError, SpentTxo, Txo};
 use crate::wakeup::Wakeup;
 
 #[derive(Debug)]
 pub struct ChainRepository {
     network: Network,
-    pub(super) pool: Arc<PgPool>,
+    pub(super) pool: Arc<Pool>,
     pub(super) watched: Wakeup,
 }
 
 impl ChainRepository {
-    pub fn new(pool: Arc<PgPool>, network: Network) -> Self {
+    pub fn new(pool: Arc<Pool>, network: Network) -> Self {
         Self {
             network,
             pool,
@@ -27,10 +28,10 @@ impl ChainRepository {
         }
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, tx))]
     async fn add_utxos(
         &self,
-        tx: &mut PgConnection,
+        tx: &impl GenericClient,
         tx_outputs: &[AddressUtxo],
     ) -> Result<(), ChainRepositoryError> {
         let tx_ids: Vec<_> = tx_outputs
@@ -46,7 +47,8 @@ impl ChainRepository {
             .iter()
             .map(|u| u.utxo.tx_out.value.to_sat().cast_signed())
             .collect();
-        sqlx::query(
+        execute(
+            tx,
             r#"INSERT INTO brz_ssp_chain_tx_outputs (
                    tx_id
                ,   output_index
@@ -60,12 +62,8 @@ impl ChainRepository {
                ,   $4::bigint[]
                ) AS t(tx_id, output_index, address, amount)
                ON CONFLICT DO NOTHING"#,
+            &[&tx_ids, &output_indices, &addresses, &amounts],
         )
-        .bind(&tx_ids)
-        .bind(&output_indices)
-        .bind(&addresses)
-        .bind(&amounts)
-        .execute(tx)
         .await?;
 
         Ok(())
@@ -75,8 +73,10 @@ impl ChainRepository {
         &self,
         query: &'static str,
     ) -> Result<Option<BlockHeader>, ChainRepositoryError> {
-        let row: Option<(String, i64)> = sqlx::query_as(query).fetch_optional(&*self.pool).await?;
-        row.map(|(hash, height)| {
+        let row = query_opt(&self.pool.get().await?, query, &[]).await?;
+        row.map(|row| {
+            let hash: String = row.try_get(0)?;
+            let height: i64 = row.try_get(1)?;
             Ok(BlockHeader {
                 hash: hash.parse()?,
                 height: height.cast_unsigned(),
@@ -85,7 +85,7 @@ impl ChainRepository {
         .transpose()
     }
 
-    fn map_txo(address: &Address, row: &PgRow) -> Result<Txo, ChainRepositoryError> {
+    fn map_txo(address: &Address, row: &Row) -> Result<Txo, ChainRepositoryError> {
         let tx_id: String = row.try_get("tx_id")?;
         let output_index: i32 = row.try_get("output_index")?;
         let amount: i64 = row.try_get("amount")?;
@@ -102,14 +102,15 @@ impl ChainRepository {
 
     async fn mark_watched_outputs_spent(
         &self,
-        tx: &mut PgConnection,
+        tx: &impl GenericClient,
         block: &BlockHeader,
         txos: &[SpentTxo],
     ) -> Result<(), ChainRepositoryError> {
         let tx_ids: Vec<_> = txos.iter().map(|u| u.outpoint.txid.to_string()).collect();
         let output_indices: Vec<_> = txos.iter().map(|u| u.outpoint.vout.cast_signed()).collect();
         let spending_tx_ids: Vec<_> = txos.iter().map(|u| u.spending_tx.to_string()).collect();
-        sqlx::query(
+        execute(
+            tx,
             r#"INSERT INTO brz_ssp_chain_spent_outputs (
                    tx_id
                ,   output_index
@@ -132,22 +133,23 @@ impl ChainRepository {
                INNER JOIN brz_ssp_chain_watch_outputs w
                    ON w.tx_id = i.tx_id AND w.output_index = i.output_index
                ON CONFLICT DO NOTHING"#,
+            &[
+                &tx_ids,
+                &output_indices,
+                &spending_tx_ids,
+                &block.hash.to_string(),
+                &block.height.cast_signed(),
+            ],
         )
-        .bind(&tx_ids)
-        .bind(&output_indices)
-        .bind(&spending_tx_ids)
-        .bind(block.hash.to_string())
-        .bind(block.height.cast_signed())
-        .execute(tx)
         .await?;
 
         Ok(())
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", skip(self, tx))]
     async fn mark_spent(
         &self,
-        tx: &mut PgConnection,
+        tx: &impl GenericClient,
         txos: &[SpentTxo],
     ) -> Result<(), ChainRepositoryError> {
         let tx_ids: Vec<_> = txos.iter().map(|u| u.outpoint.txid.to_string()).collect();
@@ -159,7 +161,8 @@ impl ChainRepository {
             .map(|u| u.spending_input_index.cast_signed())
             .collect();
 
-        sqlx::query(
+        execute(
+            tx,
             r#"INSERT INTO brz_ssp_chain_tx_inputs (
                    tx_id
                ,   output_index
@@ -182,12 +185,13 @@ impl ChainRepository {
                INNER JOIN brz_ssp_chain_tx_outputs o
                    ON i.tx_id = o.tx_id AND i.output_index = o.output_index
                ON CONFLICT DO NOTHING"#,
+            &[
+                &tx_ids,
+                &tx_output_indices,
+                &spending_tx_ids,
+                &spending_tx_input_indices,
+            ],
         )
-        .bind(&tx_ids)
-        .bind(&tx_output_indices)
-        .bind(&spending_tx_ids)
-        .bind(&spending_tx_input_indices)
-        .execute(tx)
         .await?;
 
         Ok(())
@@ -204,21 +208,21 @@ impl chain::ChainRepository for ChainRepository {
         tx_outputs: &[AddressUtxo],
         tx_inputs: &[SpentTxo],
     ) -> Result<(), ChainRepositoryError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let mut client = self.pool.get().await?;
+        let tx = client.transaction().await?;
+        execute(
+            &tx,
             r#"INSERT INTO brz_ssp_chain_blocks (block_hash, height)
                VALUES ($1, $2)
                ON CONFLICT DO NOTHING"#,
+            &[&block.hash.to_string(), &block.height.cast_signed()],
         )
-        .bind(block.hash.to_string())
-        .bind(block.height.cast_signed())
-        .execute(&mut *tx)
         .await?;
 
-        self.add_utxos(&mut tx, tx_outputs).await?;
+        self.add_utxos(&tx, tx_outputs).await?;
 
-        self.mark_spent(&mut tx, tx_inputs).await?;
-        self.mark_watched_outputs_spent(&mut tx, block, tx_inputs)
+        self.mark_spent(&tx, tx_inputs).await?;
+        self.mark_watched_outputs_spent(&tx, block, tx_inputs)
             .await?;
 
         let txns: Vec<_> = tx_outputs
@@ -227,7 +231,8 @@ impl chain::ChainRepository for ChainRepository {
             .chain(tx_inputs.iter().map(|i| i.spending_tx.to_string()))
             .collect();
         let block_hashes: Vec<_> = txns.iter().map(|_| block.hash.to_string()).collect();
-        sqlx::query(
+        execute(
+            &tx,
             r#"INSERT INTO brz_ssp_chain_tx_blocks
                SELECT i.tx_id
                ,      i.block_hash
@@ -244,10 +249,8 @@ impl chain::ChainRepository for ChainRepository {
                               FROM brz_ssp_chain_tx_inputs ti
                               WHERE ti.spending_tx_id = i.tx_id)
                ON CONFLICT DO NOTHING"#,
+            &[&txns, &block_hashes],
         )
-        .bind(&txns)
-        .bind(&block_hashes)
-        .execute(&mut *tx)
         .await?;
 
         tx.commit().await?;
@@ -257,13 +260,13 @@ impl chain::ChainRepository for ChainRepository {
     #[instrument(level = "trace", skip(self))]
     async fn add_watch_addresses(&self, addresses: &[Address]) -> Result<(), ChainRepositoryError> {
         let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
-        sqlx::query(
+        execute(
+            &self.pool.get().await?,
             r#"INSERT INTO brz_ssp_chain_watch_addresses (address)
                SELECT * FROM UNNEST($1::text[])
                ON CONFLICT DO NOTHING"#,
+            &[&addresses],
         )
-        .bind(&addresses)
-        .execute(&*self.pool)
         .await?;
 
         Ok(())
@@ -275,16 +278,17 @@ impl chain::ChainRepository for ChainRepository {
         addresses: &[Address],
     ) -> Result<Vec<Address>, ChainRepositoryError> {
         let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
-        let mut rows = sqlx::query(
+        let rows = query(
+            &self.pool.get().await?,
             r#"SELECT address
                FROM brz_ssp_chain_watch_addresses
                WHERE address = ANY($1)"#,
+            &[&addresses],
         )
-        .bind(addresses)
-        .fetch(&*self.pool);
+        .await?;
 
         let mut result: Vec<Address> = Vec::new();
-        while let Some(row) = rows.try_next().await? {
+        for row in rows {
             let address: String = row.try_get("address")?;
             let address = address
                 .parse::<Address<NetworkUnchecked>>()?
@@ -296,12 +300,15 @@ impl chain::ChainRepository for ChainRepository {
 
     #[instrument(level = "trace", skip(self))]
     async fn get_block_hashes(&self, height: u64) -> Result<Vec<BlockHash>, ChainRepositoryError> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT block_hash FROM brz_ssp_chain_blocks WHERE height = $1")
-                .bind(height.cast_signed())
-                .fetch_all(&*self.pool)
-                .await?;
-        rows.into_iter().map(|(hash,)| Ok(hash.parse()?)).collect()
+        let rows = query(
+            &self.pool.get().await?,
+            "SELECT block_hash FROM brz_ssp_chain_blocks WHERE height = $1",
+            &[&height.cast_signed()],
+        )
+        .await?;
+        rows.iter()
+            .map(|row| Ok(row.try_get::<_, &str>(0)?.parse()?))
+            .collect()
     }
 
     #[instrument(level = "trace", skip(self))]
@@ -330,7 +337,8 @@ impl chain::ChainRepository for ChainRepository {
             .map(|address| (address.to_string(), address))
             .collect();
         let texts: Vec<&str> = by_text.keys().map(String::as_str).collect();
-        let mut rows = sqlx::query(
+        let rows = query(
+            &self.pool.get().await?,
             r#"SELECT o.address
             ,         o.tx_id
             ,         o.output_index
@@ -341,12 +349,12 @@ impl chain::ChainRepository for ChainRepository {
             INNER JOIN brz_ssp_chain_blocks b ON tb.block_hash = b.block_hash
             WHERE o.address = ANY($1)
             ORDER BY b.height, o.tx_id, o.output_index"#,
+            &[&texts],
         )
-        .bind(&texts)
-        .fetch(&*self.pool);
+        .await?;
 
         let mut result: Vec<Txo> = Vec::new();
-        while let Some(row) = rows.try_next().await? {
+        for row in rows {
             let address: String = row.try_get("address")?;
             if let Some(address) = by_text.get(&address) {
                 result.push(Self::map_txo(address, &row)?);
@@ -366,7 +374,8 @@ impl chain::ChainRepository for ChainRepository {
         let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
         let output_indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
 
-        let rows: Vec<(String, i32, String, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r#"SELECT i.tx_id
                ,      i.output_index
                ,      i.spending_tx_id
@@ -376,14 +385,16 @@ impl chain::ChainRepository for ChainRepository {
                INNER JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
                INNER JOIN UNNEST($1::text[], $2::int[]) AS o(tx_id, output_index)
                    ON o.tx_id = i.tx_id AND o.output_index = i.output_index"#,
+            &[&tx_ids, &output_indices],
         )
-        .bind(&tx_ids)
-        .bind(&output_indices)
-        .fetch_all(&*self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(|(tx_id, output_index, spending_tx_id, height)| {
+        rows.iter()
+            .map(|row| {
+                let tx_id: &str = row.try_get(0)?;
+                let output_index: i32 = row.try_get(1)?;
+                let spending_tx_id: &str = row.try_get(2)?;
+                let height: i64 = row.try_get(3)?;
                 Ok(chain::Spender {
                     outpoint: OutPoint::new(tx_id.parse()?, output_index.cast_unsigned()),
                     txid: spending_tx_id.parse()?,
@@ -395,10 +406,12 @@ impl chain::ChainRepository for ChainRepository {
 
     #[instrument(level = "trace", skip(self))]
     async fn undo_block(&self, hash: BlockHash) -> Result<(), ChainRepositoryError> {
-        sqlx::query("DELETE FROM brz_ssp_chain_blocks WHERE block_hash = $1")
-            .bind(hash.to_string())
-            .execute(&*self.pool)
-            .await?;
+        execute(
+            &self.pool.get().await?,
+            "DELETE FROM brz_ssp_chain_blocks WHERE block_hash = $1",
+            &[&hash.to_string()],
+        )
+        .await?;
         Ok(())
     }
 }
@@ -415,8 +428,14 @@ impl From<bitcoin::hashes::hex::HexToArrayError> for ChainRepositoryError {
     }
 }
 
-impl From<sqlx::Error> for ChainRepositoryError {
-    fn from(value: sqlx::Error) -> Self {
+impl From<tokio_postgres::Error> for ChainRepositoryError {
+    fn from(value: tokio_postgres::Error) -> Self {
+        ChainRepositoryError::General(Box::new(value))
+    }
+}
+
+impl From<PoolError> for ChainRepositoryError {
+    fn from(value: PoolError) -> Self {
         ChainRepositoryError::General(Box::new(value))
     }
 }
@@ -596,12 +615,8 @@ mod tests {
             outpoint: output,
             input: None,
         };
-        let mut db = fixture.chain.pool.acquire().await.unwrap();
-        fixture
-            .chain
-            .watch_outputs(&mut db, &[watched])
-            .await
-            .unwrap();
+        let db = fixture.chain.pool.get().await.unwrap();
+        fixture.chain.watch_outputs(&db, &[watched]).await.unwrap();
 
         fixture
             .add_block(&block, &[paid, paid], &[spend, spend])
