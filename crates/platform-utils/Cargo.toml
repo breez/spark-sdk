@@ -28,6 +28,7 @@ tracing.workspace = true
 # the browser owns connection setup and exposes no proxy knob.
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 http.workspace = true
+hyper.workspace = true
 hyper-util.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 tokio-socks.workspace = true
@@ -44,6 +45,8 @@ tokio_with_wasm = { version = "0.8.7", features = [
 ] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+bytes.workspace = true
+h2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
 
 # The wasm tests drive a Node-side HTTP fixture, so they are the only place the

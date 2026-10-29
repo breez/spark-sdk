@@ -318,6 +318,7 @@ impl HttpClient for ReqwestHttpClient {
 #[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::task::JoinHandle;
@@ -744,6 +745,92 @@ mod tests {
         let response = client.get(url, None).await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.body, "ok");
+    }
+
+    /// Serves HTTP/2 without TLS. The server holds the first connection open
+    /// and never answers on it, which is how a dead server or network path
+    /// looks to the client. On every later connection it answers each request
+    /// with `ok`. Returns the URL and the count of connections accepted.
+    async fn serve_h2_after_a_dead_connection() -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let url = format!("http://{}/", listener.local_addr().expect("local addr"));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            let mut dead = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                    dead.push(socket);
+                    continue;
+                }
+                tokio::spawn(async move {
+                    let mut conn = h2::server::handshake(socket).await.expect("h2 handshake");
+                    while let Some(Ok((_, mut respond))) = conn.accept().await {
+                        let mut body = respond
+                            .send_response(http::Response::new(()), false)
+                            .expect("send headers");
+                        body.send_data(bytes::Bytes::from_static(b"ok"), true)
+                            .expect("send body");
+                    }
+                });
+            }
+        });
+        (url, accepted)
+    }
+
+    /// Talks HTTP/2 to a server without TLS. It pings a connection after 100
+    /// ms without a frame from the server and drops the connection when the
+    /// ping goes 1 second unanswered, where production clients wait 30 and 10
+    /// seconds.
+    fn h2_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .http2_keep_alive_interval(Duration::from_millis(100))
+            .http2_keep_alive_timeout(Duration::from_secs(1))
+            .http2_keep_alive_while_idle(true)
+            .build()
+            .expect("build client")
+    }
+
+    #[macros::async_test_not_wasm]
+    async fn reports_an_unanswered_keep_alive_ping_as_a_lost_connection() {
+        let (url, accepted) = serve_h2_after_a_dead_connection().await;
+        let client = ReqwestHttpClient {
+            client: h2_client(),
+        };
+
+        let err = client
+            .get(url.clone(), None)
+            .await
+            .expect_err("the dead connection never answers");
+        assert!(
+            matches!(&err, HttpError::Request(message) if message.contains("keep-alive timed out")),
+            "expected a lost connection, got {err:?}"
+        );
+
+        // hyper dropped the dead connection, so the client sends the same
+        // request on a new one, and the server answers it there.
+        let response = client.get(url, None).await.expect("a new connection");
+        assert_eq!(response.body, "ok");
+        assert_eq!(accepted.load(Ordering::SeqCst), 2);
+    }
+
+    #[macros::async_test_not_wasm]
+    async fn reports_the_request_time_limit_as_a_timeout() {
+        let (url, _) = serve_h2_after_a_dead_connection().await;
+
+        // The time limit runs out before hyper even sends the keep-alive ping.
+        let err = h2_client()
+            .get(url)
+            .timeout(Duration::from_millis(50))
+            .send()
+            .await
+            .expect_err("the dead connection never answers");
+        let err = HttpError::from(err);
+        assert!(
+            matches!(err, HttpError::Timeout(_)),
+            "expected a timeout, got {err:?}"
+        );
     }
 }
 

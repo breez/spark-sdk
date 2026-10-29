@@ -5624,9 +5624,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "encoding_rs",
  "futures",
+ "h2",
  "http",
+ "hyper",
  "hyper-util",
  "js-sys",
  "macros 0.1.0",
