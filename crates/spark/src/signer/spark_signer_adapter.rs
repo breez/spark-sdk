@@ -20,10 +20,11 @@ use prost::Message as _;
 use super::spark_signer::*;
 use super::{
     AggregateFrostRequest, CommitAndSignFrostRequest, CommittedFrostShare, SecretSource,
-    SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+    SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
 };
 use crate::operator::rpc::spark as proto;
 use crate::utils::frost::aggregate_frost;
+use crate::utils::secret_sharing;
 use crate::utils::tagged_hasher::TaggedHasher;
 
 struct OperatorShares {
@@ -361,11 +362,7 @@ impl SparkSigner for SparkSignerAdapter {
                 .await?;
             let shares = self
                 .signer
-                .split_secret_with_proofs(
-                    &SecretToSplit::SecretSource(privkey_tweak),
-                    threshold,
-                    operator_recipients.len(),
-                )
+                .split_secret_with_proofs(&privkey_tweak, threshold, operator_recipients.len())
                 .await?;
             let pubkey_shares_tweak = self.pubkey_shares_tweak(&operator_recipients, &shares)?;
 
@@ -471,11 +468,7 @@ impl SparkSigner for SparkSignerAdapter {
                 .await?;
             let shares = self
                 .signer
-                .split_secret_with_proofs(
-                    &SecretToSplit::SecretSource(privkey_tweak),
-                    threshold,
-                    operator_recipients.len(),
-                )
+                .split_secret_with_proofs(&privkey_tweak, threshold, operator_recipients.len())
                 .await?;
             let pubkey_shares_tweak = self.pubkey_shares_tweak(&operator_recipients, &shares)?;
 
@@ -530,14 +523,11 @@ impl SparkSigner for SparkSignerAdapter {
         };
         let payment_hash = sha256::Hash::hash(&preimage).to_byte_array();
 
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                &SecretToSplit::Preimage(preimage.to_vec()),
-                threshold,
-                operator_recipients.len(),
-            )
-            .await?;
+        let shares = secret_sharing::split_secret_with_proofs(
+            &secret_sharing::from_bytes_to_scalar(&preimage)?,
+            threshold as usize,
+            operator_recipients.len(),
+        )?;
 
         let mut operator_preimage_packages = Vec::with_capacity(operator_recipients.len());
         for recipient in &operator_recipients {

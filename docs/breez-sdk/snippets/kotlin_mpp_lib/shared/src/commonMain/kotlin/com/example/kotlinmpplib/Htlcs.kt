@@ -75,7 +75,8 @@ class Htlcs {
                         amountSats = 50_000u,
                         expirySecs = null,
                         paymentHash = paymentHash,
-                        receiverIdentityPublicKey = null
+                        receiverIdentityPublicKey = null,
+                        preimage = null
                     )
                 )
             )

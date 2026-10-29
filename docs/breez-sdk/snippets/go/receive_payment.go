@@ -25,6 +25,7 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 			ExpirySecs:  &optionalExpirySecs,
 			PaymentHash: nil,
 			ReceiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+			Preimage: nil,
 		},
 	}
 

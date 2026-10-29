@@ -238,6 +238,10 @@ pub enum Command {
         #[arg(long)]
         hodl: bool,
 
+        /// Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates.
+        #[arg(long, conflicts_with = "hodl")]
+        preimage: Option<String>,
+
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
@@ -969,6 +973,7 @@ pub(crate) async fn execute_command(
             expiry_secs,
             sender_public_key,
             hodl,
+            preimage,
             new_address,
             cross_chain_max_slippage_bps,
             cross_chain_fees_included,
@@ -1017,6 +1022,7 @@ pub(crate) async fn execute_command(
                         expiry_secs,
                         payment_hash,
                         receiver_identity_public_key: None,
+                        preimage,
                     }
                 }
                 ReceivePaymentMethodArg::CrossChain => {

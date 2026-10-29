@@ -2018,7 +2018,7 @@ pub struct SyncWalletResponse {
     pub last_synced_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
@@ -2053,6 +2053,13 @@ pub enum ReceivePaymentMethod {
         /// Spark identity public key that will receive the payment.
         /// If absent, the connected wallet's identity public key is used.
         receiver_identity_public_key: Option<String>,
+        /// If set, creates an invoice for the hash of this preimage (hex-encoded)
+        /// instead of one the SDK generates. The SSP settles the payment without
+        /// the receiver, and the payer learns the preimage. Use a random value
+        /// below the secp256k1 group order, and a new one for each invoice. The
+        /// invoice never includes a Spark address. Set at most one of this and
+        /// `payment_hash`.
+        preimage: Option<String>,
     },
     CrossChain {
         /// The selected cross-chain route in the receive direction.
@@ -2086,6 +2093,64 @@ pub enum ReceivePaymentMethod {
         /// is `FeesIncluded`.
         target_overpay_bps: Option<u32>,
     },
+}
+
+impl fmt::Debug for ReceivePaymentMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReceivePaymentMethod::SparkAddress => f.write_str("SparkAddress"),
+            ReceivePaymentMethod::SparkInvoice {
+                amount,
+                token_identifier,
+                expiry_time,
+                description,
+                sender_public_key,
+            } => f
+                .debug_struct("SparkInvoice")
+                .field("amount", amount)
+                .field("token_identifier", token_identifier)
+                .field("expiry_time", expiry_time)
+                .field("description", description)
+                .field("sender_public_key", sender_public_key)
+                .finish(),
+            ReceivePaymentMethod::BitcoinAddress { new_address } => f
+                .debug_struct("BitcoinAddress")
+                .field("new_address", new_address)
+                .finish(),
+            ReceivePaymentMethod::Bolt11Invoice {
+                description,
+                amount_sats,
+                expiry_secs,
+                payment_hash,
+                receiver_identity_public_key,
+                preimage,
+            } => f
+                .debug_struct("Bolt11Invoice")
+                .field("description", description)
+                .field("amount_sats", amount_sats)
+                .field("expiry_secs", expiry_secs)
+                .field("payment_hash", payment_hash)
+                .field("receiver_identity_public_key", receiver_identity_public_key)
+                .field("preimage", &preimage.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            ReceivePaymentMethod::CrossChain {
+                route,
+                amount,
+                destination,
+                fee_mode,
+                max_slippage_bps,
+                target_overpay_bps,
+            } => f
+                .debug_struct("CrossChain")
+                .field("route", route)
+                .field("amount", amount)
+                .field("destination", destination)
+                .field("fee_mode", fee_mode)
+                .field("max_slippage_bps", max_slippage_bps)
+                .field("target_overpay_bps", target_overpay_bps)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3764,6 +3829,27 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn debug_fmt_redacts_the_preimage_of_a_bolt11_receive() {
+        let preimage = "ab".repeat(32);
+        let method = ReceivePaymentMethod::Bolt11Invoice {
+            description: "test".to_string(),
+            amount_sats: Some(1_000),
+            expiry_secs: None,
+            payment_hash: None,
+            receiver_identity_public_key: None,
+            preimage: Some(preimage.clone()),
+        };
+
+        let written = format!("{method:?}");
+
+        assert!(
+            written.contains(r#"preimage: Some("<redacted>")"#),
+            "{written}"
+        );
+        assert!(!written.contains(&preimage), "{written}");
+    }
 
     #[test_all]
     fn payment_link_types_map_to_bridge_from_cash_app() {

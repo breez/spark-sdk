@@ -293,6 +293,7 @@ async fn test_03_lightning_invoice_payment(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -571,6 +572,7 @@ async fn test_04_lightning_invoice_for_external_recipient(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: Some(alice_identity_pubkey),
+                preimage: None,
             },
         })
         .await?
@@ -638,6 +640,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -745,6 +748,7 @@ async fn test_06_lightning_send_without_completion_wait(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -1001,6 +1005,7 @@ async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment
                 expiry_secs: Some(custom_expiry_secs),
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?;
@@ -1159,6 +1164,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -1454,6 +1460,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -1503,5 +1510,131 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
     info!("=== Test test_10_lightning_completion_timeout_resolves_to_completed PASSED ===");
+    Ok(())
+}
+
+/// Test 11: An invoice on a preimage the receiver supplies carries no Spark address,
+/// so a payer that prefers Spark still pays over Lightning and learns the preimage.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_11_lightning_invoice_with_caller_preimage(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
+    let invoice_amount_sats = 2_000u64;
+
+    ensure_funded(&mut bob, 50_000).await?;
+
+    let (preimage, payment_hash) = generate_preimage_hash_pair();
+    let invoice = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Invoice on a caller preimage".to_string(),
+                amount_sats: Some(invoice_amount_sats),
+                expiry_secs: None,
+                payment_hash: None,
+                receiver_identity_public_key: None,
+                preimage: Some(preimage.clone()),
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepared = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input { input: invoice },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let SendPaymentMethod::Bolt11Invoice {
+        invoice_details,
+        spark_transfer_fee_sats,
+        ..
+    } = &prepared.payment_method
+    else {
+        anyhow::bail!("Expected Bolt11Invoice payment method in prepare response");
+    };
+    assert_eq!(invoice_details.payment_hash, payment_hash);
+    assert!(
+        spark_transfer_fee_sats.is_none(),
+        "the invoice should carry no Spark address"
+    );
+
+    bob.sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepared,
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: true,
+                completion_timeout_secs: Some(10),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    let received =
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.amount, invoice_amount_sats as u128);
+    assert_eq!(received.method, PaymentMethod::Lightning);
+    assert!(matches!(
+        &received.details,
+        Some(PaymentDetails::Lightning { htlc_details: details, .. })
+        if details.payment_hash == payment_hash && details.preimage == Some(preimage.clone())
+    ));
+
+    let sent = wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 60).await?;
+    assert!(matches!(
+        &sent.details,
+        Some(PaymentDetails::Lightning { htlc_details: details, .. })
+        if details.preimage == Some(preimage.clone())
+    ));
+    Ok(())
+}
+
+/// Test 12: `receive_payment` refuses a preimage together with a payment hash,
+/// and a preimage the operators cannot rebuild from its shares.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_12_lightning_invoice_refuses_invalid_caller_preimage(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    let env = env.await?;
+    let alice = env.create_wallet().await?;
+    let bolt11 = |payment_hash: Option<String>, preimage: String| ReceivePaymentRequest {
+        payment_method: ReceivePaymentMethod::Bolt11Invoice {
+            description: "Invalid caller preimage".to_string(),
+            amount_sats: Some(1_000),
+            expiry_secs: None,
+            payment_hash,
+            receiver_identity_public_key: None,
+            preimage: Some(preimage),
+        },
+    };
+
+    let (preimage, payment_hash) = generate_preimage_hash_pair();
+    let curve_order = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+    for (request, case) in [
+        (
+            bolt11(Some(payment_hash), preimage),
+            "a preimage with a payment hash",
+        ),
+        (bolt11(None, "00".repeat(32)), "a zero preimage"),
+        (
+            bolt11(None, curve_order.to_string()),
+            "the group order as preimage",
+        ),
+    ] {
+        let result = alice.sdk.receive_payment(request).await;
+        assert!(
+            matches!(result, Err(SdkError::InvalidInput(_))),
+            "receive_payment accepted {case}: {result:?}"
+        );
+    }
     Ok(())
 }

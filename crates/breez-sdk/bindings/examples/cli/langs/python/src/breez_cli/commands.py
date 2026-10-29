@@ -331,6 +331,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
             receiver_identity_public_key=None,
+            preimage=None,
         )
     elif method == "crosschain":
         if args.amount is None:
