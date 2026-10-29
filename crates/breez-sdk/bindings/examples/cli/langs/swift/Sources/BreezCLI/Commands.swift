@@ -427,7 +427,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             amountSats: amountSats,
             expirySecs: expirySecs,
             paymentHash: paymentHash,
-            receiverIdentityPublicKey: nil
+            receiverIdentityPublicKey: nil,
+            preimage: nil
         )
 
     case "crosschain":
