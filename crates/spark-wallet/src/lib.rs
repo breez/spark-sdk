@@ -22,7 +22,7 @@ pub use spark::{
     services::{
         ConfirmedExitNode, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpChild, CpfpInput,
         ExitChainState, ExitNodeConfirmation, ExitRefund, ExitRefundState, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
+        FreezeIssuerTokenResponse, InvoiceDescription, InvoicePreimage, LightningReceivePayment,
         LightningSendPayment, LightningSendStatus, MIN_RELAY_FEE_SAT_PER_VBYTE, Preimage,
         PreimageRequestStatus, ReceiverTokenOutput, ServiceError, SingleUseDepositAddress,
         StaticDepositAddress, TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction,

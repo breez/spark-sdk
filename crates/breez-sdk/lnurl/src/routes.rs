@@ -692,6 +692,7 @@ where
                 Some(spark_wallet::InvoiceDescription::DescriptionHash(
                     desc_hash.to_byte_array(),
                 )),
+                spark_wallet::InvoicePreimage::FromSigner,
                 Some(pubkey),
                 params.expiry,
                 state.include_spark_address,

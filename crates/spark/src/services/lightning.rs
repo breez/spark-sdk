@@ -154,6 +154,18 @@ impl InvoiceDescription {
     }
 }
 
+/// The preimage of a new Lightning invoice, and who holds it.
+#[derive(Debug, Clone)]
+pub enum InvoicePreimage {
+    /// The signer generates the preimage. The operators receive its shares, so the
+    /// SSP can settle a payment while the receiver is offline.
+    FromSigner,
+    /// The hash of a preimage the receiver keeps. The operators receive no shares,
+    /// so the SSP holds the HTLC until the receiver provides the preimage, or until
+    /// the HTLC expires.
+    Hodl(sha256::Hash),
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LightningSendPayment {
     pub id: String,
@@ -444,56 +456,7 @@ impl LightningService {
         &self,
         amount_sats: u64,
         description: Option<InvoiceDescription>,
-        preimage: Option<Vec<u8>>,
-        expiry_secs: Option<u32>,
-        include_spark_address: bool,
-        identity_pubkey: Option<PublicKey>,
-    ) -> Result<LightningReceivePayment, ServiceError> {
-        self.create_lightning_invoice_inner(
-            amount_sats,
-            description,
-            preimage,
-            None,
-            expiry_secs,
-            include_spark_address,
-            identity_pubkey,
-        )
-        .await
-    }
-
-    /// Creates a HODL lightning invoice using an externally-provided payment hash.
-    /// No preimage shares are stored with operators, so the SSP will hold the HTLC
-    /// until `provide_preimage` is called with the matching preimage, or the HTLC expires.
-    ///
-    /// Spark addresses are never included in HODL invoices because a direct Spark
-    /// transfer would bypass the Lightning HTLC hold mechanism entirely.
-    pub async fn create_hodl_lightning_invoice(
-        &self,
-        amount_sats: u64,
-        description: Option<InvoiceDescription>,
-        payment_hash: sha256::Hash,
-        expiry_secs: Option<u32>,
-        identity_pubkey: Option<PublicKey>,
-    ) -> Result<LightningReceivePayment, ServiceError> {
-        self.create_lightning_invoice_inner(
-            amount_sats,
-            description,
-            None,
-            Some(payment_hash),
-            expiry_secs,
-            false,
-            identity_pubkey,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn create_lightning_invoice_inner(
-        &self,
-        amount_sats: u64,
-        description: Option<InvoiceDescription>,
-        preimage: Option<Vec<u8>>,
-        external_payment_hash: Option<sha256::Hash>,
+        preimage: InvoicePreimage,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
@@ -514,20 +477,10 @@ impl LightningService {
             None => self.spark_signer.get_identity_public_key().await?,
         };
 
-        let is_hodl = external_payment_hash.is_some();
-        if !is_hodl && preimage.is_some() {
-            return Err(ServiceError::InvalidInput(
-                "external preimage is not supported; the signer generates it in-enclave"
-                    .to_string(),
-            ));
-        }
-
-        // For non-HODL invoices the signer generates the preimage in-enclave
-        // (it never leaves), returning its hash plus the per-operator encrypted
-        // preimage shares to store with the coordinator.
-        let (payment_hash, prepared_receive) = match external_payment_hash {
-            Some(hash) => (hash, None),
-            None => {
+        let (payment_hash, encrypted_preimage_shares) = match preimage {
+            // The signer generates the preimage in-enclave (it never leaves),
+            // returning its hash plus the per-operator encrypted preimage shares.
+            InvoicePreimage::FromSigner => {
                 let prepared = self
                     .spark_signer
                     .prepare_lightning_receive(PrepareLightningReceiveRequest {
@@ -535,11 +488,22 @@ impl LightningService {
                         threshold: self.split_secret_threshold,
                     })
                     .await?;
+                let encrypted_preimage_shares = prepared
+                    .operator_preimage_packages
+                    .into_iter()
+                    .map(|p| {
+                        (
+                            hex::encode(p.operator_identifier.serialize()),
+                            p.encrypted_package,
+                        )
+                    })
+                    .collect();
                 (
                     sha256::Hash::from_byte_array(prepared.payment_hash),
-                    Some(prepared),
+                    Some(encrypted_preimage_shares),
                 )
             }
+            InvoicePreimage::Hodl(payment_hash) => (payment_hash, None),
         };
 
         let expiry = expiry_secs.unwrap_or(DEFAULT_RECEIVE_EXPIRY_SECS);
@@ -583,34 +547,16 @@ impl LightningService {
             identity_pubkey,
         )?;
 
-        if let Some(prepared) = prepared_receive {
-            // The signer already Feldman-split the preimage and ECIES-encrypted
-            // a share per operator; just forward them to the coordinator.
-            let encrypted_preimage_shares: std::collections::HashMap<String, Vec<u8>> = prepared
-                .operator_preimage_packages
-                .into_iter()
-                .map(|p| {
-                    (
-                        hex::encode(p.operator_identifier.serialize()),
-                        p.encrypted_package,
-                    )
-                })
-                .collect();
-
-            self.operator_pool
-                .get_coordinator()
-                .client
-                .store_preimage_share_v2(StorePreimageShareV2Request {
-                    payment_hash: payment_hash.to_byte_array().to_vec(),
-                    encrypted_preimage_shares,
-                    threshold: self.split_secret_threshold,
-                    invoice_string: invoice.invoice.encoded_invoice.clone(),
-                    user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                })
-                .await
-                .map_err(|e: crate::operator::rpc::OperatorRpcError| {
-                    ServiceError::PreimageShareStoreFailed(e.to_string())
-                })?;
+        if let Some(encrypted_preimage_shares) = encrypted_preimage_shares {
+            store_encrypted_preimage_shares(
+                &self.operator_pool,
+                self.split_secret_threshold,
+                payment_hash,
+                encrypted_preimage_shares,
+                invoice.invoice.encoded_invoice.clone(),
+                identity_pubkey,
+            )
+            .await?;
         }
 
         invoice.try_into()
