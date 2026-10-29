@@ -3,7 +3,7 @@ use std::str::FromStr;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::time::{Duration, SystemTime};
-use spark_wallet::{InvoiceDescription, LightningReceivePayment, Preimage};
+use spark_wallet::{InvoiceDescription, InvoicePreimage, LightningReceivePayment, Preimage};
 use tracing::debug;
 
 use crate::{
@@ -393,28 +393,26 @@ pub(super) async fn receive_bolt11_invoice_inner(
         .map(|key| PublicKey::from_str(&key))
         .transpose()
         .map_err(|_| SdkError::InvalidInput("Invalid receiver identity public key".to_string()))?;
-    let receive = if let Some(payment_hash_hex) = payment_hash {
+    let (invoice_preimage, include_spark_address) = if let Some(payment_hash_hex) = payment_hash {
         let hash = sha256::Hash::from_str(&payment_hash_hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
-        sdk.spark_wallet
-            .create_hodl_lightning_invoice(
-                amount_sats.unwrap_or_default(),
-                Some(InvoiceDescription::Memo(description.clone())),
-                hash,
-                receiver_identity_public_key,
-                expiry_secs,
-            )
-            .await?
+        // No Spark address: a payer who pays by a direct Spark transfer bypasses the hold.
+        (InvoicePreimage::Hodl(hash), false)
     } else {
-        sdk.spark_wallet
-            .create_lightning_invoice(
-                amount_sats.unwrap_or_default(),
-                Some(InvoiceDescription::Memo(description.clone())),
-                receiver_identity_public_key,
-                expiry_secs,
-                sdk.config.prefer_spark_over_lightning,
-            )
-            .await?
+        (
+            InvoicePreimage::FromSigner,
+            sdk.config.prefer_spark_over_lightning,
+        )
     };
-    Ok(receive)
+    Ok(sdk
+        .spark_wallet
+        .create_lightning_invoice(
+            amount_sats.unwrap_or_default(),
+            Some(InvoiceDescription::Memo(description)),
+            invoice_preimage,
+            receiver_identity_public_key,
+            expiry_secs,
+            include_spark_address,
+        )
+        .await?)
 }
