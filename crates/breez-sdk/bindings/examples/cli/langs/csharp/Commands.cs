@@ -599,7 +599,8 @@ public static class Commands
                     amountSats: amountSats,
                     expirySecs: ParseOptionalUint(expirySecsStr),
                     paymentHash: paymentHash,
-                    receiverIdentityPublicKey: null
+                    receiverIdentityPublicKey: null,
+                    preimage: null
                 );
                 break;
 

@@ -392,6 +392,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         expirySecs: expirySecs,
         paymentHash: paymentHash,
         receiverIdentityPublicKey: null,
+        preimage: null,
       );
     case 'crosschain':
       if (amount == null) {
