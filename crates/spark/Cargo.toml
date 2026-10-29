@@ -54,6 +54,14 @@ tonic = { workspace = true, features = [
     "transport",
 ] }
 uuid.workspace = true
+# Minimum versions only, unused in code: Cargo resolves at least these in every
+# build with this crate, integrators' builds too. With older rustls-webpki and
+# webpki-roots, the SDK accepts certificates issued with the leaked eMudhra CA
+# keys (RUSTSEC-2026-0381, RUSTSEC-2026-0382). Older rustls lacks the fix for
+# RUSTSEC-2026-0285.
+rustls.workspace = true
+rustls-webpki.workspace = true
+webpki-roots.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
