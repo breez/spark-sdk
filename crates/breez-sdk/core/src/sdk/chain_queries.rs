@@ -166,6 +166,15 @@ impl ChainQueries {
             .collect()
     }
 
+    /// Whether a transaction in the block at `block_height` is at least
+    /// [`SETTLED_DEPTH`] blocks deep. `false` when the chain service fails the
+    /// tip height.
+    pub(crate) async fn settled(&mut self, block_height: u32) -> bool {
+        self.tip_height()
+            .await
+            .is_some_and(|tip| is_settled(block_height, tip))
+    }
+
     /// The tip height, requested once per call. `None` when the chain service
     /// failed the request.
     pub(crate) async fn tip_height(&mut self) -> Option<u32> {
