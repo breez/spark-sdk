@@ -95,6 +95,24 @@ const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: delete-lightning-address
 }
 
+const exampleAccessLightningAddress = async (sdk: BreezSdk) => {
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({ paymentId })
+  const payment = response.payment
+
+  // ANCHOR: access-lightning-address
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details?.tag === PaymentDetails_Tags.Lightning) {
+    const metadata = payment.details.inner.lnurlReceiveMetadata
+
+    // Access the Lightning address the sender paid, if present
+    if (metadata?.lightningAddress != null) {
+      console.log('Lightning address:', metadata.lightningAddress)
+    }
+  }
+  // ANCHOR_END: access-lightning-address
+}
+
 const exampleAccessSenderComment = async (sdk: BreezSdk) => {
   const paymentId = '<payment id>'
   const response = await sdk.getPayment({ paymentId })
