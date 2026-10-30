@@ -16,14 +16,15 @@ use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote,
     create_claim_instant_static_deposit, create_instant_static_deposit_quote,
     delete_wallet_webhook, leaves_swap_fee_estimate, lightning_send_fee_estimate,
-    register_wallet_webhook, request_coop_exit, request_lightning_receive, request_lightning_send,
-    request_swap, static_deposit_quote, transfers, user_request, wallet_webhooks,
+    register_wallet_webhook, request_coop_exit, request_coop_exit_with_silent_payment_proof,
+    request_lightning_receive, request_lightning_send, request_swap, static_deposit_quote,
+    transfers, user_request, wallet_webhooks,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
     InstantStaticDepositClaim, InstantStaticDepositQuoteResult, LeavesSwapRequest,
-    LightningReceiveRequest, LightningSendRequest, SparkWalletWebhookEventType, StaticDepositQuote,
-    WebhookEntry,
+    LightningReceiveRequest, LightningSendRequest, SilentPaymentProof, SparkWalletWebhookEventType,
+    StaticDepositQuote, WebhookEntry,
 };
 use crate::ssp::{
     ClaimStaticDepositInput, CoopExitFeeQuote, CreateClaimInstantStaticDepositInput,
@@ -282,6 +283,36 @@ impl GraphQLClient {
         let response = self.post_query::<queries::RequestCoopExit, _>(vars).await?;
 
         Ok(response.request_coop_exit.request.into())
+    }
+
+    /// Request a cooperative exit to a silent payment address, with the proof
+    /// that its transaction pays the address
+    pub async fn request_coop_exit_with_silent_payment_proof(
+        &self,
+        input: RequestCoopExitInput,
+    ) -> GraphQLResult<(CoopExitRequest, Option<SilentPaymentProof>)> {
+        let vars = request_coop_exit_with_silent_payment_proof::Variables {
+            input: request_coop_exit_with_silent_payment_proof::RequestCoopExitInput {
+                leaf_external_ids: input.leaf_external_ids,
+                withdrawal_address: input.withdrawal_address,
+                idempotency_key: input.idempotency_key,
+                exit_speed: input.exit_speed,
+                withdraw_all: input.withdraw_all,
+                fee_leaf_external_ids: input.fee_leaf_external_ids,
+                fee_quote_id: input.fee_quote_id,
+                user_outbound_transfer_external_id: input.user_outbound_transfer_external_id,
+            },
+        };
+
+        let response = self
+            .post_query::<queries::RequestCoopExitWithSilentPaymentProof, _>(vars)
+            .await?;
+
+        let request = response.request_coop_exit.request;
+        Ok((
+            request.coop_exit_request_fragment.into(),
+            request.silent_payment_proof.map(Into::into),
+        ))
     }
 
     /// Request lightning receive

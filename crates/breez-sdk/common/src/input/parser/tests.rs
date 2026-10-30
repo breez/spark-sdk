@@ -1,7 +1,13 @@
 #![allow(clippy::similar_names)]
 
+use bech32::{
+    Bech32m, Fe32, Hrp,
+    primitives::iter::{ByteIterExt, Fe32IterExt},
+};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use macros::async_test_all;
 use serde_json::json;
+use spark_wallet::{Network, SilentPaymentAddress};
 
 use crate::input::error::Bip21Error;
 use crate::input::parser::InputParser;
@@ -9,6 +15,7 @@ use crate::input::{
     Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType,
     MAX_INPUT_LENGTH, MAX_PAYMENT_METHODS, ParseError,
 };
+use crate::network::BitcoinNetwork;
 use crate::test_utils::mock_dns_resolver::MockDnsResolver;
 use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
@@ -229,6 +236,119 @@ async fn test_bip21_with_invalid_silent_payment() {
     assert!(matches!(
         result,
         Err(ParseError::Bip21Error(Bip21Error::InvalidParameter(_)))
+    ));
+}
+
+/// From the BIP-352 test vectors.
+const SILENT_PAYMENT_ADDRESS: &str = "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv";
+
+fn silent_payment_keys() -> (PublicKey, PublicKey) {
+    let secp = Secp256k1::new();
+    let key =
+        |seed: u8| PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[seed; 32]).unwrap());
+    (key(1), key(2))
+}
+
+async fn parse(input: &str) -> Result<InputType, ParseError> {
+    InputParser::new(MockDnsResolver::new(), MockRestClient::new(), None)
+        .parse(input)
+        .await
+}
+
+#[async_test_all]
+async fn test_silent_payment_address() {
+    let result = parse(SILENT_PAYMENT_ADDRESS).await;
+    assert!(matches!(
+        result,
+        Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails {
+            address,
+            network: BitcoinNetwork::Bitcoin,
+            source: _,
+        })) if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_uppercase() {
+    let result = parse(&SILENT_PAYMENT_ADDRESS.to_uppercase()).await;
+    assert!(matches!(
+        result,
+        Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. }))
+            if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_networks() {
+    let (scan_key, spend_key) = silent_payment_keys();
+    for (network, expected) in [
+        (Network::Signet, BitcoinNetwork::Signet),
+        (Network::Regtest, BitcoinNetwork::Regtest),
+    ] {
+        let address = SilentPaymentAddress::new(scan_key, spend_key, network).to_string();
+        let result = parse(&address).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails { network, .. }))
+                    if *network == expected
+            ),
+            "{address}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_version_1() {
+    let (scan_key, spend_key) = silent_payment_keys();
+    let payload = [scan_key.serialize(), spend_key.serialize()].concat();
+    let address: String = payload
+        .into_iter()
+        .bytes_to_fes()
+        .with_checksum::<Bech32m>(&Hrp::parse("sp").unwrap())
+        .with_witness_version(Fe32::P)
+        .chars()
+        .collect();
+    assert!(matches!(
+        parse(&address).await,
+        Err(ParseError::InvalidInput)
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_silent_payment() {
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    let result = parse(&format!("bitcoin:{addr}?sp={SILENT_PAYMENT_ADDRESS}")).await;
+
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [
+            InputType::BitcoinAddress(_),
+            InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. }),
+        ] if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_only_silent_payment() {
+    let result = parse(&format!("bitcoin:?sp={SILENT_PAYMENT_ADDRESS}")).await;
+
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. })]
+            if address == SILENT_PAYMENT_ADDRESS
     ));
 }
 
@@ -537,21 +657,27 @@ async fn test_bip353_with_multibyte_dns_record() {
 
 #[async_test_all]
 async fn test_bip353_address() {
+    let silent_payment_address = "sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c";
     let mock_dns_resolver = MockDnsResolver::new();
-    mock_dns_resolver.add_response(vec![String::from("bitcoin:?sp=sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c&lno=lno1pqps7sjqpgtyzm3qv4uxzmtsd3jjqer9wd3hy6tsw35k7msjzfpy7nz5yqcnygrfdej82um5wf5k2uckyypwa3eyt44h6txtxquqh7lz5djge4afgfjn7k4rgrkuag0jsd5vxg")]);
+    mock_dns_resolver.add_response(vec![format!("bitcoin:?sp={silent_payment_address}&lno=lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese")]);
     let mock_rest_client = MockRestClient::new();
     let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
-    // Test with a BIP-353 address
-    let bip353_address = "user@bitcoin-domain.com";
-
-    // This should be handled by parse_bip_353
-    // Since mocking DNS is complex, we'll just ensure the method exists and is called
-    let result = input_parser.parse(bip353_address).await;
-    println!("Debug - bip353 address result: {result:?}");
-
-    // The result might be Err if DNS mocking isn't set up
-    // Just check the method exists and runs without crashing
+    let result = input_parser.parse("user@bitcoin-domain.com").await;
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [
+            InputType::SilentPaymentAddress(BitcoinAddressDetails { address, source, .. }),
+            InputType::Bolt12Offer(_),
+        ] if address == silent_payment_address
+            && source.bip_353_address.as_deref() == Some("user@bitcoin-domain.com")
+    ));
 }
 
 #[async_test_all]

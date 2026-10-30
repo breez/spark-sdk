@@ -319,7 +319,7 @@ pub enum InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -485,14 +485,6 @@ pub struct LnurlPayRequestDetails {
     pub nostr_pubkey: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SilentPaymentAddressDetails)]
-
-pub struct SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlAuthRequestDetails)]
 pub struct LnurlAuthRequestDetails {
     pub k1: String,
@@ -652,6 +644,8 @@ pub enum PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,

@@ -52,10 +52,11 @@ use spark::{
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
-        WatchtowerRecoveryService,
+        WatchtowerRecoveryService, WithdrawalAddress, WithdrawalAddressError,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
+    silent_payment::SilentPaymentAddress,
     ssp::{
         InstantStaticDepositPlan, InstantStaticDepositQuote, InstantStaticDepositQuoteResult,
         ServiceProvider, SspTransfer, SspUserRequest,
@@ -825,6 +826,18 @@ impl SparkWallet {
             .await?)
     }
 
+    fn parse_withdrawal_address(
+        &self,
+        withdrawal_address: &str,
+    ) -> Result<WithdrawalAddress, SparkWalletError> {
+        WithdrawalAddress::parse(withdrawal_address, self.config.network).map_err(|e| match e {
+            WithdrawalAddressError::Invalid(_) => SparkWalletError::InvalidAddress(format!(
+                "Invalid withdrawal address: {withdrawal_address}"
+            )),
+            WithdrawalAddressError::WrongNetwork(_) => SparkWalletError::InvalidNetwork,
+        })
+    }
+
     /// `amount_sats` prices the quote against the leaves that would fund a
     /// withdrawal of that size. `None` prices it against every available leaf.
     /// Either way the provider requires at least one: it rejects an empty set
@@ -834,16 +847,7 @@ impl SparkWallet {
         withdrawal_address: &str,
         amount_sats: Option<u64>,
     ) -> Result<CoopExitFeeQuote, SparkWalletError> {
-        // Validate withdrawal address
-        let withdrawal_address = withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let withdrawal_address = self.parse_withdrawal_address(withdrawal_address)?;
 
         // Selects leaves totaling `amount_sats` if provided, otherwise retrieves all available leaves.
         let target_amounts =
@@ -855,7 +859,7 @@ impl SparkWallet {
         // Fetches fee quote for the coop exit then cancels the reservation.
         let fee_quote_res = self
             .coop_exit_service
-            .fetch_coop_exit_fee_quote(reservation.leaves.clone(), withdrawal_address)
+            .fetch_coop_exit_fee_quote(reservation.leaves.clone(), &withdrawal_address)
             .await;
         self.tree_service.cancel_reservation(reservation).await?;
 
@@ -956,15 +960,7 @@ impl SparkWallet {
         refund_address: &str,
         fee: Fee,
     ) -> Result<Transaction, SparkWalletError> {
-        let refund_address = refund_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid refund address: {refund_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let refund_address = parse_refund_address(refund_address, self.config.network)?;
 
         // The operators reject the refund with MISSING_ENTITY until their chain
         // watcher indexes the deposit UTXO the coordinator already revealed. Back
@@ -1545,15 +1541,7 @@ impl SparkWallet {
         transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
-        let withdrawal_address = withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let withdrawal_address = self.parse_withdrawal_address(withdrawal_address)?;
 
         // Calculate the fee based on the exit speed
         let fee_sats = fee_quote.fee_sats(&exit_speed);
@@ -3543,6 +3531,25 @@ fn validate_invoiced_transaction_is_single_token(
     Ok(())
 }
 
+fn parse_refund_address(
+    refund_address: &str,
+    network: spark::Network,
+) -> Result<Address, SparkWalletError> {
+    refund_address
+        .parse::<Address<NetworkUnchecked>>()
+        .map_err(|_| {
+            if refund_address.parse::<SilentPaymentAddress>().is_ok() {
+                SparkWalletError::SilentPaymentAddressNotSupported("deposit refunds")
+            } else {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid refund address: {refund_address}"
+                ))
+            }
+        })?
+        .require_network(network.into())
+        .map_err(|_| SparkWalletError::InvalidNetwork)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3559,6 +3566,26 @@ mod tests {
             tests::{create_test_node_with_parent, create_test_tree_node},
         },
     };
+
+    #[macros::test_all]
+    fn refunds_reject_silent_payment_addresses() {
+        assert!(matches!(
+            parse_refund_address(
+                "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+                Network::Mainnet
+            ),
+            Err(SparkWalletError::SilentPaymentAddressNotSupported(
+                "deposit refunds"
+            ))
+        ));
+        assert!(
+            parse_refund_address(
+                "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                Network::Regtest
+            )
+            .is_ok()
+        );
+    }
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

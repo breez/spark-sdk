@@ -17,7 +17,10 @@ use crate::{
         ServiceProviderConfig, SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer,
         StaticDepositQuote, WebhookEntry,
         error::{ServiceProviderError, ServiceProviderResult},
-        graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
+        graphql::{
+            CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest,
+            SilentPaymentProof,
+        },
     },
 };
 
@@ -163,6 +166,19 @@ impl ServiceProvider {
         input: RequestCoopExitInput,
     ) -> ServiceProviderResult<CoopExitRequest> {
         Ok(self.gql_client.request_coop_exit(input).await?)
+    }
+
+    /// Request a cooperative exit to a silent payment address, with the proof
+    /// that its transaction pays the address
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn request_coop_exit_with_silent_payment_proof(
+        &self,
+        input: RequestCoopExitInput,
+    ) -> ServiceProviderResult<(CoopExitRequest, Option<SilentPaymentProof>)> {
+        Ok(self
+            .gql_client
+            .request_coop_exit_with_silent_payment_proof(input)
+            .await?)
     }
 
     /// Request lightning receive

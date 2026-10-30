@@ -10,9 +10,9 @@ use bitcoin::{
     hashes::Hash,
 };
 use spark_wallet::{
-    ChainQuery, ChainResult, EXITING_STATUSES, Fee, SparkWalletError, TreeNode, TreeNodeStatus,
-    WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup, refund_sweep_input_fee,
-    watchtower_exit_recovery_payout,
+    ChainQuery, ChainResult, EXITING_STATUSES, Fee, SilentPaymentAddress, SparkWalletError,
+    TreeNode, TreeNodeStatus, WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup,
+    refund_sweep_input_fee, watchtower_exit_recovery_payout,
 };
 use tracing::{debug, error, info};
 
@@ -1206,7 +1206,15 @@ fn cooperative_recovery_status(
 fn parse_destination(destination: &str, network: Network) -> Result<Address, SdkError> {
     destination
         .parse::<Address<NetworkUnchecked>>()
-        .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
+        .map_err(|e| {
+            if destination.parse::<SilentPaymentAddress>().is_ok() {
+                SdkError::InvalidInput(
+                    "Silent payment addresses are not supported for fund recovery".to_string(),
+                )
+            } else {
+                SdkError::InvalidInput(format!("Invalid destination address: {e}"))
+            }
+        })?
         .require_network(network.into())
         .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))
 }
@@ -1219,6 +1227,19 @@ mod tests {
     use crate::{StoredWatchtowerExitOutput, chain::stub::tx_paying};
 
     use super::*;
+
+    #[test]
+    fn a_silent_payment_address_is_no_recovery_destination() {
+        let result = parse_destination(
+            "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+            Network::Mainnet,
+        );
+        assert!(matches!(
+            result,
+            Err(SdkError::InvalidInput(message))
+                if message == "Silent payment addresses are not supported for fund recovery"
+        ));
+    }
 
     const LEAF_ID: &str = "00000000-0000-0000-0000-00000000000a";
     const OTHER_LEAF_ID: &str = "00000000-0000-0000-0000-00000000000b";

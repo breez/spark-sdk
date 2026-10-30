@@ -12,7 +12,7 @@ For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md).
 During the prepare step, the SDK ensures that the inputs are valid with respect to the payment request type,
 and also returns the fees related to the payment so they can be confirmed.
 
-The payment request field supports Lightning invoices, Bitcoin addresses, Spark addresses and Spark invoices.
+The payment request field supports Lightning invoices, Bitcoin addresses, silent payment addresses, Spark addresses and Spark invoices.
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -38,6 +38,10 @@ The quote's {{#name is_estimate}} flag is set when your bitcoin balance is zero 
 Fee quotes are short lived. If one is close to expiry by the time you send, the SDK fetches a fresh quote for you. It will not spend more than the payment allows, so a fee that rises beyond that fails the send and asks you to prepare again.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
+
+#### Silent payment address
+
+You send to a silent payment address ([BIP352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki)) the same way as to a Bitcoin address: the prepare response's {{#name payment_method}} is {{#enum SendPaymentMethod::BitcoinAddress}}.
 
 ### Spark
 

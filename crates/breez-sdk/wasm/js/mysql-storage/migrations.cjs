@@ -655,6 +655,18 @@ class MysqlMigrationManager {
           )`,
         ],
       },
+      {
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and fills in both columns for past withdrawals.
+        name: "Add withdrawal destination address and output index",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_vout INT UNSIGNED NULL`,
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_destination_address TEXT NULL`,
+          `UPDATE brz_settings
+           SET value = JSON_SET(value, '$.offset', 0)
+           WHERE \`key\` = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
     ];
   }
 }

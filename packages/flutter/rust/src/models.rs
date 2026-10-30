@@ -585,7 +585,7 @@ pub enum _InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -1481,6 +1481,8 @@ pub enum _PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,
@@ -1743,13 +1745,6 @@ pub struct _LnurlWithdrawRequestDetails {
     pub min_withdrawable: u64,
     pub max_withdrawable: u64,
     pub url: String,
-}
-
-#[frb(mirror(SilentPaymentAddressDetails))]
-pub struct _SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
 }
 
 #[frb(mirror(CheckLightningAddressRequest))]

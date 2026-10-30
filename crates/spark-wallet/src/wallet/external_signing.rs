@@ -272,15 +272,7 @@ impl SparkWallet {
         fee_quote: CoopExitFeeQuote,
         transfer_id: Option<TransferId>,
     ) -> Result<SendPackagePreparation, SparkWalletError> {
-        withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        self.parse_withdrawal_address(withdrawal_address)?;
 
         let fee_sats = fee_quote.fee_sats(&exit_speed);
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats));
@@ -325,15 +317,7 @@ impl SparkWallet {
         fee_quote: CoopExitFeeQuote,
         approved_transfer: PreparedTransfer,
     ) -> Result<WalletTransfer, SparkWalletError> {
-        let withdrawal_address = withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let withdrawal_address = self.parse_withdrawal_address(withdrawal_address)?;
 
         let reservation = self
             .tree_service

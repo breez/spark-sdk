@@ -343,6 +343,11 @@ type CoopExitRequest implements UserRequest & Entity {
   """The transaction id of the coop exit transaction."""
   coop_exit_txid: String!
 
+  """
+  For a withdrawal to a BIP-352 silent payment address, the data a wallet needs to check the coop exit transaction's silent payment output. Null for every other address type.
+  """
+  silent_payment_proof: SilentPaymentProof
+
   """The spark id of the swap transfer."""
   transfer_spark_id: UUID
 
@@ -1048,6 +1053,41 @@ input RequestSwapInput {
 
 type RequestSwapOutput {
   request: LeavesSwapRequest!
+}
+
+type SilentPaymentProof {
+  """
+  Index of the user's silent payment output in the coop exit transaction.
+  """
+  output_index: Int!
+
+  """
+  Hex 33-byte compressed public key of each input, in transaction input order. Every input is P2WPKH, and its key is the one its prevout script hashes.
+  """
+  input_public_keys: [String!]!
+
+  """
+  The outpoint "txid:vout" of each of those inputs, in the same order. The txid is hex in display (RPC) byte order.
+  """
+  input_outpoints: [String!]!
+
+  """Hex scriptPubKey of each of those inputs' prevouts, in the same order."""
+  input_prevout_scripts: [String!]!
+
+  """
+  Hex 33-byte compressed ECDH share a_sum·B_scan, before the input_hash multiplication.
+  """
+  ecdh_share: String!
+
+  """
+  Hex 64-byte BIP-374 DLEQ proof (e || s) that the ECDH share and A_sum share a discrete log, generated with no message as BIP-375 does.
+  """
+  dleq_proof: String!
+
+  """
+  Hex raw parent transaction of each input, in the same order as input_outpoints and repeated when inputs share a parent, so a wallet can check the prevouts without fetching them. Served as the SSP recorded it, with witness data when the parent has any; its non-witness serialization hashes to the outpoint's txid.
+  """
+  input_prevout_transactions: [String!]!
 }
 
 enum SparkCoopExitRequestStatus {

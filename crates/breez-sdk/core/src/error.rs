@@ -531,6 +531,9 @@ impl From<SparkWalletError> for SdkError {
             SparkWalletError::ServiceError(spark_wallet::ServiceError::InvalidInput(msg)) => {
                 SdkError::InvalidInput(msg)
             }
+            SparkWalletError::SilentPaymentAddressNotSupported(_) => {
+                SdkError::InvalidInput(e.to_string())
+            }
             SparkWalletError::ServiceError(
                 spark_wallet::ServiceError::InsufficientCpfpBudget { required_sat },
             ) => SdkError::insufficient_cpfp_funds(required_sat),
