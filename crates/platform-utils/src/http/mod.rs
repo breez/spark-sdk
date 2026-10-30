@@ -59,6 +59,8 @@ impl From<reqwest::Error> for HttpError {
                 status: err.status().unwrap_or_default().into(),
                 body: err_str,
             }
+        } else if keep_alive_timed_out(&err) {
+            Self::Request(err_str)
         } else if err.is_timeout() {
             Self::Timeout(err_str)
         } else if err.is_request() {
@@ -71,6 +73,25 @@ impl From<reqwest::Error> for HttpError {
             Self::Other(err_str)
         }
     }
+}
+
+/// Whether hyper failed the request while it waited for the response because
+/// the server left an HTTP/2 keep-alive ping unanswered. reqwest reports that
+/// as a timeout although the request's time limit has not run out. In a client,
+/// hyper raises no other timeout.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn keep_alive_timed_out(err: &reqwest::Error) -> bool {
+    std::iter::successors(std::error::Error::source(err), |cause| cause.source()).any(|cause| {
+        cause
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_timeout)
+    })
+}
+
+/// hyper does not run on WASM: the browser manages the connections.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+fn keep_alive_timed_out(_err: &reqwest::Error) -> bool {
+    false
 }
 
 mod client;
