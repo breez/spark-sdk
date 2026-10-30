@@ -455,7 +455,46 @@ pub struct ExitCheck {
     /// either not asked about or its lookup failed, and neither of those says
     /// anything about where the transaction is.
     pub not_confirmed: HashSet<Txid>,
+    /// Transactions in the caller's list that still have to confirm, where the
+    /// chain service failed a query for an outpoint that the transaction or its
+    /// CPFP child spends.
+    pub unverified: HashSet<Txid>,
     pub pending: Vec<ChainQuery>,
+}
+
+/// A transaction in the caller's list, or the CPFP child of one.
+struct ExitTransaction<'a> {
+    txid: Txid,
+    tx: &'a Transaction,
+    /// Set for a CPFP child: its parent in the caller's list.
+    cpfp_parent: Option<Txid>,
+    /// Whether the caller last recorded it in a block. The caller records no
+    /// CPFP child.
+    confirmed: bool,
+}
+
+/// The transactions in the caller's list, in its order, each followed by its
+/// CPFP child.
+fn exit_transactions(txs: &[ExitCheckInput]) -> Vec<ExitTransaction<'_>> {
+    let mut transactions = Vec::with_capacity(txs.len().saturating_mul(2));
+    for input in txs {
+        let txid = input.tx.compute_txid();
+        transactions.push(ExitTransaction {
+            txid,
+            tx: &input.tx,
+            cpfp_parent: None,
+            confirmed: input.confirmed,
+        });
+        if let Some(cpfp) = &input.cpfp {
+            transactions.push(ExitTransaction {
+                txid: cpfp.compute_txid(),
+                tx: cpfp,
+                cpfp_parent: Some(txid),
+                confirmed: false,
+            });
+        }
+    }
+    transactions
 }
 
 /// Reads back an exit a caller kept, saying which of its transactions are in a
@@ -463,32 +502,42 @@ pub struct ExitCheck {
 /// perform `pending`, feed the results back, and repeat until nothing is
 /// pending.
 ///
-/// It asks as little as it can. Transactions are checked deepest first, and one
-/// in a block settles everything it depends on, so a finished exit costs a
-/// lookup or two rather than one per transaction. Only where the answer is no,
-/// and only at the frontier, does it ask what took the outpoint instead: below an
-/// unconfirmed transaction there is no outpoint yet for anything to take.
+/// A CPFP child is a transaction of the exit like the ones in the caller's
+/// list. For each transaction that still has to confirm, the check reads the
+/// spend of every outpoint its inputs refer to.
 #[must_use]
 pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> ExitCheck {
     let index = ObservedIndex::new(observed);
     let mut pending: Vec<ChainQuery> = Vec::new();
     let mut confirmed: HashMap<Txid, Option<u32>> = HashMap::new();
-    let mut settled: HashSet<Txid> = HashSet::new();
     let mut not_confirmed: HashSet<Txid> = HashSet::new();
+    let mut unverified: HashSet<Txid> = HashSet::new();
     let mut diverged = false;
 
-    let by_txid: HashMap<Txid, &ExitCheckInput> =
-        txs.iter().map(|t| (t.tx.compute_txid(), t)).collect();
+    let transactions = exit_transactions(txs);
+    let by_txid: HashMap<Txid, &ExitTransaction> = transactions
+        .iter()
+        .map(|transaction| (transaction.txid, transaction))
+        .collect();
+    let spenders = spenders(&transactions, &by_txid);
+    let mut expected = expected_in_block(&transactions, &by_txid, &spenders);
 
-    // Deepest first, so a transaction in a block spares every lookup above it.
-    for input in txs.iter().rev() {
-        let txid = input.tx.compute_txid();
-        if settled.contains(&txid) {
+    // Deepest first. The check queries a transaction it expects in a block
+    // only when no other one it expects in a block has an output of it as an
+    // input: when that one is in a block, so is this one. It also queries the
+    // parent of a CPFP child, for the parent's block height.
+    for transaction in transactions.iter().rev() {
+        let txid = transaction.txid;
+        if !expected.contains(&txid) || confirmed.contains_key(&txid) {
             continue;
         }
-        // Only what the caller saw in a block is worth asking about: the rest was
-        // never there, and the frontier pass below covers it.
-        if !input.confirmed {
+        let spender_expected = spenders.get(&txid).into_iter().flatten().any(|spender| {
+            expected.contains(spender)
+                && by_txid
+                    .get(spender)
+                    .is_some_and(|spender| spender.cpfp_parent != Some(txid))
+        });
+        if spender_expected {
             continue;
         }
         let query = ChainQuery::TxConfirmed(txid);
@@ -496,22 +545,20 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
             Some(ChainResult::Confirmed {
                 confirmed: true,
                 block_height,
-            }) => {
-                confirmed.insert(txid, *block_height);
-                mark_settled(&by_txid, txid, &mut confirmed, &mut settled);
-            }
-            // Not in a block: whether a reorg undid it or it never landed, the
-            // frontier pass below asks what is there instead.
+            }) => mark_in_block(&by_txid, &index, txid, *block_height, &mut confirmed),
             Some(ChainResult::Confirmed {
                 confirmed: false, ..
             }) => {
+                expected.remove(&txid);
                 not_confirmed.insert(txid);
-                settled.insert(txid);
             }
-            // Unreadable: nothing is known, and asking again next time is all
-            // that can be done.
+            // After a failed lookup, the check still expects a transaction the
+            // caller recorded in a block there. The caller records no CPFP
+            // child, so the check reads the inputs of a CPFP child instead.
             Some(_) => {
-                settled.insert(txid);
+                if !transaction.confirmed {
+                    expected.remove(&txid);
+                }
             }
             None => pending.push(query),
         }
@@ -520,46 +567,42 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     if pending.is_empty() {
         // Forward, so a transaction found in a block here opens the one below it
         // in the same pass: the list is in the order the exit was built.
-        for input in txs {
-            let txid = input.tx.compute_txid();
-            if confirmed.contains_key(&txid) {
+        for transaction in &transactions {
+            let in_block = |txid: &Txid| confirmed.contains_key(txid) || expected.contains(txid);
+            if !has_to_confirm(transaction, &by_txid, &spenders, &in_block) {
                 continue;
             }
-            // Not reachable: an input of its own is not in a block, so the
-            // outpoint it would spend does not exist and nothing can have taken
-            // it.
-            if !spend_parents(input, &by_txid).all(|parent| confirmed.contains_key(&parent)) {
-                continue;
-            }
-            // One input answers for a transaction with several (the sweep): they
-            // are all spent by it or none of them are.
-            let Some(spent_outpoint) = input.tx.input.first().map(|i| i.previous_output) else {
-                continue;
-            };
-            let mut outpoints = vec![spent_outpoint];
-            // The anchor its own child would bump, where it has one.
-            if let Some(cpfp) = &input.cpfp {
-                outpoints.extend(
-                    cpfp.input
-                        .iter()
-                        .map(|i| i.previous_output)
-                        .filter(|o| o.txid == txid),
-                );
-            }
-
-            for outpoint in outpoints {
-                let query = ChainQuery::Outspend(outpoint);
-                match index.get(&query) {
-                    Some(ChainResult::Spend(Some(info))) if info.confirmed => {
-                        if info.spender_txid == txid {
-                            confirmed.insert(txid, info.block_height);
-                        } else if !ours(input, info.spender_txid) {
-                            warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
-                            diverged = true;
-                        }
+            // The check skips an output of a transaction of the exit that it has
+            // not found in a block: until that transaction is in a block, the
+            // output does not exist, so it cannot have been spent.
+            let outpoints: Vec<OutPoint> = transaction
+                .tx
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .filter(|outpoint| {
+                    !by_txid.contains_key(&outpoint.txid) || in_block(&outpoint.txid)
+                })
+                .collect();
+            match outpoint_spends(transaction.txid, &outpoints, &index) {
+                OutpointSpends::InBlock { block_height } => {
+                    mark_in_block(
+                        &by_txid,
+                        &index,
+                        transaction.txid,
+                        block_height,
+                        &mut confirmed,
+                    );
+                }
+                OutpointSpends::Taken => diverged = true,
+                OutpointSpends::NotSpentInBlock {
+                    without_result,
+                    unreadable,
+                } => {
+                    pending.extend(without_result);
+                    if unreadable {
+                        unverified.insert(transaction.cpfp_parent.unwrap_or(transaction.txid));
                     }
-                    None => pending.push(query),
-                    _ => {}
                 }
             }
         }
@@ -569,26 +612,156 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     pending.retain(|query| seen.insert(query.clone()));
 
     not_confirmed.retain(|txid| !confirmed.contains_key(txid));
+    unverified.retain(|txid| !confirmed.contains_key(txid));
 
     ExitCheck {
         confirmed,
         diverged,
         not_confirmed,
+        unverified,
         pending,
     }
 }
 
-/// The transactions of this exit whose outputs `input` spends.
-///
-/// The check works from these rather than from the broadcast order the caller
-/// holds, which also lists the fan-out: `input`'s CPFP child spends that, not
-/// `input`. A confirmation says nothing about a transaction it does not spend
-/// from.
+/// Whether `transaction` still has to confirm before the exit is finished. A
+/// transaction in the caller's list has to until it is in a block. A CPFP child
+/// has to while its parent is in no block, or while a transaction that still
+/// has to confirm has an output of the child as an input.
+fn has_to_confirm(
+    transaction: &ExitTransaction,
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    spenders: &HashMap<Txid, Vec<Txid>>,
+    in_block: &dyn Fn(&Txid) -> bool,
+) -> bool {
+    if in_block(&transaction.txid) {
+        return false;
+    }
+    let Some(parent) = transaction.cpfp_parent else {
+        return true;
+    };
+    !in_block(&parent)
+        || spenders
+            .get(&transaction.txid)
+            .into_iter()
+            .flatten()
+            .filter_map(|spender| by_txid.get(spender))
+            .any(|spender| has_to_confirm(spender, by_txid, spenders, in_block))
+}
+
+/// What the check read about the outpoints of a transaction's inputs. Once one
+/// of them is spent in a block, the check needs no other: spent by the
+/// transaction itself, the transaction is in a block, and spent by another
+/// transaction, the transaction can no longer confirm.
+enum OutpointSpends {
+    InBlock {
+        block_height: Option<u32>,
+    },
+    Taken,
+    NotSpentInBlock {
+        without_result: Vec<ChainQuery>,
+        /// Whether the chain service failed the query for one of them.
+        unreadable: bool,
+    },
+}
+
+fn outpoint_spends(
+    txid: Txid,
+    outpoints: &[OutPoint],
+    index: &ObservedIndex<'_>,
+) -> OutpointSpends {
+    let mut without_result = Vec::new();
+    let mut unreadable = false;
+    for outpoint in outpoints {
+        let query = ChainQuery::Outspend(*outpoint);
+        let info = match index.get(&query) {
+            Some(ChainResult::Spend(Some(info))) if info.confirmed => info,
+            Some(ChainResult::Spend(_)) => continue,
+            Some(_) => {
+                unreadable = true;
+                continue;
+            }
+            None => {
+                without_result.push(query);
+                continue;
+            }
+        };
+        if info.spender_txid == txid {
+            return OutpointSpends::InBlock {
+                block_height: info.block_height,
+            };
+        }
+        warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
+        return OutpointSpends::Taken;
+    }
+    OutpointSpends::NotSpentInBlock {
+        without_result,
+        unreadable,
+    }
+}
+
+/// For each transaction of the exit, the transactions of the exit with one of
+/// its outputs as an input.
+fn spenders(
+    transactions: &[ExitTransaction],
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+) -> HashMap<Txid, Vec<Txid>> {
+    let mut spenders: HashMap<Txid, Vec<Txid>> = HashMap::new();
+    for transaction in transactions {
+        for parent in spend_parents(transaction, by_txid) {
+            spenders.entry(parent).or_default().push(transaction.txid);
+        }
+    }
+    spenders
+}
+
+/// The transactions the check expects in a block: the ones the caller recorded
+/// there, every transaction of the exit with an output among their inputs,
+/// directly or through others, and the CPFP child of a recorded transaction
+/// that, by that record, still has to confirm. The caller records no CPFP
+/// child.
+fn expected_in_block(
+    transactions: &[ExitTransaction],
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    spenders: &HashMap<Txid, Vec<Txid>>,
+) -> HashSet<Txid> {
+    let recorded: HashSet<Txid> = transactions
+        .iter()
+        .filter(|transaction| transaction.confirmed)
+        .map(|transaction| transaction.txid)
+        .collect();
+    let in_record = |txid: &Txid| recorded.contains(txid);
+    let children: Vec<Txid> = transactions
+        .iter()
+        .filter(|transaction| {
+            transaction
+                .cpfp_parent
+                .is_some_and(|parent| recorded.contains(&parent))
+                && has_to_confirm(transaction, by_txid, spenders, &in_record)
+        })
+        .map(|transaction| transaction.txid)
+        .collect();
+    let mut expected = recorded.clone();
+    let mut stack: Vec<Txid> = recorded.into_iter().collect();
+    while let Some(txid) = stack.pop() {
+        let Some(transaction) = by_txid.get(&txid) else {
+            continue;
+        };
+        for parent in spend_parents(transaction, by_txid) {
+            if expected.insert(parent) {
+                stack.push(parent);
+            }
+        }
+    }
+    expected.extend(children);
+    expected
+}
+
+/// The transactions of this exit with an output among the inputs of `transaction`.
 fn spend_parents<'a>(
-    input: &'a ExitCheckInput,
-    by_txid: &'a HashMap<Txid, &ExitCheckInput>,
+    transaction: &'a ExitTransaction,
+    by_txid: &'a HashMap<Txid, &ExitTransaction>,
 ) -> impl Iterator<Item = Txid> + 'a {
-    input
+    transaction
         .tx
         .input
         .iter()
@@ -596,32 +769,36 @@ fn spend_parents<'a>(
         .filter(|txid| by_txid.contains_key(txid))
 }
 
-/// Whether `spender` is this exit's own transaction for that outpoint.
-fn ours(input: &ExitCheckInput, spender: Txid) -> bool {
-    spender == input.tx.compute_txid()
-        || input
-            .cpfp
-            .as_ref()
-            .is_some_and(|cpfp| cpfp.compute_txid() == spender)
-}
-
-/// Marks `txid` and everything it depends on, transitively, as answered: a
-/// transaction in a block puts every one it spends from in a block too.
-fn mark_settled(
-    by_txid: &HashMap<Txid, &ExitCheckInput>,
+/// Records `txid` in a block at `block_height`, and with it every transaction
+/// of the exit with an output among its inputs, directly or through others.
+/// Each of those gets the height of its own query's result, where the check
+/// has one.
+fn mark_in_block(
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    index: &ObservedIndex<'_>,
     txid: Txid,
+    block_height: Option<u32>,
     confirmed: &mut HashMap<Txid, Option<u32>>,
-    settled: &mut HashSet<Txid>,
 ) {
-    let mut stack = vec![txid];
+    confirmed.insert(txid, block_height);
+    let mut stack: Vec<Txid> = by_txid
+        .get(&txid)
+        .map(|transaction| spend_parents(transaction, by_txid).collect())
+        .unwrap_or_default();
     while let Some(txid) = stack.pop() {
-        if !settled.insert(txid) {
+        if confirmed.contains_key(&txid) {
             continue;
         }
-        // In a block by the same spend chain, but which one was never asked.
-        confirmed.entry(txid).or_insert(None);
-        if let Some(input) = by_txid.get(&txid) {
-            stack.extend(spend_parents(input, by_txid));
+        let reported = match index.get(&ChainQuery::TxConfirmed(txid)) {
+            Some(ChainResult::Confirmed {
+                confirmed: true,
+                block_height,
+            }) => *block_height,
+            _ => None,
+        };
+        confirmed.insert(txid, reported);
+        if let Some(transaction) = by_txid.get(&txid) {
+            stack.extend(spend_parents(transaction, by_txid));
         }
     }
 }
@@ -3537,34 +3714,795 @@ mod interpret_tests {
         assert!(check.diverged, "a stranger holds the outpoint it needs");
     }
 
-    /// A frontier whose anchor a foreign child already bumped: our own child
-    /// conflicts with what is there.
+    /// The check finds a transaction in a block whose anchor is spent by
+    /// another transaction. The next CPFP child has the change of this
+    /// transaction's own child as an input, so the exit can no longer be
+    /// finished.
     #[test]
     fn check_reports_an_anchor_bumped_by_another_child() {
-        let mut chain = exit_chain_of_three();
-        let first = chain[0].tx.compute_txid();
+        let chain = exit_chain_with_children();
         let frontier = chain[1].tx.compute_txid();
-        let anchor = OutPoint {
-            txid: frontier,
-            vout: 1,
-        };
-        chain[1].cpfp = Some(tx_spending(anchor, 99));
+        let anchor = anchor_of(&chain[1].tx);
         let stranger = Txid::from_byte_array([0xbb; 32]);
 
         let observed = vec![
-            Observation {
-                query: ChainQuery::TxConfirmed(first),
-                result: ChainResult::Confirmed {
-                    confirmed: true,
-                    block_height: None,
-                },
-            },
-            unspent(chain[1].tx.input[0].previous_output),
+            in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+            in_block(chain[0].tx.compute_txid(), true),
+            spent(chain[1].tx.input[0].previous_output, frontier),
             spent(anchor, stranger),
+            unspent(chain[2].tx.input[0].previous_output),
         ];
-        let check = check_exit_chain(&chain[..2], &observed);
+        let check = check_exit_chain(&chain, &observed);
 
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
         assert!(check.diverged, "somebody else bumped the anchor");
+    }
+
+    fn in_block(txid: Txid, confirmed: bool) -> Observation {
+        Observation {
+            query: ChainQuery::TxConfirmed(txid),
+            result: ChainResult::Confirmed {
+                confirmed,
+                block_height: None,
+            },
+        }
+    }
+
+    fn with_inputs(inputs: &[OutPoint], nonce: u32) -> Transaction {
+        let mut tx = tx_spending(inputs[0], nonce);
+        tx.input.extend(inputs[1..].iter().map(|outpoint| TxIn {
+            previous_output: *outpoint,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            ..Default::default()
+        }));
+        tx
+    }
+
+    fn anchor_of(tx: &Transaction) -> OutPoint {
+        OutPoint {
+            txid: tx.compute_txid(),
+            vout: 1,
+        }
+    }
+
+    fn change_of(cpfp: &Transaction) -> OutPoint {
+        OutPoint {
+            txid: cpfp.compute_txid(),
+            vout: 0,
+        }
+    }
+
+    fn funding_outpoint(vout: u32) -> OutPoint {
+        OutPoint {
+            txid: Txid::from_byte_array([0x66; 32]),
+            vout,
+        }
+    }
+
+    /// The chain of [`exit_chain_of_three`], each transaction with a CPFP child.
+    /// The first child has a funding outpoint as an input, each later one the
+    /// change of the child before it.
+    fn exit_chain_with_children() -> Vec<ExitCheckInput> {
+        let mut chain = exit_chain_of_three();
+        let mut funding = funding_outpoint(0);
+        for (nonce, input) in (90..).zip(&mut chain) {
+            let cpfp = with_inputs(&[funding, anchor_of(&input.tx)], nonce);
+            funding = change_of(&cpfp);
+            input.cpfp = Some(cpfp);
+        }
+        chain
+    }
+
+    /// Runs the check until it returns no query, taking the result of each
+    /// query from `results` and failing one that has none there. Returns the
+    /// last check and every query it executed, in order.
+    fn run_check(txs: &[ExitCheckInput], results: &[Observation]) -> (ExitCheck, Vec<ChainQuery>) {
+        let mut observed: Vec<Observation> = Vec::new();
+        loop {
+            let check = check_exit_chain(txs, &observed);
+            if check.pending.is_empty() {
+                let executed = observed.into_iter().map(|o| o.query).collect();
+                return (check, executed);
+            }
+            for query in check.pending {
+                let result = results
+                    .iter()
+                    .find(|o| o.query == query)
+                    .map_or(ChainResult::Unavailable, |o| o.result.clone());
+                observed.push(Observation { query, result });
+            }
+        }
+    }
+
+    /// When a transaction is in a block, so is every one above it, so the check
+    /// queries the deepest one the caller recorded and none above it.
+    #[test]
+    fn check_queries_only_the_deepest_recorded_transaction() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let (check, executed) = run_check(&chain, &[in_block(deepest, true)]);
+
+        assert_eq!(executed, vec![ChainQuery::TxConfirmed(deepest)]);
+        assert_eq!(check.confirmed.len(), 3);
+    }
+
+    /// The deepest recorded transaction is in no block, so the check queries
+    /// the one above it next.
+    #[test]
+    fn check_steps_up_from_a_recorded_transaction_that_is_in_no_block() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let [first, second, third] = [0, 1, 2].map(|i| chain[i].tx.compute_txid());
+        let third_input = chain[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(third, false),
+                in_block(second, true),
+                unspent(third_input),
+            ],
+        );
+
+        assert_eq!(
+            executed,
+            vec![
+                ChainQuery::TxConfirmed(third),
+                ChainQuery::TxConfirmed(second),
+                ChainQuery::Outspend(third_input),
+            ]
+        );
+        assert!(check.not_confirmed.contains(&third));
+        assert!(check.confirmed.contains_key(&first));
+    }
+
+    /// The chain service fails the lookup of the deepest recorded transaction.
+    /// The check then queries nothing above it and reports no transaction in or
+    /// out of a block.
+    #[test]
+    fn check_queries_nothing_above_a_failed_lookup() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let (check, executed) = run_check(&chain, &[]);
+
+        assert_eq!(executed, vec![ChainQuery::TxConfirmed(deepest)]);
+        assert!(check.confirmed.is_empty());
+        assert!(check.not_confirmed.is_empty());
+        assert!(check.unverified.is_empty());
+    }
+
+    /// Below two transactions in a block, one still has to confirm. The check
+    /// queries the deepest transaction in a block and its CPFP child, then the
+    /// outpoint of the input of the one that still has to confirm and the
+    /// funding of its CPFP child.
+    #[test]
+    fn check_returns_four_queries_for_the_next_transaction() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+        let third_input = chain[2].tx.input[0].previous_output;
+
+        let second = chain[1].tx.compute_txid();
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(second_child.compute_txid(), true),
+                in_block(second, true),
+                unspent(third_input),
+                unspent(change_of(second_child)),
+            ],
+        );
+
+        assert_eq!(executed.len(), 4);
+        assert_eq!(
+            executed.into_iter().collect::<HashSet<_>>(),
+            HashSet::from([
+                ChainQuery::TxConfirmed(second_child.compute_txid()),
+                ChainQuery::TxConfirmed(second),
+                ChainQuery::Outspend(third_input),
+                ChainQuery::Outspend(change_of(second_child)),
+            ])
+        );
+        assert!(!check.diverged);
+    }
+
+    /// The caller stores the statuses the check returns, so on the next call the
+    /// check starts from a transaction the caller recorded in a block. The
+    /// anchor of that transaction is spent by another CPFP child.
+    #[test]
+    fn check_reports_a_bumped_anchor_of_a_transaction_recorded_in_a_block() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let [first, second, third] = [&chain[0], &chain[1], &chain[2]];
+        let first_child = first.cpfp.as_ref().unwrap();
+        let stranger = Txid::from_byte_array([0xbb; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(second.cpfp.as_ref().unwrap().compute_txid(), false),
+                in_block(second.tx.compute_txid(), true),
+                in_block(first_child.compute_txid(), true),
+                unspent(change_of(first_child)),
+                spent(anchor_of(&second.tx), stranger),
+                unspent(third.tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The funding of a CPFP child is spent by another transaction while the
+    /// child's parent is in no block.
+    #[test]
+    fn check_reports_funding_of_a_cpfp_child_spent_by_another_transaction() {
+        let chain = exit_chain_with_children();
+        let first_child = chain[0].cpfp.as_ref().unwrap();
+        let funding = change_of(first_child);
+        let stranger = Txid::from_byte_array([0xcc; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(first_child.compute_txid(), true),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(chain[1].tx.input[0].previous_output),
+                spent(funding, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The change that is an input of a CPFP child does not exist while the
+    /// child before it is in no block, so the check does not query its spend.
+    /// The child before it still has to confirm, so the check queries the spend
+    /// of that child's own funding.
+    #[test]
+    fn check_skips_funding_that_does_not_exist_yet() {
+        let chain = exit_chain_with_children();
+        let first_child = chain[0].cpfp.as_ref().unwrap();
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(first_child.compute_txid(), false),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(funding_outpoint(0)),
+                unspent(anchor_of(&chain[0].tx)),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(
+            !executed.contains(&ChainQuery::Outspend(change_of(first_child))),
+            "{executed:?}"
+        );
+        assert!(executed.contains(&ChainQuery::Outspend(funding_outpoint(0))));
+        assert!(!check.diverged);
+    }
+
+    /// A transaction and its CPFP child confirmed after the caller last checked.
+    /// The check finds both, and reads the funding of the next child.
+    #[test]
+    fn check_finds_a_cpfp_child_that_confirmed_with_its_parent() {
+        let chain = exit_chain_with_children();
+        let second = chain[1].tx.compute_txid();
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+
+        let mut observed = vec![
+            in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+            in_block(chain[0].tx.compute_txid(), true),
+            spent(chain[1].tx.input[0].previous_output, second),
+            spent(anchor_of(&chain[1].tx), second_child.compute_txid()),
+            unspent(chain[2].tx.input[0].previous_output),
+        ];
+        let check = check_exit_chain(&chain, &observed);
+        assert_eq!(
+            check.pending,
+            vec![ChainQuery::Outspend(change_of(second_child))]
+        );
+
+        observed.push(unspent(change_of(second_child)));
+        let check = check_exit_chain(&chain, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(!check.diverged);
+        assert!(check.confirmed.contains_key(&second));
+        assert!(check.confirmed.contains_key(&second_child.compute_txid()));
+    }
+
+    /// A node transaction with a CPFP child, the refund below it already in a
+    /// block when the wallet built the exit, and the sweep. No transaction of
+    /// the exit has the child's change as an input.
+    fn exit_with_a_cpfp_child_whose_change_is_not_an_input() -> Vec<ExitCheckInput> {
+        let node = tx_spending(funding_outpoint(7), 1);
+        let child = with_inputs(&[funding_outpoint(0), anchor_of(&node)], 90);
+        let refund = tx_spending(
+            OutPoint {
+                txid: node.compute_txid(),
+                vout: 0,
+            },
+            2,
+        );
+        let sweep = tx_spending(
+            OutPoint {
+                txid: refund.compute_txid(),
+                vout: 0,
+            },
+            3,
+        );
+        vec![
+            ExitCheckInput {
+                tx: node,
+                cpfp: Some(child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: refund,
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ]
+    }
+
+    /// No transaction of the exit has the change of the node transaction's
+    /// CPFP child as an input. Once the node transaction is in a block, the exit
+    /// can be finished whichever child confirmed it, so the check does not query
+    /// the anchor.
+    #[test]
+    fn check_ignores_a_cpfp_child_whose_change_is_not_an_input() {
+        let txs = exit_with_a_cpfp_child_whose_change_is_not_an_input();
+        let sweep_input = txs[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &txs,
+            &[
+                in_block(txs[1].tx.compute_txid(), true),
+                unspent(sweep_input),
+            ],
+        );
+
+        assert!(!executed.contains(&ChainQuery::Outspend(anchor_of(&txs[0].tx))));
+        assert!(!check.diverged);
+    }
+
+    /// The same once the caller recorded the node transaction in a block.
+    #[test]
+    fn check_ignores_such_a_child_of_a_recorded_transaction() {
+        let mut txs = exit_with_a_cpfp_child_whose_change_is_not_an_input();
+        txs[0].confirmed = true;
+        let sweep_input = txs[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &txs,
+            &[
+                in_block(txs[1].tx.compute_txid(), true),
+                unspent(sweep_input),
+            ],
+        );
+
+        assert!(!executed.contains(&ChainQuery::Outspend(anchor_of(&txs[0].tx))));
+        assert!(!check.diverged);
+    }
+
+    /// The check queries a recorded transaction along with its CPFP child, and
+    /// reports the block height of the transaction's own result.
+    #[test]
+    fn check_reports_the_height_of_a_transaction_whose_child_is_in_a_block() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let second = chain[1].tx.compute_txid();
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(second_child.compute_txid(), true),
+                Observation {
+                    query: ChainQuery::TxConfirmed(second),
+                    result: ChainResult::Confirmed {
+                        confirmed: true,
+                        block_height: Some(880_000),
+                    },
+                },
+            ],
+        );
+
+        assert_eq!(check.confirmed.get(&second), Some(&Some(880_000)));
+    }
+
+    /// Two branches below one transaction. The chain service fails the lookup
+    /// for the first branch. The check still finds the transaction of the
+    /// second branch that confirmed after the caller last checked, and with it
+    /// the transaction above both branches.
+    #[test]
+    fn check_reads_a_branch_next_to_one_whose_lookup_failed() {
+        let shared = tx_spending(funding_outpoint(7), 1);
+        let shared_txid = shared.compute_txid();
+        let [first_branch, second_branch] = [0, 1].map(|vout| {
+            tx_spending(
+                OutPoint {
+                    txid: shared_txid,
+                    vout,
+                },
+                2 + vout,
+            )
+        });
+        let second_branch_input = second_branch.input[0].previous_output;
+        let second_branch_txid = second_branch.compute_txid();
+        let txs = vec![
+            ExitCheckInput {
+                tx: shared,
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: first_branch.clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: second_branch,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, executed) = run_check(&txs, &[spent(second_branch_input, second_branch_txid)]);
+
+        assert_eq!(
+            executed,
+            vec![
+                ChainQuery::TxConfirmed(first_branch.compute_txid()),
+                ChainQuery::Outspend(second_branch_input),
+            ]
+        );
+        assert!(check.confirmed.contains_key(&second_branch_txid));
+        assert!(check.confirmed.contains_key(&shared_txid));
+    }
+
+    /// The inputs of the sweep are the refund output and the change of the
+    /// refund's CPFP child. That change is spent by another transaction.
+    #[test]
+    fn check_reads_the_change_among_the_sweep_inputs() {
+        let refund = tx_spending(funding_outpoint(7), 1);
+        let child = with_inputs(&[funding_outpoint(0), anchor_of(&refund)], 90);
+        let refund_output = OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        };
+        let sweep = with_inputs(&[refund_output, change_of(&child)], 3);
+        let stranger = Txid::from_byte_array([0xee; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: Some(child.clone()),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep.clone(),
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(child.compute_txid(), true),
+                in_block(refund.compute_txid(), true),
+                unspent(refund_output),
+                spent(change_of(&child), stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The inputs of the sweep are the refund outputs of two leaves. The second
+    /// one is spent by another transaction.
+    #[test]
+    fn check_reads_every_input_of_a_transaction() {
+        let refunds = [
+            tx_spending(funding_outpoint(0), 1),
+            tx_spending(funding_outpoint(1), 2),
+        ];
+        let refund_outputs = refunds.clone().map(|refund| OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        });
+        let sweep = with_inputs(&refund_outputs, 3);
+        let stranger = Txid::from_byte_array([0xdd; 32]);
+        let mut txs: Vec<ExitCheckInput> = refunds
+            .iter()
+            .map(|refund| ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: None,
+                confirmed: true,
+            })
+            .collect();
+        txs.push(ExitCheckInput {
+            tx: sweep.clone(),
+            cpfp: None,
+            confirmed: false,
+        });
+
+        let observed = vec![
+            in_block(refunds[0].compute_txid(), true),
+            in_block(refunds[1].compute_txid(), true),
+            unspent(refund_outputs[0]),
+            spent(refund_outputs[1], stranger),
+        ];
+        let check = check_exit_chain(&txs, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(check.diverged);
+    }
+
+    /// The inputs of the sweep are the refund outputs of two leaves. One refund
+    /// is in a block, and its output is spent by another transaction, while the
+    /// other refund is in no block yet.
+    #[test]
+    fn check_reads_an_input_while_another_input_does_not_exist() {
+        let refunds = [
+            tx_spending(funding_outpoint(0), 1),
+            tx_spending(funding_outpoint(1), 2),
+        ];
+        let refund_outputs = refunds.clone().map(|refund| OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        });
+        let sweep = with_inputs(&refund_outputs, 3);
+        let stranger = Txid::from_byte_array([0xdd; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refunds[0].clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: refunds[1].clone(),
+                cpfp: None,
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(refunds[0].compute_txid(), true),
+                unspent(funding_outpoint(1)),
+                spent(refund_outputs[0], stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The first CPFP child of each branch has an output of the fan-out as an
+    /// input. The fan-out output for the CPFP child of the second branch's leaf
+    /// node is spent by another transaction, while the node above both branches
+    /// is in no block.
+    #[test]
+    fn check_reads_the_funding_of_a_child_below_a_shared_ancestor() {
+        let fan_out = tx_spending(funding_outpoint(0), 1);
+        let shared = tx_spending(funding_outpoint(7), 2);
+        let first_leaf = tx_spending(
+            OutPoint {
+                txid: shared.compute_txid(),
+                vout: 0,
+            },
+            3,
+        );
+        let second_leaf = tx_spending(
+            OutPoint {
+                txid: shared.compute_txid(),
+                vout: 2,
+            },
+            4,
+        );
+        let fan_out_output = |vout| OutPoint {
+            txid: fan_out.compute_txid(),
+            vout,
+        };
+        let shared_child = with_inputs(&[fan_out_output(0), anchor_of(&shared)], 90);
+        let first_leaf_child = with_inputs(&[change_of(&shared_child), anchor_of(&first_leaf)], 91);
+        let second_leaf_child = with_inputs(&[fan_out_output(1), anchor_of(&second_leaf)], 92);
+        let stranger = Txid::from_byte_array([0xcc; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: fan_out.clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: shared,
+                cpfp: Some(shared_child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: first_leaf,
+                cpfp: Some(first_leaf_child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: second_leaf,
+                cpfp: Some(second_leaf_child),
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(fan_out.compute_txid(), true),
+                unspent(funding_outpoint(7)),
+                unspent(fan_out_output(0)),
+                spent(fan_out_output(1), stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The caller recorded the first transaction in a block, and another CPFP
+    /// child of that transaction is in the same block. The chain service fails
+    /// the confirmation query of the exit's own CPFP child, so the check reads
+    /// that child's inputs.
+    #[test]
+    fn check_reads_the_inputs_of_a_cpfp_child_whose_lookup_failed() {
+        let chain = exit_chain_with_children();
+        let stranger = Txid::from_byte_array([0xbb; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(chain[0].tx.compute_txid(), true),
+                spent(anchor_of(&chain[0].tx), stranger),
+                unspent(funding_outpoint(0)),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The caller recorded a node transaction in a block, but not the fan-out
+    /// that funds its CPFP child. The chain service fails the confirmation
+    /// query of that child, and the input of the fan-out is spent by another
+    /// transaction.
+    #[test]
+    fn check_reads_a_fan_out_the_caller_did_not_record() {
+        let caller_utxo = funding_outpoint(5);
+        let fan_out = tx_spending(caller_utxo, 50);
+        let node = tx_spending(funding_outpoint(7), 1);
+        let node_output = OutPoint {
+            txid: node.compute_txid(),
+            vout: 0,
+        };
+        let child = with_inputs(
+            &[
+                OutPoint {
+                    txid: fan_out.compute_txid(),
+                    vout: 0,
+                },
+                anchor_of(&node),
+            ],
+            90,
+        );
+        let next = tx_spending(node_output, 2);
+        let next_child = with_inputs(&[change_of(&child), anchor_of(&next)], 91);
+        let stranger = Txid::from_byte_array([0xab; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: fan_out,
+                cpfp: None,
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: node.clone(),
+                cpfp: Some(child),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: next,
+                cpfp: Some(next_child),
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(node.compute_txid(), true),
+                unspent(node_output),
+                spent(caller_utxo, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The chain service fails the query for the funding of the next CPFP
+    /// child, so the check reports that child's parent as unverified.
+    #[test]
+    fn check_reports_a_transaction_it_could_not_read_as_unverified() {
+        let chain = exit_chain_with_children();
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(!check.diverged);
+        assert_eq!(
+            check.unverified,
+            HashSet::from([chain[1].tx.compute_txid()])
+        );
+    }
+
+    /// The child of a refund without an anchor has the refund output as its
+    /// input, and the sweep has the child's output. The caller recorded the
+    /// refund in a block, where its output is spent by another transaction.
+    #[test]
+    fn check_reports_another_spend_of_the_output_of_an_anchorless_refund() {
+        let refund = tx_spending(funding_outpoint(7), 1);
+        let refund_output = OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        };
+        let child = tx_spending(refund_output, 90);
+        let sweep = tx_spending(change_of(&child), 3);
+        let stranger = Txid::from_byte_array([0xee; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: Some(child.clone()),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(child.compute_txid(), false),
+                in_block(refund.compute_txid(), true),
+                spent(refund_output, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
     }
 
     /// Below an unconfirmed transaction there is no outpoint yet for anything to

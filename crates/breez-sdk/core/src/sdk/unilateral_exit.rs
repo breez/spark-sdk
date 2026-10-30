@@ -212,7 +212,6 @@ impl BreezSdk {
         queries: &mut ChainQueries,
     ) -> Result<UnilateralBuild, SdkError> {
         let btc_network: bitcoin::Network = self.config.network.into();
-        let chain = self.chain_service.as_ref();
         let dest_script_len = destination.script_pubkey().len();
 
         let supplied = funding_inputs
@@ -362,7 +361,7 @@ impl BreezSdk {
         // A sweep over zero inputs would error: return without one when no refund
         // is on-chain yet. A later run sweeps any refund that surfaces.
         if build.refund_outputs.is_empty() {
-            resolve_statuses(chain, &mut transactions).await?;
+            resolve_statuses(queries, &mut transactions).await?;
             debug!("build_unilateral_exit: no refund outputs to sweep, omitting the sweep");
             return Ok(UnilateralBuild {
                 leaves,
@@ -416,7 +415,7 @@ impl BreezSdk {
             status: sweep_status,
         });
 
-        resolve_statuses(chain, &mut transactions).await?;
+        resolve_statuses(queries, &mut transactions).await?;
         debug!(
             transactions = transactions.len(),
             recoverable_value_sats,
@@ -628,7 +627,7 @@ pub(super) async fn check_recovery_transactions(
         tx.status = status_after_check(tx.status, &check, &txid);
     }
 
-    resolve_statuses(queries.chain_service(), transactions).await?;
+    resolve_statuses(queries, transactions).await?;
     Ok(check.diverged)
 }
 
@@ -976,7 +975,7 @@ fn ids(ids: Vec<TreeNodeId>) -> Vec<String> {
 /// transaction waiting rather than ready, the direction that never sends a
 /// transaction the mempool would reject.
 pub(super) async fn resolve_statuses(
-    chain: &dyn BitcoinChainService,
+    queries: &mut ChainQueries,
     transactions: &mut [RecoveryTransaction],
 ) -> Result<(), SdkError> {
     let confirmed: HashSet<&str> = transactions
@@ -1005,7 +1004,6 @@ pub(super) async fn resolve_statuses(
             _ => None,
         })
         .collect();
-    let mut tip: Option<u32> = None;
 
     let mut resolved = Vec::with_capacity(transactions.len());
     for (tx, met) in transactions.iter().zip(&met) {
@@ -1028,17 +1026,19 @@ pub(super) async fn resolve_statuses(
         }
         let decoded = deserialize_hex::<Transaction>(&tx.tx_hex)
             .map_err(|e| SdkError::InvalidInput(format!("Invalid transaction: {e}")))?;
-        let Some(spendable_at) = spendable_at_height(chain, &decoded, &mut heights).await else {
+        let Some(spendable_at) =
+            spendable_at_height(queries.chain_service(), &decoded, &mut heights).await
+        else {
             resolved.push(ExitTransactionStatus::WaitingForTimelock {
                 spendable_at_height: None,
             });
             continue;
         };
-        if tip.is_none() {
-            tip = chain.tip_height().await.ok();
-        }
         // A transaction is accepted while it would be valid in the next block.
-        let matured = tip.is_some_and(|tip| tip.saturating_add(1) >= spendable_at);
+        let matured = queries
+            .tip_height()
+            .await
+            .is_some_and(|tip| tip.saturating_add(1) >= spendable_at);
         resolved.push(if matured {
             ExitTransactionStatus::Ready
         } else {
@@ -1059,12 +1059,15 @@ pub(super) async fn resolve_statuses(
 /// - The chain has it in a block: `Confirmed`, at the height the read reported,
 ///   or at the height already held when the read settled it along the spend
 ///   chain instead of asking about it.
+/// - The chain service failed a query the read needed for it: `Unverified`.
 /// - The chain was asked and reported it is not in a block: reset to a
 ///   placeholder `resolve_statuses` replaces, discarding a confirmation a reorg
 ///   has undone.
+/// - `Unverified` otherwise: reset to that placeholder as well, because the read
+///   had every result it needed for the transaction.
 /// - Anything else: left as it is. `resolve_statuses` recomputes every status
-///   except `Confirmed` and `Unverified`, and neither of those may be dropped on
-///   a read that did not contradict it.
+///   except `Confirmed` and `Unverified`, and a `Confirmed` may not be dropped
+///   on a read that did not contradict it.
 fn status_after_check(
     current: ExitTransactionStatus,
     check: &ExitCheck,
@@ -1078,9 +1081,11 @@ fn status_after_check(
         (Some(block_height), _) => ExitTransactionStatus::Confirmed {
             block_height: block_height.or(held_height),
         },
+        (None, _) if check.unverified.contains(txid) => ExitTransactionStatus::Unverified,
         (None, ExitTransactionStatus::Confirmed { .. }) if check.not_confirmed.contains(txid) => {
             ExitTransactionStatus::WaitingForDependencies
         }
+        (None, ExitTransactionStatus::Unverified) => ExitTransactionStatus::WaitingForDependencies,
         (None, _) => current,
     }
 }
@@ -1276,6 +1281,8 @@ mod tests {
         },
         error::SignerError,
     };
+    use std::sync::Arc;
+
     use bitcoin::hashes::Hash;
     use spark_wallet::{ChainQuery, ChainResult, ExitBranch, ExitTx};
 
@@ -1764,6 +1771,7 @@ mod tests {
             confirmed: confirmed.iter().copied().collect(),
             diverged: false,
             not_confirmed: not_confirmed.iter().copied().collect(),
+            unverified: HashSet::new(),
             pending: Vec::new(),
         }
     }
@@ -1814,24 +1822,18 @@ mod tests {
         );
     }
 
-    /// `Unverified` says the chain could not be read while the exit was built, so
-    /// the SDK cannot tell whether an earlier fee-bumping child already spent the
-    /// funding this transaction would use. A check reads only the kept exit, never
-    /// the funding, so it can promote the status on finding the transaction in a
-    /// block, but must not clear it on failing to.
+    /// `Unverified` means that the chain service failed a query the SDK needed
+    /// for the transaction. `status_after_check` replaces it with what the check
+    /// read: the transaction in a block, a query failed again, or every result
+    /// the check needed, after which `resolve_statuses` recomputes the status.
     #[macros::async_test_all]
-    async fn a_check_promotes_an_unverified_transaction_but_never_clears_it() {
+    async fn a_check_replaces_an_unverified_status_with_what_it_read() {
         let txid = Txid::from_byte_array([6; 32]);
+        let unreadable = spark_wallet::ExitCheck {
+            unverified: HashSet::from([txid]),
+            ..check_of(&[], &[])
+        };
 
-        assert_eq!(
-            status_after_check(
-                ExitTransactionStatus::Unverified,
-                &check_of(&[], &[]),
-                &txid
-            ),
-            ExitTransactionStatus::Unverified,
-            "not found is not evidence that broadcasting it is safe"
-        );
         assert_eq!(
             status_after_check(
                 ExitTransactionStatus::Unverified,
@@ -1840,8 +1842,19 @@ mod tests {
             ),
             ExitTransactionStatus::Confirmed {
                 block_height: Some(880_000)
-            },
-            "found in a block settles it outright"
+            }
+        );
+        assert_eq!(
+            status_after_check(ExitTransactionStatus::Ready, &unreadable, &txid),
+            ExitTransactionStatus::Unverified
+        );
+        assert_eq!(
+            status_after_check(
+                ExitTransactionStatus::Unverified,
+                &check_of(&[], &[]),
+                &txid
+            ),
+            ExitTransactionStatus::WaitingForDependencies
         );
     }
 
@@ -1891,7 +1904,9 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[1].status, ExitTransactionStatus::Ready);
     }
@@ -1920,8 +1935,54 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
+        assert_eq!(
+            txs[1].status,
+            ExitTransactionStatus::WaitingForTimelock {
+                spendable_at_height: Some(106)
+            }
+        );
+    }
+
+    /// The chain service fails the tip height. The SDK requests it once for all
+    /// the transactions waiting on a timelock.
+    #[macros::async_test_all]
+    async fn a_failed_tip_height_is_requested_once() {
+        let parent = model_tx(
+            &timelocked_tx(Txid::from_byte_array([9; 32]), 0),
+            None,
+            vec![],
+            ExitTransactionStatus::Confirmed {
+                block_height: Some(100),
+            },
+        );
+        let parent_txid = Txid::from_str(&parent.txid).unwrap();
+        let children: Vec<RecoveryTransaction> = [6, 7, 8]
+            .into_iter()
+            .map(|csv| {
+                model_tx(
+                    &timelocked_tx(parent_txid, csv),
+                    Some(csv),
+                    vec![parent.txid.clone()],
+                    ExitTransactionStatus::WaitingForDependencies,
+                )
+            })
+            .collect();
+        let chain = Arc::new(ChainStub {
+            tip: None,
+            ..Default::default()
+        });
+
+        let mut txs = vec![parent];
+        txs.extend(children);
+        resolve_statuses(&mut ChainQueries::new(chain.clone()), &mut txs)
+            .await
+            .unwrap();
+
+        assert_eq!(chain.requests.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(
             txs[1].status,
             ExitTransactionStatus::WaitingForTimelock {
@@ -1954,7 +2015,9 @@ mod tests {
         };
 
         let mut txs = vec![parent, child];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[1].status, ExitTransactionStatus::WaitingForDependencies);
     }
@@ -1978,7 +2041,9 @@ mod tests {
             vec![],
             ExitTransactionStatus::WaitingForDependencies,
         )];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(txs[0].status, ExitTransactionStatus::Ready);
     }
@@ -2000,7 +2065,9 @@ mod tests {
             vec![],
             ExitTransactionStatus::WaitingForDependencies,
         )];
-        resolve_statuses(&chain, &mut txs).await.unwrap();
+        resolve_statuses(&mut ChainQueries::new(Arc::new(chain)), &mut txs)
+            .await
+            .unwrap();
 
         assert_eq!(
             txs[0].status,
@@ -2008,5 +2075,134 @@ mod tests {
                 spendable_at_height: None
             }
         );
+    }
+
+    /// A transaction in a block and the next one, whose CPFP child has `funding`
+    /// as an input.
+    struct NextToConfirm {
+        transactions: Vec<RecoveryTransaction>,
+        funding: OutPoint,
+        chain: ChainStub,
+    }
+
+    fn next_to_confirm() -> NextToConfirm {
+        let confirmed = tx_paying(
+            OutPoint {
+                txid: Txid::from_byte_array([1; 32]),
+                vout: 0,
+            },
+            1_000,
+        );
+        let confirmed_txid = confirmed.compute_txid();
+        let next_input = OutPoint {
+            txid: confirmed_txid,
+            vout: 0,
+        };
+        let next = tx_paying(next_input, 900);
+        let funding = OutPoint {
+            txid: Txid::from_byte_array([3; 32]),
+            vout: 0,
+        };
+        let mut cpfp = tx_paying(funding, 500);
+        cpfp.input.push(bitcoin::TxIn {
+            previous_output: OutPoint {
+                txid: next.compute_txid(),
+                vout: 1,
+            },
+            ..Default::default()
+        });
+        let chain = ChainStub {
+            heights: HashMap::from([(confirmed_txid.to_string(), 100)]),
+            outspends: HashMap::from([(
+                (next_input.txid.to_string(), next_input.vout),
+                Outspend::Unspent,
+            )]),
+            ..Default::default()
+        };
+        NextToConfirm {
+            transactions: vec![
+                model_tx(
+                    &confirmed,
+                    None,
+                    vec![],
+                    ExitTransactionStatus::Confirmed {
+                        block_height: Some(100),
+                    },
+                ),
+                RecoveryTransaction {
+                    cpfp_tx_hex: Some(serialize_hex(&cpfp)),
+                    ..model_tx(
+                        &next,
+                        None,
+                        vec![confirmed_txid.to_string()],
+                        ExitTransactionStatus::WaitingForDependencies,
+                    )
+                },
+            ],
+            funding,
+            chain,
+        }
+    }
+
+    impl NextToConfirm {
+        /// Runs `check_recovery_transactions`. Returns whether it found an
+        /// outpoint spent by another transaction, the status it gave the next
+        /// transaction, and how many requests the chain stub received.
+        async fn check(mut self) -> (bool, ExitTransactionStatus, usize) {
+            let chain = std::sync::Arc::new(self.chain);
+            let mut queries = ChainQueries::new(chain.clone());
+            let diverged = check_recovery_transactions(&mut queries, &mut self.transactions)
+                .await
+                .unwrap();
+            let requests = chain.requests.load(std::sync::atomic::Ordering::SeqCst);
+            (diverged, self.transactions[1].status, requests)
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn check_finds_the_spent_funding_of_a_cpfp_child() {
+        let mut next = next_to_confirm();
+        let spender_txid = Txid::from_byte_array([2; 32]).to_string();
+        next.chain.outspends.insert(
+            (next.funding.txid.to_string(), next.funding.vout),
+            ChainStub::spent(&spender_txid, true, Some(101)),
+        );
+
+        let (diverged, _, requests) = next.check().await;
+
+        assert!(diverged);
+        assert_eq!(
+            requests, 3,
+            "the transaction in a block, the outpoint of the next one's input, and the funding"
+        );
+    }
+
+    /// The SDK could not read the chain for the next transaction while it built
+    /// the recovery. `check_recovery_transactions` reads every input it needs,
+    /// the funding of its CPFP child included, and finds it ready.
+    #[macros::async_test_all]
+    async fn check_clears_unverified_once_it_reads_what_the_transaction_needs() {
+        let mut next = next_to_confirm();
+        next.transactions[1].status = ExitTransactionStatus::Unverified;
+        next.chain.outspends.insert(
+            (next.funding.txid.to_string(), next.funding.vout),
+            Outspend::Unspent,
+        );
+
+        let (diverged, status, _) = next.check().await;
+
+        assert!(!diverged);
+        assert_eq!(status, ExitTransactionStatus::Ready);
+    }
+
+    /// The chain stub fails the query for the funding of the next transaction's
+    /// CPFP child.
+    #[macros::async_test_all]
+    async fn check_reports_a_transaction_it_could_not_read_as_unverified() {
+        let (diverged, status, requests) = next_to_confirm().check().await;
+
+        assert!(!diverged);
+        assert_eq!(status, ExitTransactionStatus::Unverified);
+        assert_eq!(requests, 3);
     }
 }
