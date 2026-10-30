@@ -107,13 +107,17 @@ impl std::fmt::Display for LnurlServerError {
 #[derive(Debug, Clone)]
 pub struct RegisterLightningAddressRequest {
     pub username: String,
-    pub description: String,
+    /// `None` leaves the description to the LNURL server: the client sends an
+    /// empty one.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TransferLightningAddressRequest {
     pub username: String,
-    pub description: String,
+    /// `None` leaves the description to the LNURL server: the client sends an
+    /// empty one.
+    pub description: Option<String>,
     /// Hex-encoded secp256k1 compressed public key of the current owner.
     pub from_pubkey: String,
     /// Hex-encoded DER ECDSA signature by the current owner over
@@ -346,19 +350,20 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         request: &RegisterLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
+        let description = request.description.as_deref().unwrap_or_default();
 
         let timestamp = Self::now()?;
         let signature = self
             .sign(&signed_message::register(
                 self.signed_domain(),
                 &request.username,
-                &request.description,
+                description,
                 timestamp,
             ))
             .await?;
         let api_request = RegisterLnurlPayRequest {
             username: request.username.clone(),
-            description: request.description.clone(),
+            description: description.to_string(),
             signature,
             timestamp,
         };
@@ -380,6 +385,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         request: &TransferLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
+        let description = request.description.as_deref().unwrap_or_default();
 
         // Signed with the current owner's timestamp, not a fresh one: the two
         // signatures authorize one transfer and must name the same instant.
@@ -389,13 +395,13 @@ impl LnurlServerClient for DefaultLnurlServerClient {
                 &request.username,
                 &request.from_pubkey,
                 &pubkey.to_string(),
-                &request.description,
+                description,
                 request.timestamp,
             ))
             .await?;
         let api_request = TransferLnurlPayRequest {
             username: request.username.clone(),
-            description: request.description.clone(),
+            description: description.to_string(),
             from_pubkey: request.from_pubkey.clone(),
             from_signature: request.from_signature.clone(),
             to_signature,

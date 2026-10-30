@@ -54,7 +54,7 @@ The flow has two steps, one method each, run by the current owner and then the n
 
 **Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name TransferAuthorization}} (carrying the `username`, A's `pubkey`, `signature`, the `domain` the address is registered on, and the `timestamp` it was produced at), which grants B the right to take over the username.
 
-> **Note:** The two owners sign different messages: A's names A as the outgoing owner and B as the incoming one, and B's names the description B is choosing, so neither signature can stand in for the other. Both cover the same `domain` and `timestamp`, so an authorization is only valid on the server it was made for, and only for 10 minutes. Only B can submit the transfer, because the server requires B's own signature alongside A's; A's authorization alone doesn't let any third party move the username.
+> **Note:** The two owners sign different messages: A's names A as the outgoing owner and B as the incoming one, and B's names the description B is choosing, so neither signature can stand in for the other. Both cover the same `domain` and `timestamp`, so an authorization is only valid on the domain it was made for, and only for 10 minutes. Only B can submit the transfer, because the server requires B's own signature alongside A's; A's authorization alone doesn't let any third party move the username.
 
 {{#tabs lightning_address:authorize-lightning-address-transfer}}
 
