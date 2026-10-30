@@ -570,6 +570,13 @@ impl PostgresStorage {
                  SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
                  WHERE key = 'sync_offset' AND value IS NOT NULL".to_string(),
             ],
+            // Migration 27: The Lightning address an LNURL payment was received on.
+            vec![
+                "ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN lightning_address TEXT".to_string(),
+                // Clear the lnurl_metadata_updated_after setting so the SDK fetches the
+                // Lightning address of payments it already synced.
+                "DELETE FROM brz_settings WHERE key = 'lnurl_metadata_updated_after'".to_string(),
+            ],
         ]
     }
 }
@@ -1423,7 +1430,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(34);
+            let parent_payment_id: String = row.get(35);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1765,13 +1772,14 @@ impl Storage for PostgresStorage {
         for m in metadata {
             client
                 .execute(
-                    "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                     VALUES ($1, $2, $3, $4, $5)
+                    "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+                     VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                         nostr_zap_request = EXCLUDED.nostr_zap_request,
                         nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-                        sender_comment = EXCLUDED.sender_comment",
-                    &[&self.identity, &m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment],
+                        sender_comment = EXCLUDED.sender_comment,
+                        lightning_address = EXCLUDED.lightning_address",
+                    &[&self.identity, &m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment, &m.lightning_address],
                 )
                 .await?;
         }
@@ -2316,7 +2324,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-33 are used by `map_payment`, index 34 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-34 are used by `map_payment`, index 35 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -2352,6 +2360,7 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_status,
            p.withdraw_vout,
            p.withdraw_destination_address,
+           lrm.lightning_address AS lnurl_lightning_address,
            pm.parent_payment_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
@@ -2404,6 +2413,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let lnurl_nostr_zap_request: Option<String> = row.get(27);
             let lnurl_nostr_zap_receipt: Option<String> = row.get(28);
             let lnurl_sender_comment: Option<String> = row.get(29);
+            let lnurl_lightning_address: Option<String> = row.get(34);
             let lnurl_payment_hash: Option<String> = row.get(30);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
@@ -2415,6 +2425,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     nostr_zap_request: lnurl_nostr_zap_request,
                     nostr_zap_receipt: lnurl_nostr_zap_receipt,
                     sender_comment: lnurl_sender_comment,
+                    lightning_address: lnurl_lightning_address,
                 })
             } else {
                 None
@@ -3036,6 +3047,7 @@ mod tests {
             nostr_zap_request: Some("zap_a".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
+            lightning_address: None,
         }])
         .await
         .unwrap();
@@ -3044,6 +3056,7 @@ mod tests {
             nostr_zap_request: Some("zap_b".to_string()),
             nostr_zap_receipt: None,
             sender_comment: None,
+            lightning_address: None,
         }])
         .await
         .unwrap();
@@ -3672,7 +3685,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 26, "migration version must advance to 26");
+        assert_eq!(version, 27, "migration version must advance to 27");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3968,7 +3981,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 26, "migration must advance to 26");
+        assert_eq!(version, 27, "migration must advance to 27");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client
