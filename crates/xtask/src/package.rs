@@ -200,6 +200,8 @@ fn package_wasm_target(
         bail!("wasm-pack build failed for target {}", target);
     }
 
+    add_disposable_lib_reference(&out_path)?;
+
     // For Node.js target, copy the JavaScript sqlite storage implementation
     if target == "nodejs" {
         copy_nodejs_storage_files(crate_dir, &out_path)?;
@@ -230,6 +232,19 @@ fn package_wasm_target(
 
     println!("Successfully built WASM target: {}", target);
     Ok(())
+}
+
+/// wasm-bindgen declares `[Symbol.dispose]()` on exported classes, which only
+/// type-checks with the disposable lib loaded.
+fn add_disposable_lib_reference(out_path: &Path) -> Result<()> {
+    let dts = out_path.join("breez_sdk_spark_wasm.d.ts");
+    let content =
+        fs::read_to_string(&dts).with_context(|| format!("Failed to read {}", dts.display()))?;
+    fs::write(
+        &dts,
+        format!("/// <reference lib=\"esnext.disposable\" />\n{content}"),
+    )
+    .with_context(|| format!("Failed to write {}", dts.display()))
 }
 
 /// Parsed exports from a wasm-bindgen generated `.d.ts` file.
@@ -425,6 +440,8 @@ fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<
 /// Generate an ESM wrapper at `pkg_dir/nodejs/index.mjs` so that
 /// `import { connect } from '@breeztech/breez-sdk-spark'` works in ESM
 /// contexts (e.g. Vite SSR) where the `"node"` export condition is active.
+/// Its `index.d.mts` types that entry as ESM: without it, TypeScript falls
+/// back to the CommonJS `index.d.ts`.
 fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
     let dts = pkg_dir.join("nodejs/breez_sdk_spark_wasm.d.ts");
     let exports = parse_wasm_exports(&dts)?;
@@ -450,6 +467,12 @@ fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
     let count = exports.functions.len() + exports.classes.len();
     fs::write(pkg_dir.join("nodejs/index.mjs"), &mjs)
         .with_context(|| "Failed to write nodejs/index.mjs")?;
+
+    let dmts = "export * from \"./breez_sdk_spark_wasm.js\";\n\
+                import * as pkg from \"./breez_sdk_spark_wasm.js\";\n\
+                export default pkg;\n";
+    fs::write(pkg_dir.join("nodejs/index.d.mts"), dmts)
+        .with_context(|| "Failed to write nodejs/index.d.mts")?;
 
     println!("Created Node.js ESM wrapper with {count} exports");
     Ok(())

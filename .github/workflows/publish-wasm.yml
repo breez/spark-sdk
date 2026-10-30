@@ -48,10 +48,6 @@ jobs:
           name: bindings-wasm
           path: packages/wasm
 
-      - name: Remove unpublished files
-        working-directory: packages/wasm
-        run: rm -rf examples Makefile
-
       - name: Make sure we publish the version as specified
         working-directory: packages/wasm
         run: npm --no-git-tag-version --allow-same-version version ${{ inputs.package-version || '0.0.2' }}

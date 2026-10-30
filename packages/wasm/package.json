@@ -14,13 +14,23 @@
       "deno",
       "nodejs",
       "web",
-      "ssr",
-      "!examples"
+      "ssr"
     ],
+    "types": "./nodejs/index.d.ts",
     "exports": {
       "./bundler": "./bundler/index.js",
       "./deno": "./deno/breez_sdk_spark_wasm.js",
-      "./nodejs": "./nodejs/index.js",
+      "./nodejs": {
+        "import": {
+          "types": "./nodejs/index.d.mts",
+          "default": "./nodejs/index.mjs"
+        },
+        "require": {
+          "types": "./nodejs/index.d.ts",
+          "default": "./nodejs/index.js"
+        },
+        "default": "./nodejs/index.js"
+      },
       "./web": "./web/index.js",
       "./ssr": "./ssr/index.js",
       "./passkey-prf-provider": {
@@ -30,8 +40,15 @@
       },
       ".": {
         "node": {
-          "import": "./nodejs/index.mjs",
-          "require": "./nodejs/index.js"
+          "import": {
+            "types": "./nodejs/index.d.mts",
+            "default": "./nodejs/index.mjs"
+          },
+          "require": {
+            "types": "./nodejs/index.d.ts",
+            "default": "./nodejs/index.js"
+          },
+          "default": "./nodejs/index.js"
         },
         "deno": "./deno/breez_sdk_spark_wasm.js",
         "default": "./web/index.js"

@@ -74,6 +74,14 @@ wasm-test-js-ssl-mode:
 wasm-js-lint:
 	cd crates/breez-sdk/wasm/js && npm ci && ESLINT_USE_FLAT_CONFIG=false npm run lint
 
+# Type-checks the packed npm package as Node and browser projects see it, with
+# skipLibCheck off. Needs the tarball from `cargo xtask package wasm::all`.
+wasm-typecheck:
+	cd crates/breez-sdk/wasm/typecheck && rm -rf node_modules \
+		&& npm install --no-package-lock --omit=optional --no-audit --no-fund \
+		&& npx tsc -p tsconfig.node.json && npx tsc -p tsconfig.node10.json \
+		&& npx tsc -p tsconfig.browser.json
+
 flutter-check:
 	cargo xtask flutter-check
 
