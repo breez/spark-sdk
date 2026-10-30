@@ -86,6 +86,12 @@ When using the SDK on multiple devices, Lightning address changes made on one de
 
 When receiving payments via LNURL-Pay or Lightning addresses, additional metadata may be included with the payment. This metadata is available on the received payment.
 
+### Lightning address
+
+The received payment includes the Lightning address the payment was received on. The address is unset for some payments received before the LNURL server recorded addresses.
+
+{{#tabs lightning_address:access-lightning-address}}
+
 ### Sender comment
 
 If the sender includes a comment with their payment (as defined in [LUD-12](https://github.com/lnurl/luds/blob/luds/12.md)), it will be available on the received payment. This is the message that the sender wrote when making the payment.

@@ -150,6 +150,35 @@ func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func AccessLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
+	paymentID := "<payment id>"
+	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
+		PaymentId: paymentID,
+	})
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+	payment := response.Payment
+
+	// ANCHOR: access-lightning-address
+	// Check if this is a lightning payment with LNURL receive metadata
+	if lightningDetails, ok := (*payment.Details).(breez_sdk_spark.PaymentDetailsLightning); ok {
+		metadata := lightningDetails.LnurlReceiveMetadata
+
+		// Access the Lightning address the sender paid, if present
+		if metadata != nil && metadata.LightningAddress != nil {
+			println("Lightning address:", *metadata.LightningAddress)
+		}
+	}
+	// ANCHOR_END: access-lightning-address
+	return nil
+}
+
 func AccessSenderComment(sdk *breez_sdk_spark.BreezSdk) error {
 	paymentID := "<payment id>"
 	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
