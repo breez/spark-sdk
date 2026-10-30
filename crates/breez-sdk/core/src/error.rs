@@ -418,6 +418,7 @@ impl From<flashnet::FlashnetError> for SdkError {
     }
 }
 
+#[cfg(feature = "boltz")]
 impl From<boltz_client::BoltzError> for SdkError {
     fn from(e: boltz_client::BoltzError) -> Self {
         use boltz_client::BoltzError;

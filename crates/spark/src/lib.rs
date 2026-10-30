@@ -21,16 +21,14 @@ pub use core::Network;
 pub use frost_secp256k1_tr::Identifier;
 pub use token::{bech32m_decode_token_id, bech32m_encode_token_id};
 
-#[allow(clippy::doc_markdown)]
-pub(crate) mod built_info {
-    // The file has been placed there by the build script.
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
+/// The `git describe` output for the commit that cargo built this crate from.
+/// Unset when cargo built it outside a git checkout or without git installed.
+pub const GIT_VERSION: Option<&str> = option_env!("SPARK_GIT_VERSION");
 
 pub(crate) fn default_user_agent() -> String {
     format!(
         "{}/{}",
-        crate::built_info::PKG_NAME,
-        crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+        env!("CARGO_PKG_NAME"),
+        GIT_VERSION.unwrap_or(env!("CARGO_PKG_VERSION")),
     )
 }

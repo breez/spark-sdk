@@ -28,10 +28,10 @@ bindings-golang: build-release install-uniffi-bindgen-golang
 	uniffi-bindgen-go --library $(BIN_PATH) -o $(FFI_DIR)golang -c ./uniffi.toml
 
 bindings-python: build-release
-	cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
+	cargo run -p uniffi-bindgen -- generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
 
 bindings-swift: build-release
-	cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
+	cargo run -p uniffi-bindgen -- generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
 
 build-release:
 	cargo build --release $(if $(CARGO_FEATURES),--features $(CARGO_FEATURES))
@@ -68,7 +68,7 @@ build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-li
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 package-android: build-android
-	rm $(FFI_DIR)kotlin/jniLibs/**/*spark.so
+	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs langs/android/lib/src/main
 	cp -r $(FFI_DIR)kotlin/main/kotlin/breez_sdk_spark langs/android/lib/src/main/kotlin/
 	cd langs/android && ./gradlew assemble

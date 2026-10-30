@@ -1718,7 +1718,6 @@ dependencies = [
  "boltz-client",
  "breez-sdk-common",
  "breez-sdk-spark",
- "built",
  "chrono",
  "flashnet",
  "frost-secp256k1-tr",
@@ -1808,15 +1807,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9dd6407f73a9b8b6162d8a2ef999fe6afd7cc15902ebf42c5cd296addf17e0ad"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "built"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4ad8f11f288f48ca24471bbd51ac257aaeaaa07adae295591266b792902ae64"
-dependencies = [
- "git2",
 ]
 
 [[package]]
@@ -1948,8 +1938,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d16d90359e986641506914ba71350897565610e87ce0ad9e6f28569db3dd5c6d"
 dependencies = [
  "find-msvc-tools",
- "jobserver",
- "libc",
  "shlex",
 ]
 
@@ -3542,19 +3530,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
-name = "git2"
-version = "0.20.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
-dependencies = [
- "bitflags 2.11.1",
- "libc",
- "libgit2-sys",
- "log",
- "url",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4400,16 +4375,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jobserver"
-version = "0.1.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
-dependencies = [
- "getrandom 0.3.4",
- "libc",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4508,18 +4473,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "libgit2-sys"
-version = "0.18.3+1.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9b3acc4b91781bb0b3386669d325163746af5f6e4f73e6d2d630e09a35f3487"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "pkg-config",
-]
-
-[[package]]
 name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4553,18 +4506,6 @@ name = "libusb1-sys"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da050ade7ac4ff1ba5379af847a10a10a8e284181e060105bf8d86960ce9ce0f"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
-name = "libz-sys"
-version = "1.1.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc3a226e576f50782b3305c5ccf458698f92798987f551c6a02efe8276721e22"
 dependencies = [
  "cc",
  "libc",
@@ -7383,7 +7324,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bitcoin",
- "built",
  "bytes",
  "chrono",
  "frost-core",
@@ -8883,10 +8823,16 @@ dependencies = [
  "cargo_metadata 0.19.2",
  "clap",
  "uniffi_bindgen",
- "uniffi_build",
  "uniffi_core",
  "uniffi_macros",
  "uniffi_pipeline",
+]
+
+[[package]]
+name = "uniffi-bindgen"
+version = "0.1.0"
+dependencies = [
+ "uniffi",
 ]
 
 [[package]]
@@ -8911,18 +8857,7 @@ dependencies = [
  "uniffi_internal_macros",
  "uniffi_meta",
  "uniffi_pipeline",
- "uniffi_testing",
  "uniffi_udl",
-]
-
-[[package]]
-name = "uniffi_build"
-version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
-dependencies = [
- "anyhow",
- "camino",
- "uniffi_bindgen",
 ]
 
 [[package]]
@@ -8986,18 +8921,6 @@ dependencies = [
  "indexmap 2.14.0",
  "tempfile",
  "uniffi_internal_macros",
-]
-
-[[package]]
-name = "uniffi_testing"
-version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
-dependencies = [
- "anyhow",
- "camino",
- "cargo_metadata 0.19.2",
- "fs-err",
- "once_cell",
 ]
 
 [[package]]

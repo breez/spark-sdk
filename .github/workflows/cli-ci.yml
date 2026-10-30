@@ -13,6 +13,10 @@ env:
   # Mirror of `kotlin_target_version` in
   # `crates/breez-sdk/bindings/uniffi.kotlin-multiplatform.toml`.
   KOTLIN_NATIVE_VERSION: 1.9.21
+  # These jobs only need a library to generate bindings from and to run
+  # against, so cargo builds it here without the release profile's LTO.
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
 
 jobs:
   check:
@@ -159,7 +163,11 @@ jobs:
       - name: Generate KMP bindings (Android arm64)
         if: matrix.lang == 'kotlin-multiplatform-android'
         working-directory: crates/breez-sdk/bindings
-        run: make build-kotlin-multiplatform-bindgen-android-arm64
+        # env drops the release-profile overrides from the top of this file,
+        # so that in this job cargo links the library as it does for a release.
+        run: |
+          env -u CARGO_PROFILE_RELEASE_LTO -u CARGO_PROFILE_RELEASE_CODEGEN_UNITS \
+            make build-kotlin-multiplatform-bindgen-android-arm64
 
       - name: Assemble Android release AAR
         if: matrix.lang == 'kotlin-multiplatform-android'

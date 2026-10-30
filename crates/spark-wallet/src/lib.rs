@@ -15,7 +15,7 @@ pub use error::*;
 pub use model::*;
 pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
-    Identifier, Network,
+    GIT_VERSION, Identifier, Network,
     address::{SparkAddress, SparkAddressPaymentType},
     header_provider::*,
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
