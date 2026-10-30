@@ -315,6 +315,12 @@ pub enum _CpfpFundingKind {
     },
 }
 
+#[frb(mirror(CpfpFundingStrategy))]
+pub enum _CpfpFundingStrategy {
+    PerBranch,
+    PerNode,
+}
+
 #[frb(mirror(ExitLeafSelection))]
 pub enum _ExitLeafSelection {
     All,
@@ -398,6 +404,7 @@ pub struct _ImportUnilateralExitStateResponse {
 pub struct _PrepareRecoverFundsRequest {
     pub fee_rate_sat_per_vbyte: u64,
     pub funding_kind: Option<CpfpFundingKind>,
+    pub funding_strategy: Option<CpfpFundingStrategy>,
     pub destination: String,
     pub selection: ExitLeafSelection,
 }
@@ -423,6 +430,7 @@ pub struct _PrepareRecoverFundsResponse {
 pub struct _RecoveryFunding {
     pub single_utxo_sats: u64,
     pub per_branch: Vec<PerBranchFunding>,
+    pub strategy: CpfpFundingStrategy,
 }
 
 #[frb(mirror(RecoverFundsLeaf))]

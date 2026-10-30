@@ -18,6 +18,7 @@ Future<PrepareRecoverFundsResponse> prepareRecovery(BreezSdk sdk) async {
   PrepareRecoverFundsRequest request = PrepareRecoverFundsRequest(
     feeRateSatPerVbyte: BigInt.from(2),
     fundingKind: const CpfpFundingKind.p2Wpkh(),
+    fundingStrategy: null,
     destination: "bc1q...your-destination-address",
     selection: const ExitLeafSelection.recoverableOnly(),
   );
@@ -58,6 +59,7 @@ Future<void> recoverCooperatively(BreezSdk sdk, PrepareRecoverFundsResponse quot
       request: PrepareRecoverFundsRequest(
         feeRateSatPerVbyte: quote.feeRateSatPerVbyte,
         fundingKind: null,
+        fundingStrategy: null,
         destination: quote.destination,
         selection: ExitLeafSelection.specific(leafIds: leafIds),
       ),
