@@ -595,7 +595,7 @@ mod tests {
             domain: &str,
             signed_domain: &str,
             username: &str,
-            description: &str,
+            description: Option<&str>,
         ) -> reqwest::Response {
             let timestamp = now_u64();
             let message = signed_message::register(signed_domain, username, description, timestamp);
@@ -605,7 +605,7 @@ mod tests {
                     username: username.to_string(),
                     signature: self.signature(&message),
                     timestamp,
-                    description: description.to_string(),
+                    description: description.map(str::to_string),
                 })
                 .send()
                 .await
@@ -643,7 +643,7 @@ mod tests {
             domain: &str,
             to: &Wallet,
             username: &str,
-            description: &str,
+            description: Option<&str>,
         ) -> reqwest::Response {
             let timestamp = now_u64();
             let (from_pubkey, to_pubkey) = (self.pubkey.to_string(), to.pubkey.to_string());
@@ -670,7 +670,7 @@ mod tests {
                 )
                 .json(&TransferLnurlPayRequest {
                     username: username.to_string(),
-                    description: description.to_string(),
+                    description: description.map(str::to_string),
                     from_pubkey,
                     from_signature: self.signature(&from_message),
                     to_signature: to.signature(&to_message),
@@ -751,7 +751,7 @@ mod tests {
         let wallet = Wallet::new(1);
 
         let registered: RegisterLnurlPayResponse = wallet
-            .register(server, ALIAS, ALIAS, "alice", "Tips")
+            .register(server, ALIAS, ALIAS, "alice", Some("Tips"))
             .await
             .error_for_status()
             .unwrap()
@@ -784,13 +784,13 @@ mod tests {
         let fixture = server_with_aliases(CASH_IS_AN_ALIAS_OF_TIPS).await;
         let (state, server) = (&fixture.state, &fixture.server);
         let (from, to) = (Wallet::new(1), Wallet::new(2));
-        from.register(server, TARGET, TARGET, "alice", "Tips")
+        from.register(server, TARGET, TARGET, "alice", Some("Tips"))
             .await
             .error_for_status()
             .unwrap();
 
         let handed_over: TransferLnurlPayResponse = from
-            .hand_over(server, ALIAS, &to, "alice", "Tips")
+            .hand_over(server, ALIAS, &to, "alice", Some("Tips"))
             .await
             .error_for_status()
             .unwrap()
@@ -809,7 +809,7 @@ mod tests {
         let server = &fixture.server;
         let wallet = Wallet::new(1);
         Wallet::new(2)
-            .register(server, TARGET, TARGET, "alice", "")
+            .register(server, TARGET, TARGET, "alice", None)
             .await
             .error_for_status()
             .unwrap();
@@ -847,7 +847,7 @@ mod tests {
         let server = &fixture.server;
 
         let refused = Wallet::new(1)
-            .register(server, ALIAS, TARGET, "alice", "")
+            .register(server, ALIAS, TARGET, "alice", None)
             .await;
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -862,7 +862,7 @@ mod tests {
         let server = &fixture.server;
         let wallet = Wallet::new(1);
         wallet
-            .register(server, TARGET, TARGET, "alice", "")
+            .register(server, TARGET, TARGET, "alice", None)
             .await
             .error_for_status()
             .unwrap();
@@ -903,7 +903,7 @@ mod tests {
         let fixture = server_with_aliases("").await;
         let (state, server) = (&fixture.state, &fixture.server);
         Wallet::new(1)
-            .register(server, "own.example", "own.example", "bob", "")
+            .register(server, "own.example", "own.example", "bob", None)
             .await
             .error_for_status()
             .unwrap();

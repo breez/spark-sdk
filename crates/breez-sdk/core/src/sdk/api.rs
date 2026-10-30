@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn reject_reserved_namespace_refuses_lnurl_messages() {
         let messages = [
-            lnurl_models::signed_message::register("lnurl.example.com", "alice", "d", 1),
+            lnurl_models::signed_message::register("lnurl.example.com", "alice", Some("d"), 1),
             lnurl_models::signed_message::unregister("lnurl.example.com", "alice", 1),
             lnurl_models::signed_message::recover("lnurl.example.com", COMPRESSED, 1),
             lnurl_models::signed_message::metadata("lnurl.example.com", COMPRESSED, 1),

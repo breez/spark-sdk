@@ -9,7 +9,7 @@
 //! in a header value so no resolved domain can carry one,
 //! `USERNAME_VALIDATION_REGEX` excludes it, hashes and pubkeys are hex,
 //! timestamps are digits, and the one free-form field (the description) enters
-//! hashed.
+//! hashed, or as an empty field when a request has none.
 //!
 //! The `golden_vectors` test below is the byte-level spec a third-party client
 //! implements against: it is machine-checked, so unlike prose it cannot drift
@@ -63,19 +63,26 @@ pub fn description_hash(description: &str) -> String {
     hex
 }
 
+/// The description field of a message: the hash of the description, or empty
+/// when the request has none. A hash is never empty, so the server never takes
+/// a signature made without a description for one over an empty description.
+fn description_field(description: Option<&str>) -> String {
+    description.map(description_hash).unwrap_or_default()
+}
+
 fn join(fields: &[&str]) -> String {
     fields.join(&SEPARATOR.to_string())
 }
 
 /// `POST /lnurlpay/{pubkey}`: claim `username` on `domain`.
 #[must_use]
-pub fn register(domain: &str, username: &str, description: &str, timestamp: u64) -> String {
+pub fn register(domain: &str, username: &str, description: Option<&str>, timestamp: u64) -> String {
     join(&[
         VERSION,
         "register",
         domain,
         username,
-        &description_hash(description),
+        &description_field(description),
         &timestamp.to_string(),
     ])
 }
@@ -160,7 +167,7 @@ pub fn transfer_to(
     username: &str,
     from_pubkey: &str,
     to_pubkey: &str,
-    description: &str,
+    description: Option<&str>,
     timestamp: u64,
 ) -> String {
     join(&[
@@ -170,7 +177,7 @@ pub fn transfer_to(
         username,
         from_pubkey,
         to_pubkey,
-        &description_hash(description),
+        &description_field(description),
         &timestamp.to_string(),
     ])
 }
@@ -189,7 +196,7 @@ mod tests {
     #[test]
     fn golden_vectors() {
         assert_eq!(
-            register(DOMAIN, "alice", "Pay to alice", 1_700_000_000),
+            register(DOMAIN, "alice", Some("Pay to alice"), 1_700_000_000),
             concat!(
                 "breez-lnurl:v2\nregister\nlnurl.example.com\nalice\n",
                 "0261d8b11c7eba9f71ccf5180df58416d3b2d19ba917caf57ba4bacead3ce2c2",
@@ -219,10 +226,27 @@ mod tests {
             )
         );
         assert_eq!(
-            transfer_to(DOMAIN, "alice", ALICE, BOB, "Pay to alice", 1_700_000_000),
+            transfer_to(
+                DOMAIN,
+                "alice",
+                ALICE,
+                BOB,
+                Some("Pay to alice"),
+                1_700_000_000
+            ),
             format!(
                 "breez-lnurl:v2\ntransfer-to\nlnurl.example.com\nalice\n{ALICE}\n{BOB}\n\
                  0261d8b11c7eba9f71ccf5180df58416d3b2d19ba917caf57ba4bacead3ce2c2\n1700000000"
+            )
+        );
+        assert_eq!(
+            register(DOMAIN, "alice", None, 1_700_000_000),
+            "breez-lnurl:v2\nregister\nlnurl.example.com\nalice\n\n1700000000"
+        );
+        assert_eq!(
+            transfer_to(DOMAIN, "alice", ALICE, BOB, None, 1_700_000_000),
+            format!(
+                "breez-lnurl:v2\ntransfer-to\nlnurl.example.com\nalice\n{ALICE}\n{BOB}\n\n1700000000"
             )
         );
     }
@@ -244,9 +268,22 @@ mod tests {
     #[test]
     fn a_description_containing_the_separator_stays_one_field() {
         let sneaky = "x\n1700000000";
-        let message = register(DOMAIN, "alice", sneaky, 1_700_000_000);
+        let message = register(DOMAIN, "alice", Some(sneaky), 1_700_000_000);
         assert_eq!(message.matches(SEPARATOR).count(), 5);
         assert!(!message.contains(sneaky));
+    }
+
+    /// No description and an empty description are different messages.
+    #[test]
+    fn no_description_and_an_empty_one_are_different_messages() {
+        assert_ne!(
+            register(DOMAIN, "alice", None, 1),
+            register(DOMAIN, "alice", Some(""), 1)
+        );
+        assert_ne!(
+            transfer_to(DOMAIN, "alice", ALICE, BOB, None, 1),
+            transfer_to(DOMAIN, "alice", ALICE, BOB, Some(""), 1)
+        );
     }
 
     /// Every message leads with the version field, so a future version is
@@ -254,13 +291,13 @@ mod tests {
     #[test]
     fn every_message_leads_with_the_version() {
         for message in [
-            register(DOMAIN, "alice", "d", 1),
+            register(DOMAIN, "alice", Some("d"), 1),
             unregister(DOMAIN, "alice", 1),
             recover(DOMAIN, ALICE, 1),
             metadata(DOMAIN, ALICE, 1),
             available(DOMAIN, ALICE, "alice", 1),
             transfer_from(DOMAIN, "alice", ALICE, BOB, 1),
-            transfer_to(DOMAIN, "alice", ALICE, BOB, "d", 1),
+            transfer_to(DOMAIN, "alice", ALICE, BOB, Some("d"), 1),
         ] {
             assert!(message.starts_with(VERSION), "{message}");
         }
@@ -283,7 +320,7 @@ mod tests {
             available(DOMAIN, ALICE, ALICE, 1),
             unregister(DOMAIN, ALICE, 1),
             transfer_from(DOMAIN, "alice", ALICE, BOB, 1),
-            transfer_to(DOMAIN, "alice", ALICE, BOB, "d", 1),
+            transfer_to(DOMAIN, "alice", ALICE, BOB, Some("d"), 1),
             // The reversed pair is a different transfer, not the same one.
             transfer_from(DOMAIN, "alice", BOB, ALICE, 1),
         ];

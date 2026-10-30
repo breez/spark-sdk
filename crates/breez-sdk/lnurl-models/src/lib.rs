@@ -35,7 +35,9 @@ pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
     pub timestamp: u64,
-    pub description: String,
+    /// The server shows `Pay to <username>@<domain>` for a request without a
+    /// description.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,7 +60,9 @@ pub struct RegisterLnurlPayResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransferLnurlPayRequest {
     pub username: String,
-    pub description: String,
+    /// The server shows `Pay to <username>@<domain>` for a request without a
+    /// description.
+    pub description: Option<String>,
     /// Hex-encoded secp256k1 compressed public key of the current owner (A).
     pub from_pubkey: String,
     /// Hex-encoded DER ECDSA signature by A over
