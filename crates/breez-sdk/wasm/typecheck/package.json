@@ -1,0 +1,14 @@
+{
+  "name": "breez-sdk-spark-typecheck",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Type-checks the packed npm package as Node and browser projects see it, with skipLibCheck off",
+  "type": "module",
+  "dependencies": {
+    "@breeztech/breez-sdk-spark": "file:../../../../packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "typescript": "5.9.3"
+  }
+}

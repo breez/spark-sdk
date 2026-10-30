@@ -102,3 +102,7 @@ jobs:
 
       - name: Check doc snippets
         run: cargo xtask check-doc-snippets -p ${{ matrix.platform }}
+
+      - name: Type-check npm package declarations
+        if: matrix.platform == 'wasm'
+        run: make wasm-typecheck

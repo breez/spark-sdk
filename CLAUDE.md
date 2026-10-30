@@ -112,6 +112,7 @@ make fmt-fix            # Fix formatting
 make clippy-check       # Run clippy lints (cargo + WASM)
 make clippy-fix         # Fix clippy issues
 make wasm-js-lint       # Run ESLint on the JS files under crates/breez-sdk/wasm/js
+make wasm-typecheck     # Type-check the packed npm package, skipLibCheck off (after wasm::all)
 ```
 
 ## Architecture
