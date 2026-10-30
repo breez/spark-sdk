@@ -284,7 +284,8 @@ pub trait TokenOutputStore: Send + Sync {
     /// transaction coordinates) and inserts new outputs into the store.
     ///
     /// Removed outputs are marked as spent so that a concurrent refresh will
-    /// not re-add them.
+    /// not re-add them. The store does not insert an output that is reserved
+    /// or marked as spent.
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
@@ -357,11 +358,6 @@ pub trait TokenOutputService: Send + Sync {
         filter: GetTokenOutputsFilter<'_>,
     ) -> Result<TokenMetadata, TokenOutputServiceError>;
 
-    /// Atomically removes spent outputs (identified by their previous
-    /// transaction coordinates) and inserts new outputs into the store.
-    ///
-    /// Removed outputs are marked as spent so that a concurrent refresh will
-    /// not re-add them.
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],

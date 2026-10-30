@@ -12,6 +12,7 @@ use platform_utils::time::SystemTime;
 use crate::token::{
     GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy, TokenMetadata,
     TokenOutput, TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
+    TokenOutputsPerStatus, TokenOutputsReservation,
 };
 
 pub fn create_public_key(fill_byte: u8) -> PublicKey {
@@ -1623,15 +1624,16 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
     assert_eq!(stored.available[0].output.token_amount, 600);
 }
 
-pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStore) {
-    let token1 = create_token_outputs(1, vec![100]);
+/// Stores token-1 outputs of 100 and 200 and reserves the output of 100 for a payment.
+async fn reserve_100_for_payment(store: &dyn TokenOutputStore) -> TokenOutputsReservation {
     store
-        .set_tokens_outputs(&token1, future_refresh_start(store).await)
+        .set_tokens_outputs(
+            &create_token_outputs(1, vec![100, 200]),
+            future_refresh_start(store).await,
+        )
         .await
         .unwrap();
-
-    // Reserve and finalize (marks as spent)
-    let reservation = store
+    store
         .reserve_token_outputs(
             &[("token-1".to_string(), ReservationTarget::MinTotalValue(100))],
             ReservationPurpose::Payment,
@@ -1639,34 +1641,100 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
             None,
         )
         .await
+        .unwrap()
+}
+
+async fn token_1_outputs(store: &dyn TokenOutputStore) -> TokenOutputsPerStatus {
+    store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap()
+}
+
+async fn token_1_balance(store: &dyn TokenOutputStore) -> u128 {
+    store
+        .get_token_balances()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(metadata, _)| metadata.identifier == "token-1")
+        .map(|(_, balance)| balance)
+        .expect("token-1 is listed")
+}
+
+fn sorted_amounts(outputs: &[TokenOutputWithPrevOut]) -> Vec<u128> {
+    let mut amounts: Vec<u128> = outputs.iter().map(|o| o.output.token_amount).collect();
+    amounts.sort_unstable();
+    amounts
+}
+
+/// Asserts that token-1's outputs are exactly `amounts`, none of them reserved, and that its
+/// balance is their sum.
+async fn assert_available(store: &dyn TokenOutputStore, amounts: &[u128]) {
+    let mut expected = amounts.to_vec();
+    expected.sort_unstable();
+    let outputs = token_1_outputs(store).await;
+    assert_eq!(sorted_amounts(&outputs.available), expected);
+    assert!(outputs.reserved_for_payment.is_empty());
+    assert!(outputs.reserved_for_swap.is_empty());
+    assert_eq!(token_1_balance(store).await, expected.iter().sum::<u128>());
+}
+
+/// The wallet reserves an output for a payment, then applies the transaction that created the
+/// output.
+pub async fn test_update_token_outputs_skips_reserved_output(store: &dyn TokenOutputStore) {
+    let reservation = reserve_100_for_payment(store).await;
+
+    store
+        .update_token_outputs(&[], &create_token_outputs(1, vec![100, 300]))
+        .await
         .unwrap();
+
+    let outputs = token_1_outputs(store).await;
+    assert_eq!(sorted_amounts(&outputs.available), vec![200, 300]);
+    assert_eq!(sorted_amounts(&outputs.reserved_for_payment), vec![100]);
+    assert_eq!(token_1_balance(store).await, 500);
+
+    store.finalize_reservation(&reservation.id).await.unwrap();
+    assert_available(store, &[200, 300]).await;
+}
+
+/// The wallet spends an output, then applies the transaction that created the output.
+pub async fn test_update_token_outputs_skips_spent_output(store: &dyn TokenOutputStore) {
+    let reservation = reserve_100_for_payment(store).await;
     store.finalize_reservation(&reservation.id).await.unwrap();
 
-    // Insert the same output back (simulating receiving it back)
-    let token1_back = create_token_outputs(1, vec![100]);
-    store.update_token_outputs(&[], &token1_back).await.unwrap();
-
-    // Verify it's available
-    let stored = store
-        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
-        .await
-        .unwrap();
-    assert_eq!(stored.available.len(), 1);
-    assert_eq!(stored.available[0].output.token_amount, 100);
-
-    // Now a stale refresh should not remove it (spent status was cleared)
-    let old_refresh = past_refresh_start(store).await;
-    let token1_refresh = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(&token1_refresh, old_refresh)
+        .update_token_outputs(&[], &create_token_outputs(1, vec![100, 300]))
         .await
         .unwrap();
+    assert_available(store, &[200, 300]).await;
 
-    let stored = store
-        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+    // The spent marker survives the update, so a refresh that started before the spend still
+    // skips the output.
+    store
+        .set_tokens_outputs(
+            &create_token_outputs(1, vec![100, 200, 300]),
+            past_refresh_start(store).await,
+        )
         .await
         .unwrap();
-    assert_eq!(stored.available.len(), 2);
+    assert_available(store, &[200, 300]).await;
+
+    // The marker also survives a refresh that started after the spend, so the store still skips
+    // the output when the wallet applies the transaction after that refresh.
+    store
+        .set_tokens_outputs(
+            &create_token_outputs(1, vec![200, 300]),
+            future_refresh_start(store).await,
+        )
+        .await
+        .unwrap();
+    store
+        .update_token_outputs(&[], &create_token_outputs(1, vec![100, 300]))
+        .await
+        .unwrap();
+    assert_available(store, &[200, 300]).await;
 }
 
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
