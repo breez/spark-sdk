@@ -107,7 +107,7 @@ fn htlc_details_from_preimage_request(
 }
 
 fn withdrawal_vout(request: &CoopExitRequest) -> Option<u32> {
-    let address = request.withdrawal_address.as_deref()?;
+    let address = request.withdrawal_address.as_str();
     let transaction: Transaction = deserialize_hex(&request.raw_coop_exit_transaction).ok()?;
     let Ok(bitcoin_address) = address.parse::<Address<NetworkUnchecked>>() else {
         // The SDK cannot derive a silent payment output's script from the address,
@@ -241,13 +241,11 @@ impl PaymentDetails {
                 }
             }
             SspUserRequest::CoopExitRequest(request) => {
-                let (Some(destination_address), Some(vout)) =
-                    (request.withdrawal_address.clone(), withdrawal_vout(request))
-                else {
+                let Some(vout) = withdrawal_vout(request) else {
                     // An error here would stall the sync, so the payment is
                     // stored without details instead.
                     warn!(
-                        "The SSP's record of coop exit {} has no destination address or payout output; storing the payment without details",
+                        "The SSP's record of coop exit {} has no payout output; storing the payment without details",
                         request.id
                     );
                     return Ok(None);
@@ -255,7 +253,7 @@ impl PaymentDetails {
                 PaymentDetails::Withdraw {
                     tx_id: request.coop_exit_txid.clone(),
                     vout,
-                    destination_address,
+                    destination_address: request.withdrawal_address.clone(),
                 }
             }
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
@@ -870,17 +868,14 @@ mod tests {
         assert_eq!(details.preimage, Some(preimage));
     }
 
-    fn coop_exit(
-        withdrawal_address: Option<&str>,
-        raw_coop_exit_transaction: &str,
-    ) -> CoopExitRequest {
+    fn coop_exit(withdrawal_address: &str, raw_coop_exit_transaction: &str) -> CoopExitRequest {
         CoopExitRequest {
             id: "request".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             network: BitcoinNetwork::Regtest,
             fee: CurrencyAmount::default(),
-            withdrawal_address: withdrawal_address.map(ToString::to_string),
+            withdrawal_address: withdrawal_address.to_string(),
             l1_broadcast_fee: CurrencyAmount::default(),
             exit_status: SparkCoopExitRequestStatus::Succeeded,
             exit_expired_at: Utc::now(),
@@ -925,7 +920,7 @@ mod tests {
                 total_amount: CurrencyAmount::default(),
                 spark_id: None,
                 user_request: Some(SspUserRequest::CoopExitRequest(coop_exit(
-                    Some(&address.to_string()),
+                    &address.to_string(),
                     &raw_transaction,
                 ))),
             }),
@@ -950,16 +945,17 @@ mod tests {
     }
 
     #[test_all]
-    fn a_withdrawal_without_an_address_has_no_details() {
+    fn a_withdrawal_without_a_payout_output_has_no_details() {
         let (ours, ssp) = (pk(1), pk(2));
-        let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(7))]);
+        let address = regtest_address(pk(7));
+        let raw_transaction = exit_transaction_hex(&[&regtest_address(ssp)]);
         let wallet_transfer = WalletTransfer::from_transfer(
             transfer(ours, ssp, TransferType::CooperativeExit),
             Some(SspTransfer {
                 total_amount: CurrencyAmount::default(),
                 spark_id: None,
                 user_request: Some(SspUserRequest::CoopExitRequest(coop_exit(
-                    None,
+                    &address.to_string(),
                     &raw_transaction,
                 ))),
             }),
@@ -979,7 +975,7 @@ mod tests {
         let address = regtest_address(pk(7));
         let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(2))]);
 
-        let vout = withdrawal_vout(&coop_exit(Some(&address.to_string()), &raw_transaction));
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), &raw_transaction));
 
         assert_eq!(vout, None);
     }
@@ -989,25 +985,16 @@ mod tests {
         let address = SilentPaymentAddress::new(pk(1), pk(7), SparkNetwork::Regtest);
         let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(2))]);
 
-        let vout = withdrawal_vout(&coop_exit(Some(&address.to_string()), &raw_transaction));
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), &raw_transaction));
 
         assert_eq!(vout, Some(0));
-    }
-
-    #[test_all]
-    fn no_output_index_without_a_withdrawal_address() {
-        let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(7))]);
-
-        let vout = withdrawal_vout(&coop_exit(None, &raw_transaction));
-
-        assert_eq!(vout, None);
     }
 
     #[test_all]
     fn no_output_index_when_the_exit_transaction_does_not_decode() {
         let address = SilentPaymentAddress::new(pk(1), pk(7), SparkNetwork::Regtest);
 
-        let vout = withdrawal_vout(&coop_exit(Some(&address.to_string()), "not a transaction"));
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), "not a transaction"));
 
         assert_eq!(vout, None);
     }

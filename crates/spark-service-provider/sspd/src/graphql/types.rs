@@ -437,7 +437,7 @@ pub struct CoopExitRequestType {
     pub network: BitcoinNetwork,
     pub request_status: Option<SparkUserRequestStatus>,
     pub fee: CurrencyAmount,
-    pub withdrawal_address: Option<String>,
+    pub withdrawal_address: String,
     #[graphql(name = "l1_broadcast_fee")]
     pub l1_broadcast_fee: CurrencyAmount,
     pub fee_quote: Option<CoopExitFeeQuote>,
