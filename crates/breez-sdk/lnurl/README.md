@@ -271,11 +271,12 @@ pubkey that released it.
 ## Descriptions
 
 The description of an address is the `text/plain` entry of its LNURL-pay
-metadata. A wallet that sends an empty description in a register or transfer
-request leaves the description to the server. The server then stores none, and
-shows `Pay to <username>@<domain>` with the domain the request was sent to. The
-register, transfer and recover responses return the description the server
-shows.
+metadata. A wallet that sends a register or transfer request without a
+description leaves the description to the server. The server then stores none,
+and shows `Pay to <username>@<domain>` with the domain the request was sent to.
+The server stores an empty description as it is, and shows it empty. The server
+returns the description it shows in its register, transfer and recover
+responses.
 
 ## Domain Aliases
 

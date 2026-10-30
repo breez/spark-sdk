@@ -728,14 +728,14 @@ mod tests {
         let (secret, pubkey) = transfer_key(1);
         let register = |domain: &'static str| {
             let timestamp = crate::time::now_u64();
-            let message = signed_message::register(domain, "alice", "Tips", timestamp);
+            let message = signed_message::register(domain, "alice", Some("Tips"), timestamp);
             server
                 .request(Method::POST, domain, &format!("/lnurlpay/{pubkey}"))
                 .json(&RegisterLnurlPayRequest {
                     username: "alice".to_string(),
                     signature: hex::encode(sign(&secret, &message).serialize_der()),
                     timestamp,
-                    description: "Tips".to_string(),
+                    description: Some("Tips".to_string()),
                 })
                 .send()
         };

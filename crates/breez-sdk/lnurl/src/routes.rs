@@ -201,14 +201,15 @@ where
         // message, so both are settled before anything verifies a signature.
         // Resolving the domain first also refuses a request naming a host this
         // server does not serve without spending the statement.
-        validate_description(&description)?;
+        validate_description(description.as_deref())?;
         let domain = sanitize_domain(&state, &host).await?;
 
         let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
             return Err(invalid_timestamp());
         }
-        let candidates = register_candidates(&actual_domain, &username, &description, timestamp);
+        let candidates =
+            register_candidates(&actual_domain, &username, description.as_deref(), timestamp);
         let candidate = verify_candidates(&pubkey, &signature, &candidates, &actual_domain)?;
         // Register and the legacy unregister candidate cover identical bytes,
         // so claiming here spends the statement for both routes. The claim
@@ -220,7 +221,7 @@ where
             domain,
             pubkey: pubkey.to_string(),
             name: username,
-            description: given_description(&description).map(str::to_string),
+            description,
         };
 
         if let Err(e) = state.db.upsert_user(&user, state.registration_limit).await {
@@ -290,7 +291,7 @@ where
         } = payload;
         let username = sanitize_username(&username);
         validate_username(&username)?;
-        validate_description(&description)?;
+        validate_description(description.as_deref())?;
         let domain = sanitize_domain(&state, &host).await?;
 
         let (from_pk, from_sig) = parse_signed_request(&from_pubkey, &from_signature)?;
@@ -323,7 +324,7 @@ where
             &from_pk,
             &to_pk,
             &to_pubkey,
-            &description,
+            description.as_deref(),
             timestamp,
         );
         let authorization =
@@ -349,7 +350,7 @@ where
                     from_pubkey: &from_pk.to_string(),
                     to_pubkey: &to_pk.to_string(),
                     username: &username,
-                    description: given_description(&description),
+                    description: description.as_deref(),
                 },
                 StatementClaim {
                     hash: &statement_hash(&from_pk, &authorization.message),
@@ -409,7 +410,7 @@ where
             description: Some(shown_description(
                 &username,
                 &domain,
-                given_description(&description),
+                description.as_deref(),
             )),
         }))
     }
@@ -1323,20 +1324,14 @@ fn validate_amount_bounds(
     Ok(())
 }
 
-fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    if description.chars().take(256).count() > 255 {
+fn validate_description(description: Option<&str>) -> Result<(), (StatusCode, Json<Value>)> {
+    if description.is_some_and(|description| description.chars().take(256).count() > 255) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(Value::String("description too long".into())),
         ));
     }
     Ok(())
-}
-
-/// The description a client gave. A client sends an empty one to leave the
-/// description to the server.
-fn given_description(description: &str) -> Option<&str> {
-    (!description.is_empty()).then_some(description)
 }
 
 /// Take the metadata request's signature and timestamp from the headers,
@@ -1473,7 +1468,7 @@ fn legacy_timestamped(message: &str, timestamp: u64) -> String {
 fn register_candidates(
     domain: &str,
     username: &str,
-    description: &str,
+    description: Option<&str>,
     timestamp: u64,
 ) -> Vec<Candidate> {
     vec![
@@ -1607,7 +1602,7 @@ fn transfer_to_candidates(
     from_pubkey: &PublicKey,
     to_pubkey: &PublicKey,
     raw_to_pubkey: &str,
-    description: &str,
+    description: Option<&str>,
     timestamp: Option<u64>,
 ) -> Vec<Candidate> {
     match timestamp {
@@ -3015,8 +3010,8 @@ mod tests {
         );
     }
 
-    /// A wallet that sends an empty description leaves the description to the
-    /// server, which stores none and shows its default to payers and wallets.
+    /// A wallet that sends no description leaves the description to the server,
+    /// which stores none and shows its default to payers and wallets.
     #[tokio::test]
     async fn an_address_without_a_description_shows_the_servers_default() {
         use crate::test_support::{TestServer, test_db, test_state};
@@ -3035,14 +3030,14 @@ mod tests {
         let shown = "Pay to alice@tips.example";
 
         let timestamp = now_u64();
-        let message = signed_message::register("tips.example", "alice", "", timestamp);
+        let message = signed_message::register("tips.example", "alice", None, timestamp);
         let registered: RegisterLnurlPayResponse = server
             .request(Method::POST, "tips.example", &format!("/lnurlpay/{alice}"))
             .json(&RegisterLnurlPayRequest {
                 username: "alice".to_string(),
                 signature: signed(&alice_secret, &message),
                 timestamp,
-                description: String::new(),
+                description: None,
             })
             .send()
             .await
@@ -3094,7 +3089,7 @@ mod tests {
         let from_message =
             signed_message::transfer_from("tips.example", "alice", &alice, &bob, timestamp);
         let to_message =
-            signed_message::transfer_to("tips.example", "alice", &alice, &bob, "", timestamp);
+            signed_message::transfer_to("tips.example", "alice", &alice, &bob, None, timestamp);
         let handed_over: TransferLnurlPayResponse = server
             .request(
                 Method::POST,
@@ -3103,7 +3098,7 @@ mod tests {
             )
             .json(&TransferLnurlPayRequest {
                 username: "alice".to_string(),
-                description: String::new(),
+                description: None,
                 from_pubkey: alice,
                 from_signature: signed(&alice_secret, &from_message),
                 to_signature: signed(&bob_secret, &to_message),
@@ -3118,6 +3113,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(handed_over.description.as_deref(), Some(shown));
+    }
+
+    /// A wallet that sends an empty description gets an empty description: the
+    /// server stores and shows it as it is.
+    #[tokio::test]
+    async fn an_empty_description_stays_empty() {
+        use crate::test_support::{TestServer, test_db, test_state};
+        use axum::http::Method;
+
+        let (_pg, db) = test_db().await;
+        let state = test_state(db.clone()).await;
+        state
+            .domains
+            .write()
+            .await
+            .insert("tips.example".to_string(), None);
+        let server = TestServer::start(crate::router(state)).await;
+        let (secret, alice) = transfer_key(1);
+
+        let timestamp = now_u64();
+        let message = signed_message::register("tips.example", "alice", Some(""), timestamp);
+        let registered: RegisterLnurlPayResponse = server
+            .request(Method::POST, "tips.example", &format!("/lnurlpay/{alice}"))
+            .json(&RegisterLnurlPayRequest {
+                username: "alice".to_string(),
+                signature: hex::encode(sign(&secret, &message).serialize_der()),
+                timestamp,
+                description: Some(String::new()),
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(registered.description.as_deref(), Some(""));
+        let stored = db.get_user_by_name("tips.example", "alice").await.unwrap();
+        assert_eq!(
+            stored.map(|user| user.description),
+            Some(Some(String::new()))
+        );
+
+        let pay: Value = server
+            .request(Method::GET, "tips.example", "/lnurlp/alice")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let metadata: Value = serde_json::from_str(pay["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata[0], json!(["text/plain", ""]));
     }
 
     // -- Signed messages -------------------------------------------------------
@@ -3162,7 +3213,8 @@ mod tests {
         let desc_hash = signed_message::description_hash(TEST_DESCRIPTION);
 
         assert_eq!(
-            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
             format!(
                 "breez-lnurl:v2\nregister\n{TEST_DOMAIN}\nalice\n{desc_hash}\n{TEST_TIMESTAMP}"
             )
@@ -3200,7 +3252,7 @@ mod tests {
                 &alice,
                 &bob,
                 &bob.to_string(),
-                TEST_DESCRIPTION,
+                Some(TEST_DESCRIPTION),
                 Some(TEST_TIMESTAMP)
             )[0]
             .message,
@@ -3221,7 +3273,7 @@ mod tests {
         for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
             for name in ["alice", "bob"] {
                 messages.extend(
-                    register_candidates(domain, name, TEST_DESCRIPTION, TEST_TIMESTAMP)
+                    register_candidates(domain, name, Some(TEST_DESCRIPTION), TEST_TIMESTAMP)
                         .into_iter()
                         .chain(unregister_candidates(domain, name, TEST_TIMESTAMP))
                         .chain(transfer_from_candidates(
@@ -3238,7 +3290,7 @@ mod tests {
                             &alice,
                             &bob,
                             &hex_alice,
-                            TEST_DESCRIPTION,
+                            Some(TEST_DESCRIPTION),
                             Some(TEST_TIMESTAMP),
                         ))
                         .filter(|candidate| !candidate.legacy)
@@ -3281,17 +3333,23 @@ mod tests {
         let (secret, public) = transfer_key(0x11);
         let signature = sign(
             &secret,
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
         );
 
         assert!(verifies(
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
             &signature,
             &public
         ));
         assert!(
             !verifies(
-                &register_candidates(OTHER_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &register_candidates(
+                    OTHER_DOMAIN,
+                    "alice",
+                    Some(TEST_DESCRIPTION),
+                    TEST_TIMESTAMP
+                ),
                 &signature,
                 &public
             ),
@@ -3334,7 +3392,7 @@ mod tests {
             (
                 "register",
                 format!("alice-{TEST_TIMESTAMP}"),
-                register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
             ),
             (
                 "unregister, prefixed",
@@ -3397,7 +3455,7 @@ mod tests {
             &alice,
             &bob,
             &hex_bob,
-            TEST_DESCRIPTION,
+            Some(TEST_DESCRIPTION),
             None,
         );
 
@@ -3420,7 +3478,7 @@ mod tests {
     fn the_v2_candidate_is_matched_before_the_legacy_one() {
         let (secret, public) = transfer_key(0x11);
         let candidates =
-            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP);
+            register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP);
         let signature = sign(&secret, &candidates[0].message);
 
         let matched = verify_candidates(&public, &signature, &candidates, TEST_DOMAIN)
@@ -3489,7 +3547,7 @@ mod tests {
 
         for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
             assert!(verifies(
-                &register_candidates(domain, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &register_candidates(domain, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
                 &signature,
                 &public
             ));
@@ -3503,12 +3561,13 @@ mod tests {
         let (secret, public) = transfer_key(0x11);
         let signature = sign(
             &secret,
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
         );
 
         assert!(
             !verifies(
-                &register_candidates(TEST_DOMAIN, "alice", "Pay to mallory", TEST_TIMESTAMP)
+                &register_candidates(TEST_DOMAIN, "alice", Some("Pay to mallory"), TEST_TIMESTAMP)
                     .into_iter()
                     .filter(|candidate| !candidate.legacy)
                     .collect::<Vec<_>>(),
@@ -3534,11 +3593,15 @@ mod tests {
                 Some(TEST_TIMESTAMP),
             )
         };
-        let signature = sign(&secret, &to_candidates(TEST_DESCRIPTION)[0].message);
+        let signature = sign(&secret, &to_candidates(Some(TEST_DESCRIPTION))[0].message);
 
-        assert!(verifies(&to_candidates(TEST_DESCRIPTION), &signature, &bob));
+        assert!(verifies(
+            &to_candidates(Some(TEST_DESCRIPTION)),
+            &signature,
+            &bob
+        ));
         assert!(!verifies(
-            &to_candidates("Pay to mallory"),
+            &to_candidates(Some("Pay to mallory")),
             &signature,
             &bob
         ));
@@ -3567,7 +3630,7 @@ mod tests {
             &alice,
             &bob,
             &hex_bob,
-            TEST_DESCRIPTION,
+            Some(TEST_DESCRIPTION),
             Some(TEST_TIMESTAMP),
         );
         let signature = sign(&alice_secret, &from[0].message);
@@ -3900,8 +3963,9 @@ mod tests {
         assert_ne!(
             statement_hash(
                 &public_key,
-                &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0]
-                    .message
+                &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)
+                    [0]
+                .message
             ),
             statement_hash(
                 &public_key,
