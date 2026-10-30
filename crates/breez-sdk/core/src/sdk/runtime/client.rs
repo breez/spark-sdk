@@ -787,7 +787,7 @@ mod tests {
     /// for the next start.
     #[tokio::test]
     async fn shutdown_during_the_wait_leaves_the_input_unsettled() {
-        let (converter, shutdown) = start(false, Duration::from_mins(1));
+        let (converter, shutdown) = start(false, Duration::from_secs(60));
         converter.requests.send(stranded("input")).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 

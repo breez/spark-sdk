@@ -74,10 +74,10 @@ silentpayments = { version = "0.8.1", default-features = false, features = ["rec
 # transactions for the receive-side sweep (alloy-consensus + alloy-eips +
 # alloy-signer + alloy-rlp). The alloy crates are already in the workspace lock
 # via boltz-client.
-alloy-signer-local = { version = "1.8.3", features = ["mnemonic"] }
-alloy-signer = "1.8.3"
-alloy-consensus = "1.8.3"
-alloy-eips = "1.8.3"
+alloy-signer-local = { version = "1.6.3", features = ["mnemonic"] }
+alloy-signer = "1.6.3"
+alloy-consensus = "1.6.3"
+alloy-eips = "1.6.3"
 alloy-primitives = "1.6.0"
 alloy-rlp = "0.3.15"
 reqwest.workspace = true

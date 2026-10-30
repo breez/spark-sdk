@@ -44,7 +44,7 @@ const MIN_REPLENISH_SPACING: Duration = Duration::from_secs(10);
 /// The longest a failing cycle waits before it is tried again. A failed cycle can leave
 /// the operators holding the deposit addresses it prepared, of which they allow each
 /// wallet a limited number.
-const MAX_REPLENISH_BACKOFF: Duration = Duration::from_secs(60 * 60);
+const MAX_REPLENISH_BACKOFF: Duration = Duration::from_hours(1);
 
 /// Keeps unconfirmed funding transactions broadcast, bumps them when due, and
 /// funds new trees for what the pool is short of. The loop runs a cycle at
