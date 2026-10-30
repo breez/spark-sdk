@@ -315,7 +315,7 @@ type CoopExitRequest implements UserRequest & Entity {
   fee: CurrencyAmount!
 
   """The bitcoin address where user would like to coop exit to."""
-  withdrawal_address: String
+  withdrawal_address: String!
 
   """The L1 broadcast fee user pays for the coop exit."""
   l1_broadcast_fee: CurrencyAmount!
