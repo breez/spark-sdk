@@ -1,6 +1,7 @@
 import {
   type BreezSdk,
   connect,
+  ConsoleLogger,
   defaultConfig,
   getSparkStatus,
   initLogging,
@@ -66,6 +67,12 @@ const exampleLogging = async () => {
   const logger = new JsLogger()
   await initLogging(logger)
   // ANCHOR_END: logging
+}
+
+const exampleConsoleLogging = async () => {
+  // ANCHOR: logging-console
+  await initLogging(new ConsoleLogger())
+  // ANCHOR_END: logging-console
 }
 
 const exampleAddEventListener = async (sdk: BreezSdk) => {
