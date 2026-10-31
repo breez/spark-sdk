@@ -53,14 +53,7 @@ class MigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({
-        line: message,
-        level: level,
-      });
-    } else if (level === "error") {
-      console.error(`[MigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -149,7 +142,7 @@ class MigrationManager {
               }
             });
 
-            console.log(`Migrated ${updated} payment records to BigInt format`);
+            this._log("info", `Migrated ${updated} payment records to BigInt format`);
           };
         },
       },
@@ -1133,13 +1126,15 @@ class IndexedDBStorage {
           shouldPersist = true;
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "debug",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           shouldPersist = true;
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "warn",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldPersist = false;
@@ -2785,6 +2780,10 @@ class IndexedDBStorage {
       details: payment.details ? toJson(payment.details) : null,
       method: payment.method ? toJson(payment.method) : null,
     };
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
