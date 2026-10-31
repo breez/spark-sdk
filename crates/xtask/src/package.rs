@@ -200,7 +200,7 @@ fn package_wasm_target(
         bail!("wasm-pack build failed for target {}", target);
     }
 
-    add_disposable_lib_reference(&out_path)?;
+    declare_symbol_dispose(&out_path)?;
 
     // For Node.js target, copy the JavaScript sqlite storage implementation
     if target == "nodejs" {
@@ -234,18 +234,25 @@ fn package_wasm_target(
     Ok(())
 }
 
-/// wasm-bindgen declares `[Symbol.dispose]()` on exported classes, which only
-/// type-checks with the disposable lib loaded.
-fn add_disposable_lib_reference(out_path: &Path) -> Result<()> {
+/// Prepends a declaration of `Symbol.dispose`, which TypeScript needs to check
+/// the `[Symbol.dispose]()` methods wasm-bindgen puts on exported classes.
+/// With a reference to the `esnext.disposable` lib instead, TypeScript would
+/// also accept `DisposableStack` and `using` in every consumer, including
+/// consumers whose runtimes lack them.
+fn declare_symbol_dispose(out_path: &Path) -> Result<()> {
     let dts = out_path.join("breez_sdk_spark_wasm.d.ts");
     let content =
         fs::read_to_string(&dts).with_context(|| format!("Failed to read {}", dts.display()))?;
-    fs::write(
-        &dts,
-        format!("/// <reference lib=\"esnext.disposable\" />\n{content}"),
-    )
-    .with_context(|| format!("Failed to write {}", dts.display()))
+    fs::write(&dts, format!("{SYMBOL_DISPOSE_DECLARATION}{content}"))
+        .with_context(|| format!("Failed to write {}", dts.display()))
 }
+
+const SYMBOL_DISPOSE_DECLARATION: &str = "declare global {
+    interface SymbolConstructor {
+        readonly dispose: unique symbol;
+    }
+}
+";
 
 /// Parsed exports from a wasm-bindgen generated `.d.ts` file.
 struct WasmExports {
