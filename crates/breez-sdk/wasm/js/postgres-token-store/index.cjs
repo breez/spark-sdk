@@ -1005,9 +1005,7 @@ class PostgresTokenStore {
   // ===== Private Helpers =====
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
