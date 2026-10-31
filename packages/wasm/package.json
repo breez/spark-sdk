@@ -51,6 +51,10 @@
           "default": "./nodejs/index.js"
         },
         "deno": "./deno/breez_sdk_spark_wasm.js",
+        "require": {
+          "types": "./nodejs/index.d.ts",
+          "default": "./web/index.js"
+        },
         "default": "./web/index.js"
       }
     },
