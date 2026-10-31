@@ -512,13 +512,15 @@ class MysqlStorage {
           await this._runPaymentUpsert(conn, payment);
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "debug",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           await this._runPaymentUpsert(conn, payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "warn",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;
@@ -695,6 +697,10 @@ class MysqlStorage {
       .update(Buffer.from(paymentId))
       .digest("hex")
       .slice(0, 32);
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
@@ -1524,11 +1530,7 @@ class MysqlStorage {
 
         if (deleteResult.affectedRows === 0) {
           const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
-          if (this.logger && typeof this.logger.log === "function") {
-            this.logger.log({ line: msg, level: "warn" });
-          } else {
-            console.warn(`[MysqlStorage] ${msg}`);
-          }
+          this._log("warn", msg);
         }
 
         await conn.query(

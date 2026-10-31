@@ -79,16 +79,7 @@ class MigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({
-        line: message,
-        level: level,
-      });
-    } else if (level === "error") {
-      // Fallback to console.error for errors only
-      console.error(`[MigrationManager] ${message}`);
-    }
-    // For info/debug/warn levels, only log if logger is provided
+    this.logger?.log({ line: message, level });
   }
 
   /**

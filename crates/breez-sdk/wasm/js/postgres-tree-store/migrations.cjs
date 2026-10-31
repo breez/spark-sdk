@@ -179,11 +179,7 @@ class TreeStoreMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[TreeStoreMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**

@@ -414,7 +414,8 @@ class PostgresStorage {
         if (stored != null
             && this._isFinalPaymentStatus(stored)
             && stored !== next) {
-          console.warn(
+          this._log(
+            "warn",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           return false;
@@ -422,7 +423,8 @@ class PostgresStorage {
 
         const sameStatus = stored === next;
         if (sameStatus) {
-          console.debug(
+          this._log(
+            "debug",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
         }
@@ -567,6 +569,10 @@ class PostgresStorage {
         ]
       );
     }
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
@@ -1434,11 +1440,7 @@ class PostgresStorage {
 
         if (deleteResult.rowCount === 0) {
           const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
-          if (this.logger && typeof this.logger.log === "function") {
-            this.logger.log({ line: msg, level: "warn" });
-          } else {
-            console.warn(`[PostgresStorage] ${msg}`);
-          }
+          this._log("warn", msg);
         }
 
         await client.query(

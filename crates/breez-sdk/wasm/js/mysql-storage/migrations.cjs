@@ -146,11 +146,7 @@ class MysqlMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[MysqlMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**

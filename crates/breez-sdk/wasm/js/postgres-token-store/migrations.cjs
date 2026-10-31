@@ -187,11 +187,7 @@ class TokenStoreMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[TokenStoreMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**

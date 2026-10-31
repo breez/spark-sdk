@@ -369,13 +369,15 @@ class SqliteStorage {
           this._runPaymentUpsert(payment);
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "debug",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           this._runPaymentUpsert(payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "warn",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;
@@ -514,6 +516,10 @@ class SqliteStorage {
           : null,
       });
     }
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
