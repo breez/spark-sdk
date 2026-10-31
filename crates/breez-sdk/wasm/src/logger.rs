@@ -8,7 +8,8 @@ use tracing_subscriber::{
     layer::Context,
     registry::LookupSpan,
 };
-use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
+use web_sys::console;
 
 use crate::models::LogEntry;
 
@@ -59,4 +60,30 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = log)]
     pub fn log(this: &Logger, l: LogEntry);
+}
+
+/// A logger that prints each log entry to the JavaScript console, with the console method that
+/// matches the entry's level.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct ConsoleLogger;
+
+#[wasm_bindgen]
+impl ConsoleLogger {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn log(&self, entry: LogEntry) {
+        let LogEntry { line, level, .. } = entry;
+        let level = level.to_ascii_uppercase();
+        let text = JsValue::from(format!("[{level}] {line}"));
+        match level.as_str() {
+            "ERROR" => console::error_1(&text),
+            "WARN" => console::warn_1(&text),
+            "INFO" => console::info_1(&text),
+            _ => console::debug_1(&text),
+        }
+    }
 }
