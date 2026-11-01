@@ -84,17 +84,6 @@ CpfpFundingKind? _parseFundingKind(String s) {
   }
 }
 
-CpfpFundingStrategy? _parseFundingStrategy(String s) {
-  switch (s.toLowerCase()) {
-    case 'per-branch':
-      return const CpfpFundingStrategy.perBranch();
-    case 'per-node':
-      return const CpfpFundingStrategy.perNode();
-    default:
-      return null;
-  }
-}
-
 /// Parse [args] with [parser], returning `null` if the user asked for help
 /// or if parsing fails (prints usage + error in that case).
 ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
@@ -153,16 +142,11 @@ Future<void> _handleImportUnilateralExitState(BreezSdk sdk, List<String> args) a
 Future<void> _handleRecoverFunds(BreezSdk sdk, List<String> args) async {
   const usage =
       'advanced recover-funds --fee-rate <rate> --destination <addr> [--funding-kind p2tr] '
-      '[--funding-strategy per-branch] [--all | --leaf <id>...] [--output-file <path>]';
+      '[--all | --leaf <id>...] [--output-file <path>]';
   final parser =
       ArgParser(usageLineLength: 80)
         ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
         ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
-        ..addOption(
-          'funding-strategy',
-          defaultsTo: 'per-branch',
-          help: 'Fund one UTXO per branch, or one per fee-bumped transaction: per-branch or per-node',
-        )
         ..addOption('destination', mandatory: true, help: 'Destination address for the recovered funds')
         ..addFlag(
           'all',
@@ -196,17 +180,10 @@ Future<void> _handleRecoverFunds(BreezSdk sdk, List<String> args) async {
     print('Invalid funding kind: $fundingKindStr (expected p2wpkh or p2tr)');
     return;
   }
-  final fundingStrategyStr = results.option('funding-strategy')!;
-  final fundingStrategy = _parseFundingStrategy(fundingStrategyStr);
-  if (fundingStrategy == null) {
-    print('Invalid funding strategy: $fundingStrategyStr (expected per-branch or per-node)');
-    return;
-  }
 
   final request = PrepareRecoverFundsRequest(
     feeRateSatPerVbyte: BigInt.parse(results.option('fee-rate')!),
     fundingKind: fundingKind,
-    fundingStrategy: fundingStrategy,
     destination: results.option('destination')!,
     selection: _recoverySelection(all, leafIds),
   );
@@ -252,7 +229,6 @@ Future<void> _recoverFunds(
         request: PrepareRecoverFundsRequest(
           feeRateSatPerVbyte: request.feeRateSatPerVbyte,
           fundingKind: request.fundingKind,
-          fundingStrategy: request.fundingStrategy,
           destination: request.destination,
           selection: ExitLeafSelection.specific(leafIds: cooperative),
         ),
