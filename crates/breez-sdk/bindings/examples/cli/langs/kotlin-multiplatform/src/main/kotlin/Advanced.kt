@@ -185,6 +185,7 @@ suspend fun handleRecoverFunds(sdk: BreezSdk, reader: LineReader, args: List<Str
     val fp = FlagParser(args)
     val feeRate = fp.getULong("fee-rate")
     val fundingKindStr = fp.getString("funding-kind") ?: "p2tr"
+    val fundingStrategyStr = fp.getString("funding-strategy") ?: "per-branch"
     val destination = fp.getString("destination")
     val all = fp.hasFlag("all")
     val leafIds = fp.getAll("leaf")
@@ -193,10 +194,11 @@ suspend fun handleRecoverFunds(sdk: BreezSdk, reader: LineReader, args: List<Str
     if (feeRate == null || destination == null) {
         println("Usage: advanced recover-funds --fee-rate <sat/vByte> --destination <address> [options]")
         println("Options:")
-        println("  --funding-kind <p2wpkh|p2tr>    Funding UTXO kind (default: p2tr)")
-        println("  --all                           Recover every leaf worth it, including the ones still in the balance (only for when the operators are unreachable or refuse to serve the wallet)")
-        println("  --leaf <id>                     Leaf id to recover (repeatable, omit to recover the leaves that left the balance)")
-        println("  --output-file <path>            File to write the signed recovery to, for check-recover-funds to read back")
+        println("  --funding-kind <p2wpkh|p2tr>              Funding UTXO kind (default: p2tr)")
+        println("  --funding-strategy <per-branch|per-node>  Fund one UTXO per branch, or one per fee-bumped transaction (default: per-branch)")
+        println("  --all                                     Recover every leaf worth it, including the ones still in the balance (only for when the operators are unreachable or refuse to serve the wallet)")
+        println("  --leaf <id>                               Leaf id to recover (repeatable, omit to recover the leaves that left the balance)")
+        println("  --output-file <path>                      File to write the signed recovery to, for check-recover-funds to read back")
         return
     }
 
@@ -214,9 +216,19 @@ suspend fun handleRecoverFunds(sdk: BreezSdk, reader: LineReader, args: List<Str
         }
     }
 
+    val fundingStrategy = when (fundingStrategyStr.lowercase()) {
+        "per-branch" -> CpfpFundingStrategy.PerBranch
+        "per-node" -> CpfpFundingStrategy.PerNode
+        else -> {
+            println("Invalid funding strategy: $fundingStrategyStr (expected per-branch or per-node)")
+            return
+        }
+    }
+
     val request = PrepareRecoverFundsRequest(
         feeRateSatPerVbyte = feeRate,
         fundingKind = fundingKind,
+        fundingStrategy = fundingStrategy,
         destination = destination,
         selection = recoverySelection(all, leafIds),
     )

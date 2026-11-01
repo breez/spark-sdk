@@ -168,6 +168,7 @@ public static class AdvancedCommands
     {
         var feeRateStr = GetFlag(args, "--fee-rate");
         var fundingKindStr = GetFlag(args, "--funding-kind") ?? "p2tr";
+        var fundingStrategyStr = GetFlag(args, "--funding-strategy") ?? "per-branch";
         var destination = GetFlag(args, "--destination");
         var all = HasFlag(args, "--all");
         var leafIds = GetAllFlags(args, "--leaf");
@@ -175,7 +176,7 @@ public static class AdvancedCommands
 
         if (feeRateStr == null || destination == null)
         {
-            Console.WriteLine("Usage: advanced recover-funds --fee-rate <N> --destination <addr> [--funding-kind p2tr|p2wpkh] [--all | --leaf <id> ...] [--output-file <path>]");
+            Console.WriteLine("Usage: advanced recover-funds --fee-rate <N> --destination <addr> [--funding-kind p2tr|p2wpkh] [--funding-strategy per-branch|per-node] [--all | --leaf <id> ...] [--output-file <path>]");
             return;
         }
 
@@ -194,9 +195,17 @@ public static class AdvancedCommands
             _ => throw new ArgumentException($"Invalid funding kind: {fundingKindStr}. Use 'p2wpkh' or 'p2tr'")
         };
 
+        CpfpFundingStrategy fundingStrategy = fundingStrategyStr.ToLower() switch
+        {
+            "per-branch" => CpfpFundingStrategy.PerBranch,
+            "per-node" => CpfpFundingStrategy.PerNode,
+            _ => throw new ArgumentException($"Invalid funding strategy: {fundingStrategyStr}. Use 'per-branch' or 'per-node'")
+        };
+
         var request = new PrepareRecoverFundsRequest(
             feeRateSatPerVbyte: feeRate,
             fundingKind: fundingKind,
+            fundingStrategy: fundingStrategy,
             destination: destination,
             selection: RecoverySelection(all, leafIds)
         );

@@ -158,6 +158,7 @@ func handleRecoverFunds(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, ar
 	fs := flag.NewFlagSet("recover-funds", flag.ContinueOnError)
 	feeRate := fs.Uint64("fee-rate", 0, "Target fee rate in sat/vByte")
 	fundingKind := fs.String("funding-kind", "p2tr", "Funding UTXO kind: p2wpkh or p2tr")
+	fundingStrategy := fs.String("funding-strategy", "per-branch", "Fund one UTXO per branch, or one per fee-bumped transaction: per-branch or per-node")
 	destination := fs.String("destination", "", "Destination address for the recovered funds")
 	all := fs.Bool("all", false, "Recover every leaf worth it, including the ones still in the balance. Only for when the operators are unreachable or refuse to serve the wallet.")
 	var leafIDs stringSliceFlag
@@ -174,7 +175,7 @@ func handleRecoverFunds(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, ar
 		}
 	})
 	if !feeRateSet || *destination == "" {
-		fmt.Println("Usage: advanced recover-funds --fee-rate <sat/vByte> --destination <address> [--funding-kind p2wpkh|p2tr] [--all | --leaf <id> ...] [--output-file <path>]")
+		fmt.Println("Usage: advanced recover-funds --fee-rate <sat/vByte> --destination <address> [--funding-kind p2wpkh|p2tr] [--funding-strategy per-branch|per-node] [--all | --leaf <id> ...] [--output-file <path>]")
 		return nil
 	}
 	if *all && len(leafIDs) > 0 {
@@ -192,9 +193,20 @@ func handleRecoverFunds(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, ar
 		return fmt.Errorf("invalid funding kind '%s', expected p2wpkh or p2tr", *fundingKind)
 	}
 
+	var cpfpFundingStrategy breez_sdk_spark.CpfpFundingStrategy
+	switch strings.ToLower(*fundingStrategy) {
+	case "per-branch":
+		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerBranch{}
+	case "per-node":
+		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerNode{}
+	default:
+		return fmt.Errorf("invalid funding strategy '%s', expected per-branch or per-node", *fundingStrategy)
+	}
+
 	request := breez_sdk_spark.PrepareRecoverFundsRequest{
 		FeeRateSatPerVbyte: *feeRate,
 		FundingKind:        &cpfpFundingKind,
+		FundingStrategy:    &cpfpFundingStrategy,
 		Destination:        *destination,
 		Selection:          recoverySelection(*all, leafIDs),
 	}

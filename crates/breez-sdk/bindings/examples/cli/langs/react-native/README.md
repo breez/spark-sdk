@@ -219,6 +219,9 @@ advanced recover-funds --fee-rate 2 --destination bc1q...
 # Also sign it, and write it to a file for check-recover-funds to read back
 advanced recover-funds --fee-rate 2 --destination bc1q... --output-file recovery.json --sign
 
+# Fund one UTXO per fee-bumped transaction instead of per branch
+advanced recover-funds --fee-rate 2 --destination bc1q... --funding-strategy per-node
+
 # Fund the unilateral exit (for P2TR, pubkey is the internal key)
 advanced recover-funds --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex> --output-file recovery.json --sign
 

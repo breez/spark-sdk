@@ -12,6 +12,7 @@ import {
   CooperativeRecoveryError_Tags,
   CooperativeRecoveryFailure,
   CpfpFundingKind,
+  CpfpFundingStrategy,
   CpfpInput,
   CpfpInput_Tags,
   ExitLeafSelection,
@@ -124,7 +125,8 @@ function printAdvancedHelp(): string {
     '',
     'Advanced subcommands (expert-only, misuse can strand or lose funds):',
     '  advanced recover-funds --fee-rate <rate> --destination <addr>',
-    '    [--funding-kind p2wpkh|p2tr] [--all | --leaf <id> ...]',
+    '    [--funding-kind p2wpkh|p2tr] [--funding-strategy per-branch|per-node]',
+    '    [--all | --leaf <id> ...]',
     '    [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>]',
     '    [--output-file <path>] [--sign]',
     '                                         Recover the funds that left the balance, or with --all every leaf',
@@ -316,12 +318,16 @@ async function handleRecoverFunds(sdk: BreezSdkInterface, args: string[]): Promi
   const destination = parseFlag(args, '--destination')
 
   if (!feeRateStr || !destination) {
-    return 'Usage: advanced recover-funds --fee-rate <rate> --destination <addr> [--funding-kind p2wpkh|p2tr] [--all | --leaf <id> ...] [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>] [--output-file <path>] [--sign]'
+    return 'Usage: advanced recover-funds --fee-rate <rate> --destination <addr> [--funding-kind p2wpkh|p2tr] [--funding-strategy per-branch|per-node] [--all | --leaf <id> ...] [--utxo txid:vout:value:pubkey ...] [--secret-key <hex>] [--output-file <path>] [--sign]'
   }
 
   const fundingKindStr = parseFlag(args, '--funding-kind') ?? 'p2tr'
   if (fundingKindStr !== 'p2wpkh' && fundingKindStr !== 'p2tr') {
     return 'Error: --funding-kind must be p2wpkh or p2tr'
+  }
+  const fundingStrategyStr = parseFlag(args, '--funding-strategy') ?? 'per-branch'
+  if (fundingStrategyStr !== 'per-branch' && fundingStrategyStr !== 'per-node') {
+    return 'Error: --funding-strategy must be per-branch or per-node'
   }
   const all = args.includes('--all')
   const leafIds = parseRepeatedFlag(args, '--leaf')
@@ -341,6 +347,9 @@ async function handleRecoverFunds(sdk: BreezSdkInterface, args: string[]): Promi
     fundingKind: fundingKindStr === 'p2wpkh'
       ? new CpfpFundingKind.P2wpkh()
       : new CpfpFundingKind.P2tr(),
+    fundingStrategy: fundingStrategyStr === 'per-node'
+      ? new CpfpFundingStrategy.PerNode()
+      : new CpfpFundingStrategy.PerBranch(),
     destination,
     selection: recoverySelection(all, leafIds),
   }
