@@ -25,7 +25,7 @@ use crate::{
     chain::BitcoinChainService,
     error::SdkError,
     models::{
-        ConfirmedExitNode, CpfpFundingKind, CpfpInput as ModelCpfpInput,
+        ConfirmedExitNode, CpfpFundingKind, CpfpFundingStrategy, CpfpInput as ModelCpfpInput,
         ExitChainState as ModelExitChainState, ExitNodeConfirmation, ExitRefund, ExitRefundState,
         ExitTransactionStatus, PerBranchFunding, RecoverFundsLeaf, RecoveryFunding, RecoveryMethod,
         RecoveryTransaction, RecoveryTxKind, SkippedLeaf, SkippedLeafReason,
@@ -76,6 +76,7 @@ impl BreezSdk {
         destination: &Address,
         fee_rate_sat_per_vbyte: u64,
         funding_kind: Option<&CpfpFundingKind>,
+        funding_strategy: CpfpFundingStrategy,
         selection: spark_wallet::ExitLeafSelection,
         not_unilateral: &HashSet<String>,
         stored: &HashMap<String, LeafRecovery>,
@@ -127,6 +128,7 @@ impl BreezSdk {
             input_weight,
             output_script.len(),
             output_script.minimal_non_dust().to_sat(),
+            funding_strategy.into(),
             dest_script_len,
             &exit_chain_state,
         )?;
@@ -172,6 +174,7 @@ impl BreezSdk {
             sweep_fee_sat = quote.sweep_fee_sat,
             single_utxo_funding_sat = quote.single_utxo_funding_sat,
             branches = per_branch.len(),
+            ?funding_strategy,
             "quote_unilateral_exit: quote ready"
         );
 
@@ -187,6 +190,7 @@ impl BreezSdk {
             funding: (!per_branch.is_empty()).then_some(RecoveryFunding {
                 single_utxo_sats: quote.single_utxo_funding_sat,
                 per_branch,
+                strategy: funding_strategy,
             }),
             exit_chain_state: exit_chain_state_model(with_swept_refunds(exit_chain_state, swept)),
         })
@@ -207,6 +211,7 @@ impl BreezSdk {
         fee_rate_sat_per_vbyte: u64,
         funding_inputs: Vec<ModelCpfpInput>,
         single_utxo_funding_sats: u64,
+        funding_strategy: CpfpFundingStrategy,
         exit_chain_state: &ModelExitChainState,
         signer: Option<&dyn CpfpSigner>,
         queries: &mut ChainQueries,
@@ -240,6 +245,7 @@ impl BreezSdk {
             &context,
             fee_rate_sat_per_kw,
             funding_inputs,
+            funding_strategy.into(),
             dest_script_len,
             &chain_state,
         )?;

@@ -30,6 +30,7 @@ const examplePrepareRecovery = async (sdk: BreezSdk): Promise<PrepareRecoverFund
   const quote = await sdk.prepareRecoverFunds({
     feeRateSatPerVbyte: BigInt(2),
     fundingKind: new CpfpFundingKind.P2wpkh(),
+    fundingStrategy: undefined,
     destination: 'bc1q...your-destination-address',
     selection: new ExitLeafSelection.RecoverableOnly()
   })
@@ -67,6 +68,7 @@ const exampleRecoverCooperatively = async (sdk: BreezSdk, quote: PrepareRecoverF
     prepared = await sdk.prepareRecoverFunds({
       feeRateSatPerVbyte: quote.feeRateSatPerVbyte,
       fundingKind: undefined,
+      fundingStrategy: undefined,
       destination: quote.destination,
       selection: new ExitLeafSelection.Specific({ leafIds })
     })

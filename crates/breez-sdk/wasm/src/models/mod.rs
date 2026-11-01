@@ -991,6 +991,14 @@ pub enum CpfpFundingKind {
     },
 }
 
+#[derive(Clone, Copy, Default)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CpfpFundingStrategy)]
+pub enum CpfpFundingStrategy {
+    #[default]
+    PerBranch,
+    PerNode,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitLeafSelection)]
 pub enum ExitLeafSelection {
     All,
@@ -1074,6 +1082,7 @@ pub struct ImportUnilateralExitStateResponse {
 pub struct PrepareRecoverFundsRequest {
     pub fee_rate_sat_per_vbyte: u64,
     pub funding_kind: Option<CpfpFundingKind>,
+    pub funding_strategy: Option<CpfpFundingStrategy>,
     pub destination: String,
     pub selection: ExitLeafSelection,
 }
@@ -1099,6 +1108,8 @@ pub struct PrepareRecoverFundsResponse {
 pub struct RecoveryFunding {
     pub single_utxo_sats: u64,
     pub per_branch: Vec<PerBranchFunding>,
+    #[serde(default)]
+    pub strategy: CpfpFundingStrategy,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeaf)]

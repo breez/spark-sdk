@@ -49,7 +49,7 @@ A cooperative recovery is one transaction per leaf. It spends the leaf's funds f
 
 To move a leaf on-chain you broadcast the chain of transactions from the tree down to that leaf, then a refund transaction, then a final sweep to your destination address. Because the pre-signed transactions pay no fee on their own, each one is broadcast together with a CPFP child that pays its fee. A leaf received with a [watchtower fee ladder](./config.md#watchtower-fee-ladder) is the exception at the last step: the child of its refund is signed by the SDK and pays the fee out of the leaf itself.
 
-With one leaf there is no fan-out: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.
+With one leaf there is no fan-out under the default per-branch funding: your funding UTXO pays the fees directly. You broadcast the tree transactions top to bottom, each with its CPFP child as a package, then the refund once its timelock matures, then the sweep.
 
 ![Single-leaf unilateral exit](images/unilateral_exit_single_leaf.svg)
 
@@ -57,7 +57,7 @@ The blue transactions come pre-signed and fixed; you cannot change them. The gre
 
 ### A unilateral exit of multiple leaves
 
-Exiting several leaves at once starts with a **fan-out** transaction that splits a single funding UTXO into one output per branch. Leaves that share ancestors in the tree share those transactions too, so a shared ancestor is broadcast only once. Every branch's refund is then pulled into a single sweep.
+Exiting several leaves at once starts with a **fan-out** transaction that splits a single funding UTXO into one output per branch (per transaction with {{#enum CpfpFundingStrategy::PerNode}}). Leaves that share ancestors in the tree share those transactions too, so a shared ancestor is broadcast only once. Every branch's refund is then pulled into a single sweep.
 
 ![Multi-leaf unilateral exit](images/unilateral_exit_multi_leaf.svg)
 
@@ -88,7 +88,7 @@ Call {{#name prepare_recover_funds}} with the target {{#name fee_rate_sat_per_vb
 Its fields tell you how much Bitcoin to gather and how to structure it:
 
 - {{#name recoverable_value_sats}} is the total value of the selected {{#name leaves}}, and {{#name total_fee_sats}} is the on-chain fee to recover it, broken down into its components below. Compare them to decide whether the recovery is worth it at the current fee rate.
-- {{#name funding}} says how much to fund, two ways. {{#name single_utxo_sats}} is the simplest: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches. {{#name per_branch}} lets you skip the fan-out (and its {{#name fanout_fee_sats}}) by funding **one UTXO per branch**, each of at least the amount in its {{#name PerBranchFunding}} entry.
+- {{#name funding}} says how much to fund, two ways. {{#name single_utxo_sats}} is the simplest: fund **one** UTXO of at least this many satoshis and the SDK fans it out across branches. {{#name per_branch}} lets you skip the fan-out (and its {{#name fanout_fee_sats}}) by funding **one UTXO per entry**, each of at least the amount in its {{#name PerBranchFunding}} entry. An entry is a branch, or with {{#enum CpfpFundingStrategy::PerNode}} one transaction of a branch (see [One UTXO per transaction](#one-utxo-per-transaction)).
 
 Only the steps that have a CPFP child need funding, and {{#name funding}} is unset when no step has one. The fees of a cooperative recovery and of a sweep come out of the funds being recovered. The refund of a leaf whose last tree transaction went out in the operators' version has no CPFP child (see [A step left waiting can be sent by the operators](#broadcast-the-transactions)). Neither has the refund of a leaf received with a [watchtower fee ladder](./config.md#watchtower-fee-ladder): it pays its own fee out of the leaf.
 
@@ -124,26 +124,34 @@ The CPFP and fan-out fees come out of the Bitcoin you supplied as funding and do
 
 {{#name refund_fee_sats}} is the value of the unilateral leaves less the value of their refunds. For a refund that is on-chain when the SDK prepares the recovery, the SDK takes the value of its output. For a refund that is not on-chain yet, the SDK takes the refund it expects. When the leaf's last tree transaction is on-chain in the operators' version, that is the operators' refund, at the value of the SDK's copy of it. Otherwise it is the pre-signed refund you broadcast, which carries no fee and is worth the whole leaf. A refund received with a fee ladder is worth the whole leaf too, but pays its own fee out of it, and that fee counts here. The operators can still broadcast a refund with another fee, and the amount that arrives then changes by the difference between the two fees.
 
-**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sats}} less {{#name cooperative_fee_sats}}, {{#name refund_fee_sats}} and {{#name sweep_fee_sats}}, plus any funding that was not spent on fees. The sweep also collects the leftover change of the CPFP children it built, so unused funding is delivered to the same address rather than left behind. {{#name recoverable_value_sats}} less {{#name total_fee_sats}} is not the arriving amount: it subtracts the CPFP and fan-out fees, which the funding already paid.
+**What arrives at {{#name destination}}** is therefore {{#name recoverable_value_sats}} less {{#name cooperative_fee_sats}}, {{#name refund_fee_sats}} and {{#name sweep_fee_sats}}, plus the change of CPFP children that the sweep spends. With per-branch funding the sweep spends the change of the last CPFP child that the SDK built for each branch, so what the funding has left after the fees arrives at the same address. With {{#enum CpfpFundingStrategy::PerNode}} it spends no change: that change stays on your funding script. A supplied UTXO that the SDK does not use stays there too, under either strategy. {{#name recoverable_value_sats}} less {{#name total_fee_sats}} is not the arriving amount: it subtracts the CPFP and fan-out fees, which the funding already paid.
 
 **What the recovery costs in total** is {{#name total_fee_sats}}, across the funding UTXO and the recovered value together. Beginning with {{#name recoverable_value_sats}} in Spark and a funding UTXO worth F, the destination ends up with those two added together, less {{#name total_fee_sats}}.
 
-{{#name single_utxo_sats}} sits above {{#name cpfp_fee_sats}} plus {{#name fanout_fee_sats}} on purpose. It carries the sweep fee and a small per-branch allowance as headroom, and both come back to you in the sweep.
+{{#name single_utxo_sats}} sits above {{#name cpfp_fee_sats}} plus {{#name fanout_fee_sats}} on purpose. It carries the sweep fee and a small per-branch allowance as headroom, and both come back to you in the sweep. With {{#enum CpfpFundingStrategy::PerNode}} it carries no sweep fee, and the allowance is per transaction and stays on your funding script.
 
 ### Worth recovering
 
-Under {{#enum ExitLeafSelection::All}} and {{#enum ExitLeafSelection::RecoverableOnly}} a leaf is kept only when what is left of its funds exceeds its own recovery cost, measured per leaf. For a unilateral exit that is what the leaf's refund holds: the leaf's value, less the fee built into each step that went out, or goes out, in the operators' version. That per-leaf measure does not include the shared {{#name fanout_fee_sats}}, which the single-UTXO path pays once for the whole exit. So when you fund a multi-leaf exit from a **single** UTXO, the fan-out fee can push the total above what you recover, even though every leaf looked profitable on its own.
+Under {{#enum ExitLeafSelection::All}} and {{#enum ExitLeafSelection::RecoverableOnly}} a leaf is kept only when what is left of its funds exceeds its own recovery cost, measured per leaf. For a unilateral exit that is what the leaf's refund holds: the leaf's value, less the fee built into each step that went out, or goes out, in the operators' version. The cost depends on {{#name funding_strategy}}: with {{#enum CpfpFundingStrategy::PerNode}} the sweep has no change input for the leaf, so the leaf costs that input's share of the sweep fee less, and the SDK can keep a leaf that per-branch funding would drop. That per-leaf measure does not include the shared {{#name fanout_fee_sats}}, which the single-UTXO path pays once for the whole exit. So when you fund an exit whose {{#name per_branch}} has several entries from a **single** UTXO, the total with the fan-out fee can exceed what you recover, even though every leaf looked profitable on its own.
 
 Two rules keep a recovery from ever costing more than it returns:
 
 1. **Before funding, require {{#name recoverable_value_sats}} to exceed {{#name total_fee_sats}}.** These are the actual totals for the quote, fan-out fee included. If the margin is thin or negative, do not proceed as prepared.
-2. **Prefer per-branch funding.** Funding one UTXO per branch ({{#name per_branch}}) skips the fan-out entirely, so there is no shared fee. Because those two selections keep a leaf only when what is left of its funds exceeds its own cost, such a recovery is always net-positive when funded per branch.
+2. **Prefer one UTXO per entry.** If you fund one UTXO per {{#name per_branch}} entry, the SDK builds no fan-out, so there is no shared fee. Because those two selections keep a leaf only when what is left of its funds exceeds its own cost, such a recovery is always net-positive when funded that way.
 
-If the single-UTXO total is not worth it, either fund per branch, or narrow the set: prepare again with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
+If the single-UTXO total is not worth it, either fund one UTXO per entry, or narrow the set: prepare again with {{#enum ExitLeafSelection::Specific}} naming only the higher-value leaves (dropping the marginal ones removes their cost and can turn the total positive), or wait for a lower fee rate.
 
 If nothing is selected (no leaf is worth recovering at the given fee rate, the leaves' recoveries already finished, or there is nothing to recover) the response comes back with no {{#name leaves}} rather than as an error. {{#name skipped}} names each leaf the SDK left out of the quote and why.
 
 {{#tabs recover_funds:prepare-recover-funds}}
+
+### One UTXO per transaction
+
+By default a branch's CPFP children are chained: the first spends the UTXO you supplied and each later one spends the change of the one before it. So a child cannot be signed until the fee rate of every child above it is known, and preparing a choice of fee rates for each step of a branch multiplies out across its depth.
+
+Set {{#name funding_strategy}} to {{#enum CpfpFundingStrategy::PerNode}} to fund each transaction the exit fee-bumps from a UTXO of its own. No child then spends another's output, so each can be signed at any fee rate without knowing the others, and of children signed in advance for several fee rates you can broadcast whichever fits when the time comes.
+
+{{#name per_branch}} then has one entry per transaction, so a leaf can have several. Fund one UTXO per entry, in any order: the SDK gives the largest UTXO to the heaviest transaction, so it funds each transaction from the same UTXO at every fee rate, as long as you recover the same leaves at every rate. Name them with {{#enum ExitLeafSelection::Specific}} for that. To sign children for several fee rates, fund the amounts quoted for the highest of them. Each child's change, at least the dust limit, stays on your funding script rather than being swept, so the sweep can confirm whichever children you broadcast, and it is cheaper for it. If you fund a single UTXO instead, the SDK fans it out into one output per transaction, which costs more in fan-out fee than per-branch funding does. The SDK then makes a fan-out on each call to {{#name recover_funds}}, so you can mix children from calls at different fee rates only once one fan-out is in a block and you call again. Resume with the strategy you prepared with.
 
 ## Build the recovery
 
@@ -157,7 +165,7 @@ If the funding is below what the exit needs, it returns {{#enum SdkError::Insuff
 
 A very thin-margin exit can fail even when the funding is sufficient: {{#name recover_funds}} returns an error when the value of the sweep's inputs is not more than the sweep's fee. Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate.
 
-The set it builds depends on what is already on-chain. Because each CPFP child spends the previous one, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ExitTransactionStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ExitTransactionStatus::Unverified}} rather than failing the build. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
+The set it builds depends on what is already on-chain. Because each tree transaction spends an output of the one above it, and with per-branch funding each CPFP child also spends the change of the one before it, the exit is one connected chain, so to continue it correctly the SDK reads confirmed on-chain state through its chain service: a step already confirmed comes back as {{#enum ExitTransactionStatus::Confirmed}} and is not rebuilt. If the chain service cannot resolve a step, the SDK falls back to the status the operators reported: a node the operators already consider on-chain is left as-is rather than fee-bumped (bumping an already-confirmed node would invalidate the rest of the chain), and any node whose state still cannot be determined comes back as {{#enum ExitTransactionStatus::Unverified}} rather than failing the build. For a more reliable source you can supply your own chain service (see [Customizing the SDK](customizing.md#with-chain-service)).
 
 {{#tabs recover_funds:recover-funds}}
 
@@ -236,7 +244,7 @@ Within a branch you broadcast one package, wait for it to confirm, then broadcas
 
 Follow {{#name depends_on}} to order the set: a transaction can go out as soon as the transactions it lists have confirmed. Cooperative recoveries list nothing, and a single leaf's exit is one straight line, top to bottom. With several leaves the branches are largely independent, so to finish faster you can broadcast them in parallel and serialize only where {{#name depends_on}} actually links them:
 
-1. **The fan-out first, and alone.** It pays its own fee and has no CPFP child, so it is an ordinary single-transaction broadcast. Wait for it to confirm before any branch package: every branch's first package depends on it.
+1. **The fan-out first, and alone.** It pays its own fee and has no CPFP child, so it is an ordinary single-transaction broadcast. Wait for it to confirm before any branch package: every branch's first package depends on it, and with {{#enum CpfpFundingStrategy::PerNode}} every package does.
 2. **Then the branch packages, each node transaction with its CPFP child.** A shared ancestor appears once, listed in the {{#name depends_on}} of every branch that needs it, so you broadcast it a single time. Within a branch, send one package, wait for it to confirm, then the next (the 1P1C limit above); across branches you can work in parallel.
 3. **The sweep last, and alone,** once every refund in its {{#name depends_on}} has confirmed.
 
@@ -318,7 +326,7 @@ An out of date value can restore leaves that have since been spent, so the balan
 | {{#name check_recover_funds}} returns {{#enum RecoveryVerdict::Redo}} | Something on-chain no longer matches the transactions you hold, for example the Spark operators took a leaf on-chain | Prepare and build again, naming the same leaves; see [Starting over](#starting-over) |
 | The recovery has stopped confirming | On-chain fees rose above what its transactions pay | Prepare and build again at a higher {{#name fee_rate_sat_per_vbyte}}; see [Starting over](#starting-over) |
 | Less arrived than a recovery's {{#name recoverable_value_sats}} less its {{#name cooperative_fee_sats}}, {{#name refund_fee_sats}} and {{#name sweep_fee_sats}} | After you built that recovery, a step sat unbroadcast long enough for the operators to send their own version, which pays its fee out of the leaf. A recovery you prepare after that includes the fee: in {{#name refund_fee_sats}} for a leaf still in the exit, in {{#name cooperative_fee_sats}} for a leaf that is recovered cooperatively | Broadcast each step while it is {{#enum ExitTransactionStatus::Ready}}; see [A step left waiting can be sent by the operators](#broadcast-the-transactions) |
-| {{#name total_fee_sats}} is close to or above {{#name recoverable_value_sats}} | The shared fan-out fee makes a single-UTXO multi-leaf exit uneconomical | Fund one UTXO per branch ({{#name per_branch}}) to drop the fan-out fee, recover fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
+| {{#name total_fee_sats}} is close to or above {{#name recoverable_value_sats}} | The funding is a single UTXO for several {{#name per_branch}} entries, so the fees include the shared fan-out fee | Fund one UTXO per {{#name per_branch}} entry to drop the fan-out fee, recover fewer leaves with {{#enum ExitLeafSelection::Specific}}, or wait for a lower fee rate |
 | {{#name recover_funds}} returns an error that the total value is not enough to cover the fee | The value of the sweep's inputs is not more than the sweep's fee | Exit higher-value leaves with {{#enum ExitLeafSelection::Specific}}, lower the {{#name fee_rate_sat_per_vbyte}}, or wait for a cheaper fee rate |
 | {{#enum SdkError::InsufficientCpfpFunds}} | The funding you gave, once followed to what it became, is below what the exit needs | Fund at least {{#name single_utxo_sats}}, or the amount in each {{#name PerBranchFunding}}; you can pass fresh UTXOs alongside the old ones |
 | {{#enum SdkError::InvalidInput}} about the destination | The address is malformed, or belongs to another network | Use an address of the network the SDK is configured for |
