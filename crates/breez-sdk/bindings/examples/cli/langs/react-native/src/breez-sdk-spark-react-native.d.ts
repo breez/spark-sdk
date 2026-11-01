@@ -100,6 +100,8 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const singleKeyCpfpSigner: any;
   export const CpfpFundingKind: any;
   export type CpfpFundingKind = any;
+  export const CpfpFundingStrategy: any;
+  export type CpfpFundingStrategy = any;
   export const CpfpInput: any;
   export type CpfpInput = any;
   export const ExitLeafSelection: any;

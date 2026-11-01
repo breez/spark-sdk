@@ -90,7 +90,7 @@ private func handleRecoverFunds(_ sdk: BreezSdk, _ args: [String]) async throws 
     guard let feeRateStr = fp.get("fee-rate"),
           let feeRate = UInt64(feeRateStr),
           let destination = fp.get("destination") else {
-        print("Usage: advanced recover-funds --fee-rate <sat/vbyte> --destination <address> [--funding-kind p2wpkh|p2tr] [--all | --leaf <id> ...] [--output-file <path>]")
+        print("Usage: advanced recover-funds --fee-rate <sat/vbyte> --destination <address> [--funding-kind p2wpkh|p2tr] [--funding-strategy per-branch|per-node] [--all | --leaf <id> ...] [--output-file <path>]")
         return
     }
 
@@ -104,6 +104,16 @@ private func handleRecoverFunds(_ sdk: BreezSdk, _ args: [String]) async throws 
         return
     }
 
+    let fundingStrategyStr = fp.get("funding-strategy") ?? "per-branch"
+    let fundingStrategy: CpfpFundingStrategy
+    switch fundingStrategyStr.lowercased() {
+    case "per-branch": fundingStrategy = .perBranch
+    case "per-node":   fundingStrategy = .perNode
+    default:
+        print("Invalid funding strategy '\(fundingStrategyStr)'. Use 'per-branch' or 'per-node'.")
+        return
+    }
+
     let all = fp.has("all")
     let leafIds = collectRepeatedFlag(args, flag: "--leaf")
     if all && !leafIds.isEmpty {
@@ -114,6 +124,7 @@ private func handleRecoverFunds(_ sdk: BreezSdk, _ args: [String]) async throws 
     let request = PrepareRecoverFundsRequest(
         feeRateSatPerVbyte: feeRate,
         fundingKind: fundingKind,
+        fundingStrategy: fundingStrategy,
         destination: destination,
         selection: recoverySelection(all: all, leafIds: leafIds)
     )
