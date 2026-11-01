@@ -217,8 +217,8 @@ suspend fun handleRecoverFunds(sdk: BreezSdk, reader: LineReader, args: List<Str
     }
 
     val fundingStrategy = when (fundingStrategyStr.lowercase()) {
-        "per-branch" -> CpfpFundingStrategy.PerBranch
-        "per-node" -> CpfpFundingStrategy.PerNode
+        "per-branch" -> CpfpFundingStrategy.PER_BRANCH
+        "per-node" -> CpfpFundingStrategy.PER_NODE
         else -> {
             println("Invalid funding strategy: $fundingStrategyStr (expected per-branch or per-node)")
             return

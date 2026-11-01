@@ -196,9 +196,9 @@ func handleRecoverFunds(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, ar
 	var cpfpFundingStrategy breez_sdk_spark.CpfpFundingStrategy
 	switch strings.ToLower(*fundingStrategy) {
 	case "per-branch":
-		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerBranch{}
+		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerBranch
 	case "per-node":
-		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerNode{}
+		cpfpFundingStrategy = breez_sdk_spark.CpfpFundingStrategyPerNode
 	default:
 		return fmt.Errorf("invalid funding strategy '%s', expected per-branch or per-node", *fundingStrategy)
 	}

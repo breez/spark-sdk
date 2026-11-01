@@ -348,8 +348,8 @@ async function handleRecoverFunds(sdk: BreezSdkInterface, args: string[]): Promi
       ? new CpfpFundingKind.P2wpkh()
       : new CpfpFundingKind.P2tr(),
     fundingStrategy: fundingStrategyStr === 'per-node'
-      ? new CpfpFundingStrategy.PerNode()
-      : new CpfpFundingStrategy.PerBranch(),
+      ? CpfpFundingStrategy.PerNode
+      : CpfpFundingStrategy.PerBranch,
     destination,
     selection: recoverySelection(all, leafIds),
   }
