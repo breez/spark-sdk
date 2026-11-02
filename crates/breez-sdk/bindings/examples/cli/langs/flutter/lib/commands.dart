@@ -334,6 +334,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         ..addOption('expiry-secs', abbr: 'e')
         ..addOption('sender-public-key', abbr: 's')
         ..addFlag('hodl', defaultsTo: false)
+        ..addOption('preimage', help: 'Preimage (hex) for the bolt11 invoice (conflicts with --hodl)')
         ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address')
         ..addOption(
           'cross-chain-max-slippage-bps',
@@ -358,6 +359,11 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
   final expirySecs = expirySecsStr != null ? int.parse(expirySecsStr) : null;
   final senderPublicKey = results.option('sender-public-key');
   final hodl = results.flag('hodl');
+  final callerPreimage = results.option('preimage');
+  if (hodl && callerPreimage != null) {
+    print('--hodl and --preimage conflict: use one or the other');
+    return;
+  }
   final newAddress = results.flag('new-address');
 
   ReceivePaymentMethod paymentMethod;
@@ -398,7 +404,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         expirySecs: expirySecs,
         paymentHash: paymentHash,
         receiverIdentityPublicKey: null,
-        preimage: null,
+        preimage: callerPreimage,
       );
     case 'crosschain':
       if (amount == null) {

@@ -540,6 +540,7 @@ public static class Commands
         var expirySecsStr = GetFlag(args, "-e", "--expiry-secs");
         var senderPubKey = GetFlag(args, "-s", "--sender-public-key");
         var hodl = HasFlag(args, "--hodl");
+        var preimage = GetFlag(args, "--preimage");
         var newAddress = HasFlag(args, "--new-address");
         var crossChainMaxSlippageStr = GetFlag(args, "--cross-chain-max-slippage-bps");
         var crossChainFeesIncluded = HasFlag(args, "--cross-chain-fees-included");
@@ -583,6 +584,12 @@ public static class Commands
                 break;
 
             case "bolt11":
+                if (hodl && preimage != null)
+                {
+                    Console.Error.WriteLine("--hodl and --preimage cannot be used together");
+                    return;
+                }
+
                 ulong? amountSats = null;
                 if (amountStr != null)
                 {
@@ -594,10 +601,10 @@ public static class Commands
                 {
                     var preimageBytes = new byte[32];
                     RandomNumberGenerator.Fill(preimageBytes);
-                    var preimage = Convert.ToHexString(preimageBytes).ToLowerInvariant();
+                    var hodlPreimage = Convert.ToHexString(preimageBytes).ToLowerInvariant();
                     paymentHash = ComputeSha256Hex(preimageBytes);
 
-                    Console.WriteLine($"HODL invoice preimage: {preimage}");
+                    Console.WriteLine($"HODL invoice preimage: {hodlPreimage}");
                     Console.WriteLine($"Payment hash: {paymentHash}");
                     Console.WriteLine("Save the preimage! Use `claim-htlc-payment` with it to settle.");
                 }
@@ -608,7 +615,7 @@ public static class Commands
                     expirySecs: ParseOptionalUint(expirySecsStr),
                     paymentHash: paymentHash,
                     receiverIdentityPublicKey: null,
-                    preimage: null
+                    preimage: preimage
                 );
                 break;
 

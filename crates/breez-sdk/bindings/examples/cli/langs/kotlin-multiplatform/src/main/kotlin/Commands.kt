@@ -312,6 +312,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val expirySecs = fp.getUInt("e", "expiry-secs")
     val senderPublicKey = fp.getString("s", "sender-public-key")
     val hodl = fp.hasFlag("hodl")
+    val preimage = fp.getString("preimage")
     val newAddress = fp.hasFlag("new-address")
     val crossChainMaxSlippageBps = fp.getUInt("cross-chain-max-slippage-bps")
     val crossChainFeesIncluded = fp.hasFlag("cross-chain-fees-included")
@@ -328,6 +329,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         println("  -e, --expiry-secs <secs>                   Expiry in seconds")
         println("  -s, --sender-public-key <key>              Sender public key (spark invoice only)")
         println("  --hodl                                     Create a HODL invoice (bolt11 only)")
+        println("  --preimage <hex>                           Preimage (hex) for bolt11 invoice (conflicts with --hodl)")
         println("  --new-address                              Get a new bitcoin deposit address")
         println("  --cross-chain-max-slippage-bps <bps>       Max slippage in basis points (10..500, cross-chain only)")
         println("  --cross-chain-fees-included                Deduct fees from amount (cross-chain only)")
@@ -366,6 +368,10 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         "bitcoin" -> ReceivePaymentMethod.BitcoinAddress(newAddress = newAddress)
 
         "bolt11" -> {
+            if (hodl && preimage != null) {
+                println("Error: --hodl and --preimage are mutually exclusive")
+                return
+            }
             var paymentHash: String? = null
             if (hodl) {
                 val random = java.security.SecureRandom()
@@ -397,7 +403,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 expirySecs = expirySecs,
                 paymentHash = paymentHash,
                 receiverIdentityPublicKey = null,
-                preimage = null,
+                preimage = preimage,
             )
         }
 

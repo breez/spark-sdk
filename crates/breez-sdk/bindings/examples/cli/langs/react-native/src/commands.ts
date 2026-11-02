@@ -491,7 +491,7 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
 async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const method = parseFlag(args, '--method', '-m')
   if (!method) {
-    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)\n  --cross-chain-to-bitcoin         Deliver as Bitcoin instead of stable token'
+    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --preimage <hex>               Preimage (hex) for bolt11 invoice (conflicts with --hodl)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)\n  --cross-chain-to-bitcoin         Deliver as Bitcoin instead of stable token'
   }
 
   const description = parseFlag(args, '--description', '-d')
@@ -500,6 +500,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
   const expirySecsStr = parseFlag(args, '--expiry-secs', '-e')
   const senderPublicKey = parseFlag(args, '--sender-public-key', '-s')
   const hodl = hasFlag(args, '--hodl')
+  const callerPreimage = parseFlag(args, '--preimage')
   const newAddress = hasFlag(args, '--new-address')
   const crossChainMaxSlippageBps = parseNumericFlag(args, '--cross-chain-max-slippage-bps')
   const crossChainFeesIncluded = hasFlag(args, '--cross-chain-fees-included')
@@ -546,6 +547,10 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       break
 
     case 'bolt11': {
+      if (hodl && callerPreimage) {
+        return 'Error: --hodl and --preimage are mutually exclusive'
+      }
+
       let paymentHash: string | undefined
 
       if (hodl) {
@@ -567,7 +572,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         expirySecs,
         paymentHash,
         receiverIdentityPublicKey: undefined,
-        preimage: undefined,
+        preimage: callerPreimage,
       })
       break
     }
