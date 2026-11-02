@@ -460,7 +460,10 @@ async fn test_05_lnurl_payment_flow(#[future] env: Result<Environment>) -> Resul
     let Some(lnurl_pay_info) = lnurl_pay_info else {
         anyhow::bail!("Expected Lnurl pay info");
     };
-    assert_eq!(lnurl_pay_info.ln_address, Some(bob_lightning_address));
+    assert_eq!(
+        lnurl_pay_info.ln_address,
+        Some(bob_lightning_address.clone())
+    );
     assert_eq!(lnurl_pay_info.comment, Some(payment_comment.to_string()));
     assert_eq!(
         lnurl_pay_info.extract_description(),
@@ -482,10 +485,22 @@ async fn test_05_lnurl_payment_flow(#[future] env: Result<Environment>) -> Resul
     assert_eq!(bob_payment.method, PaymentMethod::Lightning);
     assert_eq!(bob_payment.status, PaymentStatus::Completed);
 
-    let Some(PaymentDetails::Lightning { lnurl_pay_info, .. }) = bob_payment.details else {
+    let Some(PaymentDetails::Lightning {
+        lnurl_pay_info,
+        lnurl_receive_metadata,
+        ..
+    }) = bob_payment.details
+    else {
         anyhow::bail!("Expected Lightning payment");
     };
     assert!(lnurl_pay_info.is_none()); // Only payer sees LNURL pay info
+    let Some(lnurl_receive_metadata) = lnurl_receive_metadata else {
+        anyhow::bail!("Expected LNURL receive metadata");
+    };
+    assert_eq!(
+        lnurl_receive_metadata.lightning_address,
+        Some(bob_lightning_address)
+    );
 
     info!("=== Test test_05_lnurl_payment_flow PASSED ===");
     Ok(())

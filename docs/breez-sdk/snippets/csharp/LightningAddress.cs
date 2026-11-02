@@ -100,6 +100,27 @@ namespace BreezSdkSnippets
             // ANCHOR_END: delete-lightning-address
         }
 
+        async Task AccessLightningAddress(BreezSdk sdk)
+        {
+            var paymentId = "<payment id>";
+            var response = await sdk.GetPayment(new GetPaymentRequest(paymentId: paymentId));
+            var payment = response.payment;
+
+            // ANCHOR: access-lightning-address
+            // Check if this is a lightning payment with LNURL receive metadata
+            if (payment.details is PaymentDetails.Lightning lightningDetails)
+            {
+                var metadata = lightningDetails.lnurlReceiveMetadata;
+
+                // Access the Lightning address the sender paid, if present
+                if (metadata?.lightningAddress != null)
+                {
+                    Console.WriteLine($"Lightning address: {metadata.lightningAddress}");
+                }
+            }
+            // ANCHOR_END: access-lightning-address
+        }
+
         async Task AccessSenderComment(BreezSdk sdk)
         {
             var paymentId = "<payment id>";

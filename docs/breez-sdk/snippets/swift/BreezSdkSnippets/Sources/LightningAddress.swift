@@ -92,6 +92,23 @@ func deleteLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: delete-lightning-address
 }
 
+func accessLightningAddress(sdk: BreezSdk) async throws {
+    let paymentId = "<payment id>"
+    let response = try await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId))
+    let payment = response.payment
+
+    // ANCHOR: access-lightning-address
+    // Check if this is a lightning payment with LNURL receive metadata
+    if case .lightning(let details) = payment.details {
+        // Access the Lightning address the sender paid, if present
+        if let metadata = details.lnurlReceiveMetadata,
+           let lightningAddress = metadata.lightningAddress {
+            print("Lightning address: \(lightningAddress)")
+        }
+    }
+    // ANCHOR_END: access-lightning-address
+}
+
 func accessSenderComment(sdk: BreezSdk) async throws {
     let paymentId = "<payment id>"
     let response = try await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId))

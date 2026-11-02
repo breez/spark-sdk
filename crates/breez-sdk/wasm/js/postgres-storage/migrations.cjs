@@ -624,6 +624,13 @@ class PostgresMigrationManager {
            WHERE key = 'sync_offset' AND value IS NOT NULL`,
         ],
       },
+      {
+        name: "Add lightning address to brz_lnurl_receive_metadata and force its re-sync",
+        sql: [
+          `ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN lightning_address TEXT`,
+          `DELETE FROM brz_settings WHERE key = 'lnurl_metadata_updated_after'`,
+        ],
+      },
     ];
   }
 }

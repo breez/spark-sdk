@@ -74,6 +74,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM payments p
@@ -1021,7 +1022,7 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address) VALUES (?, ?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -1030,7 +1031,8 @@ class SqliteStorage {
             item.paymentHash,
             item.nostrZapRequest || null,
             item.nostrZapReceipt || null,
-            item.senderComment || null
+            item.senderComment || null,
+            item.lightningAddress || null
           );
         }
       });
@@ -1094,6 +1096,7 @@ class SqliteStorage {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          lightningAddress: row.lnurl_lightning_address || null,
         };
       }
 

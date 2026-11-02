@@ -102,6 +102,22 @@ async def delete_lightning_address(sdk: BreezSdk):
     # ANCHOR_END: delete-lightning-address
 
 
+async def access_lightning_address(sdk: BreezSdk):
+    payment_id = "<payment id>"
+    response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
+    payment = response.payment
+
+    # ANCHOR: access-lightning-address
+    # Check if this is a lightning payment with LNURL receive metadata
+    if isinstance(payment.details, PaymentDetails.LIGHTNING):
+        metadata = payment.details.lnurl_receive_metadata
+
+        # Access the Lightning address the sender paid, if present
+        if metadata is not None and metadata.lightning_address is not None:
+            print(f"Lightning address: {metadata.lightning_address}")
+    # ANCHOR_END: access-lightning-address
+
+
 async def access_sender_comment(sdk: BreezSdk):
     payment_id = "<payment id>"
     response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
