@@ -671,7 +671,7 @@ pub struct CoopExitRequest {
     pub updated_at: DateTime<Utc>,
     pub network: BitcoinNetwork,
     pub fee: CurrencyAmount,
-    pub withdrawal_address: Option<String>,
+    pub withdrawal_address: String,
     pub l1_broadcast_fee: CurrencyAmount,
     pub exit_status: SparkCoopExitRequestStatus,
     pub exit_expired_at: DateTime<Utc>,
