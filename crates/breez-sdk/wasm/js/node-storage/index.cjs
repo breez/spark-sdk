@@ -586,7 +586,7 @@ class SqliteStorage {
   /**
    * Gets payments that have any of the specified parent payment IDs.
    * @param {string[]} parentPaymentIds - Array of parent payment IDs
-   * @returns {Promise<Object>} Map of parentPaymentId -> array of RelatedPayment objects
+   * @returns {Promise<Object>} Map of parentPaymentId -> array of Payment objects
    */
   getPaymentsByParentIds(parentPaymentIds) {
     try {

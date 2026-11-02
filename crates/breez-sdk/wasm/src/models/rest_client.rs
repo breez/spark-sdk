@@ -84,9 +84,9 @@ impl breez_sdk_spark::RestClient for WasmRestClient {
 
 #[wasm_bindgen(typescript_custom_section)]
 const EVENT_INTERFACE: &'static str = r#"export interface RestClient {
-    getRequest(url: string, headers?: Record<string, string>): Promise<RestResponse>;
-    postRequest(url: string, headers?: Record<string, string>, body?: string): Promise<RestResponse>;
-    deleteRequest(url: string, headers?: Record<string, string>, body?: string): Promise<RestResponse>;
+    getRequest(url: string, headers?: { [key: string]: string }): Promise<RestResponse>;
+    postRequest(url: string, headers?: { [key: string]: string }, body?: string): Promise<RestResponse>;
+    deleteRequest(url: string, headers?: { [key: string]: string }, body?: string): Promise<RestResponse>;
 }"#;
 
 #[wasm_bindgen]
