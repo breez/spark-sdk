@@ -1,5 +1,5 @@
 /**
- * Migrations for the x402 replay store in the wallet's SQLite storage file.
+ * Migrations for the x402 replay store in the SDK's SQLite storage file.
  * Versioned in their own table, since the main storage owns the file's
  * `PRAGMA user_version`. Mirrors the Rust `SqliteX402ReplayStore` schema.
  */

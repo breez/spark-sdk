@@ -7,7 +7,8 @@ import CryptoKit
 
 struct FlagParser {
     var positional: [String] = []
-    private var flags: [String: [String]] = [:]
+    /// In command-line order, across a flag's short and long names.
+    private var flags: [(key: String, value: String)] = []
 
     init(_ args: [String]) {
         var i = 0
@@ -16,19 +17,19 @@ struct FlagParser {
             if arg.hasPrefix("--") {
                 let key = String(arg.dropFirst(2))
                 if i + 1 < args.count && !args[i + 1].hasPrefix("-") {
-                    flags[key, default: []].append(args[i + 1])
+                    flags.append((key, args[i + 1]))
                     i += 2
                 } else {
-                    flags[key, default: []].append("")
+                    flags.append((key, ""))
                     i += 1
                 }
             } else if arg.hasPrefix("-") && arg.count == 2 {
                 let key = String(arg.dropFirst(1))
                 if i + 1 < args.count && !args[i + 1].hasPrefix("-") {
-                    flags[key, default: []].append(args[i + 1])
+                    flags.append((key, args[i + 1]))
                     i += 2
                 } else {
-                    flags[key, default: []].append("")
+                    flags.append((key, ""))
                     i += 1
                 }
             } else {
@@ -40,24 +41,17 @@ struct FlagParser {
 
     func get(_ keys: String...) -> String? {
         for key in keys {
-            if let vals = flags[key], let last = vals.last, !last.isEmpty { return last }
+            if let last = flags.last(where: { $0.key == key }), !last.value.isEmpty { return last.value }
         }
         return nil
     }
 
     func getAll(_ keys: String...) -> [String] {
-        for key in keys {
-            if let vals = flags[key] {
-                let nonEmpty = vals.filter { !$0.isEmpty }
-                if !nonEmpty.isEmpty { return nonEmpty }
-            }
-        }
-        return []
+        flags.filter { keys.contains($0.key) && !$0.value.isEmpty }.map(\.value)
     }
 
     func has(_ keys: String...) -> Bool {
-        for key in keys { if flags[key] != nil { return true } }
-        return false
+        flags.contains { keys.contains($0.key) }
     }
 }
 

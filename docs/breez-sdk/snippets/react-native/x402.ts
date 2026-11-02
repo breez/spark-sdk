@@ -2,7 +2,8 @@ import {
   type BreezSdk,
   type X402,
   X402PaymentAmount,
-  X402Request
+  X402Request,
+  X402SettleStatus
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const getX402 = (sdk: BreezSdk) => {
@@ -31,8 +32,8 @@ const payHttpRequest = async (x402: X402, paymentRequiredHeader: string) => {
   })
 
   if (response.paymentSignature !== undefined) {
-    // Send the request again with a PAYMENT-SIGNATURE header
-    console.log(`PAYMENT-SIGNATURE: ${response.paymentSignature}`)
+    // Send the request again with it as the PAYMENT-SIGNATURE header.
+    // It proves the payment, so don't log it.
   } else {
     // Still in flight: paying the same challenge again picks it up
     console.log(`Payment status: ${response.status}`)
@@ -58,7 +59,6 @@ const payMcpToolCall = async (x402: X402, structuredContent: string) => {
 
   if (response.paymentSignature !== undefined) {
     // Call the tool again with this JSON in params._meta["x402/payment"]
-    console.log(`Payment: ${response.paymentSignature}`)
   }
   // ANCHOR_END: pay-mcp-tool-call
 }
@@ -98,18 +98,32 @@ const settlePayment = async (x402: X402, paymentSignatureHeader: string) => {
   })
   const response = await x402.settle({
     // The PAYMENT-SIGNATURE header of the request
-    payment: paymentSignatureHeader,
+    paymentSignature: paymentSignatureHeader,
     request,
-    boundNames: ['accept']
+    boundNames: ['accept'],
+    // The same price and lifetime the challenge was created with
+    amounts: [new X402PaymentAmount.Lightning({ amountSats: BigInt(21) })],
+    maxTimeoutSecs: undefined
   })
 
-  // Send the PAYMENT-RESPONSE header either way
+  // Send the PAYMENT-RESPONSE header whatever the status
   console.log(`PAYMENT-RESPONSE: ${response.paymentResponse}`)
-  if (response.success) {
-    // Serve the resource
-  } else {
-    // Respond with status 402 and a new challenge
-    console.log(`Payment refused: ${response.errorReason ?? ''}`)
+  switch (response.status) {
+    case X402SettleStatus.Settled:
+      // Serve the resource
+      break
+    case X402SettleStatus.Pending:
+      // Respond with status 402 and no new challenge
+      break
+    case X402SettleStatus.Malformed:
+      // Respond with status 400
+      break
+    case X402SettleStatus.Refused:
+      // Respond with status 402 and a new challenge
+      break
+    case X402SettleStatus.Error:
+      // Respond with status 500
+      break
   }
   // ANCHOR_END: settle-payment
 }

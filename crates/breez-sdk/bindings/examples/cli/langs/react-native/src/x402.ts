@@ -11,7 +11,6 @@ import {
   X402Request,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type { BreezSdkInterface } from '@breeztech/breez-sdk-spark-react-native'
-import { formatValue } from './serialization'
 
 /** All x402 subcommand names for help and completion. */
 export const X402_COMMAND_NAMES = [
@@ -24,10 +23,20 @@ const PAYMENT_RESPONSE_HEADER = 'payment-response'
 // Times to pay the same challenge again while its payment is pending. Fetching
 // again instead would bring a new challenge with a new invoice to pay.
 const PENDING_RETRIES = 3
-// Times to send the paid request again while the server answers 402 without a
-// new challenge, meaning the payment may still settle.
+// Times to send the paid request again while the server answers that the
+// payment may still settle.
 const SETTLE_RETRIES = 5
 const SETTLE_RETRY_DELAY_MS = 2000
+// Headers the platform adds when the request does not set them. A body needs a
+// content-type too: Android refuses to send one without it.
+const DEFAULT_HEADERS: [string, string][] = [
+  ['accept', '*/*'],
+  ['accept-encoding', 'gzip'],
+  ['accept-language', '*'],
+  ['user-agent', 'breez-sdk-spark-cli'],
+]
+const DEFAULT_BODY_CONTENT_TYPE = 'text/plain;charset=UTF-8'
+const DEFAULT_PORTS: Record<string, string> = { http: '80', https: '443' }
 
 const FETCH_USAGE =
   'Usage: x402 fetch <url> --max-amount-sats <n> [-X|--method GET|POST] [-d|--body <body>] [-H|--header "Name: value"]...'
@@ -112,28 +121,38 @@ async function handleFetch(sdk: BreezSdkInterface, args: string[]): Promise<stri
     }
   }
 
-  const url = positional[0]
-  if (url === undefined || maxAmountStr === undefined) {
+  if (positional[0] === undefined || maxAmountStr === undefined) {
     return FETCH_USAGE
   }
+  const url = asSent(positional[0])
   if (!/^\d+$/.test(maxAmountStr)) {
     return `Error: invalid --max-amount-sats ${maxAmountStr}`
   }
   const maxAmountSats = BigInt(maxAmountStr)
+  if (method === 'GET' && body !== undefined) {
+    return 'Error: a GET request has no body: use -X POST to send one'
+  }
 
   // The server hashes the headers it binds, so send every header explicitly:
-  // anything fetch added on its own would be missing from the hash computed here.
+  // anything fetch or the platform added on its own would be missing from the
+  // hash computed here.
   let headers: Map<string, string>
   try {
     headers = parseHeaders(headerLines)
   } catch (error: unknown) {
     return `Error: ${errorMessage(error)}`
   }
-  if (!headers.has('accept')) {
-    headers.set('accept', '*/*')
+  for (const [name, value] of DEFAULT_HEADERS) {
+    if (!headers.has(name)) {
+      headers.set(name, value)
+    }
+  }
+  if (body !== undefined && !headers.has('content-type')) {
+    headers.set('content-type', DEFAULT_BODY_CONTENT_TYPE)
   }
 
-  // A bytes body keeps fetch from adding a content-type.
+  // Bytes, so Android sends the UTF-8 that is hashed instead of re-encoding a
+  // string body in the content-type's charset.
   const bodyBytes = body !== undefined ? utf8Bytes(body) : undefined
 
   const lines: string[] = []
@@ -169,7 +188,11 @@ async function handleFetch(sdk: BreezSdkInterface, args: string[]): Promise<stri
       lines.push('Payment is pending, waiting for it to complete...')
       paid = await x402.pay(request)
     }
-    lines.push(formatValue(paid))
+    // The payment signature proves the payment, so it isn't printed.
+    lines.push(
+      `x402 payment ${paid.payment.id} is ${X402PaymentStatus[paid.status]}: ` +
+        `${paid.payment.amount} sats, fee ${paid.payment.fees} sats`
+    )
     const signature: string | undefined = paid.paymentSignature
     if (signature === undefined) {
       lines.push('Payment is still pending. Check its status with list-payments.')
@@ -179,7 +202,7 @@ async function handleFetch(sdk: BreezSdkInterface, args: string[]): Promise<stri
     headers.set(PAYMENT_SIGNATURE_HEADER, signature)
     response = await send(method, url, headers, bodyBytes)
     for (let i = 0; i < SETTLE_RETRIES; i++) {
-      if (response.status !== 402 || response.header(PAYMENT_REQUIRED_HEADER) !== null) {
+      if (!settlementPending(response)) {
         break
       }
       lines.push('Payment is not settled yet, sending it again...')
@@ -211,28 +234,77 @@ async function send(
   headers: Map<string, string>,
   body: ArrayBuffer | undefined
 ): Promise<HttpResponse> {
+  // Omitting credentials keeps the platform from adding cookies from its store.
+  const init = { method, headers: Object.fromEntries(headers), credentials: 'omit' as const }
   let response: Response
   switch (method) {
     case 'GET':
-      response = await fetch(url, { method, headers: Object.fromEntries(headers) })
+      response = await fetch(url, init)
       break
     case 'POST':
-      response = await fetch(url, { method, headers: Object.fromEntries(headers), body })
+      response = await fetch(url, { ...init, body })
       break
     default:
       throw new Error(`unsupported method ${method}: use GET or POST`)
   }
-  // fetch follows redirects itself, so one reaching here could not be followed.
+  // A redirect the platform hands back instead of following, such as one with
+  // no location.
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     const location = response.headers.get('location') ?? '<no location>'
     throw new Error(
-      `endpoint returned a ${response.status} redirect to ${location}, which this client does not follow`
+      `endpoint returned a ${response.status} redirect to ${location}, which x402 fetch doesn't follow`
+    )
+  }
+  // React Native's fetch follows redirects and can't be told not to, so a
+  // redirect shows as a different URL answering. The platform may carry the
+  // request's headers, the payment signature among them, to that URL.
+  const answered = asSent(response.url || url)
+  if (answered !== url) {
+    const payment = headers.has(PAYMENT_SIGNATURE_HEADER)
+      ? ', and the payment may have been sent to it'
+      : ''
+    throw new Error(
+      `the platform followed a redirect to ${answered}, which x402 fetch doesn't support${payment}`
     )
   }
   return {
     status: response.status,
     header: name => response.headers.get(name),
     body: await response.text(),
+  }
+}
+
+// The URL as the platform sends it: scheme and host in lowercase, no default
+// port, an empty path as `/` and no fragment. React Native's URL polyfill
+// does not implement a URL's parts, hence the regex.
+function asSent(url: string): string {
+  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*@)?(\[[^\]]*\]|[^:/?#]*)(?::(\d*))?([^#]*)/i.exec(url)
+  if (match === null) {
+    return url
+  }
+  const [, scheme, userinfo = '', host, port, rest] = match
+  const lowerScheme = scheme.toLowerCase()
+  const portSuffix = port && port !== DEFAULT_PORTS[lowerScheme] ? `:${port}` : ''
+  const path = rest.startsWith('/') ? rest : `/${rest}`
+  return `${lowerScheme}://${userinfo}${host.toLowerCase()}${portSuffix}${path}`
+}
+
+// Whether the server answered that the payment may still settle: a 402 with no
+// new challenge and the core x402 specification's non-final reason.
+function settlementPending(response: HttpResponse): boolean {
+  if (response.status !== 402 || response.header(PAYMENT_REQUIRED_HEADER) !== null) {
+    return false
+  }
+  const settlement = response.header(PAYMENT_RESPONSE_HEADER)
+  const decoded = settlement !== null ? decodeBase64(settlement) : undefined
+  if (decoded === undefined) {
+    return false
+  }
+  try {
+    const json = JSON.parse(decoded) as { errorReason?: unknown } | null
+    return json?.errorReason === 'settlement_pending'
+  } catch {
+    return false
   }
 }
 

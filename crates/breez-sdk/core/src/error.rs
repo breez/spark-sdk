@@ -68,6 +68,27 @@ impl From<spark_wallet::TokenAllowanceFailure> for TokenAllowanceErrorReason {
     }
 }
 
+/// What an x402 failure means for the payment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum X402ErrorKind {
+    /// Refused before anything was sent: a challenge that fails a check when
+    /// paying, or a request that can't be bound to a payment when charging.
+    Refused,
+    /// The Lightning payment was sent and failed, so the challenge isn't paid.
+    /// A token conversion made to fund it is not undone.
+    PaymentFailed,
+}
+
+impl std::fmt::Display for X402ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Refused => "refused",
+            Self::PaymentFailed => "payment failed",
+        })
+    }
+}
+
 /// Error type for the `BreezSdk`
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
@@ -229,6 +250,18 @@ pub enum SdkError {
         docs_url: String,
     },
 
+    /// An x402 payment or challenge failed. `reason` is the x402 failure
+    /// reason, such as `invalid_exact_lnbtc_request_mismatch`, and `details`
+    /// explains it further.
+    #[error("x402 {kind} ({reason}): {details}")]
+    X402Error {
+        kind: X402ErrorKind,
+        reason: String,
+        details: String,
+        /// Guide section explaining x402 errors.
+        docs_url: String,
+    },
+
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -260,6 +293,7 @@ mod docs_url {
         errors_page!("refund-replacement-fee-too-low");
     pub(super) const INSUFFICIENT_CPFP_FUNDS: &str = errors_page!("insufficient-cpfp-funds");
     pub(super) const TOKEN_ALLOWANCE: &str = errors_page!("token-allowance");
+    pub(super) const X402_ERROR: &str = errors_page!("x402-error");
 
     #[cfg(all(test, not(target_family = "wasm")))]
     pub(super) const SECTION_PREFIX: &str = errors_page!("");
@@ -352,6 +386,15 @@ impl SdkError {
         }
     }
 
+    pub(crate) fn x402(kind: X402ErrorKind, reason: &str, details: String) -> Self {
+        Self::X402Error {
+            kind,
+            reason: reason.to_string(),
+            details,
+            docs_url: docs_url::X402_ERROR.to_string(),
+        }
+    }
+
     /// Link to the guide page that explains this error, when it has one.
     pub fn docs_url(&self) -> Option<&str> {
         match self {
@@ -363,7 +406,8 @@ impl SdkError {
             | Self::DepositClaimInProgress { docs_url, .. }
             | Self::RefundReplacementFeeTooLow { docs_url, .. }
             | Self::InsufficientCpfpFunds { docs_url, .. }
-            | Self::TokenAllowance { docs_url, .. } => Some(docs_url),
+            | Self::TokenAllowance { docs_url, .. }
+            | Self::X402Error { docs_url, .. } => Some(docs_url),
             _ => None,
         }
     }
@@ -383,7 +427,8 @@ impl From<breez_sdk_common::lnurl::error::LnurlError> for SdkError {
 
 impl From<crate::X402StoreError> for SdkError {
     fn from(e: crate::X402StoreError) -> Self {
-        SdkError::StorageError(format!("x402 invoice store: {e}"))
+        let crate::X402StoreError::Generic(message) = e;
+        SdkError::StorageError(format!("x402 replay store: {message}"))
     }
 }
 
@@ -391,8 +436,20 @@ impl From<breez_sdk_common::x402::error::X402Error> for SdkError {
     fn from(e: breez_sdk_common::x402::error::X402Error) -> Self {
         use breez_sdk_common::x402::error::X402ErrorReason;
         match e.reason {
-            X402ErrorReason::PaymentNotPaid => SdkError::Generic(format!("x402: {e}")),
-            _ => SdkError::InvalidInput(format!("x402: {e}")),
+            X402ErrorReason::PaymentNotPaid => {
+                SdkError::x402(X402ErrorKind::PaymentFailed, e.reason.as_str(), e.detail)
+            }
+            // The SDK's own payment record contradicts the challenge it paid,
+            // or reports it in flight where a final status was expected, so
+            // there is nothing a caller can act on.
+            X402ErrorReason::PaymentInFlight
+            | X402ErrorReason::PayerInvoiceMismatch
+            | X402ErrorReason::PayerPaymentHashMismatch
+            | X402ErrorReason::PayerAmountMismatch
+            | X402ErrorReason::PayerPreimageRequired
+            | X402ErrorReason::PayerPreimageMalformed
+            | X402ErrorReason::PayerPreimageHashMismatch => SdkError::Generic(format!("x402: {e}")),
+            _ => SdkError::x402(X402ErrorKind::Refused, e.reason.as_str(), e.detail),
         }
     }
 }
@@ -975,6 +1032,7 @@ mod docs_url_tests {
             SdkError::refund_replacement_fee_too_low(0, 0),
             SdkError::insufficient_cpfp_funds(0),
             SdkError::token_allowance(TokenAllowanceErrorReason::NotFound, String::new()),
+            SdkError::x402(X402ErrorKind::Refused, "", String::new()),
         ]
     }
 

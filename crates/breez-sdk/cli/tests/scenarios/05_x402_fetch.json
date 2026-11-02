@@ -35,7 +35,8 @@
           "expect_json": {
             "payments.0.payment_type": "send",
             "payments.0.amount": "100",
-            "payments.0.status": "completed"
+            "payments.0.status": "completed",
+            "payments.1": { "exists": false }
           }
         }
       ]

@@ -2558,14 +2558,25 @@ pub struct _CreateX402ChallengeResponse {
 
 #[frb(mirror(SettleX402Request))]
 pub struct _SettleX402Request {
-    pub payment: String,
+    pub payment_signature: String,
     pub request: X402Request,
     pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(X402SettleStatus))]
+pub enum _X402SettleStatus {
+    Settled,
+    Pending,
+    Malformed,
+    Refused,
+    Error,
 }
 
 #[frb(mirror(SettleX402Response))]
 pub struct _SettleX402Response {
-    pub success: bool,
+    pub status: X402SettleStatus,
     pub error_reason: Option<String>,
     pub payment_response: String,
     pub payment_hash: Option<String>,

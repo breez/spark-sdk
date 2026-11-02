@@ -15,6 +15,8 @@ pub enum X402Request {
         method: String,
         url: String,
         headers: Vec<X402Header>,
+        #[serde(with = "serde_bytes")]
+        #[tsify(type = "Uint8Array")]
         body: Option<Vec<u8>>,
     },
     Mcp {
@@ -65,14 +67,25 @@ pub struct CreateX402ChallengeResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SettleX402Request)]
 pub struct SettleX402Request {
-    pub payment: String,
+    pub payment_signature: String,
     pub request: X402Request,
     pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::X402SettleStatus)]
+pub enum X402SettleStatus {
+    Settled,
+    Pending,
+    Malformed,
+    Refused,
+    Error,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SettleX402Response)]
 pub struct SettleX402Response {
-    pub success: bool,
+    pub status: X402SettleStatus,
     pub error_reason: Option<String>,
     pub payment_response: String,
     pub payment_hash: Option<String>,

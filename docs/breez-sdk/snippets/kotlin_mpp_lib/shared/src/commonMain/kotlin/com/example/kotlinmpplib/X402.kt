@@ -31,10 +31,9 @@ class X402Snippets {
                 )
             )
 
-            val paymentSignature = response.paymentSignature
-            if (paymentSignature != null) {
-                // Send the request again with a PAYMENT-SIGNATURE header
-                // Log.v("Breez", "PAYMENT-SIGNATURE: $paymentSignature")
+            if (response.paymentSignature != null) {
+                // Send the request again with it as the PAYMENT-SIGNATURE header.
+                // It proves the payment, so don't log it.
             } else {
                 // Still in flight: paying the same challenge again picks it up
                 // Log.v("Breez", "Payment status: ${response.status}")
@@ -64,10 +63,8 @@ class X402Snippets {
                 )
             )
 
-            val paymentSignature = response.paymentSignature
-            if (paymentSignature != null) {
+            if (response.paymentSignature != null) {
                 // Call the tool again with this JSON in params._meta["x402/payment"]
-                // Log.v("Breez", "Payment: $paymentSignature")
             }
         } catch (e: Exception) {
             // handle error
@@ -118,19 +115,33 @@ class X402Snippets {
             val response = x402.settle(
                 SettleX402Request(
                     // The PAYMENT-SIGNATURE header of the request
-                    payment = paymentSignatureHeader,
+                    paymentSignature = paymentSignatureHeader,
                     request = request,
-                    boundNames = listOf("accept")
+                    boundNames = listOf("accept"),
+                    // The same price and lifetime the challenge was created with
+                    amounts = listOf(X402PaymentAmount.Lightning(amountSats = 21u)),
+                    maxTimeoutSecs = null
                 )
             )
 
-            // Send the PAYMENT-RESPONSE header either way
+            // Send the PAYMENT-RESPONSE header whatever the status
             // Log.v("Breez", "PAYMENT-RESPONSE: ${response.paymentResponse}")
-            if (response.success) {
-                // Serve the resource
-            } else {
-                // Respond with status 402 and a new challenge
-                // Log.v("Breez", "Payment refused: ${response.errorReason}")
+            when (response.status) {
+                X402SettleStatus.SETTLED -> {
+                    // Serve the resource
+                }
+                X402SettleStatus.PENDING -> {
+                    // Respond with status 402 and no new challenge
+                }
+                X402SettleStatus.MALFORMED -> {
+                    // Respond with status 400
+                }
+                X402SettleStatus.REFUSED -> {
+                    // Respond with status 402 and a new challenge
+                }
+                X402SettleStatus.ERROR -> {
+                    // Respond with status 500
+                }
             }
         } catch (e: Exception) {
             // handle error

@@ -482,6 +482,7 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance from the configured components.
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         self.config.validate()?;
+        crate::x402::X402QuoteKey::validate_secret(self.x402_quote_secret.as_deref())?;
         let runtime = runtime_from_config(&self.config);
         validate_server_mode(&self.config, runtime.starts_background_services())?;
 

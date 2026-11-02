@@ -1,7 +1,7 @@
 pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
 pub use breez_sdk_spark::{
     CooperativeRecoveryError, DepositClaimError, Fee, SdkError, StorageError,
-    TokenAllowanceErrorReason,
+    TokenAllowanceErrorReason, X402ErrorKind,
 };
 use flutter_rust_bridge::frb;
 
@@ -105,7 +105,19 @@ pub enum _SdkError {
         details: String,
         docs_url: String,
     },
+    X402Error {
+        kind: X402ErrorKind,
+        reason: String,
+        details: String,
+        docs_url: String,
+    },
     Generic(String),
+}
+
+#[frb(mirror(X402ErrorKind))]
+pub enum _X402ErrorKind {
+    Refused,
+    PaymentFailed,
 }
 
 #[frb(mirror(TokenAllowanceErrorReason))]

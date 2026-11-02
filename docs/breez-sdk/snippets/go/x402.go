@@ -42,8 +42,8 @@ func PayHttpRequest(x402 *breez_sdk_spark.X402, paymentRequiredHeader string) er
 	}
 
 	if response.PaymentSignature != nil {
-		// Send the request again with a PAYMENT-SIGNATURE header
-		log.Printf("PAYMENT-SIGNATURE: %v", *response.PaymentSignature)
+		// Send the request again with it as the PAYMENT-SIGNATURE header.
+		// It proves the payment, so don't log it.
 	} else {
 		// Still in flight: paying the same challenge again picks it up
 		log.Printf("Payment status: %v", response.Status)
@@ -77,7 +77,6 @@ func PayMcpToolCall(x402 *breez_sdk_spark.X402, structuredContent string) error 
 
 	if response.PaymentSignature != nil {
 		// Call the tool again with this JSON in params._meta["x402/payment"]
-		log.Printf("Payment: %v", *response.PaymentSignature)
 	}
 	// ANCHOR_END: pay-mcp-tool-call
 	return nil
@@ -134,9 +133,14 @@ func SettlePayment(x402 *breez_sdk_spark.X402, paymentSignatureHeader string) er
 	}
 	response, err := x402.Settle(breez_sdk_spark.SettleX402Request{
 		// The PAYMENT-SIGNATURE header of the request
-		Payment:    paymentSignatureHeader,
-		Request:    request,
-		BoundNames: []string{"accept"},
+		PaymentSignature: paymentSignatureHeader,
+		Request:          request,
+		BoundNames:       []string{"accept"},
+		// The same price and lifetime the challenge was created with
+		Amounts: []breez_sdk_spark.X402PaymentAmount{
+			breez_sdk_spark.X402PaymentAmountLightning{AmountSats: 21},
+		},
+		MaxTimeoutSecs: nil,
 	})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -146,15 +150,19 @@ func SettlePayment(x402 *breez_sdk_spark.X402, paymentSignatureHeader string) er
 		return err
 	}
 
-	// Send the PAYMENT-RESPONSE header either way
+	// Send the PAYMENT-RESPONSE header whatever the status
 	log.Printf("PAYMENT-RESPONSE: %v", response.PaymentResponse)
-	if response.Success {
+	switch response.Status {
+	case breez_sdk_spark.X402SettleStatusSettled:
 		// Serve the resource
-	} else {
+	case breez_sdk_spark.X402SettleStatusPending:
+		// Respond with status 402 and no new challenge
+	case breez_sdk_spark.X402SettleStatusMalformed:
+		// Respond with status 400
+	case breez_sdk_spark.X402SettleStatusRefused:
 		// Respond with status 402 and a new challenge
-		if response.ErrorReason != nil {
-			log.Printf("Payment refused: %v", *response.ErrorReason)
-		}
+	case breez_sdk_spark.X402SettleStatusError:
+		// Respond with status 500
 	}
 	// ANCHOR_END: settle-payment
 	return nil

@@ -75,6 +75,73 @@ pub fn prepare_payment(
     now_secs: u64,
     skew_secs: u64,
 ) -> X402Result<PreparedPayment> {
+    prepare_payments(payment_required, request, network, now_secs, skew_secs)
+        .map(|mut prepared| prepared.remove(0))
+}
+
+/// Every `lnbtc` entry for `network` that passes every check the client must
+/// make before paying, in the challenge's order. When none passes, the first
+/// entry's error is returned.
+pub fn prepare_payments(
+    payment_required: &PaymentRequired,
+    request: &IntendedRequest,
+    network: LnbtcNetwork,
+    now_secs: u64,
+    skew_secs: u64,
+) -> X402Result<Vec<PreparedPayment>> {
+    let clock = Clock {
+        now_secs,
+        skew_secs,
+    };
+    passing_entries(payment_required, request, network, Some(clock))
+}
+
+/// Every `lnbtc` entry for `network` that passes the checks of
+/// [`prepare_payment`] other than the invoice's creation and expiry times. An
+/// invoice paid before it expired still proves the payment after, so any of
+/// these may already be paid. When none passes, the first entry's error is
+/// returned.
+pub fn prepare_paid_payments(
+    payment_required: &PaymentRequired,
+    request: &IntendedRequest,
+    network: LnbtcNetwork,
+) -> X402Result<Vec<PreparedPayment>> {
+    passing_entries(payment_required, request, network, None)
+}
+
+fn passing_entries(
+    payment_required: &PaymentRequired,
+    request: &IntendedRequest,
+    network: LnbtcNetwork,
+    clock: Option<Clock>,
+) -> X402Result<Vec<PreparedPayment>> {
+    let mut prepared = Vec::new();
+    let mut first_error = None;
+    for entry in candidates(payment_required, network)? {
+        match prepare_entry(payment_required, entry, request, network, clock) {
+            Ok(entry) => prepared.push(entry),
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    match first_error {
+        Some(e) if prepared.is_empty() => Err(e),
+        _ => Ok(prepared),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Clock {
+    now_secs: u64,
+    skew_secs: u64,
+}
+
+/// The `exact` entries for `network`, or why there are none.
+fn candidates(
+    payment_required: &PaymentRequired,
+    network: LnbtcNetwork,
+) -> X402Result<Vec<&Value>> {
     if payment_required.x402_version != X402_VERSION {
         return Err(X402Error::new(
             X402ErrorReason::InvalidX402Version,
@@ -108,23 +175,7 @@ pub fn prepare_payment(
             )
         });
     }
-    let mut first_error = None;
-    for entry in candidates {
-        match prepare_entry(
-            payment_required,
-            entry,
-            request,
-            network,
-            now_secs,
-            skew_secs,
-        ) {
-            Ok(prepared) => return Ok(prepared),
-            Err(e) => {
-                first_error.get_or_insert(e);
-            }
-        }
-    }
-    Err(first_error.expect("at least one candidate was checked"))
+    Ok(candidates)
 }
 
 /// Checks the payer's result and builds the payload carrying the preimage.
@@ -271,8 +322,7 @@ fn prepare_entry(
     entry: &Value,
     request: &IntendedRequest,
     network: LnbtcNetwork,
-    now_secs: u64,
-    skew_secs: u64,
+    clock: Option<Clock>,
 ) -> X402Result<PreparedPayment> {
     let EntryTerms {
         amount_msat,
@@ -328,19 +378,25 @@ fn prepare_entry(
             format!("invoice expiry {expiry_secs}s is not maxTimeoutSeconds {max_timeout_secs}"),
         ));
     }
-    let created_secs = invoice.created_secs;
-    if created_secs > now_secs.saturating_add(skew_secs) {
-        return Err(X402Error::new(
-            X402ErrorReason::InvoiceCreatedInFuture,
-            "invoice was created in the future",
-        ));
-    }
-    // An invoice is not paid in its final second: payment needs time to land.
-    if now_secs >= created_secs.saturating_add(expiry_secs) {
-        return Err(X402Error::new(
-            X402ErrorReason::InvoiceExpired,
-            "invoice has expired",
-        ));
+    if let Some(Clock {
+        now_secs,
+        skew_secs,
+    }) = clock
+    {
+        let created_secs = invoice.created_secs;
+        if created_secs > now_secs.saturating_add(skew_secs) {
+            return Err(X402Error::new(
+                X402ErrorReason::InvoiceCreatedInFuture,
+                "invoice was created in the future",
+            ));
+        }
+        // An invoice is not paid in its final second: payment needs time to land.
+        if now_secs >= created_secs.saturating_add(expiry_secs) {
+            return Err(X402Error::new(
+                X402ErrorReason::InvoiceExpired,
+                "invoice has expired",
+            ));
+        }
     }
 
     Ok(PreparedPayment {

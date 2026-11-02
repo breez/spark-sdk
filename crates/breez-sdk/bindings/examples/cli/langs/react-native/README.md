@@ -92,6 +92,8 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Webhooks**: `webhooks <subcommand>`
 
+**x402**: `x402 fetch`
+
 **Advanced**: `advanced recover-funds`, `advanced check-recover-funds`, `advanced export-unilateral-exit-state`, `advanced import-unilateral-exit-state`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`

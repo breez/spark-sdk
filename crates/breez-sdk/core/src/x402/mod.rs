@@ -1,32 +1,46 @@
 mod models;
+mod pay_locks;
 mod quote_key;
 mod server;
 mod store;
 
 use breez_sdk_common::x402::{
-    binding::{HttpRequest, McpToolCall, parse_tool_call_params},
+    binding::{
+        HttpRequest, McpToolCall, normalize_bound_header_names, normalize_bound_metadata_names,
+        parse_tool_call_params,
+    },
     client::{
         DEFAULT_CLOCK_SKEW_SECS, IntendedRequest, PayerResult, PayerStatus, PreparedPayment,
-        complete_payment, prepare_payment,
+        complete_payment, prepare_paid_payments, prepare_payments,
     },
-    error::X402Result,
+    error::{X402Error, X402ErrorReason, X402Result},
     network::LnbtcNetwork,
     types::{PaymentRequired, Transport},
+};
+use platform_utils::{
+    time::{Duration, Instant},
+    tokio,
 };
 use spark_wallet::TransferId;
 
 use crate::{
     BreezSdk, Payment, PaymentDetails, PaymentRequest, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, SdkError, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    X402ErrorKind, utils::payments::fetch_and_process_payment,
 };
 
 pub use models::*;
+pub(crate) use pay_locks::X402PayLocks;
 pub(crate) use quote_key::X402QuoteKey;
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::x402_replay_store_tests;
 pub use store::{X402ReplayStore, X402StoreError};
 
 const DEFAULT_COMPLETION_TIMEOUT_SECS: u32 = 30;
+const PENDING_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// The challenge costs more than the caller's `max_amount`. Not an x402
+/// specification reason: the limit is the caller's own.
+const MAX_AMOUNT_EXCEEDED: &str = "max_amount_exceeded";
 
 /// Pays for, and charges for, HTTP resources and MCP tool calls with the x402
 /// protocol over Lightning (the `exact` scheme on `lnbtc`).
@@ -49,15 +63,58 @@ impl X402 {
     /// must commit to this exact request, be signed by the advertised payee and
     /// cost no more than `max_amount`. A challenge that fails a check is
     /// refused and nothing is paid. Paying the same challenge again returns the
-    /// existing payment instead of paying twice.
+    /// existing payment instead of paying twice, waiting for it to complete if
+    /// it is still pending. That works after the invoice expires too, but the
+    /// server accepts the payment only until shortly past its expiry (60
+    /// seconds by default).
     pub async fn pay(&self, request: PayX402Request) -> Result<PayX402Response, SdkError> {
         let payment_required = PaymentRequired::from_header_or_json(&request.payment_required)?;
         let network = lnbtc_network(&self.sdk)?;
-        let prepared = prepare(&payment_required, &request.request, network)?;
-        let payment = match self.existing_payment(&prepared.invoice).await? {
-            Some(payment) => payment,
-            None => self.send(&prepared, &request).await?,
+        let timeout_secs = request
+            .completion_timeout_secs
+            .unwrap_or(DEFAULT_COMPLETION_TIMEOUT_SECS);
+        let started = Instant::now();
+        let paid = with_intended_request(&request.request, |intended| {
+            prepare_paid_payments(&payment_required, intended, network)
+        })?;
+        let _locks = self
+            .sdk
+            .x402_pay_locks
+            .lock(paid.iter().map(|p| p.payment_hash.clone()).collect())
+            .await;
+        let mut existing = None;
+        let mut failed = Vec::new();
+        let mut unpaid = Vec::new();
+        for candidate in paid {
+            match self.existing_payment(&candidate.invoice).await? {
+                Some(payment) if payment.status == PaymentStatus::Failed => {
+                    failed.push((candidate, payment));
+                }
+                Some(payment) => {
+                    existing = Some((candidate, payment));
+                    break;
+                }
+                None => unpaid.push(candidate.invoice),
+            }
+        }
+        let (prepared, payment) = if let Some(existing) = existing {
+            existing
+        } else {
+            self.ensure_not_sending(&unpaid).await?;
+            let failed_invoices: Vec<&str> =
+                failed.iter().map(|(p, _)| p.invoice.as_str()).collect();
+            match payable(&payment_required, &request, network, &failed_invoices) {
+                Ok(prepared) => {
+                    let payment = self.send(&prepared, &request, timeout_secs).await?;
+                    (prepared, payment)
+                }
+                // The failed payment says more than why nothing else is payable.
+                Err(e) => failed.into_iter().next().ok_or(e)?,
+            }
         };
+        let payment = self
+            .wait_for_proof(payment, started, Duration::from_secs(timeout_secs.into()))
+            .await?;
         respond(&prepared, payment, transport(&request.request))
     }
 }
@@ -72,10 +129,86 @@ impl X402 {
         Ok(payment.filter(|p| p.payment_type == PaymentType::Send))
     }
 
+    /// Refuses while an earlier send for one of `invoices` is still being
+    /// finished: it failed after the operators committed it, so it has no
+    /// payment record to find yet.
+    async fn ensure_not_sending(&self, invoices: &[String]) -> Result<(), SdkError> {
+        for invoice in invoices {
+            if self.sdk.lightning_sender.has_pending_send(invoice).await {
+                return Err(SdkError::Generic(
+                    "x402 payment for this challenge is still being sent: pay it again later"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Polls storage until the payment has its proof or fails, or `timeout`
+    /// has passed since `started`.
+    async fn wait_for_proof(
+        &self,
+        mut payment: Payment,
+        started: Instant,
+        timeout: Duration,
+    ) -> Result<Payment, SdkError> {
+        while awaiting_proof(&payment) {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            tokio::time::sleep(PENDING_POLL_INTERVAL.min(remaining)).await;
+            payment = self.refreshed(&payment.id).await?;
+        }
+        Ok(payment)
+    }
+
+    /// The stored payment, with the status and preimage the operators report
+    /// when storage lacks the proof and background sync won't bring it:
+    /// background tasks are off, or the send completed without its preimage.
+    async fn refreshed(&self, payment_id: &str) -> Result<Payment, SdkError> {
+        let mut payment = self
+            .sdk
+            .storage
+            .get_payment_by_id(payment_id.to_string())
+            .await?;
+        let polled =
+            self.sdk.config.background_tasks_enabled && payment.status == PaymentStatus::Pending;
+        if !awaiting_proof(&payment) || polled {
+            return Ok(payment);
+        }
+        let Ok(Some(reported)) = fetch_and_process_payment(
+            &self.sdk.spark_wallet,
+            self.sdk.storage.clone(),
+            payment_id,
+            false,
+        )
+        .await
+        else {
+            return Ok(payment);
+        };
+        if let (
+            Some(PaymentDetails::Lightning { htlc_details, .. }),
+            Some(PaymentDetails::Lightning {
+                htlc_details: reported_htlc,
+                ..
+            }),
+        ) = (&mut payment.details, &reported.details)
+            && reported_htlc.payment_hash == htlc_details.payment_hash
+        {
+            payment.status = reported.status;
+            if htlc_details.preimage.is_none() {
+                htlc_details.preimage.clone_from(&reported_htlc.preimage);
+            }
+        }
+        Ok(payment)
+    }
+
     async fn send(
         &self,
         prepared: &PreparedPayment,
         request: &PayX402Request,
+        completion_timeout_secs: u32,
     ) -> Result<Payment, SdkError> {
         let prepare_response = self
             .sdk
@@ -104,16 +237,19 @@ impl X402 {
             .amount
             .saturating_add(u128::from(*lightning_fee_sats));
         if total_sats > u128::from(max_sats) {
-            return Err(SdkError::InvalidInput(format!(
-                "x402 payment costs {total_sats} sats, more than the maximum of {max_sats}"
-            )));
+            return Err(SdkError::x402(
+                X402ErrorKind::Refused,
+                MAX_AMOUNT_EXCEEDED,
+                format!("the payment costs {total_sats} sats, more than the maximum of {max_sats}"),
+            ));
         }
         // A token leg (an explicit or stable balance conversion) rejects
-        // idempotency keys, so only a plain sats payment gets one.
-        let idempotency_key = prepare_response
-            .conversion_estimate
-            .is_none()
-            .then(|| TransferId::from_name(&format!("x402:{}", prepared.payment_hash)).to_string());
+        // idempotency keys, so only a plain sats payment gets one. Transfer ids
+        // are unique across Spark, so the key also names the sender.
+        let identity = self.sdk.spark_wallet.get_identity_public_key();
+        let idempotency_key = prepare_response.conversion_estimate.is_none().then(|| {
+            TransferId::from_name(&format!("x402:{identity}:{}", prepared.payment_hash)).to_string()
+        });
         let response = self
             .sdk
             .send_payment(SendPaymentRequest {
@@ -122,11 +258,7 @@ impl X402 {
                 // payment does not reveal one.
                 options: Some(SendPaymentOptions::Bolt11Invoice {
                     prefer_spark: false,
-                    completion_timeout_secs: Some(
-                        request
-                            .completion_timeout_secs
-                            .unwrap_or(DEFAULT_COMPLETION_TIMEOUT_SECS),
-                    ),
+                    completion_timeout_secs: Some(completion_timeout_secs),
                 }),
                 idempotency_key,
             })
@@ -135,21 +267,53 @@ impl X402 {
     }
 }
 
-fn prepare(
+/// The first entry that passes every check and whose invoice amount fits
+/// `max_amount`. The routing fee is checked once it is known.
+/// The first entry, other than those for `excluded` invoices, that passes every
+/// check and costs no more than the caller's maximum.
+fn payable(
     payment_required: &PaymentRequired,
-    request: &X402Request,
+    request: &PayX402Request,
     network: LnbtcNetwork,
+    excluded: &[&str],
 ) -> Result<PreparedPayment, SdkError> {
     let now = u64::from(breez_sdk_common::utils::now());
-    with_intended_request(request, |intended| {
-        prepare_payment(
+    let payable = with_intended_request(&request.request, |intended| {
+        prepare_payments(
             payment_required,
             intended,
             network,
             now,
             DEFAULT_CLOCK_SKEW_SECS,
         )
-    })
+    })?;
+    let X402PaymentAmount::Lightning {
+        amount_sats: max_sats,
+    } = request.max_amount;
+    payable
+        .into_iter()
+        .filter(|prepared| !excluded.contains(&prepared.invoice.as_str()))
+        .find(|prepared| prepared.amount_msat.div_ceil(1000) <= max_sats)
+        .ok_or_else(|| {
+            SdkError::x402(
+                X402ErrorKind::Refused,
+                MAX_AMOUNT_EXCEEDED,
+                format!("every payable offer costs more than the maximum of {max_sats} sats"),
+            )
+        })
+}
+
+/// The bound names as the binding takes them. A name that can't be bound is
+/// the server's own mistake, not the request's.
+fn normalized_bound_names(
+    request: &X402Request,
+    names: &[String],
+) -> Result<Vec<String>, SdkError> {
+    match request {
+        X402Request::Http { .. } => normalize_bound_header_names(names),
+        X402Request::Mcp { .. } => normalize_bound_metadata_names(names),
+    }
+    .map_err(|e| SdkError::InvalidInput(format!("x402 bound names: {}", e.detail)))
 }
 
 /// Runs `f` on the protocol's view of `request`. MCP params are parsed
@@ -157,8 +321,8 @@ fn prepare(
 fn with_intended_request<T>(
     request: &X402Request,
     f: impl FnOnce(&IntendedRequest) -> X402Result<T>,
-) -> Result<T, SdkError> {
-    let result = match request {
+) -> X402Result<T> {
+    match request {
         X402Request::Http {
             method,
             url,
@@ -183,8 +347,7 @@ fn with_intended_request<T>(
                 params: &params,
             }))
         }
-    };
-    Ok(result?)
+    }
 }
 
 /// How x402 messages travel with `request`.
@@ -197,8 +360,31 @@ fn transport(request: &X402Request) -> Transport {
 
 /// The SDK's network in the x402 `lnbtc` namespace.
 fn lnbtc_network(sdk: &BreezSdk) -> Result<LnbtcNetwork, SdkError> {
-    LnbtcNetwork::from_bitcoin_network(sdk.config.network.into())
-        .ok_or_else(|| SdkError::Generic("x402 is not supported on this network".into()))
+    LnbtcNetwork::from_bitcoin_network(sdk.config.network.into()).ok_or_else(|| {
+        SdkError::x402(
+            X402ErrorKind::Refused,
+            X402ErrorReason::UnsupportedNetwork.as_str(),
+            "x402 is not supported on this network".to_string(),
+        )
+    })
+}
+
+/// A failure in the SDK's own x402 data rather than in what it received.
+fn internal(X402Error { reason, detail }: X402Error) -> SdkError {
+    SdkError::Generic(format!("x402: {}: {detail}", reason.as_str()))
+}
+
+/// Whether `payment` may still produce its proof: it is in flight, or it
+/// completed before its preimage was recorded.
+fn awaiting_proof(payment: &Payment) -> bool {
+    match payment.status {
+        PaymentStatus::Pending => true,
+        PaymentStatus::Completed => !matches!(
+            &payment.details,
+            Some(PaymentDetails::Lightning { htlc_details, .. }) if htlc_details.preimage.is_some()
+        ),
+        PaymentStatus::Failed => false,
+    }
 }
 
 fn respond(
@@ -216,16 +402,17 @@ fn respond(
             "x402 payment has no Lightning details".into(),
         ));
     };
-    let status = match payment.status {
-        PaymentStatus::Pending => {
-            return Ok(PayX402Response {
-                status: X402PaymentStatus::Pending,
-                payment_signature: None,
-                payment,
-            });
-        }
-        PaymentStatus::Completed => PayerStatus::Paid,
-        PaymentStatus::Failed => PayerStatus::Unpaid,
+    if awaiting_proof(&payment) {
+        return Ok(PayX402Response {
+            status: X402PaymentStatus::Pending,
+            payment_signature: None,
+            payment,
+        });
+    }
+    let status = if payment.status == PaymentStatus::Completed {
+        PayerStatus::Paid
+    } else {
+        PayerStatus::Unpaid
     };
     let result = PayerResult {
         status,
@@ -239,7 +426,7 @@ fn respond(
     let payload = complete_payment(prepared, &result)?;
     Ok(PayX402Response {
         status: X402PaymentStatus::Paid,
-        payment_signature: Some(payload.encode(transport)?),
+        payment_signature: Some(payload.encode(transport).map_err(internal)?),
         payment,
     })
 }
@@ -343,7 +530,19 @@ mod tests {
     }
 
     #[macros::test_all]
-    fn failed_payment_is_an_error() {
+    fn completed_payment_without_preimage_is_pending() {
+        let response = respond(
+            &prepared(),
+            payment(PaymentStatus::Completed, None),
+            Transport::Http,
+        )
+        .unwrap();
+        assert_eq!(response.status, X402PaymentStatus::Pending);
+        assert!(response.payment_signature.is_none());
+    }
+
+    #[macros::test_all]
+    fn failed_payment_is_a_failed_x402_payment() {
         let err = respond(
             &prepared(),
             payment(PaymentStatus::Failed, None),
@@ -351,7 +550,11 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(&err, SdkError::Generic(m) if m.contains("exact_lnbtc_payment_not_paid")),
+            matches!(
+                &err,
+                SdkError::X402Error { kind: X402ErrorKind::PaymentFailed, reason, .. }
+                    if reason == "exact_lnbtc_payment_not_paid"
+            ),
             "{err:?}"
         );
     }
@@ -365,7 +568,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(&err, SdkError::InvalidInput(m) if m.contains("payer_preimage_hash_mismatch")),
+            matches!(&err, SdkError::Generic(m) if m.contains("payer_preimage_hash_mismatch")),
             "{err:?}"
         );
     }

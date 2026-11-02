@@ -16,18 +16,18 @@ use platform_utils::{time::Duration, tokio};
 use serde_json::{Map, Value, json};
 use spark_wallet::InvoiceDescription;
 
-use super::{lnbtc_network, transport, with_intended_request};
+use super::{internal, lnbtc_network, normalized_bound_names, transport, with_intended_request};
 use crate::{
     CreateX402ChallengeRequest, CreateX402ChallengeResponse, SdkError, SettleX402Request,
-    SettleX402Response, X402, X402PaymentAmount, X402ReplayStore, X402Request,
+    SettleX402Response, X402, X402PaymentAmount, X402ReplayStore, X402Request, X402SettleStatus,
 };
 
 const DEFAULT_MAX_TIMEOUT_SECS: u32 = 300;
 const RECEIPT_ATTEMPTS: u32 = 10;
 const RECEIPT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
-/// Why a settlement didn't succeed: a refused payment, reported to the payer,
-/// or a failure of the SDK itself.
+/// Why a settlement didn't succeed: an outcome reported to the payer, or a
+/// mistake in the server's own configuration.
 enum SettleFailure {
     Refused(X402Error),
     Sdk(SdkError),
@@ -58,12 +58,14 @@ impl X402 {
     ) -> Result<CreateX402ChallengeResponse, SdkError> {
         // Refused up front: a payment taken now could never be settled.
         self.replay_store()?;
+        let key = self.sdk.x402_quote_key.get().await?;
         let network = lnbtc_network(&self.sdk)?;
-        let max_timeout_secs = request.max_timeout_secs.unwrap_or(DEFAULT_MAX_TIMEOUT_SECS);
+        let max_timeout_secs = max_timeout(request.max_timeout_secs)?;
         let amount_sats = lightning_price(&request.amounts)?;
         let amount_msat = amount_sats.saturating_mul(1000);
+        let bound_names = normalized_bound_names(&request.request, &request.bound_names)?;
         let binding = with_intended_request(&request.request, |intended| {
-            bind_request(intended, &request.bound_names)
+            bind_request(intended, &bound_names)
         })?;
 
         // The invoice carries no Spark address: a payer routing over Spark
@@ -80,12 +82,11 @@ impl X402 {
             )
             .await?;
         let invoice = receive.invoice;
-        let terms = invoice_terms(&invoice)?;
+        let terms = invoice_terms(&invoice).map_err(internal)?;
         let pay_to = terms.payee.to_string();
 
         // Every Spark user's invoices are signed by the same service provider
         // key, so the quote is what shows these terms and this invoice are ours.
-        let key = self.sdk.x402_quote_key.get().await?;
         let quote = quote_mac(
             &key,
             &QuoteTerms {
@@ -95,8 +96,11 @@ impl X402 {
                 max_timeout_secs: u64::from(max_timeout_secs),
                 request_hash: binding.hash,
                 payment_hash: &terms.payment_hash,
+                invoice: &invoice,
+                receiver: &self.sdk.spark_wallet.get_identity_public_key().to_string(),
             },
-        )?;
+        )
+        .map_err(internal)?;
         let requirement = payment_requirement(&RequirementTerms {
             network,
             amount_msat,
@@ -130,7 +134,9 @@ impl X402 {
         .map_err(|e| SdkError::Generic(format!("issued x402 challenge is invalid: {e}")))?;
 
         Ok(CreateX402ChallengeResponse {
-            payment_required: payment_required.encode(transport(&request.request))?,
+            payment_required: payment_required
+                .encode(transport(&request.request))
+                .map_err(internal)?,
             payment_hash: terms.payment_hash,
         })
     }
@@ -138,10 +144,10 @@ impl X402 {
     /// Settles the payment sent with a paid-for request.
     ///
     /// The payment must be for a challenge this SDK created for this same
-    /// request, carry its invoice's preimage, and be paid to this SDK. It is
-    /// then recorded as used, so it can't be used again. Serve the request
-    /// only when the response reports success, and send `payment_response`
-    /// with it either way.
+    /// request at its current price, carry its invoice's preimage, and be paid
+    /// to this SDK. It is then recorded as used, so it can't be used again.
+    /// Answer the request as the response's status says, and send
+    /// `payment_response` with it either way.
     pub async fn settle(&self, request: SettleX402Request) -> Result<SettleX402Response, SdkError> {
         let network = lnbtc_network(&self.sdk)?;
         let transport = transport(&request.request);
@@ -149,9 +155,9 @@ impl X402 {
             Ok(verified) => {
                 let response = verified.settlement_response();
                 Ok(SettleX402Response {
-                    success: true,
+                    status: X402SettleStatus::Settled,
                     error_reason: None,
-                    payment_response: response.encode(transport)?,
+                    payment_response: response.encode(transport).map_err(internal)?,
                     payment_hash: Some(verified.payment_hash),
                     // Challenges are priced in whole sats.
                     amount: Some(X402PaymentAmount::Lightning {
@@ -160,12 +166,19 @@ impl X402 {
                 })
             }
             Err(SettleFailure::Refused(error)) => {
-                let response = failure_response(error.reason, network.id());
+                let payment_hash = accepted_payment_hash(&request.payment_signature);
+                // Pending is only reported once the quote verified this hash.
+                let transaction = match error.reason {
+                    X402ErrorReason::SettlementPending => payment_hash.as_deref(),
+                    _ => None,
+                };
+                let response =
+                    failure_response(error.reason, network.id(), transaction.unwrap_or_default());
                 Ok(SettleX402Response {
-                    success: false,
+                    status: settle_status(error.reason),
                     error_reason: Some(error.reason.as_str().to_string()),
-                    payment_response: response.encode(transport)?,
-                    payment_hash: accepted_payment_hash(&request.payment),
+                    payment_response: response.encode(transport).map_err(internal)?,
+                    payment_hash,
                     amount: None,
                 })
             }
@@ -190,30 +203,45 @@ impl X402 {
         request: &SettleX402Request,
         network: LnbtcNetwork,
     ) -> Result<VerifiedPayment, SettleFailure> {
-        let store = self.replay_store()?;
-        let payload = PaymentPayload::from_header_or_json(&request.payment)?;
+        let max_timeout_secs = max_timeout(request.max_timeout_secs)?;
+        let amount_msat = lightning_price(&request.amounts)?.saturating_mul(1000);
+        let bound_names = normalized_bound_names(&request.request, &request.bound_names)?;
+        // Not reaching the store or the key is this server's own fault: the
+        // payment stays unused, so the client can send it again.
+        let store = self.replay_store().map_err(|e| server_fault(&e))?;
+        let payload = PaymentPayload::from_header_or_json(&request.payment_signature)?;
         let binding = with_intended_request(&request.request, |intended| {
-            bind_request(intended, &request.bound_names)
-        })
-        .map_err(|e| X402Error::new(X402ErrorReason::RequestBinding, e.to_string()))?;
+            bind_request(intended, &bound_names)
+        })?;
 
-        // The terms come from the client's echo, so they are only trusted
-        // once the quote over them verifies.
-        let requirements = requirements_from_accepted(&payload.accepted, network, &binding);
+        let requirements = settle_requirements(
+            &payload.accepted,
+            network,
+            &binding,
+            amount_msat,
+            max_timeout_secs,
+        );
         let now = u64::from(breez_sdk_common::utils::now());
         let verified = verify_settlement(&requirements, &payload, now, DEFAULT_CLOCK_SKEW_SECS)?;
-        let key = self.sdk.x402_quote_key.get().await?;
+        let key = self
+            .sdk
+            .x402_quote_key
+            .get()
+            .await
+            .map_err(|e| server_fault(&e))?;
         verify_quote(
             &key,
             &QuoteTerms {
                 network,
-                amount_msat: verified.amount_msat,
+                amount_msat,
                 pay_to: requirements["payTo"].as_str().unwrap_or_default(),
-                max_timeout_secs: requirements["maxTimeoutSeconds"]
-                    .as_u64()
-                    .unwrap_or_default(),
+                max_timeout_secs: u64::from(max_timeout_secs),
                 request_hash: binding.hash,
                 payment_hash: &verified.payment_hash,
+                invoice: requirements["extra"]["invoice"]
+                    .as_str()
+                    .unwrap_or_default(),
+                receiver: &self.sdk.spark_wallet.get_identity_public_key().to_string(),
             },
             requirements["extra"]["quote"].as_str(),
         )?;
@@ -226,11 +254,11 @@ impl X402 {
         let received = self
             .wait_until_received(&payment_hash)
             .await
-            .map_err(|e| X402Error::new(X402ErrorReason::ReceiverUnavailable, e.to_string()))?;
+            .map_err(|e| X402Error::new(X402ErrorReason::SettlementPending, e.to_string()))?;
         if !received {
             return Err(X402Error::new(
-                X402ErrorReason::InvoiceNotSettled,
-                "invoice is not settled to this SDK",
+                X402ErrorReason::SettlementPending,
+                "invoice is not yet settled to this SDK",
             )
             .into());
         }
@@ -241,7 +269,7 @@ impl X402 {
                 verified.retain_until_secs(DEFAULT_CLOCK_SKEW_SECS),
             )
             .await
-            .map_err(SdkError::from)?;
+            .map_err(|e| server_fault(&SdkError::from(e)))?;
         if !claimed {
             return Err(X402Error::new(
                 X402ErrorReason::DuplicateSettlement,
@@ -253,18 +281,20 @@ impl X402 {
     }
 
     /// Whether the operators show the payment as received, asking a few times:
-    /// a payer holding the preimage has been paid already, but the record can
-    /// lag. Answering a paid request with a new challenge would make the payer
-    /// pay again.
+    /// a payer holding the preimage has already paid this SDK, but the record
+    /// can lag. Answering a paid request with a new challenge would make the
+    /// payer pay again.
     async fn wait_until_received(&self, payment_hash: &sha256::Hash) -> Result<bool, SdkError> {
         for attempt in 1..=RECEIPT_ATTEMPTS {
-            if self
+            let received = self
                 .sdk
                 .spark_wallet
                 .is_lightning_receive_settled(payment_hash)
-                .await?
-            {
-                return Ok(true);
+                .await;
+            match received {
+                Ok(true) => return Ok(true),
+                Err(e) if attempt == RECEIPT_ATTEMPTS => return Err(e.into()),
+                Ok(false) | Err(_) => {}
             }
             if attempt < RECEIPT_ATTEMPTS {
                 tokio::time::sleep(RECEIPT_RETRY_DELAY).await;
@@ -290,13 +320,45 @@ fn lightning_price(amounts: &[X402PaymentAmount]) -> Result<u64, SdkError> {
     }
 }
 
-/// The requirements to settle against: the accepted amount, `payTo`, timeout,
-/// invoice and quote, under this server's network and the binding of the
-/// request being served. Anything else the client changed fails the checks.
-fn requirements_from_accepted(
+/// The challenge lifetime, defaulted and checked.
+fn max_timeout(max_timeout_secs: Option<u32>) -> Result<u32, SdkError> {
+    match max_timeout_secs.unwrap_or(DEFAULT_MAX_TIMEOUT_SECS) {
+        0 => Err(SdkError::InvalidInput(
+            "x402 max_timeout_secs must be positive".to_string(),
+        )),
+        secs => Ok(secs),
+    }
+}
+
+fn server_fault(e: &SdkError) -> X402Error {
+    X402Error::new(X402ErrorReason::UnexpectedSettleError, e.to_string())
+}
+
+/// What the server answers for a settlement refused for `reason`.
+fn settle_status(reason: X402ErrorReason) -> X402SettleStatus {
+    match reason {
+        X402ErrorReason::SettlementPending => X402SettleStatus::Pending,
+        X402ErrorReason::UnexpectedSettleError => X402SettleStatus::Error,
+        X402ErrorReason::InvalidPayload
+        | X402ErrorReason::InvalidX402Version
+        | X402ErrorReason::PreimageMissing
+        | X402ErrorReason::PreimageMalformed
+        | X402ErrorReason::PreimageLength => X402SettleStatus::Malformed,
+        _ => X402SettleStatus::Refused,
+    }
+}
+
+/// The requirements to settle against, as the spec has the server derive them
+/// from the request and its configuration: this network, the request's
+/// binding, and the server's price and timeout. The receiver key, invoice and
+/// quote come from the accepted terms: on Spark the receiver key is the
+/// service provider's, which only the quote ties to this server.
+fn settle_requirements(
     accepted: &Value,
     network: LnbtcNetwork,
     binding: &RequestBinding,
+    amount_msat: u64,
+    max_timeout_secs: u32,
 ) -> Value {
     let accepted_extra = &accepted["extra"];
     let mut extra = json!({
@@ -314,13 +376,13 @@ fn requirements_from_accepted(
     let mut requirements = json!({
         "scheme": "exact",
         "network": network.id(),
+        "amount": amount_msat.to_string(),
         "asset": "BTC",
+        "maxTimeoutSeconds": max_timeout_secs,
         "extra": extra,
     });
-    for field in ["amount", "payTo", "maxTimeoutSeconds"] {
-        if let Some(value) = accepted.get(field) {
-            requirements[field] = value.clone();
-        }
+    if let Some(pay_to) = accepted.get("payTo") {
+        requirements["payTo"] = pay_to.clone();
     }
     requirements
 }
@@ -383,14 +445,37 @@ mod tests {
     }
 
     #[macros::test_all]
-    fn requirements_take_terms_but_not_binding_or_network_from_the_echo() {
+    fn settle_status_follows_the_reason() {
+        for (reason, status) in [
+            (
+                X402ErrorReason::SettlementPending,
+                X402SettleStatus::Pending,
+            ),
+            (
+                X402ErrorReason::UnexpectedSettleError,
+                X402SettleStatus::Error,
+            ),
+            (X402ErrorReason::InvalidPayload, X402SettleStatus::Malformed),
+            (X402ErrorReason::PreimageLength, X402SettleStatus::Malformed),
+            (X402ErrorReason::AmountMismatch, X402SettleStatus::Refused),
+            (
+                X402ErrorReason::DuplicateSettlement,
+                X402SettleStatus::Refused,
+            ),
+        ] {
+            assert_eq!(settle_status(reason), status, "{reason:?}");
+        }
+    }
+
+    #[macros::test_all]
+    fn requirements_take_the_servers_terms_and_only_the_quoted_parts_of_the_echo() {
         let accepted = json!({
             "scheme": "other",
             "network": "lnbtc:000000000019d6689c085ae165831e93",
-            "amount": "21000",
+            "amount": "1000",
             "asset": "USD",
             "payTo": "02aa",
-            "maxTimeoutSeconds": 300,
+            "maxTimeoutSeconds": 3600,
             "extra": {
                 "invoice": "lnbcrt1",
                 "quote": "mac",
@@ -399,7 +484,8 @@ mod tests {
                 "clientNote": "ignored",
             },
         });
-        let requirements = requirements_from_accepted(&accepted, LnbtcNetwork::Regtest, &binding());
+        let requirements =
+            settle_requirements(&accepted, LnbtcNetwork::Regtest, &binding(), 21_000, 300);
         assert_eq!(requirements["scheme"], "exact");
         assert_eq!(requirements["network"], LnbtcNetwork::Regtest.id());
         assert_eq!(requirements["asset"], "BTC");

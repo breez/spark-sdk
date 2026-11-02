@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,8 +24,8 @@ const (
 	// Times to pay the same challenge again while its payment is pending. Fetching
 	// again instead would bring a new challenge with a new invoice to pay.
 	x402PendingRetries = 3
-	// Times to send the paid request again while the server answers 402 without a
-	// new challenge, meaning the payment may still settle.
+	// Times to send the paid request again while the server answers that the
+	// payment may still settle.
 	x402SettleRetries    = 5
 	x402SettleRetryDelay = 2 * time.Second
 	x402RequestTimeout   = 60 * time.Second
@@ -121,17 +123,32 @@ func handleX402Fetch(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args [
 			body = bodyStr
 		}
 	})
+	if *method == "GET" && body != nil {
+		return fmt.Errorf("a GET request has no body: use -X POST to send one")
+	}
 
-	client := &http.Client{Timeout: x402RequestTimeout}
 	// The server hashes the headers it binds, so send every header
 	// explicitly: anything the HTTP client added on its own would be
 	// missing from the hash computed here.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableCompression = true
+	client := &http.Client{
+		Timeout:   x402RequestTimeout,
+		Transport: transport,
+		// Redirects aren't followed: the payment then commits to exactly
+		// the request sent.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	headers, err := parseX402Headers(headerLines)
 	if err != nil {
 		return err
 	}
 	if _, ok := findX402Header(headers, "accept"); !ok {
 		headers = setX402Header(headers, "accept", "*/*")
+	}
+	url, err = x402URLAsSent(url)
+	if err != nil {
+		return err
 	}
 
 	response, err := sendX402Request(client, *method, url, headers, body)
@@ -179,7 +196,9 @@ func handleX402Fetch(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args [
 			return err
 		}
 	}
-	printValue(paid)
+	// The payment signature proves the payment, so it isn't printed.
+	fmt.Printf("x402 payment %s is %s: %s sats, fee %s sats\n",
+		paid.Payment.Id, x402PaymentStatusName(paid.Status), paid.Payment.Amount, paid.Payment.Fees)
 	if paid.PaymentSignature == nil {
 		fmt.Println("Payment is still pending. Check its status with list-payments.")
 		return nil
@@ -191,10 +210,7 @@ func handleX402Fetch(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args [
 		return err
 	}
 	for i := 0; i < x402SettleRetries; i++ {
-		if response.status != http.StatusPaymentRequired {
-			break
-		}
-		if _, ok := response.header(x402PaymentRequiredHeader); ok {
+		if !x402SettlementPending(response) {
 			break
 		}
 		fmt.Println("Payment is not settled yet, sending it again...")
@@ -270,6 +286,32 @@ func setX402Header(headers []breez_sdk_spark.X402Header, name, value string) []b
 	return append(headers, breez_sdk_spark.X402Header{Name: name, Value: value})
 }
 
+// x402URLAsSent returns the URL the payment binds, normalized as a WHATWG URL
+// parser does: scheme and host in lowercase, no default port, `/` for an empty
+// path, and no fragment.
+func x402URLAsSent(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Host)
+	if port := parsed.Port(); (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		host = strings.TrimSuffix(host, ":"+port)
+	}
+	return scheme + "://" + host + parsed.RequestURI(), nil
+}
+
+func x402PaymentStatusName(status breez_sdk_spark.X402PaymentStatus) string {
+	switch status {
+	case breez_sdk_spark.X402PaymentStatusPaid:
+		return "Paid"
+	case breez_sdk_spark.X402PaymentStatusPending:
+		return "Pending"
+	}
+	return fmt.Sprintf("%d", status)
+}
+
 type x402Response struct {
 	status  int
 	headers http.Header
@@ -309,6 +351,10 @@ func sendX402Request(
 	for _, header := range headers {
 		req.Header.Set(header.Name, header.Value)
 	}
+	// An empty User-Agent stops net/http sending its default one.
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", "")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -318,7 +364,6 @@ func sendX402Request(
 	if err != nil {
 		return nil, err
 	}
-	// Redirects are followed, so a redirect status here is one that could not be.
 	switch resp.StatusCode {
 	case 301, 302, 303, 307, 308:
 		location := resp.Header.Get("location")
@@ -331,6 +376,31 @@ func sendX402Request(
 		)
 	}
 	return &x402Response{status: resp.StatusCode, headers: resp.Header, body: string(data)}, nil
+}
+
+// x402SettlementPending reports whether the server answered that the payment
+// may still settle: a 402 with no new challenge and the core x402
+// specification's non-final reason.
+func x402SettlementPending(response *x402Response) bool {
+	if response.status != http.StatusPaymentRequired {
+		return false
+	}
+	if _, ok := response.header(x402PaymentRequiredHeader); ok {
+		return false
+	}
+	header, ok := response.header(x402PaymentResponseHeader)
+	if !ok {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return false
+	}
+	var settlement map[string]interface{}
+	if err := json.Unmarshal(decoded, &settlement); err != nil {
+		return false
+	}
+	return settlement["errorReason"] == "settlement_pending"
 }
 
 func printX402Response(response *x402Response) {

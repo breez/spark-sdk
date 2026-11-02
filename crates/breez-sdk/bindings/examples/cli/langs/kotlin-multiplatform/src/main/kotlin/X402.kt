@@ -1,4 +1,7 @@
 import breez_sdk_spark.*
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.google.gson.JsonPrimitive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -75,8 +78,8 @@ private const val PAYMENT_RESPONSE_HEADER = "payment-response"
  * again instead would bring a new challenge with a new invoice to pay. */
 private const val PENDING_RETRIES = 3
 
-/** Times to send the paid request again while the server answers 402 without a
- * new challenge, meaning the payment may still settle. */
+/** Times to send the paid request again while the server answers that the
+ * payment may still settle. */
 private const val SETTLE_RETRIES = 5
 private const val SETTLE_RETRY_DELAY_MS = 2000L
 private val REQUEST_TIMEOUT: Duration = Duration.ofSeconds(60)
@@ -91,19 +94,26 @@ suspend fun handleX402Fetch(sdk: BreezSdk, reader: LineReader, args: List<String
     }
     val method = fp.getString("X", "method") ?: "GET"
     val body = fp.getString("d", "body")
+    if (method == "GET" && body != null) {
+        throw Exception("a GET request has no body: use -X POST to send one")
+    }
 
     // HTTP/1.1 keeps the client from adding h2c upgrade headers of its own.
     val client = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
-        .followRedirects(HttpClient.Redirect.NORMAL)
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build()
     // The server hashes the headers it binds, so send every header
     // explicitly: anything the HTTP client added on its own would be
     // missing from the hash computed here.
-    val headers = parseX402Headers(fp.getAll("H") + fp.getAll("header"))
+    val headers = parseX402Headers(fp.getAll("H", "header"))
     headers.putIfAbsent("accept", "*/*")
+    headers.putIfAbsent("user-agent", "Java-http-client/${System.getProperty("java.version")}")
+    // The client sends no Proxy-* header to a server it reaches directly.
+    headers.keys.removeAll { it.startsWith("proxy-") }
+    val sentUrl = x402SentUrl(url)
 
-    val response = sendX402Request(client, method, url, headers, body)
+    val response = sendX402Request(client, method, sentUrl, headers, body)
     if (response.statusCode() != 402) {
         printX402Response(response)
         return
@@ -116,7 +126,7 @@ suspend fun handleX402Fetch(sdk: BreezSdk, reader: LineReader, args: List<String
         paymentRequired = paymentRequired,
         request = X402Request.Http(
             method = method,
-            url = url,
+            url = sentUrl,
             headers = headers.map { (name, value) -> X402Header(name = name, value = value) },
             body = body?.toByteArray(Charsets.UTF_8),
         ),
@@ -130,7 +140,8 @@ suspend fun handleX402Fetch(sdk: BreezSdk, reader: LineReader, args: List<String
         println("Payment is pending, waiting for it to complete...")
         paid = x402.pay(request)
     }
-    printValue(paid)
+    // The payment signature proves the payment, so it isn't printed.
+    println("x402 payment ${paid.payment.id} is ${paid.status}: ${paid.payment.amount} sats, fee ${paid.payment.fees} sats")
     val signature = paid.paymentSignature
     if (signature == null) {
         println("Payment is still pending. Check its status with list-payments.")
@@ -138,16 +149,12 @@ suspend fun handleX402Fetch(sdk: BreezSdk, reader: LineReader, args: List<String
     }
 
     headers[PAYMENT_SIGNATURE_HEADER] = signature
-    var paidResponse = sendX402Request(client, method, url, headers, body)
+    var paidResponse = sendX402Request(client, method, sentUrl, headers, body)
     for (i in 0 until SETTLE_RETRIES) {
-        if (paidResponse.statusCode() != 402 ||
-            paidResponse.headers().firstValue(PAYMENT_REQUIRED_HEADER).isPresent
-        ) {
-            break
-        }
+        if (!settlementPending(paidResponse)) break
         println("Payment is not settled yet, sending it again...")
         delay(SETTLE_RETRY_DELAY_MS)
-        paidResponse = sendX402Request(client, method, url, headers, body)
+        paidResponse = sendX402Request(client, method, sentUrl, headers, body)
     }
     printX402Response(paidResponse)
 }
@@ -162,6 +169,26 @@ private fun parseX402Headers(lines: List<String>): MutableMap<String, String> {
         headers[line.substring(0, colon).trim().lowercase()] = line.substring(colon + 1).trim()
     }
     return headers
+}
+
+/**
+ * The URL the payment binds, normalized as a WHATWG URL parser does: scheme and
+ * host in lowercase, no default port, `/` in an empty path, and no fragment.
+ */
+private fun x402SentUrl(url: String): String {
+    val uri = URI.create(url)
+    val host = uri.host ?: return uri.toString().substringBefore('#')
+    val scheme = uri.scheme.lowercase()
+    val userInfo = uri.rawUserInfo?.let { "$it@" } ?: ""
+    val defaultPort = when (scheme) {
+        "http" -> 80
+        "https" -> 443
+        else -> -1
+    }
+    val port = if (uri.port == -1 || uri.port == defaultPort) "" else ":${uri.port}"
+    val path = uri.rawPath.ifEmpty { "/" }
+    val query = uri.rawQuery?.let { "?$it" } ?: ""
+    return "$scheme://$userInfo${host.lowercase()}$port$path$query"
 }
 
 private suspend fun sendX402Request(
@@ -189,6 +216,19 @@ private suspend fun sendX402Request(
         throw Exception("endpoint returned a $status redirect to $location, which this client does not follow")
     }
     return response
+}
+
+/** Whether the server answered that the payment may still settle: a 402 with
+ * no new challenge and the core x402 specification's non-final reason. */
+private fun settlementPending(response: HttpResponse<String>): Boolean {
+    if (response.statusCode() != 402 || response.headers().firstValue(PAYMENT_REQUIRED_HEADER).isPresent) {
+        return false
+    }
+    val settlement = response.headers().firstValue(PAYMENT_RESPONSE_HEADER).orElse(null) ?: return false
+    return runCatching {
+        val json = JsonParser.parseString(String(Base64.getDecoder().decode(settlement), Charsets.UTF_8))
+        (json as? JsonObject)?.get("errorReason") == JsonPrimitive("settlement_pending")
+    }.getOrDefault(false)
 }
 
 private fun printX402Response(response: HttpResponse<String>) {

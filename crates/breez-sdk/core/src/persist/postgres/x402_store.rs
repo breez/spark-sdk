@@ -50,12 +50,13 @@ fn map_err<E: std::fmt::Display>(e: E) -> X402StoreError {
 impl X402ReplayStore for PostgresX402ReplayStore {
     async fn consume(&self, key: String, retain_until_secs: u64) -> Result<bool, X402StoreError> {
         let retain_until = i64::try_from(retain_until_secs).map_err(map_err)?;
-        let now = i64::from(breez_sdk_common::utils::now());
         let client = self.pool.get().await.map_err(map_err)?;
+        // The database's clock, which every instance sharing the table agrees on.
         client
             .execute(
-                "DELETE FROM brz_x402_replay WHERE user_id = $1 AND retain_until < $2",
-                &[&self.identity, &now],
+                "DELETE FROM brz_x402_replay
+                 WHERE user_id = $1 AND retain_until < EXTRACT(EPOCH FROM now())::BIGINT",
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;

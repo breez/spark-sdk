@@ -18,7 +18,7 @@ use super::{
     invoice::decode_invoice,
     jcs,
     network::LnbtcNetwork,
-    types::{PaymentPayload, SettlementResponse},
+    types::{PaymentPayload, SettlementResponse, X402_VERSION},
 };
 
 /// How long a consumed payment hash stays recorded past the end of its
@@ -162,15 +162,30 @@ impl VerifiedPayment {
     }
 }
 
-/// A failed settlement's response.
-pub fn failure_response(reason: X402ErrorReason, network: &str) -> SettlementResponse {
+/// A failed settlement's response. `transaction` is the payment hash for a
+/// pending settlement, which the spec requires, and empty otherwise.
+pub fn failure_response(
+    reason: X402ErrorReason,
+    network: &str,
+    transaction: &str,
+) -> SettlementResponse {
     SettlementResponse {
         success: false,
         error_reason: Some(reason.as_str().to_string()),
-        transaction: String::new(),
+        transaction: transaction.to_string(),
         network: network.to_string(),
         payer: None,
     }
+}
+
+fn check_version(payload: &PaymentPayload) -> X402Result<()> {
+    if payload.x402_version != X402_VERSION {
+        return Err(X402Error::new(
+            X402ErrorReason::InvalidX402Version,
+            format!("unsupported version {}", payload.x402_version),
+        ));
+    }
+    Ok(())
 }
 
 /// Validates `payload` against the server's `requirements` as the
@@ -183,6 +198,7 @@ pub fn verify_settlement(
     now_secs: u64,
     skew_secs: u64,
 ) -> X402Result<VerifiedPayment> {
+    check_version(payload)?;
     let accepted = &payload.accepted;
     check_core_fields_match(requirements, accepted)?;
     let terms = check_core_fields(requirements)?;

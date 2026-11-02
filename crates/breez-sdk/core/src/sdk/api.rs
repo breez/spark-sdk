@@ -330,7 +330,8 @@ impl BreezSdk {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
     }
 
-    /// Returns an instance of [`X402`] for paying x402 challenges.
+    /// Returns an instance of [`X402`] for paying x402 challenges, and for
+    /// creating and settling your own.
     pub fn get_x402(&self) -> X402 {
         X402::new(self.clone())
     }

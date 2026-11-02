@@ -27,7 +27,8 @@ pub struct HttpRequest<'a> {
 
 /// An MCP `tools/call` as the client sends it.
 pub struct McpToolCall<'a> {
-    /// The MCP server URI from the client's own configuration.
+    /// The MCP server URI, taken from configuration: the server the client
+    /// intends to call, or the server's own.
     pub server: &'a str,
     /// The call's `params` object (`name`, `arguments`, `_meta`).
     pub params: &'a Value,
@@ -78,10 +79,30 @@ impl BindingParams {
 }
 
 /// Parses a `tools/call` `params` object from JSON text. Duplicate member
-/// names and integers outside the IEEE-754 safe range are refused, since the
-/// request hash could not represent them faithfully.
+/// names are refused, since the request hash could not represent them
+/// faithfully.
 pub fn parse_tool_call_params(json: &str) -> X402Result<Value> {
     jcs::parse_strict(json).map_err(|e| binding_error(e.0))
+}
+
+/// Bound HTTP header names as the binding takes them: lowercase, sorted and
+/// unique. A name that can't be bound is refused.
+pub fn normalize_bound_header_names(names: &[String]) -> X402Result<Vec<String>> {
+    let mut names: Vec<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
+    names.sort();
+    names.dedup();
+    validate_bound_header_names(&names)?;
+    Ok(names)
+}
+
+/// Bound MCP `_meta` member names as the binding takes them: sorted in JCS
+/// order and unique. A name that can't be bound is refused.
+pub fn normalize_bound_metadata_names(names: &[String]) -> X402Result<Vec<String>> {
+    let mut names = names.to_vec();
+    names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    names.dedup();
+    validate_metadata_names(&names)?;
+    Ok(names)
 }
 
 /// Computes the `http:1` request hash.
@@ -326,16 +347,23 @@ fn validate_uri(uri: &str, http_only: bool) -> X402Result<()> {
         return Err(invalid("is not an http or https URL"));
     }
 
+    let brackets = |part: &str| part.contains(['[', ']']);
     let Some(after_slashes) = rest.strip_prefix("//") else {
         if http_only {
             return Err(invalid("has no authority"));
+        }
+        if brackets(rest) {
+            return Err(invalid("has brackets outside an IP literal"));
         }
         return Ok(());
     };
     let authority_end = after_slashes
         .find(['/', '?'])
         .unwrap_or(after_slashes.len());
-    let authority = &after_slashes[..authority_end];
+    let (authority, path_and_query) = after_slashes.split_at(authority_end);
+    if brackets(path_and_query) {
+        return Err(invalid("has brackets outside an IP literal"));
+    }
     if authority.contains('@') {
         return Err(invalid("has user information"));
     }
@@ -343,8 +371,8 @@ fn validate_uri(uri: &str, http_only: bool) -> X402Result<()> {
         let (host, after) = literal
             .split_once(']')
             .ok_or_else(|| invalid("has an unterminated IP literal"))?;
-        if host.is_empty() {
-            return Err(invalid("has an empty IP literal"));
+        if !is_ip_literal(host) {
+            return Err(invalid("has a malformed IP literal"));
         }
         match after {
             "" => (host, None),
@@ -358,22 +386,90 @@ fn validate_uri(uri: &str, http_only: bool) -> X402Result<()> {
             ),
         }
     } else {
-        match authority.split_once(':') {
+        let (host, port) = match authority.split_once(':') {
             Some((host, port)) => (host, Some(port)),
             None => (authority, None),
+        };
+        if host.contains(['[', ']']) {
+            return Err(invalid("has brackets outside an IP literal"));
         }
+        (host, port)
     };
     if http_only && host.is_empty() {
         return Err(invalid("has no host"));
     }
-    if let Some(port) = port {
-        // Port 0 is syntactically allowed but cannot be served; it is refused.
-        let valid = !port.is_empty()
-            && port.bytes().all(|b| b.is_ascii_digit())
-            && port.parse::<u16>().is_ok_and(|p| p > 0);
+    // RFC 3986 allows an empty port. Port 0 is syntactically allowed but
+    // cannot be served, so it is refused.
+    if let Some(port) = port.filter(|port| !port.is_empty()) {
+        let valid =
+            port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok_and(|p| p > 0);
         if !valid {
             return Err(invalid("has an invalid port"));
         }
     }
     Ok(())
+}
+
+/// RFC 3986 `IP-literal` contents: an IPv6 address or `IPvFuture`.
+fn is_ip_literal(host: &str) -> bool {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        return true;
+    }
+    let Some(future) = host.strip_prefix(['v', 'V']) else {
+        return false;
+    };
+    let Some((version, address)) = future.split_once('.') else {
+        return false;
+    };
+    !version.is_empty()
+        && version.bytes().all(|b| b.is_ascii_hexdigit())
+        && !address.is_empty()
+        && address
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:".contains(&b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_uri;
+
+    #[macros::test_all]
+    fn normalizes_bound_names() {
+        let names = |list: &[&str]| list.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            super::normalize_bound_header_names(&names(&["Authorization", "accept", "Accept"]))
+                .unwrap(),
+            names(&["accept", "authorization"])
+        );
+        assert!(super::normalize_bound_header_names(&names(&["payment-signature"])).is_err());
+        assert_eq!(
+            super::normalize_bound_metadata_names(&names(&["traceId", "b", "traceId"])).unwrap(),
+            names(&["b", "traceId"])
+        );
+    }
+
+    #[macros::test_all]
+    fn validates_the_authority_as_rfc_3986_does() {
+        for uri in [
+            "https://api.example.com/a",
+            "https://api.example.com:/a",
+            "https://[::1]:8443/a",
+            "https://[v1.fe80::a+en1]/a",
+        ] {
+            assert!(validate_uri(uri, true).is_ok(), "{uri} was refused");
+        }
+        for uri in [
+            "https://a]b/x",
+            "https://[zz]/x",
+            "https://[]/x",
+            "https://api.example.com:0/a",
+            "https://api.example.com:65536/a",
+            "https://api.example.com/a[1]",
+            "https://api.example.com/?a[]=1",
+            "https://[::1]/?a[]=1",
+        ] {
+            assert!(validate_uri(uri, true).is_err(), "{uri} was accepted");
+        }
+        assert!(validate_uri("urn:a[1]", false).is_err());
+    }
 }

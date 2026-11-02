@@ -45,6 +45,7 @@ pub use cross_chain::{
 };
 pub use error::{
     CooperativeRecoveryError, DepositClaimError, SdkError, SignerError, TokenAllowanceErrorReason,
+    X402ErrorKind,
 };
 pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,

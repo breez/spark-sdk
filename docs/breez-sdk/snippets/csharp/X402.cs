@@ -35,8 +35,8 @@ namespace BreezSdkSnippets
 
             if (response.paymentSignature != null)
             {
-                // Send the request again with a PAYMENT-SIGNATURE header
-                Console.WriteLine($"PAYMENT-SIGNATURE: {response.paymentSignature}");
+                // Send the request again with it as the PAYMENT-SIGNATURE header.
+                // It proves the payment, so don't log it.
             }
             else
             {
@@ -66,7 +66,6 @@ namespace BreezSdkSnippets
             if (response.paymentSignature != null)
             {
                 // Call the tool again with this JSON in params._meta["x402/payment"]
-                Console.WriteLine($"Payment: {response.paymentSignature}");
             }
             // ANCHOR_END: pay-mcp-tool-call
         }
@@ -115,21 +114,36 @@ namespace BreezSdkSnippets
             );
             var response = await x402.Settle(request: new SettleX402Request(
                 // The PAYMENT-SIGNATURE header of the request
-                payment: paymentSignatureHeader,
+                paymentSignature: paymentSignatureHeader,
                 request: request,
-                boundNames: new string[] { "accept" }
+                boundNames: new string[] { "accept" },
+                // The same price and lifetime the challenge was created with
+                amounts: new X402PaymentAmount[]
+                {
+                    new X402PaymentAmount.Lightning(amountSats: 21)
+                },
+                maxTimeoutSecs: null
             ));
 
-            // Send the PAYMENT-RESPONSE header either way
+            // Send the PAYMENT-RESPONSE header whatever the status
             Console.WriteLine($"PAYMENT-RESPONSE: {response.paymentResponse}");
-            if (response.success)
+            switch (response.status)
             {
-                // Serve the resource
-            }
-            else
-            {
-                // Respond with status 402 and a new challenge
-                Console.WriteLine($"Payment refused: {response.errorReason}");
+                case X402SettleStatus.Settled:
+                    // Serve the resource
+                    break;
+                case X402SettleStatus.Pending:
+                    // Respond with status 402 and no new challenge
+                    break;
+                case X402SettleStatus.Malformed:
+                    // Respond with status 400
+                    break;
+                case X402SettleStatus.Refused:
+                    // Respond with status 402 and a new challenge
+                    break;
+                case X402SettleStatus.Error:
+                    // Respond with status 500
+                    break;
             }
             // ANCHOR_END: settle-payment
         }

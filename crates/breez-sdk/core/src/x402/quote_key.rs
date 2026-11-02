@@ -31,16 +31,20 @@ impl X402QuoteKey {
         }
     }
 
+    pub(crate) fn validate_secret(secret: Option<&[u8]>) -> Result<(), SdkError> {
+        if secret.is_some_and(|secret| secret.len() < MIN_SECRET_LEN) {
+            return Err(SdkError::InvalidInput(format!(
+                "the x402 quote secret must be at least {MIN_SECRET_LEN} bytes"
+            )));
+        }
+        Ok(())
+    }
+
     /// The key, derived on first use: one signer call per SDK instance.
     pub(crate) async fn get(&self) -> Result<[u8; 32], SdkError> {
         self.key
             .get_or_try_init(|| async {
                 if let Some(secret) = &self.secret {
-                    if secret.len() < MIN_SECRET_LEN {
-                        return Err(SdkError::InvalidInput(format!(
-                            "the x402 quote secret must be at least {MIN_SECRET_LEN} bytes"
-                        )));
-                    }
                     let mut engine = HmacEngine::<sha256::Hash>::new(secret);
                     engine.input(QUOTE_KEY_LABEL);
                     return Ok(Hmac::<sha256::Hash>::from_engine(engine).to_byte_array());

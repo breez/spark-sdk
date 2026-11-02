@@ -32,9 +32,9 @@ async fn pay_http_request(x402: &X402, payment_required_header: String) -> Resul
         })
         .await?;
 
-    if let Some(payment_signature) = response.payment_signature {
-        // Send the request again with a PAYMENT-SIGNATURE header
-        info!("PAYMENT-SIGNATURE: {payment_signature}");
+    if let Some(_payment_signature) = response.payment_signature {
+        // Send the request again with it as the PAYMENT-SIGNATURE header.
+        // It proves the payment, so don't log it.
     } else {
         // Still in flight: paying the same challenge again picks it up
         info!("Payment status: {:?}", response.status);
@@ -61,9 +61,8 @@ async fn pay_mcp_tool_call(x402: &X402, structured_content: String) -> Result<()
         })
         .await?;
 
-    if let Some(payment_signature) = response.payment_signature {
+    if let Some(_payment_signature) = response.payment_signature {
         // Call the tool again with this JSON in params._meta["x402/payment"]
-        info!("Payment: {payment_signature}");
     }
     // ANCHOR_END: pay-mcp-tool-call
     Ok(())
@@ -114,19 +113,33 @@ async fn settle_payment(x402: &X402, payment_signature_header: String) -> Result
     let response = x402
         .settle(SettleX402Request {
             // The PAYMENT-SIGNATURE header of the request
-            payment: payment_signature_header,
+            payment_signature: payment_signature_header,
             request,
             bound_names: vec!["accept".to_string()],
+            // The same price and lifetime the challenge was created with
+            amounts: vec![X402PaymentAmount::Lightning { amount_sats: 21 }],
+            max_timeout_secs: None,
         })
         .await?;
 
-    // Send the PAYMENT-RESPONSE header either way
+    // Send the PAYMENT-RESPONSE header whatever the status
     info!("PAYMENT-RESPONSE: {}", response.payment_response);
-    if response.success {
-        // Serve the resource
-    } else {
-        // Respond with status 402 and a new challenge
-        info!("Payment refused: {:?}", response.error_reason);
+    match response.status {
+        X402SettleStatus::Settled => {
+            // Serve the resource
+        }
+        X402SettleStatus::Pending => {
+            // Respond with status 402 and no new challenge
+        }
+        X402SettleStatus::Malformed => {
+            // Respond with status 400
+        }
+        X402SettleStatus::Refused => {
+            // Respond with status 402 and a new challenge
+        }
+        X402SettleStatus::Error => {
+            // Respond with status 500
+        }
     }
     // ANCHOR_END: settle-payment
     Ok(())

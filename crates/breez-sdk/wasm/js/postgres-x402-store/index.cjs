@@ -26,11 +26,12 @@ class PostgresX402ReplayStore {
    * @returns {Promise<boolean>} Whether this call recorded it.
    */
   async consume(key, retainUntilSecs) {
-    const now = Math.floor(Date.now() / 1000);
     try {
+      // The database's clock, which every instance sharing the table agrees on.
       await this.pool.query(
-        "DELETE FROM brz_x402_replay WHERE user_id = $1 AND retain_until < $2",
-        [this.identity, now]
+        `DELETE FROM brz_x402_replay
+         WHERE user_id = $1 AND retain_until < EXTRACT(EPOCH FROM now())::BIGINT`,
+        [this.identity]
       );
       const { rowCount } = await this.pool.query(
         `INSERT INTO brz_x402_replay (user_id, replay_key, retain_until)

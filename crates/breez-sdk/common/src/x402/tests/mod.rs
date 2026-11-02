@@ -1,5 +1,9 @@
 //! Shared `exact` on `lnbtc` vectors, fixture version 1, vendored from
-//! x402-foundation/x402 (Apache-2.0), `specs/schemes/exact/vectors/`.
+//! x402-foundation/x402 (Apache-2.0) pull request 3727 at 63d5640d.
+//!
+//! The `http_server_adapter` cases are not run: they describe a server that
+//! takes its public authority from `Host`, `:authority` or `X-Forwarded-Host`,
+//! and the SDK's servers bind their configured origin without reading those.
 
 use bitcoin::hashes::{Hash, sha256};
 use serde_json::Value;
@@ -8,7 +12,7 @@ use super::{
     binding::{self, HttpRequest, McpToolCall},
     client::{
         IntendedRequest, PayerResult, PayerStatus, PreparedPayment, complete_payment,
-        prepare_payment,
+        prepare_paid_payments, prepare_payment,
     },
     error::X402Result,
     network::LnbtcNetwork,
@@ -158,7 +162,9 @@ enum ClientOutcome {
     Paid(PaymentPayload),
 }
 
-fn run_client_case(doc: &Value, now: u64, skew: u64) -> ClientOutcome {
+/// Runs a client case at `now` and `skew`, or as an invoice already paid when
+/// `clock` is unset.
+fn run_client_case(doc: &Value, clock: Option<(u64, u64)>) -> ClientOutcome {
     let payment_required: PaymentRequired =
         serde_json::from_value(doc["payment_required"].clone()).expect("payment_required");
     let intended = &doc["intended_request"];
@@ -188,13 +194,18 @@ fn run_client_case(doc: &Value, now: u64, skew: u64) -> ClientOutcome {
         other => panic!("unknown profile {other}"),
     };
 
-    let prepared: PreparedPayment = match prepare_payment(
-        &payment_required,
-        &request,
-        LnbtcNetwork::Mainnet,
-        now,
-        skew,
-    ) {
+    let prepared = match clock {
+        Some((now, skew)) => prepare_payment(
+            &payment_required,
+            &request,
+            LnbtcNetwork::Mainnet,
+            now,
+            skew,
+        ),
+        None => prepare_paid_payments(&payment_required, &request, LnbtcNetwork::Mainnet)
+            .map(|mut paid| paid.remove(0)),
+    };
+    let prepared: PreparedPayment = match prepared {
         Ok(prepared) => prepared,
         Err(e) => {
             return ClientOutcome::Rejected {
@@ -242,7 +253,7 @@ fn client_vectors() {
         apply_patch(&mut doc, &case["patch"]);
         let now = case["now"].as_u64().expect("now");
         let skew = case["skew"].as_u64().expect("skew");
-        let outcome = run_client_case(&doc, now, skew);
+        let outcome = run_client_case(&doc, Some((now, skew)));
         let matched = allowed_outcomes(&case["expect"])
             .into_iter()
             .any(|expect| match &outcome {
@@ -273,6 +284,61 @@ fn client_vectors() {
         };
         assert!(matched, "{id}: got {got}, expected {}", case["expect"]);
     }
+}
+
+#[macros::test_all]
+fn paid_invoice_skips_time_checks() {
+    let vectors = vectors();
+    let client = &vectors["client"];
+    for id in ["invoice-expired", "invoice-created-in-future"] {
+        let case = client["cases"]
+            .as_array()
+            .expect("cases")
+            .iter()
+            .find(|case| case["id"] == id)
+            .expect("case");
+        let mut doc = client["base"].clone();
+        apply_patch(&mut doc, &case["patch"]);
+        let ClientOutcome::Paid(payload) = run_client_case(&doc, None) else {
+            panic!("{id}: paid invoice was refused");
+        };
+        assert_eq!(payload.payload["preimage"], doc["payer_result"]["preimage"]);
+    }
+}
+
+#[macros::test_all]
+fn paid_entries_include_every_entry_but_payment_picks_a_payable_one() {
+    let vectors = vectors();
+    let client = &vectors["client"];
+    let expired_case = client["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|case| case["id"] == "invoice-expired")
+        .expect("case");
+    let expired_entry = expired_case["patch"][0]["value"][0].clone();
+    let mut doc = client["base"].clone();
+    let valid_entry = doc["payment_required"]["accepts"][0].clone();
+    doc["payment_required"]["accepts"] = serde_json::json!([expired_entry, valid_entry]);
+    let payment_required: PaymentRequired =
+        serde_json::from_value(doc["payment_required"].clone()).expect("payment_required");
+    let http = &doc["intended_request"]["http"];
+    let body = hex::decode(http["body_hex"].as_str().expect("body")).expect("hex");
+    let headers = header_lines(&http["header_lines"]);
+    let request = IntendedRequest::Http(HttpRequest {
+        method: http["method"].as_str().expect("method"),
+        url: http["url"].as_str().expect("url"),
+        body: &body,
+        headers: &headers,
+    });
+    let now = expired_case["now"].as_u64().expect("now");
+
+    let paid = prepare_paid_payments(&payment_required, &request, LnbtcNetwork::Mainnet).unwrap();
+    let payable =
+        prepare_payment(&payment_required, &request, LnbtcNetwork::Mainnet, now, 60).unwrap();
+    assert_eq!(paid.len(), 2);
+    assert_eq!(paid[0].accepted, expired_entry);
+    assert_eq!(payable.accepted, valid_entry);
 }
 
 #[macros::test_all]

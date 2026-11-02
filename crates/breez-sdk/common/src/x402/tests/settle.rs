@@ -78,3 +78,14 @@ fn facilitator_settle_vectors() {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+#[macros::test_all]
+fn unsupported_version_is_refused() {
+    let mut doc = vectors()["facilitator_settle"]["base"].clone();
+    doc["payload"]["x402Version"] = 1.into();
+    let outcome = settle(&doc, 1_700_000_000, 60, &mut HashSet::new());
+    assert!(
+        matches!(&outcome, Outcome::Failed(reason) if reason == "invalid_x402_version"),
+        "unsupported version was settled"
+    );
+}

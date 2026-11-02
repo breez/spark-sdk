@@ -2,8 +2,9 @@
 //!
 //! A [`StorageBackend`] produces the per-tenant stores the SDK needs: the
 //! main [`Storage`], plus a [`TreeStore`], [`TokenOutputStore`],
-//! [`SessionStore`] and [`X402ReplayStore`]. Each built-in backend is an independent module — adding
-//! one touches nothing else, and there is no central enum of storage options.
+//! [`SessionStore`] and [`X402ReplayStore`]. Each built-in backend is an
+//! independent module: adding one touches nothing else, and there is no
+//! central enum of storage options.
 //!
 //! [`SdkBuilder::with_storage_backend`](crate::SdkBuilder::with_storage_backend)
 //! takes an `Arc<dyn StorageBackend>`; build one with [`default_storage`],

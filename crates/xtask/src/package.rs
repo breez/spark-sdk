@@ -246,11 +246,24 @@ fn package_wasm_target(
     // The top-level packages/wasm/package.json exposes each helper as a
     // sub-export pointing into the `web` output, e.g.
     //   "./passkey-prf-provider": "./web/passkey-prf-provider/index.js"
-    // so the helpers only need to land in the `web` target output.
-    if target == "web" {
-        copy_web_helper_files(crate_dir, &out_path, "passkey-prf-provider")?;
-        copy_web_helper_files(crate_dir, &out_path, "x402-fetch")?;
-        copy_web_helper_files(crate_dir, &out_path, "x402-server")?;
+    // The x402 helpers don't import the web build's bindings, so a Node.js-only
+    // build places them there too.
+    let helpers: &[&str] = match target {
+        "web" => &["passkey-prf-provider", "x402-fetch", "x402-server"],
+        "nodejs" => &["x402-fetch", "x402-server"],
+        _ => &[],
+    };
+    if !helpers.is_empty() {
+        let helpers_out = pkg_dir.join("web");
+        for helper in helpers {
+            copy_web_helper_files(crate_dir, &helpers_out, helper)?;
+        }
+        // The helpers are ES modules. The web build's own package.json says
+        // so; without one, Node.js has to guess.
+        let module_marker = helpers_out.join("package.json");
+        if !module_marker.exists() {
+            std::fs::write(&module_marker, "{ \"type\": \"module\" }\n")?;
+        }
     }
 
     println!("Successfully built WASM target: {}", target);
@@ -1043,7 +1056,7 @@ fn copy_mysql_session_store_files(crate_dir: &Path, out_path: &Path) -> Result<(
 }
 
 /// Copies the x402 store package at `js/<src_name>` to `<dest_name>` in the
-/// Node.js output, with a package.json naming its one driver dependency.
+/// Node.js output, with a package.json naming its driver dependency, if any.
 fn copy_x402_store_files(
     crate_dir: &Path,
     out_path: &Path,
@@ -1397,6 +1410,11 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             files_array.push(serde_json::Value::String(
                 "mysql-session-store/".to_string(),
             ));
+            files_array.push(serde_json::Value::String("x402-store/".to_string()));
+            files_array.push(serde_json::Value::String(
+                "postgres-x402-store/".to_string(),
+            ));
+            files_array.push(serde_json::Value::String("mysql-x402-store/".to_string()));
             files_array.push(serde_json::Value::String("index.js".to_string()));
             files_array.push(serde_json::Value::String("index.mjs".to_string()));
         }
@@ -1412,6 +1430,9 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             "postgres-token-store/",
             "postgres-session-store/",
             "mysql-session-store/",
+            "x402-store/",
+            "postgres-x402-store/",
+            "mysql-x402-store/",
             "index.js",
             "index.mjs"
         ]);

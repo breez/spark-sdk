@@ -1310,9 +1310,10 @@ impl SparkWallet {
         ))
     }
 
-    /// Whether the operators released the preimage for a Lightning payment to
-    /// this wallet with `payment_hash`, which they do only together with the
-    /// transfer that pays it. Invoices this wallet didn't issue never match.
+    /// Whether the operators released the preimage for an HTLC paid to this
+    /// wallet with `payment_hash`, which they do only together with the
+    /// transfer that pays it. A Lightning receive and a claimed Spark HTLC
+    /// both match.
     pub async fn is_lightning_receive_settled(
         &self,
         payment_hash: &Hash,

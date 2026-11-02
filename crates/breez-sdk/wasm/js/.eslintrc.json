@@ -48,6 +48,18 @@
     },
     {
       "files": [
+        "*.test.js"
+      ],
+      "env": {
+        "node": true
+      },
+      "globals": {
+        "AbortController": "readonly",
+        "fetch": "readonly"
+      }
+    },
+    {
+      "files": [
         "mysql-storage/*",
         "node-storage/*",
         "node-tree-store/*",

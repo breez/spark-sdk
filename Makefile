@@ -72,10 +72,10 @@ wasm-test-js-ssl-mode:
 	cd crates/breez-sdk/wasm/js/postgres-storage && npm install && npm test
 
 # Unit tests for the x402 fetch wrapper and server middleware, against fakes
-# of fetch and the SDK's X402 object.
+# of fetch and the SDK's X402 object, and real Hono and Express servers.
 wasm-test-js-x402:
 	cd crates/breez-sdk/wasm/js/x402-fetch && npm test
-	cd crates/breez-sdk/wasm/js/x402-server && npm test
+	cd crates/breez-sdk/wasm/js/x402-server && npm ci && npm test
 
 wasm-js-lint:
 	cd crates/breez-sdk/wasm/js && npm ci && ESLINT_USE_FLAT_CONFIG=false npm run lint

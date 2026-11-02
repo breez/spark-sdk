@@ -166,6 +166,8 @@ All implementations run the **same shared test suite** in `crates/breez-sdk/core
 
 JS implementations also have migration files (`migrations.cjs`) alongside their `index.cjs`.
 
+The x402 replay store (`X402ReplayStore`, `crates/breez-sdk/core/src/x402/store.rs`) is separate from `Storage` and has its own implementations: Rust `crates/breez-sdk/core/src/persist/{sqlite,postgres,mysql}/x402_store.rs` and Node `crates/breez-sdk/wasm/js/{node,postgres,mysql}-x402-store/`, with no IndexedDB one. They run the shared suite `x402_replay_store_tests::run_all` in each Rust store's test module and in the Node harnesses listed above. A Rust server and a Node server may share one database, so keep their schemas, migration tables and migration lock names identical.
+
 ### Postgres/MySQL `brz_` Naming Convention
 
 All SDK-owned Postgres and MySQL schema identifiers — tables, indexes, and named constraints (PKs, FKs) — are prefixed with `brz_` (e.g. `brz_payments`, `brz_idx_payments_user_timestamp`, `brz_fk_token_outputs_metadata_user`). This isolates the SDK's schema from customer-managed tables sharing the same database.

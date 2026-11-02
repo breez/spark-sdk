@@ -13,8 +13,8 @@ private let paymentResponseHeader = "payment-response"
 /// Times to pay the same challenge again while its payment is pending. Fetching
 /// again instead would bring a new challenge with a new invoice to pay.
 private let pendingRetries = 3
-/// Times to send the paid request again while the server answers 402 without a
-/// new challenge, meaning the payment may still settle.
+/// Times to send the paid request again while the server answers that the
+/// payment may still settle.
 private let settleRetries = 5
 private let settleRetryDelayNanos: UInt64 = 2_000_000_000
 
@@ -55,28 +55,33 @@ private func printX402Help() {
 
 private func handleX402Fetch(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
-    guard let url = fp.positional.first,
+    guard let requestedUrl = fp.positional.first,
           let maxAmountSats = fp.get("max-amount-sats").flatMap({ UInt64($0) }) else {
         print("Usage: x402 fetch <url> --max-amount-sats <n> [-X|--method GET|POST] [-d|--body <body>] [-H|--header \"Name: value\"]...")
         return
     }
     let method = fp.get("X", "method") ?? "GET"
     let body = fp.get("d", "body")
+    if method == "GET" && body != nil {
+        throw X402CliError(description: "a GET request has no body: use -X POST to send one")
+    }
 
     // The server hashes the headers it binds, so send every header explicitly:
-    // anything the HTTP client added on its own would be missing from the hash
-    // computed here.
+    // URLSession fills in these when a request has none, and its values would
+    // be missing from the hash computed here.
     var headers = try parseHeaders(fp.getAll("H", "header"))
-    if headers["accept"] == nil {
-        headers["accept"] = "*/*"
+    var defaults = [
+        "accept": "*/*",
+        "accept-encoding": "identity",
+        "accept-language": "*",
+        "user-agent": "breez-cli",
+    ]
+    if method == "POST", body != nil {
+        defaults["content-type"] = "application/x-www-form-urlencoded"
     }
-    // URLSession always adds this to a POST body that has none, so name it here
-    // to keep it in the headers the payment is for.
-    if method == "POST", body != nil, headers["content-type"] == nil {
-        headers["content-type"] = "application/x-www-form-urlencoded"
-    }
+    headers.merge(defaults) { given, _ in given }
 
-    let response = try await send(method: method, url: url, headers: headers, body: body)
+    let response = try await send(method: method, url: requestedUrl, headers: headers, body: body)
     if response.status != 402 {
         printResponse(response)
         return
@@ -84,6 +89,9 @@ private func handleX402Fetch(_ sdk: BreezSdk, _ args: [String]) async throws {
     guard let paymentRequired = response.header(paymentRequiredHeader) else {
         throw X402CliError(description: "402 response has no PAYMENT-REQUIRED header")
     }
+    // The URL as URLSession sent it: `http://host` goes out as `http://host/`,
+    // and a fragment never goes out.
+    let url = withoutFragment(response.http.url?.absoluteString ?? requestedUrl)
 
     let x402 = sdk.getX402()
     let request = PayX402Request(
@@ -104,7 +112,8 @@ private func handleX402Fetch(_ sdk: BreezSdk, _ args: [String]) async throws {
         print("Payment is pending, waiting for it to complete...")
         paid = try await x402.pay(request: request)
     }
-    printValue(paid)
+    // The payment signature proves the payment, so it isn't printed.
+    print("x402 payment \(paid.payment.id) is \(paid.status): \(paid.payment.amount) sats, fee \(paid.payment.fees) sats")
     guard let signature = paid.paymentSignature else {
         print("Payment is still pending. Check its status with list-payments.")
         return
@@ -113,7 +122,7 @@ private func handleX402Fetch(_ sdk: BreezSdk, _ args: [String]) async throws {
     headers[paymentSignatureHeader] = signature
     var paidResponse = try await send(method: method, url: url, headers: headers, body: body)
     for _ in 0..<settleRetries {
-        if paidResponse.status != 402 || paidResponse.header(paymentRequiredHeader) != nil { break }
+        if !settlementPending(paidResponse) { break }
         print("Payment is not settled yet, sending it again...")
         try await Task.sleep(nanoseconds: settleRetryDelayNanos)
         paidResponse = try await send(method: method, url: url, headers: headers, body: body)
@@ -141,8 +150,25 @@ private let fetchSession: URLSession = {
     let config = URLSessionConfiguration.ephemeral
     config.urlCache = nil
     config.requestCachePolicy = .reloadIgnoringLocalCacheData
-    return URLSession(configuration: config)
+    // A stored cookie would be sent without being bound.
+    config.httpCookieStorage = nil
+    config.httpShouldSetCookies = false
+    return URLSession(configuration: config, delegate: RedirectRefuser(), delegateQueue: nil)
 }()
+
+/// Hands back a redirect instead of following it: the payment then commits to
+/// exactly the request sent.
+private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
 
 private func parseHeaders(_ lines: [String]) throws -> [String: String] {
     var headers: [String: String] = [:]
@@ -155,6 +181,12 @@ private func parseHeaders(_ lines: [String]) throws -> [String: String] {
         headers[name] = value
     }
     return headers
+}
+
+private func withoutFragment(_ url: String) -> String {
+    guard var components = URLComponents(string: url) else { return url }
+    components.fragment = nil
+    return components.string ?? url
 }
 
 private func send(method: String, url: String, headers: [String: String], body: String?) async throws -> FetchResponse {
@@ -176,12 +208,23 @@ private func send(method: String, url: String, headers: [String: String], body: 
     guard let http = response as? HTTPURLResponse else {
         throw X402CliError(description: "not an HTTP response")
     }
-    // A redirect URLSession could not follow, such as one without a Location.
     if [301, 302, 303, 307, 308].contains(http.statusCode) {
         let location = http.value(forHTTPHeaderField: "location") ?? "<no location>"
         throw X402CliError(description: "endpoint returned a \(http.statusCode) redirect to \(location), which this client does not follow")
     }
     return FetchResponse(status: http.statusCode, http: http, body: String(decoding: data, as: UTF8.self))
+}
+
+/// Whether the server answered that the payment may still settle: a 402 with no
+/// new challenge and the core x402 specification's non-final reason.
+private func settlementPending(_ response: FetchResponse) -> Bool {
+    guard response.status == 402, response.header(paymentRequiredHeader) == nil,
+          let settlement = response.header(paymentResponseHeader),
+          let json = Data(base64Encoded: settlement),
+          let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else {
+        return false
+    }
+    return object["errorReason"] as? String == "settlement_pending"
 }
 
 private func printResponse(_ response: FetchResponse) {

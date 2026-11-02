@@ -46,6 +46,7 @@ impl BreezSdk {
             lightning_sender: params.lightning_sender,
             x402_replay_store: params.x402_replay_store,
             x402_quote_key: params.x402_quote_key,
+            x402_pay_locks: crate::x402::X402PayLocks::default(),
         };
 
         sdk.start(initial_synced_sender).await;

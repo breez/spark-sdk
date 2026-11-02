@@ -48,11 +48,11 @@ fn map_err<E: std::fmt::Display>(e: E) -> X402StoreError {
 #[macros::async_trait]
 impl X402ReplayStore for MysqlX402ReplayStore {
     async fn consume(&self, key: String, retain_until_secs: u64) -> Result<bool, X402StoreError> {
-        let now = u64::from(breez_sdk_common::utils::now());
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        // The database's clock, which every instance sharing the table agrees on.
         conn.exec_drop(
-            "DELETE FROM brz_x402_replay WHERE user_id = ? AND retain_until < ?",
-            (&self.identity, now),
+            "DELETE FROM brz_x402_replay WHERE user_id = ? AND retain_until < UNIX_TIMESTAMP()",
+            (&self.identity,),
         )
         .await
         .map_err(map_err)?;
