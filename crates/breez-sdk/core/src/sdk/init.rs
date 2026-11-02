@@ -47,6 +47,9 @@ impl BreezSdk {
             lightning_sender: params.lightning_sender,
         };
 
+        if let Err(e) = sdk.clear_lightning_address_on_other_domain().await {
+            error!("Failed to check the domain of the cached lightning address: {e:?}");
+        }
         sdk.start(initial_synced_sender).await;
         Ok(sdk)
     }
