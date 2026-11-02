@@ -160,6 +160,12 @@ or the server refuses to start.
 
 When `--auto-migrate` is enabled, the server will automatically create the required tables.
 
+## Updating
+
+Update the server before you update the SDK in your apps. The server is
+backward compatible with older SDK versions, but the SDK is not backward
+compatible with older server versions.
+
 ## Server API Endpoints
 
 The LNURL server provides the following endpoints:
