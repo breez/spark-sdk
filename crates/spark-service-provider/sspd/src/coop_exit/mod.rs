@@ -33,7 +33,7 @@ use self::repository::{CoopExitPrevout, CoopExitRecord, CoopExitStore};
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The worker also wakes on every completed request and every block.
-const COOP_EXIT_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const COOP_EXIT_BACKUP_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Nodes do not relay a transaction weighing more.
 const MAX_STANDARD_TX_WEIGHT: Weight = Weight::from_wu(400_000);
@@ -42,7 +42,7 @@ const MAX_STANDARD_TX_WEIGHT: Weight = Weight::from_wu(400_000);
 /// leaves are claimed: a reorg can unconfirm it.
 const EXIT_SETTLED_CONFIRMATIONS: u64 = 6;
 
-pub const INCOMPLETE_REQUEST_TTL: Duration = Duration::from_secs(60 * 60);
+pub const INCOMPLETE_REQUEST_TTL: Duration = Duration::from_hours(1);
 
 /// A quoted fee is sized before coin selection runs, so it assumes this many
 /// wallet inputs.

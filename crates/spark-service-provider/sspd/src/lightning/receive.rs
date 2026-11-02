@@ -35,7 +35,7 @@ use super::repository::{HoldInvoiceStatus, LightningReceiveRecord, LightningStor
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-const RECEIVE_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const RECEIVE_BACKUP_INTERVAL: Duration = Duration::from_mins(1);
 
 const OPERATOR_EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
@@ -49,9 +49,9 @@ const EXPIRED_RECEIVES_PER_PASS: i64 = 100;
 
 /// Half the ten minute block target, so the margin keeps its confidence while
 /// blocks come up to twice as fast as the target.
-const ASSUMED_BLOCK_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const ASSUMED_BLOCK_INTERVAL: Duration = Duration::from_mins(5);
 
-const SETTLE_HEADROOM: Duration = Duration::from_secs(10 * 60);
+const SETTLE_HEADROOM: Duration = Duration::from_mins(10);
 
 const MARGIN_CONFIDENCE: f64 = 0.99;
 
@@ -843,13 +843,12 @@ mod tests {
 
     #[test]
     fn min_blocks_until_deadline_covers_window_and_headroom() {
-        let window = Duration::from_secs(30 * 60);
+        let window = Duration::from_mins(30);
         let expected_mean = (window.as_secs_f64() + SETTLE_HEADROOM.as_secs_f64())
             / ASSUMED_BLOCK_INTERVAL.as_secs_f64();
         assert!(f64::from(min_blocks_until_deadline(window)) > expected_mean);
         assert!(
-            min_blocks_until_deadline(Duration::from_secs(60 * 60))
-                > min_blocks_until_deadline(window)
+            min_blocks_until_deadline(Duration::from_hours(1)) > min_blocks_until_deadline(window)
         );
     }
 
@@ -859,7 +858,7 @@ mod tests {
         assert!(delta(0).is_err());
         assert_eq!(
             u32::from(delta(1800).unwrap()),
-            min_blocks_until_deadline(Duration::from_secs(1800)) + LDK_HTLC_FAIL_BACK_BUFFER_BLOCKS
+            min_blocks_until_deadline(Duration::from_mins(30)) + LDK_HTLC_FAIL_BACK_BUFFER_BLOCKS
         );
         assert!(delta(24 * 60 * 60).unwrap() > delta(1800).unwrap());
         assert!(delta(7 * 24 * 60 * 60).is_err());
@@ -875,7 +874,7 @@ mod tests {
             Arc::clone(&node),
             Arc::clone(&store),
             None,
-            hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            hold_invoice_cltv_delta(Duration::from_mins(30)).unwrap(),
         );
 
         let payment_hash = [7u8; 32];
@@ -922,7 +921,7 @@ mod tests {
             Arc::clone(&node),
             Arc::clone(&store),
             None,
-            hold_invoice_cltv_delta(Duration::from_secs(1800)).unwrap(),
+            hold_invoice_cltv_delta(Duration::from_mins(30)).unwrap(),
         );
 
         let payment_hash = [8u8; 32];

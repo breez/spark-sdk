@@ -28,7 +28,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// Node events and new sends wake the worker. After a pass that fails to advance
 /// a send, it tries again after `SEND_RETRY_DELAY`, doubling up to the backup
 /// interval.
-const SEND_BACKUP_INTERVAL: Duration = Duration::from_secs(60);
+const SEND_BACKUP_INTERVAL: Duration = Duration::from_mins(1);
 const SEND_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// The relative timelock, in blocks, of the sender's reclaim path on a lightning
@@ -41,11 +41,11 @@ const MAX_ROUTE_CLTV_BLOCKS: u32 = 1008;
 
 /// Blocks are assumed to take up to this long on average, so a payment pending for
 /// its whole route still resolves before the transfer expires.
-const SLOW_BLOCK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const SLOW_BLOCK_INTERVAL: Duration = Duration::from_mins(30);
 
 /// Time kept between the latest a payment can resolve and the user's transfer
 /// expiring, for the SSP to reveal the preimage to the operators.
-const PREIMAGE_REVEAL_MARGIN: Duration = Duration::from_secs(24 * 60 * 60);
+const PREIMAGE_REVEAL_MARGIN: Duration = Duration::from_hours(24);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SendValidationError {
@@ -748,7 +748,7 @@ mod tests {
 
         assert_eq!(fit_to_expiry(2_080, None, now).unwrap(), 2_080);
         assert_eq!(fit_to_expiry(2_080, Some(0), now).unwrap(), 2_080);
-        let sixty_days = Duration::from_secs(60 * 24 * 60 * 60);
+        let sixty_days = Duration::from_hours(60 * 24);
         assert_eq!(
             fit_to_expiry(2_080, expiring_in(sixty_days), now).unwrap(),
             2_080
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn a_default_send_transfer_fits_most_routes() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let sixteen_days = (now + Duration::from_secs(16 * 24 * 60 * 60))
+        let sixteen_days = (now + Duration::from_hours(16 * 24))
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
