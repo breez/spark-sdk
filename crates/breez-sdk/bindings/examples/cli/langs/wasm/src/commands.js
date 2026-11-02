@@ -233,6 +233,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('-e, --expiry-secs <seconds>', 'Optional expiry time in seconds from now', parseInt)
     .option('-s, --sender-public-key <key>', 'Optional sender public key (spark invoice only)')
     .option('--hodl', 'Create a HODL invoice (bolt11 only)', false)
+    .option('--preimage <hex>', 'Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates')
     .option('--new-address', 'Request a new bitcoin deposit address instead of reusing the current one', false)
     .option('--cross-chain-max-slippage-bps <bps>', 'Maximum slippage in basis points for cross-chain receives (10..500)', parseInt)
     .option('--cross-chain-fees-included', 'Deduct fees from the specified amount for cross-chain receives', false)
@@ -270,6 +271,11 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
           break
         }
         case 'bolt11': {
+          if (options.hodl && options.preimage) {
+            console.error('--hodl and --preimage cannot be used together')
+            return
+          }
+
           let paymentHash
           if (options.hodl) {
             const preimageBytes = crypto.randomBytes(32)
@@ -290,7 +296,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
             expirySecs: options.expirySecs,
             paymentHash,
             receiverIdentityPublicKey: undefined,
-            preimage: undefined
+            preimage: options.preimage
           }
           break
         }

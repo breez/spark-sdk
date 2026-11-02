@@ -384,6 +384,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let expirySecs = fp.get("e", "expiry-secs").flatMap { UInt32($0) }
     let senderPublicKey = fp.get("s", "sender-public-key")
     let hodl = fp.has("hodl")
+    let callerPreimage = fp.get("preimage")
     let newAddress = fp.has("new-address")
     let crossChainMaxSlippageBps = fp.get("cross-chain-max-slippage-bps").flatMap { UInt32($0) }
     let crossChainFeesIncluded = fp.has("cross-chain-fees-included")
@@ -413,6 +414,10 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
         paymentMethod = .bitcoinAddress(newAddress: newAddress)
 
     case "bolt11":
+        if hodl && callerPreimage != nil {
+            print("--hodl and --preimage are mutually exclusive")
+            return
+        }
         var paymentHash: String? = nil
         if hodl {
             let (preimage, hash) = generatePreimageAndHash()
@@ -428,7 +433,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             expirySecs: expirySecs,
             paymentHash: paymentHash,
             receiverIdentityPublicKey: nil,
-            preimage: nil
+            preimage: callerPreimage
         )
 
     case "crosschain":

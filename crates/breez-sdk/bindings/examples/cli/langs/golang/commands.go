@@ -291,6 +291,7 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 	senderPublicKey := fs.String("s", "", "Optional sender public key (sparkinvoice only)")
 	fs.StringVar(senderPublicKey, "sender-public-key", "", "Optional sender public key")
 	hodl := fs.Bool("hodl", false, "Create a HODL invoice (bolt11 only)")
+	callerPreimage := fs.String("preimage", "", "Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates")
 	newAddress := fs.Bool("new-address", false, "Get a new bitcoin deposit address (bitcoin only)")
 	crossChainMaxSlippageStr := fs.String("cross-chain-max-slippage-bps", "", "Max slippage in basis points for cross-chain receives (10..500)")
 	crossChainFeesIncluded := fs.Bool("cross-chain-fees-included", false, "Deduct fees from amount instead of padding onto deposit")
@@ -343,6 +344,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 		}
 
 	case "bolt11":
+		if *hodl && *callerPreimage != "" {
+			return fmt.Errorf("--hodl and --preimage are mutually exclusive")
+		}
 		pm := breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
 			Description: stringOrDefault(description, ""),
 		}
@@ -371,6 +375,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 			fmt.Println("Save the preimage! Use `claim-htlc-payment` with it to settle.")
 
 			pm.PaymentHash = &paymentHash
+		}
+		if *callerPreimage != "" {
+			pm.Preimage = callerPreimage
 		}
 		paymentMethod = pm
 

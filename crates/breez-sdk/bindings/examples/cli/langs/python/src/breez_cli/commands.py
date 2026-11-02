@@ -283,6 +283,8 @@ def _build_receive_parser():
     p.add_argument("-s", "--sender-public-key", default=None)
     p.add_argument("--hodl", action="store_true", default=False,
                    help="Create a HODL invoice (bolt11 only)")
+    p.add_argument("--preimage", default=None,
+                   help="Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates")
     p.add_argument("--new-address", action="store_true", default=False,
                    help="Request a new bitcoin deposit address instead of reusing the current one")
     p.add_argument("--cross-chain-max-slippage-bps", type=int, default=None,
@@ -316,6 +318,10 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             new_address=args.new_address,
         )
     elif method == "bolt11":
+        if args.hodl and args.preimage:
+            print("--hodl and --preimage cannot be used together")
+            return
+
         payment_hash = None
         if args.hodl:
             preimage_bytes = os.urandom(32)
@@ -331,7 +337,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
             receiver_identity_public_key=None,
-            preimage=None,
+            preimage=args.preimage,
         )
     elif method == "crosschain":
         if args.amount is None:
