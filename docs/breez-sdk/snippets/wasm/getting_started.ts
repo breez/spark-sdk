@@ -65,6 +65,9 @@ const exampleLogging = async () => {
 
   const logger = new JsLogger()
   await initLogging(logger)
+
+  // To use the SDK's console logger instead:
+  // await initLogging(new ConsoleLogger())
   // ANCHOR_END: logging
 }
 

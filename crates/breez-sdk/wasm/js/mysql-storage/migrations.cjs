@@ -101,20 +101,20 @@ class MysqlMigrationManager {
         const migrations = this._getMigrations(identity);
 
         if (currentVersion >= migrations.length) {
-          this._log("info", `Database is up to date (version ${currentVersion})`);
+          this._log("INFO", `Database is up to date (version ${currentVersion})`);
           await conn.query("COMMIT");
           return;
         }
 
         this._log(
-          "info",
+          "INFO",
           `Migrating database from version ${currentVersion} to ${migrations.length}`
         );
 
         for (let i = currentVersion; i < migrations.length; i++) {
           const migration = migrations[i];
           const version = i + 1;
-          this._log("debug", `Running migration ${version}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${version}: ${migration.name}`);
 
           for (const step of migration.sql) {
             await runMigrationStep(conn, step);
@@ -127,7 +127,7 @@ class MysqlMigrationManager {
         }
 
         await conn.query("COMMIT");
-        this._log("info", "Database migration completed successfully");
+        this._log("INFO", "Database migration completed successfully");
       } catch (error) {
         await conn.query("ROLLBACK").catch(() => {});
         throw new StorageError(
@@ -146,11 +146,7 @@ class MysqlMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[MysqlMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**

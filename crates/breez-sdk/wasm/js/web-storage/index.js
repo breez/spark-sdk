@@ -27,7 +27,7 @@ class MigrationManager {
     const transaction = event.target.transaction;
 
     this._log(
-      "info",
+      "INFO",
       `Upgrading IndexedDB from version ${oldVersion} to ${newVersion}`
     );
 
@@ -35,14 +35,14 @@ class MigrationManager {
       for (let i = oldVersion; i < newVersion; i++) {
         const migration = this.migrations[i];
         if (migration) {
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
           migration.upgrade(db, transaction);
         }
       }
-      this._log("info", `Database migration completed successfully`);
+      this._log("INFO", `Database migration completed successfully`);
     } catch (error) {
       this._log(
-        "error",
+        "ERROR",
         `Migration failed at version ${oldVersion}: ${error.message}`
       );
       throw new this.StorageError(
@@ -53,14 +53,7 @@ class MigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({
-        line: message,
-        level: level,
-      });
-    } else if (level === "error") {
-      console.error(`[MigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -149,7 +142,7 @@ class MigrationManager {
               }
             });
 
-            console.log(`Migrated ${updated} payment records to BigInt format`);
+            this._log("INFO", `Migrated ${updated} payment records to BigInt format`);
           };
         },
       },
@@ -1142,13 +1135,15 @@ class IndexedDBStorage {
           shouldPersist = true;
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           shouldPersist = true;
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldPersist = false;
@@ -2795,6 +2790,10 @@ class IndexedDBStorage {
       details: payment.details ? toJson(payment.details) : null,
       method: payment.method ? toJson(payment.method) : null,
     };
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {

@@ -383,7 +383,7 @@ class PostgresTokenStore {
           const metadata = _metadataFor(tokenOutputs.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;
@@ -642,7 +642,7 @@ class PostgresTokenStore {
           const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;
@@ -1005,9 +1005,7 @@ class PostgresTokenStore {
   // ===== Private Helpers =====
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**

@@ -54,20 +54,20 @@ class PostgresMigrationManager {
       const migrations = this._getMigrations(identity);
 
       if (currentVersion >= migrations.length) {
-        this._log("info", `Database is up to date (version ${currentVersion})`);
+        this._log("INFO", `Database is up to date (version ${currentVersion})`);
         await client.query("COMMIT");
         return;
       }
 
       this._log(
-        "info",
+        "INFO",
         `Migrating database from version ${currentVersion} to ${migrations.length}`
       );
 
       for (let i = currentVersion; i < migrations.length; i++) {
         const migration = migrations[i];
         const version = i + 1;
-        this._log("debug", `Running migration ${version}: ${migration.name}`);
+        this._log("DEBUG", `Running migration ${version}: ${migration.name}`);
 
         for (const sql of migration.sql) {
           await client.query(sql);
@@ -80,7 +80,7 @@ class PostgresMigrationManager {
       }
 
       await client.query("COMMIT");
-      this._log("info", "Database migration completed successfully");
+      this._log("INFO", "Database migration completed successfully");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw new StorageError(
@@ -219,11 +219,7 @@ class PostgresMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[PostgresMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
