@@ -31,11 +31,22 @@
           }
         },
         {
+          "cmd": "x402 fetch ${x402_url} -X POST -d question=42 --max-amount-sats 1000",
+          "expect_contains": ["HTTP 200"],
+          "expect_json": {
+            "content": "paid article"
+          }
+        },
+        {
           "cmd": "list-payments -t send",
           "expect_json": {
             "payments.0.payment_type": "send",
             "payments.0.amount": "100",
-            "payments.0.status": "completed"
+            "payments.0.status": "completed",
+            "payments.1.payment_type": "send",
+            "payments.1.amount": "100",
+            "payments.1.status": "completed",
+            "payments.2": { "exists": false }
           }
         }
       ]

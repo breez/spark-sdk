@@ -5,8 +5,6 @@ import 'dart:typed_data';
 import 'package:args/args.dart';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-import 'serialization.dart';
-
 /// x402 subcommand names (used for tab completion).
 const x402CommandNames = ['x402 fetch'];
 
@@ -18,8 +16,8 @@ const _paymentResponseHeader = 'payment-response';
 /// again instead would bring a new challenge with a new invoice to pay.
 const _pendingRetries = 3;
 
-/// Times to send the paid request again while the server answers 402 without a
-/// new challenge, meaning the payment may still settle.
+/// Times to send the paid request again while the server answers that the
+/// payment may still settle.
 const _settleRetries = 5;
 const _settleRetryDelay = Duration(seconds: 2);
 
@@ -110,7 +108,7 @@ Future<void> _handleFetch(BreezSdk sdk, List<String> args) async {
     print(parser.usage);
     return;
   }
-  final url = results.rest.first;
+  final url = _asSent(results.rest.first);
   final maxAmountSats = BigInt.tryParse(results.option('max-amount-sats')!);
   if (maxAmountSats == null || maxAmountSats.isNegative) {
     print('Invalid --max-amount-sats: ${results.option('max-amount-sats')}');
@@ -122,6 +120,10 @@ Future<void> _handleFetch(BreezSdk sdk, List<String> args) async {
     return;
   }
   final body = results.option('body');
+  if (method == 'GET' && body != null) {
+    print('a GET request has no body: use -X POST to send one');
+    return;
+  }
 
   // The server hashes the headers it binds, so send every header
   // explicitly: anything the HTTP client added on its own would be
@@ -169,7 +171,11 @@ Future<void> _handleFetch(BreezSdk sdk, List<String> args) async {
       print('Payment is pending, waiting for it to complete...');
       paid = await x402.pay(request: request);
     }
-    printValue(paid);
+    // The payment signature proves the payment, so it isn't printed.
+    print(
+      'x402 payment ${paid.payment.id} is ${paid.status.name}: '
+      '${paid.payment.amount} sats, fee ${paid.payment.fees} sats',
+    );
     final signature = paid.paymentSignature;
     if (signature == null) {
       print('Payment is still pending. Check its status with list-payments.');
@@ -179,7 +185,7 @@ Future<void> _handleFetch(BreezSdk sdk, List<String> args) async {
     headers[_paymentSignatureHeader] = signature;
     response = await _send(client, method, url, headers, body);
     for (var i = 0; i < _settleRetries; i++) {
-      if (response.status != 402 || response.header(_paymentRequiredHeader) != null) break;
+      if (!_settlementPending(response)) break;
       print('Payment is not settled yet, sending it again...');
       await Future<void>.delayed(_settleRetryDelay);
       response = await _send(client, method, url, headers, body);
@@ -207,9 +213,9 @@ Future<_Response> _send(
   String? body,
 ) async {
   final request = await client.openUrl(method, Uri.parse(url));
-  request
-    ..followRedirects = true
-    ..maxRedirects = 10;
+  // Redirects aren't followed: the payment then commits to exactly the
+  // request sent.
+  request.followRedirects = false;
   // dart:io adds accept-encoding on its own.
   request.headers.removeAll(HttpHeaders.acceptEncodingHeader);
   for (final e in headers.entries) {
@@ -222,7 +228,6 @@ Future<_Response> _send(
   }
   final response = await request.close();
   final bytes = await response.fold<BytesBuilder>(BytesBuilder(), (b, chunk) => b..add(chunk));
-  // A redirect that comes back is one the client could not follow.
   if (const [301, 302, 303, 307, 308].contains(response.statusCode)) {
     final location = response.headers[HttpHeaders.locationHeader]?.last ?? '<no location>';
     throw HttpException(
@@ -234,6 +239,28 @@ Future<_Response> _send(
     response.headers,
     utf8.decode(bytes.takeBytes(), allowMalformed: true),
   );
+}
+
+/// The URL as dart:io sends it: `http://host` goes out as `http://host/`, and
+/// a fragment never goes out.
+String _asSent(String url) {
+  final uri = Uri.parse(url).removeFragment();
+  return (uri.path.isEmpty ? uri.replace(path: '/') : uri).toString();
+}
+
+/// Whether the server answered that the payment may still settle: a 402 with
+/// no new challenge and the core x402 specification's non-final reason.
+bool _settlementPending(_Response response) {
+  final settlement = response.header(_paymentResponseHeader);
+  if (response.status != 402 || response.header(_paymentRequiredHeader) != null || settlement == null) {
+    return false;
+  }
+  try {
+    final json = jsonDecode(utf8.decode(base64.decode(settlement)));
+    return json is Map && json['errorReason'] == 'settlement_pending';
+  } on FormatException {
+    return false;
+  }
 }
 
 void _printResponse(_Response response) {

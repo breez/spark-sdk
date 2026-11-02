@@ -1,5 +1,5 @@
 /**
- * x402 replay records in the wallet's SQLite storage file, for the Node.js
+ * x402 replay records in the SDK's SQLite storage file, for the Node.js
  * build. Mirrors the Rust `SqliteX402ReplayStore`.
  */
 

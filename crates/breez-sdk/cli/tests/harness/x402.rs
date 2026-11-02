@@ -14,17 +14,12 @@ use axum::{
 };
 use breez_sdk_spark::{
     BreezSdk, ConnectRequest, CreateX402ChallengeRequest, Network, Seed, SettleX402Request, X402,
-    X402Header, X402PaymentAmount, X402Request, connect, default_config,
+    X402Header, X402PaymentAmount, X402Request, X402SettleStatus, connect, default_config,
 };
 
 const PRICE_SATS: u64 = 100;
 const CONTENT: &str = r#"{"content":"paid article"}"#;
 const BOUND_NAMES: [&str; 1] = ["accept"];
-/// The payment may still settle, so the client should send it again.
-const RETRYABLE_REASONS: [&str; 2] = [
-    "exact_lnbtc_invoice_not_settled",
-    "exact_lnbtc_receiver_unavailable",
-];
 
 pub struct X402Fixture {
     pub url: String,
@@ -117,6 +112,9 @@ impl Charger {
             body: (!body.is_empty()).then(|| body.to_vec()),
         };
         let bound_names: Vec<String> = BOUND_NAMES.iter().map(ToString::to_string).collect();
+        let amounts = vec![X402PaymentAmount::Lightning {
+            amount_sats: PRICE_SATS,
+        }];
 
         let mut response_headers = Vec::new();
         if let Some(payment) = headers
@@ -126,26 +124,39 @@ impl Charger {
             let settled = self
                 .x402
                 .settle(SettleX402Request {
-                    payment: payment.to_string(),
+                    payment_signature: payment.to_string(),
                     request: request.clone(),
                     bound_names: bound_names.clone(),
+                    amounts: amounts.clone(),
+                    max_timeout_secs: None,
                 })
                 .await?;
             response_headers.push(("payment-response", settled.payment_response));
-            if settled.success {
-                response_headers.push(("content-type", "application/json".to_string()));
-                return Ok((AppendHeaders(response_headers), CONTENT).into_response());
-            }
-            if settled
-                .error_reason
-                .as_deref()
-                .is_some_and(|reason| RETRYABLE_REASONS.contains(&reason))
-            {
-                return Ok((
-                    StatusCode::PAYMENT_REQUIRED,
-                    AppendHeaders(response_headers),
-                )
-                    .into_response());
+            match settled.status {
+                X402SettleStatus::Settled => {
+                    response_headers.push(("content-type", "application/json".to_string()));
+                    return Ok((AppendHeaders(response_headers), CONTENT).into_response());
+                }
+                X402SettleStatus::Pending => {
+                    return Ok((
+                        StatusCode::PAYMENT_REQUIRED,
+                        AppendHeaders(response_headers),
+                    )
+                        .into_response());
+                }
+                X402SettleStatus::Malformed => {
+                    return Ok(
+                        (StatusCode::BAD_REQUEST, AppendHeaders(response_headers)).into_response()
+                    );
+                }
+                X402SettleStatus::Error => {
+                    return Ok((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        AppendHeaders(response_headers),
+                    )
+                        .into_response());
+                }
+                X402SettleStatus::Refused => {}
             }
         }
 
@@ -154,9 +165,7 @@ impl Charger {
             .create_challenge(CreateX402ChallengeRequest {
                 request,
                 bound_names,
-                amounts: vec![X402PaymentAmount::Lightning {
-                    amount_sats: PRICE_SATS,
-                }],
+                amounts,
                 max_timeout_secs: None,
                 description: Some("A paid article".to_string()),
                 mime_type: Some("application/json".to_string()),

@@ -41,7 +41,9 @@ pub enum X402Request {
     },
     /// An MCP `tools/call`.
     Mcp {
-        /// The MCP server URI from the app's own configuration.
+        /// The MCP server's URI: for a client, the one it connected to, from
+        /// its own configuration, and for a server, its own public URI. The
+        /// payment commits to it, so both must be exactly the same string.
         server: String,
         /// The call's `params` object as JSON (`name`, `arguments`, `_meta`).
         params: String,
@@ -68,8 +70,8 @@ pub struct X402Header {
 pub enum X402PaymentStatus {
     /// The invoice is paid and the payment signature is set.
     Paid,
-    /// The payment is still in flight. Paying the same challenge again picks
-    /// it up without paying twice.
+    /// The payment hasn't completed, or its proof of payment hasn't arrived
+    /// yet. Paying the same challenge again picks it up without paying twice.
     Pending,
 }
 
@@ -95,7 +97,8 @@ pub struct CreateX402ChallengeRequest {
     /// The HTTP headers, or MCP `params._meta` members, the payment also
     /// commits to besides the method, URL and body, or the tool call. Include
     /// every one that changes what is served or to whom, such as
-    /// `authorization`. Lowercase and sorted.
+    /// `authorization`. Sorted, with HTTP header names in lowercase. MCP
+    /// member names are case-sensitive.
     pub bound_names: Vec<String>,
     /// The price on each rail the challenge accepts, one amount per rail.
     pub amounts: Vec<X402PaymentAmount>,
@@ -126,28 +129,57 @@ pub struct CreateX402ChallengeResponse {
 pub struct SettleX402Request {
     /// The `PAYMENT-SIGNATURE` header value, or the JSON in an MCP call's
     /// `params._meta["x402/payment"]`.
-    pub payment: String,
+    pub payment_signature: String,
     /// The request being served, as received.
     pub request: X402Request,
     /// The names bound when the challenge was created.
     pub bound_names: Vec<String>,
+    /// The request's current price on each rail, as given to
+    /// [`X402::create_challenge`](crate::X402::create_challenge). A payment for
+    /// another price is refused, so keep a price stable while challenges for
+    /// it can still be paid.
+    pub amounts: Vec<X402PaymentAmount>,
+    /// The challenge lifetime given to
+    /// [`X402::create_challenge`](crate::X402::create_challenge). Defaults to
+    /// 300.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub max_timeout_secs: Option<u32>,
+}
+
+/// How to answer a request after settling its payment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum X402SettleStatus {
+    /// The payment is valid, paid to this SDK and now used. Serve the request.
+    Settled,
+    /// The payment's receipt isn't confirmed yet, so it may still settle. Over
+    /// HTTP, answer with status 402 and no new challenge, so the client sends
+    /// the same payment again.
+    Pending,
+    /// The payment can't be read. Over HTTP, answer with status 400.
+    Malformed,
+    /// The payment is refused. Answer with a new challenge.
+    Refused,
+    /// This server couldn't settle the payment, for example because its replay
+    /// store can't be reached. The payment stays unused. Over HTTP, answer with
+    /// status 500.
+    Error,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SettleX402Response {
-    /// Whether the payment is valid, paid to this SDK and now claimed.
-    /// Serve the request only when it is.
-    pub success: bool,
-    /// The x402 reason the payment was refused. `exact_lnbtc_invoice_not_settled`
-    /// and `exact_lnbtc_receiver_unavailable` may succeed when retried.
+    pub status: X402SettleStatus,
+    /// The x402 reason the payment didn't settle.
     pub error_reason: Option<String>,
-    /// The outcome to send with the response: the `PAYMENT-RESPONSE` header
-    /// value for HTTP, or the JSON for an MCP result's
-    /// `_meta["x402/payment-response"]`.
+    /// The outcome to send with the response, whatever the status: the
+    /// `PAYMENT-RESPONSE` header value for HTTP, or the JSON for an MCP
+    /// result's `_meta["x402/payment-response"]`.
     pub payment_response: String,
-    /// The payment hash, in lowercase hex, when the payment could be identified.
+    /// The payment hash, in lowercase hex, when the payment could be
+    /// identified. Unless the status is settled, it is the client's claim and
+    /// unverified.
     pub payment_hash: Option<String>,
-    /// The amount paid, when successful.
+    /// The amount paid, when settled.
     pub amount: Option<X402PaymentAmount>,
 }

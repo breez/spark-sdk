@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Breez.Sdk.Spark;
 
 namespace BreezCli;
@@ -35,8 +36,8 @@ public static class X402Commands
     // Times to pay the same challenge again while its payment is pending. Fetching
     // again instead would bring a new challenge with a new invoice to pay.
     private const int PendingRetries = 3;
-    // Times to send the paid request again while the server answers 402 without a
-    // new challenge, meaning the payment may still settle.
+    // Times to send the paid request again while the server answers that the
+    // payment may still settle.
     private const int SettleRetries = 5;
     private static readonly TimeSpan SettleRetryDelay = TimeSpan.FromSeconds(2);
 
@@ -138,17 +139,28 @@ public static class X402Commands
             return;
         }
         var maxAmountSats = ulong.Parse(maxAmountSatsStr);
+        if (method == "GET" && body != null)
+        {
+            throw new ArgumentException("a GET request has no body: use -X POST to send one");
+        }
 
         using var client = new HttpClient(new HttpClientHandler
         {
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10,
+            // Redirects aren't followed: the payment then commits to exactly
+            // the request sent.
+            AllowAutoRedirect = false,
+            // The cookie container would send cookies the server set, which
+            // the payment does not bind.
+            UseCookies = false,
         });
         // The server hashes the headers it binds, so send every header
         // explicitly: anything the HTTP client added on its own would be
         // missing from the hash computed here.
         var headers = ParseHeaders(headerLines);
         headers.TryAdd("accept", "*/*");
+        // The URL as HttpClient sends it: `http://host` goes out as
+        // `http://host/`, and a fragment never goes out.
+        url = new Uri(url).GetLeftPart(UriPartial.Query);
 
         var response = await Send(client, method, url, headers, body);
         if (response.Status != 402)
@@ -182,7 +194,9 @@ public static class X402Commands
             Console.WriteLine("Payment is pending, waiting for it to complete...");
             paid = await x402.Pay(request: request);
         }
-        Serialization.PrintValue(paid);
+        // The payment signature proves the payment, so it isn't printed.
+        Console.WriteLine(
+            $"x402 payment {paid.payment.id} is {paid.status}: {paid.payment.amount} sats, fee {paid.payment.fees} sats");
         if (paid.paymentSignature == null)
         {
             Console.WriteLine("Payment is still pending. Check its status with list-payments.");
@@ -193,7 +207,7 @@ public static class X402Commands
         response = await Send(client, method, url, headers, body);
         for (int i = 0; i < SettleRetries; i++)
         {
-            if (response.Status != 402 || response.Header(PaymentRequiredHeader) != null)
+            if (!SettlementPending(response))
             {
                 break;
             }
@@ -265,6 +279,29 @@ public static class X402Commands
         }
         var responseBody = await response.Content.ReadAsStringAsync();
         return new FetchResponse(status, responseHeaders, responseBody);
+    }
+
+    // Whether the server answered that the payment may still settle: a 402 with
+    // no new challenge and the core x402 specification's non-final reason.
+    private static bool SettlementPending(FetchResponse response)
+    {
+        var settlement = response.Header(PaymentResponseHeader);
+        if (response.Status != 402 || response.Header(PaymentRequiredHeader) != null || settlement == null)
+        {
+            return false;
+        }
+        try
+        {
+            using var json = JsonDocument.Parse(Convert.FromBase64String(settlement));
+            return json.RootElement.ValueKind == JsonValueKind.Object
+                && json.RootElement.TryGetProperty("errorReason", out var reason)
+                && reason.ValueKind == JsonValueKind.String
+                && reason.ValueEquals("settlement_pending");
+        }
+        catch (Exception e) when (e is FormatException or JsonException)
+        {
+            return false;
+        }
     }
 
     private static void PrintResponse(FetchResponse response)

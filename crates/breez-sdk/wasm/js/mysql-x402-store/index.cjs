@@ -28,11 +28,11 @@ class MysqlX402ReplayStore {
    * @returns {Promise<boolean>} Whether this call recorded it.
    */
   async consume(key, retainUntilSecs) {
-    const now = Math.floor(Date.now() / 1000);
     try {
+      // The database's clock, which every instance sharing the table agrees on.
       await this.pool.query(
-        "DELETE FROM brz_x402_replay WHERE user_id = ? AND retain_until < ?",
-        [this.identity, now]
+        "DELETE FROM brz_x402_replay WHERE user_id = ? AND retain_until < UNIX_TIMESTAMP()",
+        [this.identity]
       );
       // A plain insert, not `ON DUPLICATE KEY UPDATE`: mysql2 sets
       // `CLIENT_FOUND_ROWS`, under which a duplicate also reports one affected

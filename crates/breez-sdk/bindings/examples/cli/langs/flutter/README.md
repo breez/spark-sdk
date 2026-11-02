@@ -111,6 +111,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `token-allowances <subcommand>` — Token allowance commands (create, revoke, list)
 - `webhooks <subcommand>` — Webhook commands (register, unregister, list)
 - `stable-balance <subcommand>` — Stable balance commands (get, set, unset)
+- `x402 <subcommand>`: x402 commands (fetch)
 
 ## Passkey
 

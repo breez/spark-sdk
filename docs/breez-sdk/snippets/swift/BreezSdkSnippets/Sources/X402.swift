@@ -26,9 +26,9 @@ func payHttpRequest(x402: X402, paymentRequiredHeader: String) async throws {
             completionTimeoutSecs: nil
         ))
 
-    if let paymentSignature = response.paymentSignature {
-        // Send the request again with a PAYMENT-SIGNATURE header
-        print("PAYMENT-SIGNATURE: \(paymentSignature)")
+    if response.paymentSignature != nil {
+        // Send the request again with it as the PAYMENT-SIGNATURE header.
+        // It proves the payment, so don't log it.
     } else {
         // Still in flight: paying the same challenge again picks it up
         print("Payment status: \(response.status)")
@@ -53,9 +53,8 @@ func payMcpToolCall(x402: X402, structuredContent: String) async throws {
             completionTimeoutSecs: nil
         ))
 
-    if let paymentSignature = response.paymentSignature {
+    if response.paymentSignature != nil {
         // Call the tool again with this JSON in params._meta["x402/payment"]
-        print("Payment: \(paymentSignature)")
     }
     // ANCHOR_END: pay-mcp-tool-call
 }
@@ -97,18 +96,32 @@ func settlePayment(x402: X402, paymentSignatureHeader: String) async throws {
     let response = try await x402.settle(
         request: SettleX402Request(
             // The PAYMENT-SIGNATURE header of the request
-            payment: paymentSignatureHeader,
+            paymentSignature: paymentSignatureHeader,
             request: request,
-            boundNames: ["accept"]
+            boundNames: ["accept"],
+            // The same price and lifetime the challenge was created with
+            amounts: [X402PaymentAmount.lightning(amountSats: 21)],
+            maxTimeoutSecs: nil
         ))
 
-    // Send the PAYMENT-RESPONSE header either way
+    // Send the PAYMENT-RESPONSE header whatever the status
     print("PAYMENT-RESPONSE: \(response.paymentResponse)")
-    if response.success {
+    switch response.status {
+    case .settled:
         // Serve the resource
-    } else {
+        break
+    case .pending:
+        // Respond with status 402 and no new challenge
+        break
+    case .malformed:
+        // Respond with status 400
+        break
+    case .refused:
         // Respond with status 402 and a new challenge
-        print("Payment refused: \(String(describing: response.errorReason))")
+        break
+    case .error:
+        // Respond with status 500
+        break
     }
     // ANCHOR_END: settle-payment
 }

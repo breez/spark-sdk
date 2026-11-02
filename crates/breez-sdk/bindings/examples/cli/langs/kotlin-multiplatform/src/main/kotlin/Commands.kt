@@ -118,7 +118,7 @@ fun readlineWithDefault(reader: LineReader, prompt: String, defaultVal: String):
  */
 class FlagParser(args: List<String>) {
     private val flags = mutableMapOf<String, String?>()
-    private val multiFlags = mutableMapOf<String, MutableList<String>>()
+    private val values = mutableListOf<Pair<String, String>>()
     val positional = mutableListOf<String>()
 
     init {
@@ -129,7 +129,7 @@ class FlagParser(args: List<String>) {
                 val key = arg.substring(2)
                 if (i + 1 < args.size && !args[i + 1].startsWith("--")) {
                     flags[key] = args[i + 1]
-                    multiFlags.getOrPut(key) { mutableListOf() }.add(args[i + 1])
+                    values.add(key to args[i + 1])
                     i += 2
                 } else {
                     flags[key] = null
@@ -139,7 +139,7 @@ class FlagParser(args: List<String>) {
                 val key = arg.substring(1)
                 if (i + 1 < args.size && !args[i + 1].startsWith("-")) {
                     flags[key] = args[i + 1]
-                    multiFlags.getOrPut(key) { mutableListOf() }.add(args[i + 1])
+                    values.add(key to args[i + 1])
                     i += 2
                 } else {
                     flags[key] = null
@@ -176,12 +176,9 @@ class FlagParser(args: List<String>) {
         return names.any { it in flags }
     }
 
-    fun getAll(vararg names: String): List<String> {
-        for (name in names) {
-            multiFlags[name]?.let { return it }
-        }
-        return emptyList()
-    }
+    /** Every value given under any of [names], in command-line order. */
+    fun getAll(vararg names: String): List<String> =
+        values.filter { it.first in names }.map { it.second }
 
     fun getBool(vararg names: String): Boolean? {
         for (name in names) {

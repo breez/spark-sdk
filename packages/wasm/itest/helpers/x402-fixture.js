@@ -80,7 +80,8 @@ async function serve(req, res, charge) {
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
     headers.append(req.rawHeaders[i], req.rawHeaders[i + 1])
   }
-  const request = new Request(new URL(req.url, 'http://fixture.invalid'), {
+  // Appended, not resolved: a path starting `//` would otherwise replace the host.
+  const request = new Request(`http://fixture.invalid${req.url}`, {
     method: req.method,
     headers,
     body: body.length > 0 ? body : undefined

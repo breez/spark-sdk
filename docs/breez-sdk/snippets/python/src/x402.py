@@ -9,6 +9,7 @@ from breez_sdk_spark import (
     X402Header,
     X402PaymentAmount,
     X402Request,
+    X402SettleStatus,
 )
 
 
@@ -41,8 +42,9 @@ async def pay_http_request(x402: X402, payment_required_header: str):
         )
 
         if response.payment_signature is not None:
-            # Send the request again with a PAYMENT-SIGNATURE header
-            logging.debug(f"PAYMENT-SIGNATURE: {response.payment_signature}")
+            # Send the request again with it as the PAYMENT-SIGNATURE header.
+            # It proves the payment, so don't log it.
+            pass
         else:
             # Still in flight: paying the same challenge again picks it up
             logging.debug(f"Payment status: {response.status}")
@@ -73,7 +75,7 @@ async def pay_mcp_tool_call(x402: X402, structured_content: str):
 
         if response.payment_signature is not None:
             # Call the tool again with this JSON in params._meta["x402/payment"]
-            logging.debug(f"Payment: {response.payment_signature}")
+            pass
     except Exception as error:
         logging.error(error)
         raise
@@ -123,20 +125,32 @@ async def settle_payment(x402: X402, payment_signature_header: str):
         response = await x402.settle(
             request=SettleX402Request(
                 # The PAYMENT-SIGNATURE header of the request
-                payment=payment_signature_header,
+                payment_signature=payment_signature_header,
                 request=request,
                 bound_names=["accept"],
+                # The same price and lifetime the challenge was created with
+                amounts=[X402PaymentAmount.LIGHTNING(amount_sats=21)],
+                max_timeout_secs=None,
             )
         )
 
-        # Send the PAYMENT-RESPONSE header either way
+        # Send the PAYMENT-RESPONSE header whatever the status
         logging.debug(f"PAYMENT-RESPONSE: {response.payment_response}")
-        if response.success:
+        if response.status == X402SettleStatus.SETTLED:
             # Serve the resource
             pass
-        else:
+        elif response.status == X402SettleStatus.PENDING:
+            # Respond with status 402 and no new challenge
+            pass
+        elif response.status == X402SettleStatus.MALFORMED:
+            # Respond with status 400
+            pass
+        elif response.status == X402SettleStatus.REFUSED:
             # Respond with status 402 and a new challenge
-            logging.debug(f"Payment refused: {response.error_reason}")
+            pass
+        elif response.status == X402SettleStatus.ERROR:
+            # Respond with status 500
+            pass
     except Exception as error:
         logging.error(error)
         raise

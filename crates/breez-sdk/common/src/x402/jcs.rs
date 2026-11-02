@@ -1,9 +1,12 @@
 //! JSON Canonicalization Scheme (RFC 8785) over `serde_json::Value`.
 
-use std::fmt::{self, Write};
+use std::{
+    collections::HashSet,
+    fmt::{self, Write},
+};
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde_json::{Map, Number, Value};
+use serde_json::{Number, Value};
 
 /// 2^53 - 1. Integers beyond it have no exact IEEE-754 double, so two distinct
 /// literals could share a canonical form. They are rejected rather than rounded.
@@ -21,14 +24,11 @@ impl fmt::Display for JcsError {
 /// Parses JSON text, rejecting duplicate object member names, which RFC 8785
 /// places outside its data model. `serde_json` alone keeps the last duplicate.
 pub(crate) fn parse_strict(text: &str) -> Result<Value, JcsError> {
+    let invalid = |e: serde_json::Error| JcsError(format!("invalid JSON: {e}"));
     let mut deserializer = serde_json::Deserializer::from_str(text);
-    let value = StrictValue::deserialize(&mut deserializer)
-        .map_err(|e| JcsError(format!("invalid JSON: {e}")))?
-        .0;
-    deserializer
-        .end()
-        .map_err(|e| JcsError(format!("invalid JSON: {e}")))?;
-    Ok(value)
+    NoDuplicates::deserialize(&mut deserializer).map_err(invalid)?;
+    deserializer.end().map_err(invalid)?;
+    serde_json::from_str(text).map_err(invalid)
 }
 
 /// Serializes a value as RFC 8785 canonical JSON.
@@ -160,71 +160,64 @@ fn format_es_number(f: f64) -> String {
     out
 }
 
-struct StrictValue(Value);
+/// A JSON value read only to refuse duplicate member names. The value itself
+/// is parsed separately, so numbers keep `serde_json`'s own representation.
+struct NoDuplicates;
 
-impl<'de> Deserialize<'de> for StrictValue {
+impl<'de> Deserialize<'de> for NoDuplicates {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(StrictVisitor).map(StrictValue)
+        deserializer.deserialize_any(NoDuplicatesVisitor)
     }
 }
 
-struct StrictVisitor;
+struct NoDuplicatesVisitor;
 
-impl<'de> Visitor<'de> for StrictVisitor {
-    type Value = Value;
+impl<'de> Visitor<'de> for NoDuplicatesVisitor {
+    type Value = NoDuplicates;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("a JSON value")
     }
 
-    fn visit_bool<E>(self, v: bool) -> Result<Value, E> {
-        Ok(Value::Bool(v))
+    fn visit_bool<E>(self, _: bool) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_i64<E>(self, v: i64) -> Result<Value, E> {
-        Ok(Value::Number(v.into()))
+    fn visit_i64<E>(self, _: i64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_u64<E>(self, v: u64) -> Result<Value, E> {
-        Ok(Value::Number(v.into()))
+    fn visit_u64<E>(self, _: u64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
-        Number::from_f64(v)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("non-finite number"))
+    fn visit_f64<E>(self, _: f64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_str<E>(self, v: &str) -> Result<Value, E> {
-        Ok(Value::String(v.to_string()))
+    fn visit_str<E>(self, _: &str) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_string<E>(self, v: String) -> Result<Value, E> {
-        Ok(Value::String(v))
+    fn visit_unit<E>(self) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates)
     }
 
-    fn visit_unit<E>(self) -> Result<Value, E> {
-        Ok(Value::Null)
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<NoDuplicates, A::Error> {
+        while seq.next_element::<NoDuplicates>()?.is_some() {}
+        Ok(NoDuplicates)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
-        let mut items = Vec::new();
-        while let Some(StrictValue(item)) = seq.next_element()? {
-            items.push(item);
-        }
-        Ok(Value::Array(items))
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        let mut out = Map::new();
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<NoDuplicates, A::Error> {
+        let mut keys = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if out.contains_key(&key) {
+            if keys.contains(&key) {
                 return Err(de::Error::custom(format!("duplicate member {key:?}")));
             }
-            let StrictValue(value) = map.next_value()?;
-            out.insert(key, value);
+            map.next_value::<NoDuplicates>()?;
+            keys.insert(key);
         }
-        Ok(Value::Object(out))
+        Ok(NoDuplicates)
     }
 }
 
@@ -257,6 +250,27 @@ mod tests {
     }
 
     #[macros::test_all]
+    fn canonicalizes_parsed_numbers() {
+        // RFC 8785 section 3.2.2.3 less its unsafe integer 1E30, then a literal
+        // whose nearest double a fast float parser misses by one unit.
+        let cases = [
+            (
+                "[333333333.33333329,4.50,2e-3,0.000000000000000000000000001]",
+                "[333333333.3333333,4.5,0.002,1e-27]",
+            ),
+            ("[1.0715660391465826e-75]", "[1.0715660391465826e-75]"),
+        ];
+        for (input, expected) in cases {
+            let value = parse_strict(input).unwrap();
+            assert_eq!(
+                canonicalize(&value).unwrap(),
+                expected,
+                "canonicalizing {input}"
+            );
+        }
+    }
+
+    #[macros::test_all]
     fn sorts_members_by_utf16() {
         // U+1F600 encodes as a surrogate pair (0xD83D...), which sorts before
         // U+FB33 (0xFB33) in UTF-16 even though it sorts after it in UTF-8.
@@ -279,6 +293,7 @@ mod tests {
     #[macros::test_all]
     fn rejects_outside_data_model() {
         assert!(parse_strict(r#"{"a":1,"a":2}"#).is_err());
+        assert!(parse_strict(r#"[{"b":{"a":1,"a":2}}]"#).is_err());
         assert!(parse_strict(r#""\ud800""#).is_err());
         assert!(canonicalize(&parse_strict("9007199254740993").unwrap()).is_err());
         assert!(canonicalize(&parse_strict("1e300").unwrap()).is_err());

@@ -48,6 +48,18 @@
     },
     {
       "files": [
+        "*.test.js"
+      ],
+      "env": {
+        "node": true
+      },
+      "globals": {
+        "AbortController": "readonly",
+        "fetch": "readonly"
+      }
+    },
+    {
+      "files": [
         "*/tests/timezone-scenario.cjs"
       ],
       "rules": {

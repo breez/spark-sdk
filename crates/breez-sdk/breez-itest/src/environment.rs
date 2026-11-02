@@ -15,6 +15,7 @@ use breez_sdk_spark::{
 };
 use rstest::fixture;
 use spark_itest::mempool::MempoolClient;
+use spark_wallet::{DefaultSigner, SparkSignerAdapter, SparkWallet, SparkWalletConfig};
 
 use crate::SdkInstance;
 use crate::faucet::{FaucetConfig, RegtestFaucet};
@@ -114,6 +115,20 @@ impl Environment {
                     .await
             }
         }
+    }
+
+    /// A Spark wallet outside the SDK, with a fresh identity, on this
+    /// environment's operators and SSP: another Spark client.
+    pub async fn spark_wallet(&self) -> Result<SparkWallet> {
+        let config = match self {
+            Environment::Deployed => {
+                SparkWalletConfig::default_config(spark_wallet::Network::Regtest)
+            }
+            Environment::Local(stack) => stack.spark_wallet_config().await?,
+        };
+        let seed: [u8; 32] = rand::random();
+        let signer = Arc::new(DefaultSigner::new(&seed, spark_wallet::Network::Regtest)?);
+        Ok(SparkWallet::connect(config, Arc::new(SparkSignerAdapter::new(signer))).await?)
     }
 
     /// A wallet whose chain service is `wrap` applied to the one it would have

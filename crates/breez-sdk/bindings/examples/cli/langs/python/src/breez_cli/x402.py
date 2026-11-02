@@ -2,8 +2,9 @@ import argparse
 import asyncio
 import base64
 import http.client
+import json
 from collections import namedtuple
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from breez_sdk_spark import (
     PayX402Request,
@@ -12,8 +13,6 @@ from breez_sdk_spark import (
     X402PaymentStatus,
     X402Request,
 )
-
-from breez_cli.serialization import print_value
 
 # x402 subcommand names (used for REPL completion)
 X402_COMMAND_NAMES = [
@@ -26,15 +25,12 @@ PAYMENT_RESPONSE_HEADER = "payment-response"
 # Times to pay the same challenge again while its payment is pending. Fetching
 # again instead would bring a new challenge with a new invoice to pay.
 PENDING_RETRIES = 3
-# Times to send the paid request again while the server answers 402 without a
-# new challenge, meaning the payment may still settle.
+# Times to send the paid request again while the server answers that the
+# payment may still settle.
 SETTLE_RETRIES = 5
 SETTLE_RETRY_DELAY_SECS = 2
 REQUEST_TIMEOUT_SECS = 60
-MAX_REDIRECTS = 10
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
-# Dropped when a redirect leaves the origin, as reqwest does.
-SENSITIVE_HEADERS = ("authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate")
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
 # Response headers have lowercased names.
@@ -60,13 +56,15 @@ def _build_fetch_parser():
 
 async def _handle_fetch(sdk, args):
     method = args.method
-    url = args.url
     body = args.body
+    if method == "GET" and body is not None:
+        raise ValueError("a GET request has no body: use -X POST to send one")
     # The server hashes the headers it binds, so send every header
     # explicitly: anything the HTTP client added on its own would be
     # missing from the hash computed here.
     headers = _parse_headers(args.headers or [])
     headers.setdefault("accept", "*/*")
+    url = _as_sent(args.url)
 
     response = await _send(method, url, headers, body)
     if response.status != 402:
@@ -95,7 +93,11 @@ async def _handle_fetch(sdk, args):
             break
         print("Payment is pending, waiting for it to complete...")
         paid = await x402.pay(request=request)
-    print_value(paid)
+    # The payment signature proves the payment, so it isn't printed.
+    print(
+        f"x402 payment {paid.payment.id} is {paid.status.name}: "
+        f"{paid.payment.amount} sats, fee {paid.payment.fees} sats"
+    )
     if paid.payment_signature is None:
         print("Payment is still pending. Check its status with list-payments.")
         return
@@ -103,7 +105,7 @@ async def _handle_fetch(sdk, args):
     headers[PAYMENT_SIGNATURE_HEADER] = paid.payment_signature
     response = await _send(method, url, headers, body)
     for _ in range(SETTLE_RETRIES):
-        if response.status != 402 or PAYMENT_REQUIRED_HEADER in response.headers:
+        if not _settlement_pending(response):
             break
         print("Payment is not settled yet, sending it again...")
         await asyncio.sleep(SETTLE_RETRY_DELAY_SECS)
@@ -128,34 +130,26 @@ async def _send(method, url, headers, body):
         data = body.encode() if body is not None else b""
     else:
         raise ValueError(f"unsupported method {method}: use GET or POST")
-    return await asyncio.to_thread(_send_following, method, url, headers, data)
+    response = await asyncio.to_thread(_send_once, method, url, headers, data)
+    if response.status in REDIRECT_STATUSES:
+        location = response.headers.get("location", "<no location>")
+        raise ValueError(
+            f"endpoint returned a {response.status} redirect to {location}, "
+            "which this client does not follow"
+        )
+    return response
 
 
-def _send_following(method, url, headers, data):
-    location = None
-    for _ in range(MAX_REDIRECTS + 1):
-        response = _send_once(method, url, headers, data)
-        if response.status not in REDIRECT_STATUSES:
-            return response
-        location = response.headers.get("location")
-        if location is None:
-            break
-        next_url = urljoin(url, location)
-        if _origin(next_url) != _origin(url):
-            headers = {name: value for name, value in headers.items() if name not in SENSITIVE_HEADERS}
-        url = next_url
-        if response.status in (301, 302, 303):
-            method, data = "GET", None
-            headers = {name: value for name, value in headers.items() if name != "content-length"}
-    raise ValueError(
-        f"endpoint returned a {response.status} redirect to {location or '<no location>'}, "
-        "which this client does not follow"
-    )
-
-
-def _origin(url):
+# The URL as http.client sends it: lowercase scheme and host, no default port,
+# "/" for no path, and no fragment.
+def _as_sent(url):
     parts = urlsplit(url)
-    return parts.scheme, parts.hostname, parts.port or DEFAULT_PORTS.get(parts.scheme)
+    host = parts.hostname or ""
+    netloc = f"[{host}]" if ":" in host else host
+    if parts.port not in (None, DEFAULT_PORTS.get(parts.scheme)):
+        netloc += f":{parts.port}"
+    userinfo, at, _ = parts.netloc.rpartition("@")
+    return urlunsplit((parts.scheme, userinfo + at + netloc, parts.path or "/", parts.query, ""))
 
 
 def _send_once(method, url, headers, data):
@@ -188,6 +182,19 @@ def _read_response(response):
     headers = {name.lower(): value for name, value in response.headers.items()}
     body = response.read().decode("utf-8", errors="replace")
     return HttpResponse(status=response.status, headers=headers, body=body)
+
+
+# Whether the server answered that the payment may still settle: a 402 with no
+# new challenge and the core x402 specification's non-final reason.
+def _settlement_pending(response):
+    settlement = response.headers.get(PAYMENT_RESPONSE_HEADER)
+    if response.status != 402 or PAYMENT_REQUIRED_HEADER in response.headers or settlement is None:
+        return False
+    try:
+        decoded = json.loads(base64.b64decode(settlement, validate=True).decode("utf-8"))
+    except ValueError:
+        return False
+    return isinstance(decoded, dict) and decoded.get("errorReason") == "settlement_pending"
 
 
 def _print_response(response):

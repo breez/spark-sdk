@@ -1,7 +1,6 @@
 'use strict'
 
 const { Command, InvalidArgumentError } = require('commander')
-const { printValue } = require('./serialization')
 
 const PAYMENT_REQUIRED_HEADER = 'payment-required'
 const PAYMENT_SIGNATURE_HEADER = 'payment-signature'
@@ -9,10 +8,17 @@ const PAYMENT_RESPONSE_HEADER = 'payment-response'
 // Times to pay the same challenge again while its payment is pending. Fetching
 // again instead would bring a new challenge with a new invoice to pay.
 const PENDING_RETRIES = 3
-// Times to send the paid request again while the server answers 402 without a
-// new challenge, meaning the payment may still settle.
+// Times to send the paid request again while the server answers that the
+// payment may still settle.
 const SETTLE_RETRIES = 5
 const SETTLE_RETRY_DELAY_MS = 2000
+// Headers fetch adds to a request that does not set them.
+const FETCH_DEFAULT_HEADERS = [
+  ['accept', '*/*'],
+  ['accept-language', '*'],
+  ['accept-encoding', 'gzip, deflate'],
+  ['user-agent', 'node']
+]
 
 /**
  * Register all x402 subcommands on the given commander program.
@@ -47,17 +53,25 @@ function registerX402Commands(program, getSdk) {
     })
 }
 
-async function handleFetch(sdk, url, options) {
+async function handleFetch(sdk, rawUrl, options) {
   const { method, maxAmountSats } = options
+  if (method === 'GET' && options.body !== undefined) {
+    throw new Error('a GET request has no body: use -X POST to send one')
+  }
+  const url = asSent(rawUrl)
   // Bytes rather than a string, so fetch adds no content-type of its own.
   const body = options.body !== undefined ? Buffer.from(options.body, 'utf8') : undefined
   // The server hashes the headers it binds, so send every header
   // explicitly: anything the HTTP client added on its own would be
   // missing from the hash computed here.
   const headers = parseHeaders(options.header ?? [])
-  if (!headers.has('accept')) {
-    headers.set('accept', '*/*')
+  for (const [name, value] of FETCH_DEFAULT_HEADERS) {
+    if (!headers.has(name)) {
+      headers.set(name, value)
+    }
   }
+  // fetch sends this value whatever the request sets.
+  headers.set('sec-fetch-mode', 'cors')
 
   let response = await send(method, url, headers, body)
   if (response.status !== 402) {
@@ -77,7 +91,7 @@ async function handleFetch(sdk, url, options) {
       method,
       url,
       headers: [...headers].map(([name, value]) => ({ name, value })),
-      body: body !== undefined ? Array.from(body) : undefined
+      body: body !== undefined ? new Uint8Array(body) : undefined
     },
     maxAmount: { type: 'lightning', amountSats: maxAmountSats },
     conversionOptions: undefined,
@@ -91,7 +105,11 @@ async function handleFetch(sdk, url, options) {
     console.log('Payment is pending, waiting for it to complete...')
     paid = await x402.pay(request)
   }
-  printValue(paid)
+  // The payment signature proves the payment, so it isn't printed.
+  console.log(
+    `x402 payment ${paid.payment.id} is ${paid.status}: ` +
+      `${paid.payment.amount} sats, fee ${paid.payment.fees} sats`
+  )
   if (paid.paymentSignature == null) {
     console.log('Payment is still pending. Check its status with list-payments.')
     return
@@ -100,7 +118,7 @@ async function handleFetch(sdk, url, options) {
   headers.set(PAYMENT_SIGNATURE_HEADER, paid.paymentSignature)
   response = await send(method, url, headers, body)
   for (let i = 0; i < SETTLE_RETRIES; i++) {
-    if (response.status !== 402 || response.headers.has(PAYMENT_REQUIRED_HEADER)) {
+    if (!settlementPending(response)) {
       break
     }
     console.log('Payment is not settled yet, sending it again...')
@@ -140,10 +158,11 @@ async function send(method, url, headers, body) {
   const response = await fetch(url, {
     method,
     headers: Object.fromEntries(headers),
-    body: method === 'POST' ? body : undefined
+    body,
+    // Redirects aren't followed: the payment then commits to exactly the
+    // request sent.
+    redirect: 'manual'
   })
-  // Redirects are followed. One that could not be (no usable location) is an
-  // error, as in the Rust client.
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     const location = response.headers.get('location') ?? '<no location>'
     throw new Error(
@@ -154,6 +173,32 @@ async function send(method, url, headers, body) {
     status: response.status,
     headers: response.headers,
     body: await response.text()
+  }
+}
+
+// The URL as fetch sends it: `http://host` goes out as `http://host/`, and a
+// fragment never goes out.
+function asSent(url) {
+  const parsed = new URL(url)
+  parsed.hash = ''
+  return parsed.href
+}
+
+// Whether the server answered that the payment may still settle: a 402 with no
+// new challenge and the core x402 specification's non-final reason.
+function settlementPending(response) {
+  if (response.status !== 402 || response.headers.has(PAYMENT_REQUIRED_HEADER)) {
+    return false
+  }
+  const settlement = response.headers.get(PAYMENT_RESPONSE_HEADER)
+  const decoded = settlement !== null ? decodeBase64(settlement) : undefined
+  if (decoded === undefined) {
+    return false
+  }
+  try {
+    return JSON.parse(decoded)?.errorReason === 'settlement_pending'
+  } catch {
+    return false
   }
 }
 

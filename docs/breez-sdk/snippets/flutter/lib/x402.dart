@@ -27,10 +27,9 @@ Future<void> payHttpRequest(X402 x402, String paymentRequiredHeader) async {
     ),
   );
 
-  String? paymentSignature = response.paymentSignature;
-  if (paymentSignature != null) {
-    // Send the request again with a PAYMENT-SIGNATURE header
-    print("PAYMENT-SIGNATURE: $paymentSignature");
+  if (response.paymentSignature != null) {
+    // Send the request again with it as the PAYMENT-SIGNATURE header.
+    // It proves the payment, so don't log it.
   } else {
     // Still in flight: paying the same challenge again picks it up
     print("Payment status: ${response.status}");
@@ -56,10 +55,8 @@ Future<void> payMcpToolCall(X402 x402, String structuredContent) async {
     ),
   );
 
-  String? paymentSignature = response.paymentSignature;
-  if (paymentSignature != null) {
+  if (response.paymentSignature != null) {
     // Call the tool again with this JSON in params._meta["x402/payment"]
-    print("Payment: $paymentSignature");
   }
   // ANCHOR_END: pay-mcp-tool-call
 }
@@ -102,19 +99,33 @@ Future<void> settlePayment(X402 x402, String paymentSignatureHeader) async {
   SettleX402Response response = await x402.settle(
     request: SettleX402Request(
       // The PAYMENT-SIGNATURE header of the request
-      payment: paymentSignatureHeader,
+      paymentSignature: paymentSignatureHeader,
       request: request,
       boundNames: ["accept"],
+      // The same price and lifetime the challenge was created with
+      amounts: [X402PaymentAmount.lightning(amountSats: BigInt.from(21))],
+      maxTimeoutSecs: null,
     ),
   );
 
-  // Send the PAYMENT-RESPONSE header either way
+  // Send the PAYMENT-RESPONSE header whatever the status
   print("PAYMENT-RESPONSE: ${response.paymentResponse}");
-  if (response.success) {
-    // Serve the resource
-  } else {
-    // Respond with status 402 and a new challenge
-    print("Payment refused: ${response.errorReason}");
+  switch (response.status) {
+    case X402SettleStatus.settled:
+      // Serve the resource
+      break;
+    case X402SettleStatus.pending:
+      // Respond with status 402 and no new challenge
+      break;
+    case X402SettleStatus.malformed:
+      // Respond with status 400
+      break;
+    case X402SettleStatus.refused:
+      // Respond with status 402 and a new challenge
+      break;
+    case X402SettleStatus.error:
+      // Respond with status 500
+      break;
   }
   // ANCHOR_END: settle-payment
 }

@@ -2,8 +2,9 @@ use thiserror::Error;
 
 pub type X402Result<T> = Result<T, X402Error>;
 
-/// Failure reasons from the x402 `exact` on `lnbtc` specification. The string
-/// form is the spec's stable vocabulary, so it can be logged or reported as is.
+/// Failure reasons from the x402 `exact` on `lnbtc` specification and the core
+/// x402 specification. The string form is the specs' stable vocabulary, so it
+/// can be logged or reported as is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum X402ErrorReason {
     InvalidX402Version,
@@ -47,12 +48,12 @@ pub enum X402ErrorReason {
     PreimageLength,
     PreimageHashMismatch,
     DuplicateSettlement,
-    /// The accepted terms carry no valid quote from this receiver.
-    InvalidQuote,
-    /// The invoice is not yet settled to the receiver. May be retried.
-    InvoiceNotSettled,
-    /// The receiver could not be asked whether the invoice is settled. May be retried.
-    ReceiverUnavailable,
+    /// The receipt of a valid payment isn't confirmed yet. Not final: the same
+    /// payment may be sent again.
+    SettlementPending,
+    /// The server couldn't settle because of its own fault. The payment stays
+    /// unused.
+    UnexpectedSettleError,
 }
 
 impl X402ErrorReason {
@@ -99,9 +100,8 @@ impl X402ErrorReason {
             Self::PreimageLength => "invalid_exact_lnbtc_preimage_length",
             Self::PreimageHashMismatch => "invalid_exact_lnbtc_preimage_hash_mismatch",
             Self::DuplicateSettlement => "duplicate_settlement",
-            Self::InvalidQuote => "invalid_exact_lnbtc_quote",
-            Self::InvoiceNotSettled => "exact_lnbtc_invoice_not_settled",
-            Self::ReceiverUnavailable => "exact_lnbtc_receiver_unavailable",
+            Self::SettlementPending => "settlement_pending",
+            Self::UnexpectedSettleError => "unexpected_settle_error",
         }
     }
 }
