@@ -58,20 +58,20 @@ class TreeStoreMigrationManager {
       const migrations = this._getMigrations(identity);
 
       if (currentVersion >= migrations.length) {
-        this._log("info", `Tree store database is up to date (version ${currentVersion})`);
+        this._log("INFO", `Tree store database is up to date (version ${currentVersion})`);
         await client.query("COMMIT");
         return;
       }
 
       this._log(
-        "info",
+        "INFO",
         `Migrating tree store database from version ${currentVersion} to ${migrations.length}`
       );
 
       for (let i = currentVersion; i < migrations.length; i++) {
         const migration = migrations[i];
         const version = i + 1;
-        this._log("debug", `Running tree store migration ${version}: ${migration.name}`);
+        this._log("DEBUG", `Running tree store migration ${version}: ${migration.name}`);
 
         for (const sql of migration.sql) {
           await client.query(sql);
@@ -84,7 +84,7 @@ class TreeStoreMigrationManager {
       }
 
       await client.query("COMMIT");
-      this._log("info", "Tree store database migration completed successfully");
+      this._log("INFO", "Tree store database migration completed successfully");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw new TreeStoreError(

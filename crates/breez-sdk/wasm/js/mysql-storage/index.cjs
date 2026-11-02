@@ -513,14 +513,14 @@ class MysqlStorage {
           shouldEmit = true;
         } else if (stored === next) {
           this._log(
-            "debug",
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           await this._runPaymentUpsert(conn, payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
           this._log(
-            "warn",
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;
@@ -1530,7 +1530,7 @@ class MysqlStorage {
 
         if (deleteResult.affectedRows === 0) {
           const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
-          this._log("warn", msg);
+          this._log("WARN", msg);
         }
 
         await conn.query(

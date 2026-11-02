@@ -399,7 +399,7 @@ class MysqlTokenStore {
           const metadata = _metadataFor(tokenOutputs.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;
@@ -647,7 +647,7 @@ class MysqlTokenStore {
           const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;

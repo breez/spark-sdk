@@ -50,7 +50,7 @@ class SessionStoreMigrationManager {
 
       if (currentVersion >= migrations.length) {
         this._log(
-          "info",
+          "INFO",
           `Session store database is up to date (version ${currentVersion})`
         );
         await client.query("COMMIT");
@@ -58,7 +58,7 @@ class SessionStoreMigrationManager {
       }
 
       this._log(
-        "info",
+        "INFO",
         `Migrating session store database from version ${currentVersion} to ${migrations.length}`
       );
 
@@ -66,7 +66,7 @@ class SessionStoreMigrationManager {
         const migration = migrations[i];
         const version = i + 1;
         this._log(
-          "debug",
+          "DEBUG",
           `Running session store migration ${version}: ${migration.name}`
         );
 
@@ -82,7 +82,7 @@ class SessionStoreMigrationManager {
 
       await client.query("COMMIT");
       this._log(
-        "info",
+        "INFO",
         "Session store database migration completed successfully"
       );
     } catch (error) {

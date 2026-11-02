@@ -370,14 +370,14 @@ class SqliteStorage {
           shouldEmit = true;
         } else if (stored === next) {
           this._log(
-            "debug",
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           this._runPaymentUpsert(payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
           this._log(
-            "warn",
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;

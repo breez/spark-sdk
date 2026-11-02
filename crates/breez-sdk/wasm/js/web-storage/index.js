@@ -27,7 +27,7 @@ class MigrationManager {
     const transaction = event.target.transaction;
 
     this._log(
-      "info",
+      "INFO",
       `Upgrading IndexedDB from version ${oldVersion} to ${newVersion}`
     );
 
@@ -35,14 +35,14 @@ class MigrationManager {
       for (let i = oldVersion; i < newVersion; i++) {
         const migration = this.migrations[i];
         if (migration) {
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
           migration.upgrade(db, transaction);
         }
       }
-      this._log("info", `Database migration completed successfully`);
+      this._log("INFO", `Database migration completed successfully`);
     } catch (error) {
       this._log(
-        "error",
+        "ERROR",
         `Migration failed at version ${oldVersion}: ${error.message}`
       );
       throw new this.StorageError(
@@ -142,7 +142,7 @@ class MigrationManager {
               }
             });
 
-            this._log("info", `Migrated ${updated} payment records to BigInt format`);
+            this._log("INFO", `Migrated ${updated} payment records to BigInt format`);
           };
         },
       },
@@ -1127,14 +1127,14 @@ class IndexedDBStorage {
           shouldEmit = true;
         } else if (stored === next) {
           this._log(
-            "debug",
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           shouldPersist = true;
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
           this._log(
-            "warn",
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldPersist = false;

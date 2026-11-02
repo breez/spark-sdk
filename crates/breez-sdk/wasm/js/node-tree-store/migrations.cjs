@@ -26,12 +26,12 @@ class TreeStoreMigrationManager {
     targetVersion = targetVersion ?? this.migrations.length;
 
     if (currentVersion >= targetVersion) {
-      this._log("info", `Tree store is up to date (version ${currentVersion})`);
+      this._log("INFO", `Tree store is up to date (version ${currentVersion})`);
       return;
     }
 
     this._log(
-      "info",
+      "INFO",
       `Migrating tree store from version ${currentVersion} to ${targetVersion}`
     );
 
@@ -39,7 +39,7 @@ class TreeStoreMigrationManager {
       const transaction = this.db.transaction(() => {
         for (let i = currentVersion; i < targetVersion; i++) {
           const migration = this.migrations[i];
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
 
           if (Array.isArray(migration.sql)) {
             migration.sql.forEach((sql) => this.db.exec(sql));
@@ -51,7 +51,7 @@ class TreeStoreMigrationManager {
       });
 
       transaction();
-      this._log("info", `Tree store migration completed successfully`);
+      this._log("INFO", `Tree store migration completed successfully`);
     } catch (error) {
       throw new this.TreeStoreError(
         `Migration failed at version ${currentVersion}: ${error.message}`,
@@ -83,7 +83,7 @@ class TreeStoreMigrationManager {
       return row.version || 0;
     } catch (error) {
       this._log(
-        "warn",
+        "WARN",
         `Failed to get tree store version, assuming 0: ${error.message}`
       );
       return 0;

@@ -77,7 +77,6 @@ impl ConsoleLogger {
 
     pub fn log(&self, entry: LogEntry) {
         let LogEntry { line, level, .. } = entry;
-        let level = level.to_ascii_uppercase();
         let text = JsValue::from(format!("[{level}] {line}"));
         match level.as_str() {
             "ERROR" => console::error_1(&text),

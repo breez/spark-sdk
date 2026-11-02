@@ -21,12 +21,12 @@ class MigrationManager {
     targetVersion = targetVersion ?? this.migrations.length;
 
     if (currentVersion >= targetVersion) {
-      this._log("info", `Database is up to date (version ${currentVersion})`);
+      this._log("INFO", `Database is up to date (version ${currentVersion})`);
       return;
     }
 
     this._log(
-      "info",
+      "INFO",
       `Migrating database from version ${currentVersion} to ${targetVersion}`
     );
 
@@ -34,7 +34,7 @@ class MigrationManager {
       const transaction = this.db.transaction(() => {
         for (let i = currentVersion; i < targetVersion; i++) {
           const migration = this.migrations[i];
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
 
           if (Array.isArray(migration.sql)) {
             migration.sql.forEach((sql) => this.db.exec(sql));
@@ -46,7 +46,7 @@ class MigrationManager {
       });
 
       transaction();
-      this._log("info", `Database migration completed successfully`);
+      this._log("INFO", `Database migration completed successfully`);
     } catch (error) {
       throw new this.StorageError(
         `Migration failed at version ${currentVersion}: ${error.message}`,
@@ -64,7 +64,7 @@ class MigrationManager {
       return row.user_version || 0;
     } catch (error) {
       this._log(
-        "warn",
+        "WARN",
         `Failed to get database version, assuming 0: ${error.message}`
       );
       return 0;
