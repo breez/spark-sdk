@@ -20,10 +20,15 @@ use crate::{
 
 const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
 
+/// The longest the SDK leaves a pending payment to the offset-based sync before
+/// it re-fetches the payment.
+const MAX_RECONCILE_AGE_SECS: u64 = 60;
+
 pub(crate) struct SparkSyncService {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     event_emitter: Arc<EventEmitter>,
+    reconcile_age_secs: u64,
 }
 
 impl SparkSyncService {
@@ -36,7 +41,15 @@ impl SparkSyncService {
             spark_wallet,
             storage,
             event_emitter,
+            reconcile_age_secs: MAX_RECONCILE_AGE_SECS,
         }
+    }
+
+    /// Re-fetches a pending payment once it is one sync interval old, at most a
+    /// minute: until then the SDK picks it up in its next offset-based sync.
+    pub fn with_sync_interval_secs(mut self, sync_interval_secs: u32) -> Self {
+        self.reconcile_age_secs = u64::from(sync_interval_secs).min(MAX_RECONCILE_AGE_SECS);
+        self
     }
 
     pub async fn sync_payments(&self, initial_sync_complete: bool) -> Result<(), SdkError> {
@@ -143,14 +156,14 @@ impl SparkSyncService {
     /// Re-fetches all locally-stored pending payments from the server and updates
     /// any whose status has changed. This catches cases where a payment transitioned to
     /// failed/completed before the current sync offset window began.
-    /// Skip payments younger than 1 minute to avoid unnecessary server load.
+    /// Skips payments younger than the reconcile age to avoid unnecessary server load.
     async fn reconcile_pending_payments(&self, initial_sync_complete: bool) {
         let now = u64::from(breez_sdk_common::utils::now());
         let pending_payments = match self
             .storage
             .list_payments(StorageListPaymentsRequest {
                 status_filter: Some(vec![PaymentStatus::Pending]),
-                to_timestamp: Some(now.saturating_sub(60)),
+                to_timestamp: Some(now.saturating_sub(self.reconcile_age_secs)),
                 ..Default::default()
             })
             .await
