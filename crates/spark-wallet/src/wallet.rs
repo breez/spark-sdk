@@ -47,12 +47,13 @@ use spark::{
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpFundingStrategy, CpfpInput,
         DepositService, ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService,
-        InvoiceDescription, LightningReceivePayment, LightningSendPayment, LightningService,
-        PayLightningResult, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
-        QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap,
-        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
-        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
-        WatchtowerRecoveryService, WithdrawalAddress, WithdrawalAddressError,
+        InvoiceDescription, InvoicePreimage, LightningReceivePayment, LightningSendPayment,
+        LightningService, PayLightningResult, Preimage, PreimageRequestStatus,
+        PreimageRequestWithTransfer, QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError,
+        StaticDepositQuote, Swap, TimelockManager, TokenTransaction, Transfer, TransferId,
+        TransferObserver, TransferService, TransferStatus, TransferTokenOutput, TransferType,
+        UnilateralExitLeafFilter, Utxo, WatchtowerRecoveryService, WithdrawalAddress,
+        WithdrawalAddressError,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
@@ -787,6 +788,7 @@ impl SparkWallet {
         &self,
         amount_sat: u64,
         description: Option<InvoiceDescription>,
+        preimage: InvoicePreimage,
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
@@ -796,31 +798,9 @@ impl SparkWallet {
             .create_lightning_invoice(
                 amount_sat,
                 description,
-                None,
+                preimage,
                 expiry_secs,
                 include_spark_address,
-                public_key,
-            )
-            .await?)
-    }
-
-    /// Creates a HODL Lightning invoice. The SSP will hold the HTLC until
-    /// `claim_htlc` is called with the preimage matching the payment_hash.
-    pub async fn create_hodl_lightning_invoice(
-        &self,
-        amount_sat: u64,
-        description: Option<InvoiceDescription>,
-        payment_hash: Hash,
-        public_key: Option<PublicKey>,
-        expiry_secs: Option<u32>,
-    ) -> Result<LightningReceivePayment, SparkWalletError> {
-        Ok(self
-            .lightning_service
-            .create_hodl_lightning_invoice(
-                amount_sat,
-                description,
-                payment_hash,
-                expiry_secs,
                 public_key,
             )
             .await?)

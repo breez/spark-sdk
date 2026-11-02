@@ -310,7 +310,6 @@ async fn client_store_preimage_shares(
     .await?;
     spark::services::store_preimage_shares(
         &operator_pool,
-        &signer,
         config.split_secret_threshold,
         preimage,
         invoice_string,

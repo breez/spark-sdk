@@ -10,13 +10,14 @@ use crate::services::{
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
-    SecretToSplit, Signer, SparkSigner,
+    SparkSigner,
 };
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
+use crate::utils::secret_sharing;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
@@ -24,7 +25,7 @@ use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef};
 use platform_utils::time::SystemTime;
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,46 +49,85 @@ const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 /// against the swap's receiver.
 pub async fn store_preimage_shares(
     operator_pool: &OperatorPool,
-    signer: &Arc<dyn Signer>,
     split_secret_threshold: u32,
     preimage: &Preimage,
     invoice_string: String,
     identity_pubkey: PublicKey,
 ) -> Result<(), ServiceError> {
-    let shares = signer
-        .split_secret_with_proofs(
-            &SecretToSplit::Preimage(preimage.to_vec()),
-            split_secret_threshold,
-            operator_pool.len(),
-        )
-        .await?;
+    let encrypted_shares =
+        encrypt_preimage_shares(operator_pool, split_secret_threshold, preimage)?;
+    store_encrypted_preimage_shares(
+        operator_pool,
+        split_secret_threshold,
+        preimage.compute_hash(),
+        encrypted_shares,
+        invoice_string,
+        identity_pubkey,
+    )
+    .await
+}
 
-    // Build the encrypted preimage shares map for the V2 endpoint: one ECIES blob
-    // per operator, keyed by that operator's identifier.
-    let mut encrypted_shares: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    for (operator, share) in operator_pool.get_all_operators().zip(shares) {
-        let secret_share_proto = SecretShare {
-            secret_share: share.secret_share.share.to_bytes().to_vec(),
-            proofs: share
-                .proofs
-                .iter()
-                .map(|p| p.to_sec1_bytes().to_vec())
-                .collect(),
-        };
-        let proto_bytes = secret_share_proto.encode_to_vec();
-        let public_key_bytes = operator.identity_public_key.serialize_uncompressed();
-        let encrypted = ::utils::ecies::encrypt(&public_key_bytes, &proto_bytes)
+/// One ECIES-encrypted share of `preimage` per operator, keyed by the operator's
+/// identifier.
+fn encrypt_preimage_shares(
+    operator_pool: &OperatorPool,
+    split_secret_threshold: u32,
+    preimage: &Preimage,
+) -> Result<HashMap<String, Vec<u8>>, ServiceError> {
+    let shares = secret_sharing::split_secret_with_proofs(
+        &preimage_scalar(preimage)?,
+        split_secret_threshold as usize,
+        operator_pool.len(),
+    )?;
+
+    operator_pool
+        .get_all_operators()
+        .zip(shares)
+        .map(|(operator, share)| {
+            let secret_share_proto = SecretShare {
+                secret_share: share.secret_share.share.to_bytes().to_vec(),
+                proofs: share
+                    .proofs
+                    .iter()
+                    .map(|p| p.to_sec1_bytes().to_vec())
+                    .collect(),
+            };
+            let encrypted = ::utils::ecies::encrypt(
+                &operator.identity_public_key.serialize_uncompressed(),
+                &secret_share_proto.encode_to_vec(),
+            )
             .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))?;
-        let operator_identifier = hex::encode(operator.identifier.serialize());
-        encrypted_shares.insert(operator_identifier, encrypted);
-    }
+            Ok((hex::encode(operator.identifier.serialize()), encrypted))
+        })
+        .collect()
+}
 
+/// The operators rebuild the preimage from its shares as a secp256k1 scalar.
+fn preimage_scalar(preimage: &Preimage) -> Result<k256::Scalar, ServiceError> {
+    secret_sharing::from_bytes_to_scalar(&preimage.to_vec())
+        .ok()
+        .filter(|scalar| *scalar != k256::Scalar::ZERO)
+        .ok_or_else(|| {
+            ServiceError::InvalidInput(
+                "preimage must be nonzero and below the secp256k1 group order".to_string(),
+            )
+        })
+}
+
+async fn store_encrypted_preimage_shares(
+    operator_pool: &OperatorPool,
+    split_secret_threshold: u32,
+    payment_hash: sha256::Hash,
+    encrypted_preimage_shares: HashMap<String, Vec<u8>>,
+    invoice_string: String,
+    identity_pubkey: PublicKey,
+) -> Result<(), ServiceError> {
     operator_pool
         .get_coordinator()
         .client
         .store_preimage_share_v2(StorePreimageShareV2Request {
-            payment_hash: preimage.compute_hash().to_byte_array().to_vec(),
-            encrypted_preimage_shares: encrypted_shares.into_iter().collect(),
+            payment_hash: payment_hash.to_byte_array().to_vec(),
+            encrypted_preimage_shares,
             threshold: split_secret_threshold,
             invoice_string,
             user_identity_public_key: identity_pubkey.serialize().to_vec(),
@@ -112,6 +152,21 @@ impl InvoiceDescription {
             InvoiceDescription::DescriptionHash(hash) => (None, Some(hash)),
         }
     }
+}
+
+/// The preimage of a new Lightning invoice, and who holds it.
+#[derive(Debug, Clone)]
+pub enum InvoicePreimage {
+    /// The signer generates the preimage. The operators receive its shares, so the
+    /// SSP can settle a payment while the receiver is offline.
+    FromSigner,
+    /// A preimage the receiver supplies. The operators receive its shares, as with a
+    /// signer-generated preimage.
+    FromCaller(Preimage),
+    /// The hash of a preimage the receiver keeps. The operators receive no shares,
+    /// so the SSP holds the HTLC until the receiver provides the preimage, or until
+    /// the HTLC expires.
+    Hodl(sha256::Hash),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -404,56 +459,7 @@ impl LightningService {
         &self,
         amount_sats: u64,
         description: Option<InvoiceDescription>,
-        preimage: Option<Vec<u8>>,
-        expiry_secs: Option<u32>,
-        include_spark_address: bool,
-        identity_pubkey: Option<PublicKey>,
-    ) -> Result<LightningReceivePayment, ServiceError> {
-        self.create_lightning_invoice_inner(
-            amount_sats,
-            description,
-            preimage,
-            None,
-            expiry_secs,
-            include_spark_address,
-            identity_pubkey,
-        )
-        .await
-    }
-
-    /// Creates a HODL lightning invoice using an externally-provided payment hash.
-    /// No preimage shares are stored with operators, so the SSP will hold the HTLC
-    /// until `provide_preimage` is called with the matching preimage, or the HTLC expires.
-    ///
-    /// Spark addresses are never included in HODL invoices because a direct Spark
-    /// transfer would bypass the Lightning HTLC hold mechanism entirely.
-    pub async fn create_hodl_lightning_invoice(
-        &self,
-        amount_sats: u64,
-        description: Option<InvoiceDescription>,
-        payment_hash: sha256::Hash,
-        expiry_secs: Option<u32>,
-        identity_pubkey: Option<PublicKey>,
-    ) -> Result<LightningReceivePayment, ServiceError> {
-        self.create_lightning_invoice_inner(
-            amount_sats,
-            description,
-            None,
-            Some(payment_hash),
-            expiry_secs,
-            false,
-            identity_pubkey,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn create_lightning_invoice_inner(
-        &self,
-        amount_sats: u64,
-        description: Option<InvoiceDescription>,
-        preimage: Option<Vec<u8>>,
-        external_payment_hash: Option<sha256::Hash>,
+        preimage: InvoicePreimage,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
@@ -474,20 +480,10 @@ impl LightningService {
             None => self.spark_signer.get_identity_public_key().await?,
         };
 
-        let is_hodl = external_payment_hash.is_some();
-        if !is_hodl && preimage.is_some() {
-            return Err(ServiceError::InvalidInput(
-                "external preimage is not supported; the signer generates it in-enclave"
-                    .to_string(),
-            ));
-        }
-
-        // For non-HODL invoices the signer generates the preimage in-enclave
-        // (it never leaves), returning its hash plus the per-operator encrypted
-        // preimage shares to store with the coordinator.
-        let (payment_hash, prepared_receive) = match external_payment_hash {
-            Some(hash) => (hash, None),
-            None => {
+        let (payment_hash, encrypted_preimage_shares) = match preimage {
+            // The signer generates the preimage in-enclave (it never leaves),
+            // returning its hash plus the per-operator encrypted preimage shares.
+            InvoicePreimage::FromSigner => {
                 let prepared = self
                     .spark_signer
                     .prepare_lightning_receive(PrepareLightningReceiveRequest {
@@ -495,11 +491,30 @@ impl LightningService {
                         threshold: self.split_secret_threshold,
                     })
                     .await?;
+                let encrypted_preimage_shares = prepared
+                    .operator_preimage_packages
+                    .into_iter()
+                    .map(|p| {
+                        (
+                            hex::encode(p.operator_identifier.serialize()),
+                            p.encrypted_package,
+                        )
+                    })
+                    .collect();
                 (
                     sha256::Hash::from_byte_array(prepared.payment_hash),
-                    Some(prepared),
+                    Some(encrypted_preimage_shares),
                 )
             }
+            InvoicePreimage::FromCaller(preimage) => (
+                preimage.compute_hash(),
+                Some(encrypt_preimage_shares(
+                    &self.operator_pool,
+                    self.split_secret_threshold,
+                    &preimage,
+                )?),
+            ),
+            InvoicePreimage::Hodl(payment_hash) => (payment_hash, None),
         };
 
         let expiry = expiry_secs.unwrap_or(DEFAULT_RECEIVE_EXPIRY_SECS);
@@ -543,34 +558,16 @@ impl LightningService {
             identity_pubkey,
         )?;
 
-        if let Some(prepared) = prepared_receive {
-            // The signer already Feldman-split the preimage and ECIES-encrypted
-            // a share per operator; just forward them to the coordinator.
-            let encrypted_preimage_shares: std::collections::HashMap<String, Vec<u8>> = prepared
-                .operator_preimage_packages
-                .into_iter()
-                .map(|p| {
-                    (
-                        hex::encode(p.operator_identifier.serialize()),
-                        p.encrypted_package,
-                    )
-                })
-                .collect();
-
-            self.operator_pool
-                .get_coordinator()
-                .client
-                .store_preimage_share_v2(StorePreimageShareV2Request {
-                    payment_hash: payment_hash.to_byte_array().to_vec(),
-                    encrypted_preimage_shares,
-                    threshold: self.split_secret_threshold,
-                    invoice_string: invoice.invoice.encoded_invoice.clone(),
-                    user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                })
-                .await
-                .map_err(|e: crate::operator::rpc::OperatorRpcError| {
-                    ServiceError::PreimageShareStoreFailed(e.to_string())
-                })?;
+        if let Some(encrypted_preimage_shares) = encrypted_preimage_shares {
+            store_encrypted_preimage_shares(
+                &self.operator_pool,
+                self.split_secret_threshold,
+                payment_hash,
+                encrypted_preimage_shares,
+                invoice.invoice.encoded_invoice.clone(),
+                identity_pubkey,
+            )
+            .await?;
         }
 
         invoice.try_into()
@@ -1417,6 +1414,42 @@ mod tests {
                 is_resumable_send(TransferType::PreimageSwap, status),
                 "{status} still holds committed leaves and must resume"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod preimage_scalar_tests {
+    use super::{Preimage, ServiceError, preimage_scalar};
+    use bitcoin::secp256k1::constants::CURVE_ORDER;
+
+    fn preimage(bytes: [u8; 32]) -> Preimage {
+        Preimage::try_from(bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn preimage_scalar_refuses_zero_and_values_from_the_group_order() {
+        for bytes in [[0u8; 32], CURVE_ORDER, [0xff; 32]] {
+            assert!(
+                matches!(
+                    preimage_scalar(&preimage(bytes)),
+                    Err(ServiceError::InvalidInput(_))
+                ),
+                "preimage_scalar accepted {}",
+                hex::encode(bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn preimage_scalar_accepts_one_and_the_largest_value_below_the_group_order() {
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let mut largest = CURVE_ORDER;
+        largest[31] -= 1;
+
+        for bytes in [one, largest] {
+            assert!(preimage_scalar(&preimage(bytes)).is_ok());
         }
     }
 }

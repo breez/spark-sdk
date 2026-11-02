@@ -20,7 +20,8 @@ class ReceivePayment {
                     optionalAmountSats,
                     optionalExpirySecs,
                     null,
-                    optionalReceiverIdentityPublicKey
+                    optionalReceiverIdentityPublicKey,
+                    null
                 )
             )
             val response = sdk.receivePayment(request)

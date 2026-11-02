@@ -2,7 +2,6 @@ mod default_signer;
 mod error;
 mod models;
 mod nonce_store;
-mod secret_sharing;
 mod spark_signer;
 mod spark_signer_adapter;
 #[cfg(test)]
@@ -85,7 +84,7 @@ pub trait Signer: Send + Sync + 'static {
     /// Split a secret into threshold shares with proofs
     async fn split_secret_with_proofs(
         &self,
-        secret: &SecretToSplit,
+        secret: &SecretSource,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;

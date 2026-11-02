@@ -289,7 +289,8 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
             amountSats: options.amount != null ? parseInt(options.amount, 10) : undefined,
             expirySecs: options.expirySecs,
             paymentHash,
-            receiverIdentityPublicKey: undefined
+            receiverIdentityPublicKey: undefined,
+            preimage: undefined
           }
           break
         }

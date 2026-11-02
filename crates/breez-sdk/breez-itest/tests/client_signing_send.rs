@@ -1063,6 +1063,7 @@ async fn test_client_signing_lightning_send() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
@@ -1189,6 +1190,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?

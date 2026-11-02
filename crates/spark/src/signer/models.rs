@@ -52,11 +52,6 @@ impl SecretSource {
     }
 }
 
-pub enum SecretToSplit {
-    SecretSource(SecretSource),
-    Preimage(Vec<u8>),
-}
-
 pub struct SignFrostRequest<'a> {
     pub message: &'a [u8],
     pub public_key: &'a PublicKey,

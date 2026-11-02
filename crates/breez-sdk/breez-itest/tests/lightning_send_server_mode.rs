@@ -74,6 +74,7 @@ async fn test_send_bolt11_invoice_server_mode(#[future] env: Result<Environment>
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
             },
         })
         .await?
