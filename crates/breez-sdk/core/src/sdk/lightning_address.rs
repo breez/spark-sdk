@@ -1,13 +1,18 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{sanitize_username, signed_message};
+use tracing::info;
 
 use crate::utils::time::try_now_secs;
 use crate::{
     AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
-    LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
-    error::SdkError, lnurl::LnurlServerError, persist::ObjectCacheRepository,
+    LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, Storage,
+    TransferAuthorization,
+    error::SdkError,
+    lnurl::LnurlServerError,
+    persist::{LIGHTNING_ADDRESS_KEY, ObjectCacheRepository},
 };
 
 use super::BreezSdk;
@@ -55,6 +60,30 @@ fn require_configured_domain(
             "{subject} names domain '{domain}', but this SDK is configured for '{configured}'"
         )));
     }
+    Ok(())
+}
+
+/// Clears a cached address that is not on the configured domain, so that the
+/// SDK recovers the address from that domain.
+async fn clear_address_on_other_domain(
+    storage: &Arc<dyn Storage>,
+    configured_domain: &str,
+) -> Result<(), SdkError> {
+    let cache = ObjectCacheRepository::new(Arc::clone(storage));
+    let Some(Some(address_info)) = cache.fetch_lightning_address().await? else {
+        return Ok(());
+    };
+    let configured = crate::lnurl::signed_domain(configured_domain);
+    if address_domain(&address_info.lightning_address).is_ok_and(|domain| domain == configured) {
+        return Ok(());
+    }
+    storage
+        .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+        .await?;
+    info!(
+        "Cleared the cached lightning address {}, which is not on {configured}",
+        address_info.lightning_address
+    );
     Ok(())
 }
 
@@ -275,6 +304,13 @@ impl BreezSdk {
 
 // Private lightning address methods
 impl BreezSdk {
+    pub(super) async fn clear_lightning_address_on_other_domain(&self) -> Result<(), SdkError> {
+        let Some(client) = &self.lnurl_server_client else {
+            return Ok(());
+        };
+        clear_address_on_other_domain(&self.storage, client.domain()).await
+    }
+
     /// Attempts to recover a lightning address from the lnurl server.
     pub(super) async fn recover_lightning_address(
         &self,
@@ -306,9 +342,11 @@ impl BreezSdk {
 mod tests {
     use std::{path::PathBuf, sync::Arc};
 
-    use crate::{LightningAddressInfo, LnurlInfo, persist::sqlite::SqliteStorage};
+    use crate::{LightningAddressInfo, LnurlInfo, Storage, persist::sqlite::SqliteStorage};
 
     use crate::persist::ObjectCacheRepository;
+
+    use super::clear_address_on_other_domain;
 
     fn create_temp_dir(name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -378,6 +416,63 @@ mod tests {
             .flatten()
             .expect("Expected Some(Some(info)) after save");
         assert_eq!(info.lightning_address, "test@example.com");
+    }
+
+    #[tokio::test]
+    async fn an_address_on_another_domain_is_cleared() {
+        let (storage, _dir) = create_temp_storage("other_domain");
+        let storage: Arc<dyn Storage> = storage;
+        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
+        cache
+            .save_lightning_address(&sample_address_info(), true)
+            .await
+            .unwrap();
+
+        clear_address_on_other_domain(&storage, "https://other.example.com")
+            .await
+            .unwrap();
+
+        assert!(cache.fetch_lightning_address().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_address_on_the_configured_domain_stays() {
+        let (storage, _dir) = create_temp_storage("configured_domain");
+        let storage: Arc<dyn Storage> = storage;
+        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
+        let address = LightningAddressInfo {
+            lightning_address: "test@127.0.0.1:8080".to_string(),
+            ..sample_address_info()
+        };
+        cache.save_lightning_address(&address, true).await.unwrap();
+
+        clear_address_on_other_domain(&storage, "http://127.0.0.1:8080/")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.fetch_lightning_address().await.unwrap(),
+            Some(Some(address))
+        );
+    }
+
+    /// A cached record that the wallet has no address names no domain to
+    /// compare.
+    #[tokio::test]
+    async fn a_record_of_no_address_stays() {
+        let (storage, _dir) = create_temp_storage("no_address");
+        let storage: Arc<dyn Storage> = storage;
+        let cache = ObjectCacheRepository::new(Arc::clone(&storage));
+        cache.delete_lightning_address(true).await.unwrap();
+
+        clear_address_on_other_domain(&storage, "https://other.example.com")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            cache.fetch_lightning_address().await.unwrap(),
+            Some(None)
+        ));
     }
 }
 
