@@ -1336,31 +1336,24 @@ let storageSetupComplete = false;
 const setupWebStorage = async () => {
     if (storageSetupComplete) return;
     
+    // The WASM bridge calls the storage factories as globals. When a storage module fails to
+    // load, its factory rejects with the load error, so only an app that uses that storage
+    // gets it.
     try {
-        // Dynamic import of storage module
         const { createDefaultStorage } = await import('./storage/index.js');
-
-        // Make createDefaultStorage available globally for WASM to find
         globalThis.createDefaultStorage = createDefaultStorage;
-
-        console.log('Breez SDK: Web IndexedDB storage automatically enabled');
         storageSetupComplete = true;
     } catch (error) {
-        console.warn('Breez SDK: Failed to load Web storage:', error.message);
-        console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
+        globalThis.createDefaultStorage = () => Promise.reject(error);
     }
 
     try {
-        // Dynamic import of the IndexedDB tree store module
+        // The browser tree store uses its own `-tree` database.
         const { createWebTreeStore } = await import('./tree-store/index.js');
-
-        // Make createDefaultTreeStore available globally for the WASM bridge to
-        // find. The browser store uses its own `-tree` database.
         globalThis.createDefaultTreeStore = (dbName, logger) =>
             createWebTreeStore(`${dbName}-tree`, logger);
     } catch (error) {
-        console.warn('Breez SDK: Failed to load Web tree store:', error.message);
-        console.warn('Breez SDK: Tree state will not be persisted. Ignore this warning if you are not using the default storage.');
+        globalThis.createDefaultTreeStore = () => Promise.reject(error);
     }
 };
 
