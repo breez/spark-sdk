@@ -51,18 +51,14 @@ impl SyncCoordinator {
     ///
     /// Guarantees the result is from a sync that started AFTER this call.
     /// Multiple concurrent callers with the same `sync_type` share the same sync.
+    /// Cancellation-safe: dropping the future stops only the wait, never the loop.
     pub async fn trigger_sync_and_wait(
         &self,
         sync_type: SyncType,
         force: bool,
     ) -> Result<(), SdkError> {
         let (tx, rx) = oneshot::channel();
-
-        let should_run = self.add_waiter(sync_type, force, Some(tx)).await;
-
-        if should_run {
-            self.run_sync_loop().await;
-        }
+        self.trigger(sync_type, force, Some(tx)).await;
 
         rx.await
             .map_err(|_| SdkError::Generic("Sync completion channel closed".to_string()))?
@@ -72,9 +68,21 @@ impl SyncCoordinator {
     ///
     /// Uses the same coalescing mechanism but doesn't block the caller.
     pub async fn trigger_sync_no_wait(&self, sync_type: SyncType, force: bool) {
-        let should_run = self.add_waiter(sync_type, force, None).await;
+        self.trigger(sync_type, force, None).await;
+    }
 
-        if should_run {
+    /// Queue a waiter, and start the sync loop if none is running.
+    ///
+    /// The loop runs on its own task, never on the caller's: a loop dropped
+    /// mid-sync would leave `sync_running` set, and every later sync would wait
+    /// forever. No await point separates claiming the loop from spawning it.
+    async fn trigger(
+        &self,
+        sync_type: SyncType,
+        force: bool,
+        sender: Option<oneshot::Sender<Result<(), SdkError>>>,
+    ) {
+        if self.add_waiter(sync_type, force, sender).await {
             let coordinator = self.clone();
             platform_utils::spawn(async move {
                 coordinator.run_sync_loop().await;
@@ -168,5 +176,50 @@ impl SyncCoordinator {
         reply_rx
             .await
             .map_err(|_| SdkError::Generic("Sync reply channel closed".to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use macros::async_test_all;
+    use platform_utils::time::Duration;
+
+    use super::*;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[async_test_all]
+    async fn a_caller_dropped_mid_sync_does_not_block_later_syncs() {
+        let coordinator = SyncCoordinator::new();
+        let (release, held) = oneshot::channel::<()>();
+        // Stands in for the runtime loop: holds the first sync until released,
+        // and replies to the rest at once.
+        let mut requests = coordinator.subscribe();
+        platform_utils::spawn(async move {
+            let mut held = Some(held);
+            while let Ok(request) = requests.recv().await {
+                if let Some(held) = held.take() {
+                    let _ = held.await;
+                }
+                request.reply(None).await;
+            }
+        });
+
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(50),
+            coordinator.trigger_sync_and_wait(SyncType::Full, true),
+        )
+        .await;
+        assert!(dropped.is_err(), "the held sync outlasts the timeout");
+        release.send(()).unwrap();
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            coordinator.trigger_sync_and_wait(SyncType::Full, true),
+        )
+        .await
+        .expect("a sync after the dropped caller completes")
+        .unwrap();
     }
 }
