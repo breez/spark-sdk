@@ -98,7 +98,7 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 
 - **Prepare Response** - The response from the [Preparing the Payment](send_payment.md#preparing-payments) step.
 - **Options** - Any payment method specific options for the payment (see below).
-- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made. The payment's id is the idempotency key. Without an idempotency key, the SDK gives every payment a unique id, including a second payment of the same invoice.
 
 ### Lightning
 
