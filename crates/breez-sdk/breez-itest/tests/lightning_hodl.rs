@@ -6,6 +6,7 @@ use breez_sdk_spark::*;
 use rstest::*;
 use tokio::time::Instant;
 use tracing::info;
+use uuid::Uuid;
 
 /// Test 1: Create a Lightning HODL invoice, pay it, and claim with preimage
 #[rstest]
@@ -184,4 +185,94 @@ async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> R
 
     info!("=== Test test_01_lightning_hodl_success PASSED ===");
     Ok(())
+}
+
+/// Test 2: get_payment returns a Lightning send while send_payment waits for it to complete
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_02_lightning_send_stored_while_in_flight(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    let env = env.await?;
+    info!("=== Starting test_02_lightning_send_stored_while_in_flight ===");
+
+    let alice = env.create_wallet().await?;
+    // A server wallet syncs only when asked to, so only send_payment can have
+    // stored the payment.
+    let mut bob = env.create_server_wallet_with(|_cfg| {}).await?;
+    ensure_funded_via_polling(&mut bob, 20_000).await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    // Alice never claims the HODL payment, so the send stays in flight.
+    let (_preimage, payment_hash) = generate_preimage_hash_pair();
+    let alice_identity_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .identity_pubkey;
+    let invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "In-flight send test".to_string(),
+                amount_sats: Some(10_000),
+                expiry_secs: None,
+                payment_hash: Some(payment_hash),
+                receiver_identity_public_key: Some(alice_identity_pubkey),
+                preimage: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input { input: invoice },
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let payment_id = Uuid::now_v7().to_string();
+    let send = bob.sdk.send_payment(SendPaymentRequest {
+        prepare_response: prepare,
+        options: Some(SendPaymentOptions::Bolt11Invoice {
+            prefer_spark: false,
+            completion_timeout_secs: Some(120),
+        }),
+        idempotency_key: Some(payment_id.clone()),
+    });
+
+    let stored = tokio::select! {
+        result = send => {
+            anyhow::bail!("send_payment returned before the payment was stored: {result:?}")
+        }
+        stored = wait_for_stored_payment(&bob.sdk, &payment_id) => stored?,
+    };
+    assert_eq!(stored.status, PaymentStatus::Pending);
+
+    info!("=== Test test_02_lightning_send_stored_while_in_flight PASSED ===");
+    Ok(())
+}
+
+async fn wait_for_stored_payment(sdk: &BreezSdk, payment_id: &str) -> Result<Payment> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Ok(response) = sdk
+            .get_payment(GetPaymentRequest {
+                payment_id: payment_id.to_string(),
+            })
+            .await
+        {
+            return Ok(response.payment);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("Payment {payment_id} was not stored within 60 seconds");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
