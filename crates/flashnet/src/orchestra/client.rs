@@ -9,8 +9,8 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 
 use super::models::{
-    EstimateRequest, EstimateResponse, LimitsResponse, QuoteRequest, QuoteResponse,
-    RouteWithLimits, StatusResponse, SubmitRequest, SubmitResponse,
+    EstimateRequest, EstimateResponse, ExplorerOperationsResponse, LimitsResponse, QuoteRequest,
+    QuoteResponse, RouteWithLimits, StatusResponse, SubmitRequest, SubmitResponse,
 };
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
@@ -37,13 +37,11 @@ pub struct OrchestraClient {
     config: OnceCell<OrchestraConfig>,
     http_client: Arc<dyn HttpClient>,
     cache_store: CacheStore,
-    spark_wallet: Arc<SparkWallet>,
 }
 
 impl OrchestraClient {
     pub fn new(
         config_resolver: Arc<dyn OrchestraConfigResolver>,
-        spark_wallet: Arc<SparkWallet>,
         http_client: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
@@ -51,7 +49,6 @@ impl OrchestraClient {
             config: OnceCell::new(),
             http_client,
             cache_store: CacheStore::default(),
-            spark_wallet,
         }
     }
 
@@ -165,58 +162,6 @@ impl OrchestraClient {
         .await
     }
 
-    /// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
-    /// via the Spark wallet. Returns the full [`AssetTransfer`].
-    ///
-    /// `transfer_id` is threaded into the underlying Spark BTC transfer for
-    /// protocol-level idempotency on retry. Ignored on the token branch:
-    /// `spark_wallet::transfer_tokens` does not accept an idempotency token,
-    /// matching the SDK's contract that token-source sends carry no retry
-    /// guarantee.
-    pub async fn transfer_to_deposit(
-        &self,
-        deposit_address: &str,
-        amount_in: u128,
-        token_identifier: Option<&str>,
-        transfer_id: Option<TransferId>,
-    ) -> Result<AssetTransfer, FlashnetError> {
-        let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
-            FlashnetError::Generic(format!(
-                "Failed to parse Orchestra deposit address '{deposit_address}': {e}"
-            ))
-        })?;
-
-        match token_identifier {
-            None => {
-                // BTC sats — plain Spark transfer.
-                let amount_sats = u64::try_from(amount_in)
-                    .map_err(|e| FlashnetError::Generic(format!("amount_in exceeds u64: {e}")))?;
-                let transfer = self
-                    .spark_wallet
-                    .transfer(amount_sats, &receiver_address, transfer_id)
-                    .await?;
-                Ok(AssetTransfer::Spark(transfer))
-            }
-            Some(token_identifier) => {
-                // USDB (or other Spark token) — token transfer.
-                // `token_identifier` is already a bech32m-encoded token id (e.g. btkn1x...).
-                let token_tx = self
-                    .spark_wallet
-                    .transfer_tokens(
-                        vec![TokenRecipient::Address {
-                            token_id: token_identifier.to_string(),
-                            amount: amount_in,
-                            receiver_address,
-                        }],
-                        None,
-                        None,
-                    )
-                    .await?;
-                Ok(AssetTransfer::Token(token_tx))
-            }
-        }
-    }
-
     /// Look up an order by its id.
     ///
     /// `read_token` is the opaque token returned by `/submit` — required by
@@ -259,6 +204,17 @@ impl OrchestraClient {
             Some(read_token),
         )
         .await
+    }
+
+    /// Looks an order up in the public explorer by its order, quote or
+    /// transaction id. Needs no key or read token.
+    pub async fn explorer_operations(
+        &self,
+        id: &str,
+    ) -> Result<ExplorerOperationsResponse, FlashnetError> {
+        debug!("Orchestra: GET /v1/explorer/operations q={id}");
+        self.get("v1/explorer/operations", Some([("q", id)]), false)
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -378,6 +334,56 @@ impl OrchestraClient {
         response
             .json::<D>()
             .map_err(|e| FlashnetError::Generic(format!("Failed to parse orchestra response: {e}")))
+    }
+}
+
+/// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
+/// via `spark_wallet`. Returns the full [`AssetTransfer`].
+///
+/// `transfer_id` is threaded into the underlying Spark BTC transfer for
+/// protocol-level idempotency on retry. Ignored on the token branch:
+/// `spark_wallet::transfer_tokens` does not accept an idempotency token,
+/// matching the SDK's contract that token-source sends carry no retry
+/// guarantee.
+pub async fn transfer_to_deposit(
+    spark_wallet: &SparkWallet,
+    deposit_address: &str,
+    amount_in: u128,
+    token_identifier: Option<&str>,
+    transfer_id: Option<TransferId>,
+) -> Result<AssetTransfer, FlashnetError> {
+    let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
+        FlashnetError::Generic(format!(
+            "Failed to parse Orchestra deposit address '{deposit_address}': {e}"
+        ))
+    })?;
+
+    match token_identifier {
+        None => {
+            // BTC sats: plain Spark transfer.
+            let amount_sats = u64::try_from(amount_in)
+                .map_err(|e| FlashnetError::Generic(format!("amount_in exceeds u64: {e}")))?;
+            let transfer = spark_wallet
+                .transfer(amount_sats, &receiver_address, transfer_id)
+                .await?;
+            Ok(AssetTransfer::Spark(transfer))
+        }
+        Some(token_identifier) => {
+            // USDB (or other Spark token): token transfer.
+            // `token_identifier` is already a bech32m-encoded token id (e.g. btkn1x...).
+            let token_tx = spark_wallet
+                .transfer_tokens(
+                    vec![TokenRecipient::Address {
+                        token_id: token_identifier.to_string(),
+                        amount: amount_in,
+                        receiver_address,
+                    }],
+                    None,
+                    None,
+                )
+                .await?;
+            Ok(AssetTransfer::Token(token_tx))
+        }
     }
 }
 

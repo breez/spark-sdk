@@ -423,7 +423,8 @@ impl BreezSdk {
         self.inner.buy_bitcoin(request).await
     }
 
-    /// **Deprecated.** Use `bridge_from_cash_app`.
+    /// **Deprecated.** Use `bridge_from_cash_app` on the client from
+    /// `get_bridging_client`.
     pub async fn prepare_payment_link(
         &self,
         request: PreparePaymentLinkRequest,
@@ -431,6 +432,8 @@ impl BreezSdk {
         self.inner.prepare_payment_link(request).await
     }
 
+    /// **Deprecated.** Use `bridge_from_cash_app` on the client from
+    /// `get_bridging_client`.
     pub async fn bridge_from_cash_app(
         &self,
         request: BridgeFromCashAppRequest,
@@ -438,11 +441,20 @@ impl BreezSdk {
         self.inner.bridge_from_cash_app(request).await
     }
 
+    /// **Deprecated.** Use `bridge_to_cash_app` on the client from
+    /// `get_bridging_client`.
     pub async fn bridge_to_cash_app(
         &self,
         request: BridgeToCashAppRequest,
     ) -> Result<BridgeToCashAppResponse, SdkError> {
         self.inner.bridge_to_cash_app(request).await
+    }
+
+    #[frb(sync)]
+    pub fn get_bridging_client(&self) -> Result<crate::bridging::BridgingClient, SdkError> {
+        Ok(crate::bridging::BridgingClient {
+            inner: self.inner.get_bridging_client()?,
+        })
     }
 
     pub async fn register_webhook(

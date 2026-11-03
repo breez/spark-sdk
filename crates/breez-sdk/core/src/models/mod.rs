@@ -887,6 +887,34 @@ pub struct CrossChainConfig {
     pub default_target_overpay_bps: Option<u32>,
 }
 
+impl CrossChainConfig {
+    pub(crate) fn validate(&self) -> Result<(), SdkError> {
+        if let Some(bps) = self.default_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
+        }
+        if let Some(bps) = self.default_target_overpay_bps
+            && !(crate::cross_chain::MIN_TARGET_OVERPAY_BPS
+                ..=crate::cross_chain::MAX_TARGET_OVERPAY_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "Default cross-chain target-overpay must be between {} and {} basis points, but got {bps}.",
+                crate::cross_chain::MIN_TARGET_OVERPAY_BPS,
+                crate::cross_chain::MAX_TARGET_OVERPAY_BPS,
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for leaf optimization.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1186,28 +1214,7 @@ impl Config {
                     self.network,
                 )));
             }
-            if let Some(bps) = cc.default_slippage_bps
-                && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
-                    ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
-                    .contains(&bps)
-            {
-                return Err(SdkError::InvalidInput(format!(
-                    "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
-                    crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
-                    crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-                )));
-            }
-            if let Some(bps) = cc.default_target_overpay_bps
-                && !(crate::cross_chain::MIN_TARGET_OVERPAY_BPS
-                    ..=crate::cross_chain::MAX_TARGET_OVERPAY_BPS)
-                    .contains(&bps)
-            {
-                return Err(SdkError::InvalidInput(format!(
-                    "Default cross-chain target-overpay must be between {} and {} basis points, but got {bps}.",
-                    crate::cross_chain::MIN_TARGET_OVERPAY_BPS,
-                    crate::cross_chain::MAX_TARGET_OVERPAY_BPS,
-                )));
-            }
+            cc.validate()?;
         }
 
         Ok(())
@@ -1713,7 +1720,8 @@ pub struct RefundPendingConversionsResponse {
     pub failed: u32,
 }
 
-/// **Deprecated.** Use [`BridgeFromCashAppRequest`].
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_from_cash_app`.
 ///
 /// Request for a payment link that sends USDC/USDT to an external-chain
 /// recipient, funded by Cash App over Lightning.
@@ -1745,7 +1753,8 @@ pub struct PreparePaymentLinkRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
-/// **Deprecated.** Use [`BridgeFromCashAppResponse`].
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_from_cash_app`.
 ///
 /// Response to a [`PreparePaymentLinkRequest`]. Mirrors `BuyBitcoinResponse`
 /// (a payable `url`) plus the quote so the caller can display the expected
@@ -1775,6 +1784,9 @@ pub struct PreparePaymentLinkResponse {
     pub expires_at: String,
 }
 
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_from_cash_app`.
+///
 /// Request to bridge from Cash App to USDC/USDT on an external chain.
 ///
 /// The payer pays the returned URL in Cash App over Lightning, and the
@@ -1804,6 +1816,9 @@ pub struct BridgeFromCashAppRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_from_cash_app`.
+///
 /// Response to a [`BridgeFromCashAppRequest`]: the URL to pay plus the quote,
 /// so the caller can display the expected delivery and fees.
 #[derive(Debug, Clone, Serialize)]
@@ -1863,6 +1878,9 @@ impl From<BridgeFromCashAppResponse> for PreparePaymentLinkResponse {
     }
 }
 
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_to_cash_app`.
+///
 /// Request to bridge USDC/USDT from an external chain to a Cash App user.
 ///
 /// The payer deposits the stablecoin to the returned address, and the
@@ -1896,6 +1914,9 @@ pub struct BridgeToCashAppRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_to_cash_app`.
+///
 /// Response to a [`BridgeToCashAppRequest`].
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

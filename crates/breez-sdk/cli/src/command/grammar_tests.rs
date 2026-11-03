@@ -11,6 +11,7 @@ use breez_sdk_spark::{
 use clap::Parser;
 
 use super::advanced::{AdvancedCommand, FundingKindArg, FundingStrategyArg};
+use super::bridging::BridgingCommand;
 use super::contacts::ContactCommand;
 use super::issuer::IssuerCommand;
 use super::stable_balance::StableBalanceCommand;
@@ -554,29 +555,29 @@ fn buy_bitcoin() {
 
 #[test]
 fn bridge_from_cash_app() {
-    let Command::BridgeFromCashApp {
+    let Command::Bridging(BridgingCommand::FromCashApp {
         recipient,
         amount,
         fees_included,
         max_slippage_bps,
-    } = parse_ok("bridge-from-cash-app 0xabc --amount 1000000")
+    }) = parse_ok("bridging from-cash-app 0xabc --amount 1000000")
     else {
-        panic!("expected BridgeFromCashApp");
+        panic!("expected bridging from-cash-app");
     };
     assert_eq!(recipient, "0xabc");
     assert_eq!(amount, 1_000_000);
     assert!(!fees_included);
     assert!(max_slippage_bps.is_none());
 
-    let Command::BridgeFromCashApp {
+    let Command::Bridging(BridgingCommand::FromCashApp {
         fees_included,
         max_slippage_bps,
         ..
-    } = parse_ok(
-        "bridge-from-cash-app 0xabc --amount 500000 --fees-included --max-slippage-bps 1000",
+    }) = parse_ok(
+        "bridging from-cash-app 0xabc --amount 500000 --fees-included --max-slippage-bps 1000",
     )
     else {
-        panic!("expected BridgeFromCashApp");
+        panic!("expected bridging from-cash-app");
     };
     assert!(fees_included);
     assert_eq!(max_slippage_bps, Some(1000));
@@ -584,15 +585,15 @@ fn bridge_from_cash_app() {
 
 #[test]
 fn bridge_to_cash_app() {
-    let Command::BridgeToCashApp {
+    let Command::Bridging(BridgingCommand::ToCashApp {
         recipient,
         amount,
         refund_address,
         fees_included,
         max_slippage_bps,
-    } = parse_ok("bridge-to-cash-app $alice --amount 1000000 --refund-address 0xabc")
+    }) = parse_ok("bridging to-cash-app $alice --amount 1000000 --refund-address 0xabc")
     else {
-        panic!("expected BridgeToCashApp");
+        panic!("expected bridging to-cash-app");
     };
     assert_eq!(recipient, "$alice");
     assert_eq!(amount, 1_000_000);
@@ -600,16 +601,16 @@ fn bridge_to_cash_app() {
     assert!(!fees_included);
     assert!(max_slippage_bps.is_none());
 
-    let Command::BridgeToCashApp {
+    let Command::Bridging(BridgingCommand::ToCashApp {
         fees_included,
         max_slippage_bps,
         ..
-    } = parse_ok(
-        "bridge-to-cash-app alice --amount 500000 --refund-address 0xabc --fees-included \
+    }) = parse_ok(
+        "bridging to-cash-app $alice --amount 500000 --refund-address 0xabc --fees-included \
          --max-slippage-bps 1000",
     )
     else {
-        panic!("expected BridgeToCashApp");
+        panic!("expected bridging to-cash-app");
     };
     assert!(fees_included);
     assert_eq!(max_slippage_bps, Some(1000));
@@ -1130,4 +1131,52 @@ fn token_allowance_commands() {
     };
     assert_eq!(receivers.len(), 2);
     parse_err("pull-payment 02aa btkn1x");
+}
+
+#[test]
+fn bridging_create() {
+    let Command::Bridging(BridgingCommand::Create {
+        recipient,
+        amount,
+        refund_address,
+        fees_included,
+        max_slippage_bps,
+    }) = parse_ok(
+        "bridging create spark1abc --amount 1000000 --refund-address 0xabc --fees-included \
+         --max-slippage-bps 50",
+    )
+    else {
+        panic!("expected bridging create");
+    };
+    assert_eq!(recipient, "spark1abc");
+    assert_eq!(amount, 1_000_000);
+    assert_eq!(refund_address.as_deref(), Some("0xabc"));
+    assert!(fees_included);
+    assert_eq!(max_slippage_bps, Some(50));
+
+    let Command::Bridging(BridgingCommand::Create {
+        refund_address,
+        fees_included,
+        ..
+    }) = parse_ok("bridging create 0xabc --amount 1")
+    else {
+        panic!("expected bridging create");
+    };
+    assert_eq!(refund_address, None);
+    assert!(!fees_included);
+
+    assert!(parse_err("bridging create spark1abc").contains("--amount"));
+}
+
+#[test]
+fn bridging_status() {
+    let Command::Bridging(BridgingCommand::Status {
+        bridge_id,
+        status_token,
+    }) = parse_ok("bridging status q_1 --status-token rt_1")
+    else {
+        panic!("expected bridging status");
+    };
+    assert_eq!(bridge_id, "q_1");
+    assert_eq!(status_token.as_deref(), Some("rt_1"));
 }

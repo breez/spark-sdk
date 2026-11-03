@@ -64,8 +64,12 @@ const SOURCE_CHAIN_SPARK: &str = "spark";
 const SOURCE_CHAIN_LIGHTNING: &str = "lightning";
 const SOURCE_CHAIN_BITCOIN: &str = "bitcoin";
 
+/// How many replaced deposits a status lookup follows to the order that
+/// recovered them.
+const MAX_RECOVERY_HOPS: usize = 3;
+
 /// The Orchestra chain wire value for a [`DeliveryMethod`].
-fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
+pub(crate) fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
     match delivery_method {
         DeliveryMethod::Spark => SOURCE_CHAIN_SPARK,
         DeliveryMethod::Lightning => SOURCE_CHAIN_LIGHTNING,
@@ -75,7 +79,7 @@ fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
 
 /// Parses an Orchestra chain wire value into a [`DeliveryMethod`], or `None`
 /// for one that isn't a local delivery rail.
-fn delivery_method_from_wire(chain: &str) -> Option<DeliveryMethod> {
+pub(crate) fn delivery_method_from_wire(chain: &str) -> Option<DeliveryMethod> {
     if chain.eq_ignore_ascii_case(SOURCE_CHAIN_SPARK) {
         Some(DeliveryMethod::Spark)
     } else if chain.eq_ignore_ascii_case(SOURCE_CHAIN_LIGHTNING) {
@@ -204,10 +208,33 @@ fn fulfilled_invoice(payment: &Payment) -> Option<String> {
     }
 }
 
-/// Flashnet Orchestra cross-chain provider.
-pub(crate) struct OrchestraService {
+/// Orchestra quoting: routes, estimates, quotes and order status, with no
+/// wallet or storage.
+pub(crate) struct OrchestraQuoter {
     client: Arc<OrchestraClient>,
     attribution: Attribution,
+    fiat_service: Arc<dyn FiatService>,
+}
+
+impl OrchestraQuoter {
+    pub(crate) fn new(
+        config_resolver: Arc<dyn OrchestraConfigResolver>,
+        partner_id: Option<String>,
+        fiat_service: Arc<dyn FiatService>,
+        http_client: Arc<dyn platform_utils::HttpClient>,
+    ) -> Self {
+        Self {
+            client: Arc::new(OrchestraClient::new(config_resolver, http_client)),
+            attribution: Attribution::new(partner_id),
+            fiat_service,
+        }
+    }
+}
+
+/// Flashnet Orchestra cross-chain provider.
+pub(crate) struct OrchestraService {
+    quoter: Arc<OrchestraQuoter>,
+    client: Arc<OrchestraClient>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
     fiat_service: Arc<dyn FiatService>,
@@ -223,20 +250,14 @@ pub(crate) struct OrchestraService {
 impl OrchestraService {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
-        config_resolver: Arc<dyn OrchestraConfigResolver>,
-        partner_id: Option<String>,
+        quoter: Arc<OrchestraQuoter>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
-        fiat_service: Arc<dyn FiatService>,
-        http_client: Arc<dyn platform_utils::HttpClient>,
         event_emitter: Arc<EventEmitter>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
-        let client = Arc::new(OrchestraClient::new(
-            config_resolver,
-            Arc::clone(&spark_wallet),
-            http_client,
-        ));
+        let client = Arc::clone(&quoter.client);
+        let fiat_service = Arc::clone(&quoter.fiat_service);
         let (monitor_trigger, _) = broadcast::channel(10);
         let has_active_receives = Arc::new(AtomicBool::new(false));
 
@@ -248,8 +269,8 @@ impl OrchestraService {
             .await;
 
         let service = Self {
+            quoter,
             client,
-            attribution: Attribution::new(partner_id),
             spark_wallet,
             storage,
             fiat_service,
@@ -997,7 +1018,9 @@ impl OrchestraService {
         }
         Ok(())
     }
+}
 
+impl OrchestraQuoter {
     /// `/quote` with the current affiliate ids and the order tag in place of
     /// `request`'s.
     async fn quote(&self, request: &QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
@@ -1080,19 +1103,15 @@ impl OrchestraService {
     /// decimals at par.
     async fn compute_target_source_amount(
         &self,
-        destination: &SparkAsset,
-        destination_decimals: u32,
+        destination: &DepositDestination,
         route: &CrossChainRoutePair,
         target: u128,
     ) -> Result<u128, SdkError> {
-        match destination {
-            SparkAsset::Bitcoin => {
-                let btc_usd = super::fetch_btc_usd_rate(self.fiat_service.as_ref()).await?;
-                super::convert_sats_to_destination_amount(target, btc_usd, route.decimals.into())
-            }
-            SparkAsset::Token { .. } => {
-                super::rescale_decimals(target, destination_decimals, route.decimals.into())
-            }
+        if destination.asset.eq_ignore_ascii_case("BTC") {
+            let btc_usd = super::fetch_btc_usd_rate(self.fiat_service.as_ref()).await?;
+            super::convert_sats_to_destination_amount(target, btc_usd, route.decimals.into())
+        } else {
+            super::rescale_decimals(target, destination.decimals, route.decimals.into())
         }
     }
 
@@ -1332,10 +1351,13 @@ fn proportional_inflation(
             "Cross-chain: ExactIn estimate returned zero delivered amount".to_string(),
         ));
     }
-    let inflated = source_amount
-        .checked_mul(destination_amount)
-        .and_then(|p| p.checked_div(estimated_delivered))
-        .ok_or_else(|| SdkError::Generic("Cross-chain: inflation scaling overflow".to_string()))?;
+    let inflated = mul_div(
+        source_amount,
+        destination_amount,
+        estimated_delivered,
+        false,
+    )
+    .ok_or_else(|| SdkError::Generic("Cross-chain: inflation scaling overflow".to_string()))?;
     Ok(inflated.max(source_amount))
 }
 
@@ -1351,10 +1373,31 @@ fn top_up_for_shortfall(
             "Cross-chain: ExactIn estimate returned zero delivered amount".to_string(),
         ));
     }
-    shortfall
-        .checked_mul(probe_in)
-        .map(|scaled| scaled.div_ceil(probe_out))
+    mul_div(shortfall, probe_in, probe_out, true)
         .ok_or_else(|| SdkError::Generic("Cross-chain: top-up scaling overflow".to_string()))
+}
+
+/// `a * b / c`, rounded up when `round_up`. Where `a * b` overflows, as two
+/// 18-decimal amounts can, `b` and `c` drop low digits together, which keeps
+/// their ratio to about one part in 10^9.
+fn mul_div(a: u128, mut b: u128, mut c: u128, round_up: bool) -> Option<u128> {
+    if c == 0 {
+        return None;
+    }
+    loop {
+        if let Some(product) = a.checked_mul(b) {
+            return if round_up {
+                Some(product.div_ceil(c))
+            } else {
+                product.checked_div(c)
+            };
+        }
+        if b < 10_000_000_000 || c < 10_000_000_000 {
+            return None;
+        }
+        b /= 10;
+        c /= 10;
+    }
 }
 
 /// `estimate.fee_amount` in `source_decimals` units, or 0 when the fee is not
@@ -1560,13 +1603,18 @@ fn attach_route_limits(
     route: &CrossChainRoutePair,
     asset: &SparkAsset,
 ) -> SdkError {
+    attach_limits(error, route.limits_for(asset))
+}
+
+/// Fill in the bounds on an amount rejection from `limits`. Leaves every other
+/// error untouched.
+fn attach_limits(error: SdkError, limits: Option<&CrossChainRouteLimits>) -> SdkError {
     let SdkError::CrossChainAmountOutOfRange {
         reason, too_small, ..
     } = error
     else {
         return error;
     };
-    let limits = route.limits_for(asset);
     let (bound_amount, bound_usd_cents) = match (limits, too_small) {
         (Some(l), true) => (l.min_amount, l.min_usd_cents),
         (Some(l), false) => (l.max_amount, l.max_usd_cents),
@@ -1581,7 +1629,7 @@ fn attach_route_limits(
 /// USD cents, and publishes whichever it can compute; an unparseable value is
 /// dropped rather than failing route discovery. Returns `None` when nothing
 /// usable survives.
-fn to_route_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
+pub(crate) fn to_route_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
     let request_amount = limits
         .exact_in
         .as_ref()
@@ -1704,7 +1752,7 @@ fn find_destination_asset_symbol<'a>(
 
 #[macros::async_trait]
 #[allow(clippy::too_many_lines)]
-impl CrossChainService for OrchestraService {
+impl CrossChainService for OrchestraQuoter {
     async fn get_routes(
         &self,
         filter: &CrossChainRouteFilter,
@@ -1856,6 +1904,7 @@ impl CrossChainService for OrchestraService {
             .await?;
         let fee_amount = asset_amount_in.saturating_sub(estimated_out);
 
+        let quote_read_token = quote.read_token.map(|t| t.0);
         let provider_context = CrossChainProviderContext::Orchestra {
             quote_id: quote.quote_id,
             deposit_address: quote.deposit_address,
@@ -1878,6 +1927,7 @@ impl CrossChainService for OrchestraService {
             recipient_address: recipient_address.to_string(),
             token_identifier: source_token_identifier,
             provider_context,
+            quote_read_token,
         })
     }
 
@@ -1893,9 +1943,70 @@ impl CrossChainService for OrchestraService {
         delivery_method: DeliveryMethod,
         refund_address: Option<&str>,
     ) -> Result<CrossChainReceivePrepared, SdkError> {
-        let is_lightning = match delivery_method {
-            DeliveryMethod::Spark => false,
-            DeliveryMethod::Lightning if matches!(destination, SparkAsset::Bitcoin) => true,
+        self.quote_receive(
+            route,
+            recipient_address,
+            amount,
+            max_slippage_bps,
+            destination,
+            fee_mode,
+            target_overpay_bps,
+            delivery_method,
+            refund_address,
+        )
+        .await
+        .map(|quote| quote.prepared)
+    }
+
+    async fn send(
+        &self,
+        _prepared: &CrossChainSendPrepared,
+        _idempotency_key: Option<String>,
+    ) -> Result<crate::Payment, SdkError> {
+        Err(SdkError::Generic(
+            "Sending a cross-chain payment requires a connected wallet".to_string(),
+        ))
+    }
+}
+
+/// A receive quote plus the raw quote fields a tracked receive persists.
+pub(crate) struct OrchestraReceiveQuote {
+    pub(crate) prepared: CrossChainReceivePrepared,
+    amount_in: String,
+    fee_asset: String,
+    destination_chain: String,
+    destination_decimals: u32,
+}
+
+/// What a deposit quote delivers, in Orchestra's wire terms.
+pub(crate) struct DepositDestination {
+    pub(crate) chain: String,
+    pub(crate) asset: String,
+    pub(crate) decimals: u32,
+    /// The Spark token delivered, when the destination is one.
+    pub(crate) token_identifier: Option<String>,
+}
+
+impl OrchestraQuoter {
+    /// Quotes a receive that delivers to `recipient_address` as given, with
+    /// nothing created or persisted. See
+    /// [`CrossChainService::prepare_receive`] for the arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn quote_receive(
+        &self,
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        destination: &SparkAsset,
+        fee_mode: CrossChainFeeMode,
+        target_overpay_bps: u32,
+        delivery_method: DeliveryMethod,
+        refund_address: Option<&str>,
+    ) -> Result<OrchestraReceiveQuote, SdkError> {
+        match delivery_method {
+            DeliveryMethod::Spark => {}
+            DeliveryMethod::Lightning if matches!(destination, SparkAsset::Bitcoin) => {}
             DeliveryMethod::Lightning => {
                 return Err(SdkError::InvalidInput(
                     "A cross-chain receive over Lightning can only deliver Bitcoin".to_string(),
@@ -1906,7 +2017,7 @@ impl CrossChainService for OrchestraService {
                     "Cross-chain receive does not support on-chain Bitcoin delivery".to_string(),
                 ));
             }
-        };
+        }
         let destination_chain = delivery_method_to_wire(delivery_method);
 
         // Resolve the destination's Spark-side wire symbol (e.g. "BTC",
@@ -1952,13 +2063,49 @@ impl CrossChainService for OrchestraService {
                  or Bitcoin destinations. Requested destination asset: {destination_asset_symbol}."
             )));
         }
+        self.quote_deposit(
+            route,
+            &DepositDestination {
+                chain: destination_chain.to_string(),
+                asset: destination_asset_symbol,
+                decimals: destination_decimals,
+                token_identifier: destination_token_identifier,
+            },
+            route.limits_for(destination),
+            recipient_address,
+            amount,
+            max_slippage_bps,
+            fee_mode,
+            target_overpay_bps,
+            refund_address,
+        )
+        .await
+    }
+
+    /// Quotes a deposit on `route`'s chain that delivers `destination` to
+    /// `recipient_address`. `amount` is the deposit on `FeesIncluded`, and the
+    /// amount to deliver, in destination units, on `FeesExcluded`. `limits`
+    /// fill in the bound an amount rejection leaves out.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub(crate) async fn quote_deposit(
+        &self,
+        route: &CrossChainRoutePair,
+        destination: &DepositDestination,
+        limits: Option<&CrossChainRouteLimits>,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        fee_mode: CrossChainFeeMode,
+        target_overpay_bps: u32,
+        refund_address: Option<&str>,
+    ) -> Result<OrchestraReceiveQuote, SdkError> {
         // USDB delivery rounds below Orchestra's quoted `estimated_out` at
         // the cent boundary; apply the rounding margin so the receiver gets
         // at least the quoted amount.
-        let apply_rounding_margin = destination_asset_symbol.eq_ignore_ascii_case("USDB");
+        let apply_rounding_margin = destination.asset.eq_ignore_ascii_case("USDB");
 
         // FeesExcluded inflates the deposit so Orchestra delivers `amount`
-        // on the Spark side. FeesIncluded passes `amount` through as the
+        // at the destination. FeesIncluded passes `amount` through as the
         // deposit.
         let (source_amount, sized) = match fee_mode {
             CrossChainFeeMode::FeesIncluded => (amount, None),
@@ -1974,69 +2121,40 @@ impl CrossChainService for OrchestraService {
                 // inside the probe is well-defined.
                 let inflated_target = super::inflate_target_amount(amount, target_overpay_bps);
                 let probe_source = self
-                    .compute_target_source_amount(
-                        destination,
-                        destination_decimals,
-                        route,
-                        inflated_target,
-                    )
+                    .compute_target_source_amount(destination, route, inflated_target)
                     .await?;
                 debug!(
                     "Orchestra receive probe: destination_target={amount} \
                      inflated_target={inflated_target} → probe_source={probe_source} \
-                     (destination_decimals={destination_decimals}, source_decimals={})",
-                    route.decimals,
+                     (destination_decimals={}, source_decimals={})",
+                    destination.decimals, route.decimals,
                 );
                 let sized = self
                     .estimate_required_source_amount(
                         &route.chain,
                         &route.asset,
-                        destination_chain,
-                        &destination_asset_symbol,
+                        &destination.chain,
+                        &destination.asset,
                         probe_source,
                         inflated_target,
                         apply_rounding_margin,
                         Some(u32::from(route.decimals)),
                     )
                     .await
-                    .map_err(|e| attach_route_limits(e, route, destination))?;
+                    .map_err(|e| attach_limits(e, limits))?;
                 (sized.required_in, Some(sized))
             }
         };
 
-        // Orchestra fulfils a Spark invoice on delivery, so quoting against
-        // one created here tags the inbound payment with it and ties it to
-        // this row the moment it is seen. Amountless, since the delivered
-        // amount is only known once the order settles, and without expiry,
-        // since Orchestra accepts late deposits. Over Lightning, Orchestra
-        // pays `recipient_address` itself and there is nothing to tie.
-        let spark_invoice = if is_lightning {
-            None
-        } else {
-            Some(
-                self.spark_wallet
-                    .create_spark_invoice(
-                        None,
-                        destination_token_identifier.clone(),
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?,
-            )
-        };
-
         let request = QuoteRequest {
             // On receive the `route` describes the external side, so it maps
-            // to SOURCE on the wire and the local rail is the DESTINATION.
+            // to SOURCE on the wire.
             source_chain: route.chain.clone(),
             source_asset: route.asset.clone(),
-            destination_chain: destination_chain.to_string(),
-            destination_asset: destination_asset_symbol.clone(),
+            destination_chain: destination.chain.clone(),
+            destination_asset: destination.asset.clone(),
             amount: source_amount.to_string(),
-            recipient_address: spark_invoice
-                .clone()
-                .unwrap_or_else(|| recipient_address.to_string()),
+            recipient_address: recipient_address.to_string(),
             // ExactIn: the deposit is fixed (caller-picked on FeesIncluded,
             // SDK-computed on FeesExcluded); Orchestra forward-computes what
             // the receiver gets net of fees.
@@ -2061,7 +2179,7 @@ impl CrossChainService for OrchestraService {
         let quote: QuoteResponse = self
             .quote(&request)
             .await
-            .map_err(|e| attach_route_limits(SdkError::from(e), route, destination))?;
+            .map_err(|e| attach_limits(SdkError::from(e), limits))?;
         debug!("Orchestra: receive quote response: {:?}", quote);
         // Verify the quote's amountIn matches what we requested.
         verify_quote_amount_in(source_amount, parse_amount(&quote.amount_in, "amountIn")?)?;
@@ -2069,14 +2187,14 @@ impl CrossChainService for OrchestraService {
             Some(sized) => self
                 .requote_if_short(request, quote, sized, amount, max_slippage_bps)
                 .await
-                .map_err(|e| attach_route_limits(e, route, destination))?,
+                .map_err(|e| attach_limits(e, limits))?,
             None => quote,
         };
 
         let deposit_amount = parse_amount(&quote.amount_in, "amountIn")?;
         let quote_estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let service_fee_amount =
-            service_fee_from_quote(&quote, &destination_asset_symbol, destination_decimals)?;
+            service_fee_from_quote(&quote, &destination.asset, destination.decimals)?;
         let (service_fee_asset, service_fee_asset_decimals) = fee_denomination(&quote);
         let expires_at_secs = parse_rfc3339_to_unix_seconds(&quote.expires_at)?;
 
@@ -2102,16 +2220,212 @@ impl CrossChainService for OrchestraService {
             deposit_amount,
         )?;
 
+        Ok(OrchestraReceiveQuote {
+            prepared: CrossChainReceivePrepared {
+                payment_request,
+                info: CrossChainReceiveInfo {
+                    deposit_address: quote.deposit_address,
+                    deposit_amount,
+                    expected_received_amount,
+                    destination_asset: destination.asset.clone(),
+                    token_identifier: destination.token_identifier.clone(),
+                    service_fee_amount,
+                    service_fee_asset,
+                    service_fee_asset_decimals,
+                    expires_at: expires_at_secs,
+                },
+                quote_id: quote.quote_id,
+                quote_read_token: quote.read_token.map(|t| t.0),
+            },
+            amount_in: quote.amount_in,
+            fee_asset: quote.fee_asset,
+            destination_chain: destination.chain.clone(),
+            destination_decimals: destination.decimals,
+        })
+    }
+
+    /// The routes Orchestra serves out of `chain` when `is_send`, into it
+    /// otherwise.
+    pub(crate) async fn route_listing(
+        &self,
+        chain: &str,
+        is_send: bool,
+    ) -> Result<Vec<RouteWithLimits>, SdkError> {
+        Ok(self.client.filter_routes(chain, is_send).await?)
+    }
+
+    /// The order behind `quote_id`, or `None` before one exists. Reads with the
+    /// `/quote` read token while it lasts, otherwise from the public explorer,
+    /// which needs no key or token.
+    pub(crate) async fn find_order(
+        &self,
+        quote_id: &str,
+        read_token: Option<&str>,
+    ) -> Result<Option<Order>, SdkError> {
+        if let Some(token) = read_token {
+            match self.client.status_by_quote_id(quote_id, token).await {
+                Ok(resp) if resp.order.quote_id.as_deref().is_none_or(|q| q == quote_id) => {
+                    return Ok(Some(self.follow_recovery(resp.order).await));
+                }
+                Ok(_) => debug!("Orchestra quote {quote_id}: read token names another order"),
+                Err(e) if is_quote_not_ordered_error(&e) => return Ok(None),
+                Err(e) if is_invalid_read_token(&e) || is_unauthorized(&e) => {
+                    debug!(
+                        "Orchestra quote {quote_id}: status read refused, reading the explorer: {e}"
+                    );
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        // A replaced deposit or a second payment leaves several orders under
+        // the quote: take the oldest that nothing superseded.
+        let order = self
+            .explorer_orders(quote_id)
+            .await?
+            .into_iter()
+            .filter(|order| order.quote_id.as_deref().is_none_or(|q| q == quote_id))
+            .min_by_key(|order| {
+                (
+                    order.superseded_by_operation_id.is_some(),
+                    parse_rfc3339_to_unix_seconds(&order.created_at).unwrap_or(u64::MAX),
+                )
+            });
+        match order {
+            Some(order) => Ok(Some(self.follow_recovery(order).await)),
+            None => Ok(None),
+        }
+    }
+
+    /// The explorer's orders for an order, quote or transaction id. Empty when
+    /// it has none.
+    async fn explorer_orders(&self, id: &str) -> Result<Vec<Order>, SdkError> {
+        match self.client.explorer_operations(id).await {
+            Ok(resp) => Ok(resp.operations.into_iter().map(|op| op.operation).collect()),
+            Err(e) if is_explorer_not_found(&e) => Ok(Vec::new()),
+            Err(e) if is_explorer_invalid_query(&e) => {
+                Err(SdkError::InvalidInput(format!("Not a valid id: {id}")))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Follows `order` to the order that recovered its replaced deposit, which
+    /// carries the delivered result. A failed lookup keeps the last order read.
+    async fn follow_recovery(&self, mut order: Order) -> Order {
+        for _ in 0..MAX_RECOVERY_HOPS {
+            let Some(successor_id) = order.superseded_by_operation_id.clone() else {
+                break;
+            };
+            let successor = match self.explorer_orders(&successor_id).await {
+                Ok(orders) => orders.into_iter().find(|o| o.id == successor_id),
+                Err(e) => {
+                    warn!(
+                        "Orchestra order {}: reading its successor {successor_id} failed: {e}",
+                        order.id
+                    );
+                    None
+                }
+            };
+            match successor {
+                Some(successor) => order = successor,
+                None => break,
+            }
+        }
+        order
+    }
+}
+
+#[macros::async_trait]
+#[allow(clippy::too_many_lines)]
+impl CrossChainService for OrchestraService {
+    async fn get_routes(
+        &self,
+        filter: &CrossChainRouteFilter,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        self.quoter.get_routes(filter).await
+    }
+
+    async fn prepare_send(
+        &self,
+        recipient_address: &str,
+        route: &CrossChainRoutePair,
+        amount: u128,
+        delivery_method: Option<DeliveryMethod>,
+        source_token_identifier: Option<String>,
+        max_slippage_bps: u32,
+        fee_mode: CrossChainFeeMode,
+    ) -> Result<CrossChainSendPrepared, SdkError> {
+        self.quoter
+            .prepare_send(
+                recipient_address,
+                route,
+                amount,
+                delivery_method,
+                source_token_identifier,
+                max_slippage_bps,
+                fee_mode,
+            )
+            .await
+    }
+
+    async fn prepare_receive(
+        &self,
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        amount: u128,
+        max_slippage_bps: u32,
+        destination: &SparkAsset,
+        fee_mode: CrossChainFeeMode,
+        target_overpay_bps: u32,
+        delivery_method: DeliveryMethod,
+        refund_address: Option<&str>,
+    ) -> Result<CrossChainReceivePrepared, SdkError> {
+        // Orchestra fulfils a Spark invoice on delivery, so quoting against
+        // one created here tags the inbound payment with it and ties it to
+        // this row the moment it is seen. Amountless, since the delivered
+        // amount is only known once the order settles, and without expiry,
+        // since Orchestra accepts late deposits. Over Lightning, Orchestra
+        // pays `recipient_address` itself and there is nothing to tie.
+        let spark_invoice = if matches!(delivery_method, DeliveryMethod::Spark) {
+            let token_identifier = match destination {
+                SparkAsset::Bitcoin => None,
+                SparkAsset::Token { token_identifier } => Some(token_identifier.clone()),
+            };
+            Some(
+                self.spark_wallet
+                    .create_spark_invoice(None, token_identifier, None, None, None)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let quote = self
+            .quoter
+            .quote_receive(
+                route,
+                spark_invoice.as_deref().unwrap_or(recipient_address),
+                amount,
+                max_slippage_bps,
+                destination,
+                fee_mode,
+                target_overpay_bps,
+                delivery_method,
+                refund_address,
+            )
+            .await?;
+        let prepared = quote.prepared;
+
         // Persisted only once the request the caller gets back is in hand: a
         // row written for a request that failed to build is polled for the
         // whole grace window against a quote nobody is paying. Over Lightning
         // no funds reach this wallet, so there is no order to track.
-        if !is_lightning {
+        if spark_invoice.is_some() {
             let data = OrchestraSwapData {
-                quote_id: quote.quote_id.clone(),
+                quote_id: prepared.quote_id.clone(),
                 order_id: None,
                 read_token: None,
-                quote_read_token: quote.read_token.as_ref().map(|t| t.0.clone()),
+                quote_read_token: prepared.quote_read_token.clone(),
                 recipient_address: recipient_address.to_string(),
                 spark_invoice,
                 source_chain: route.chain.clone(),
@@ -2119,36 +2433,23 @@ impl CrossChainService for OrchestraService {
                 source_chain_id: route.chain_id.clone(),
                 source_contract_address: route.contract_address.clone(),
                 source_decimals: u32::from(route.decimals),
-                destination_chain: destination_chain.to_string(),
-                destination_asset: destination_asset_symbol.clone(),
-                destination_decimals,
-                token_identifier: destination_token_identifier.clone(),
-                amount_in: quote.amount_in.clone(),
-                expected_amount_out: expected_received_amount.to_string(),
-                fee_amount: Some(service_fee_amount.to_string()),
-                fee_asset: Some(quote.fee_asset.clone()),
-                fee_asset_decimals: service_fee_asset_decimals,
-                expires_at: expires_at_secs,
+                destination_chain: quote.destination_chain,
+                destination_asset: prepared.info.destination_asset.clone(),
+                destination_decimals: quote.destination_decimals,
+                token_identifier: prepared.info.token_identifier.clone(),
+                amount_in: quote.amount_in,
+                expected_amount_out: prepared.info.expected_received_amount.to_string(),
+                fee_amount: Some(prepared.info.service_fee_amount.to_string()),
+                fee_asset: Some(quote.fee_asset),
+                fee_asset_decimals: prepared.info.service_fee_asset_decimals,
+                expires_at: prepared.info.expires_at,
             };
             let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
             adapter.upsert(&data).await?;
             self.has_active_receives.store(true, Ordering::Relaxed);
         }
 
-        Ok(CrossChainReceivePrepared {
-            payment_request,
-            info: CrossChainReceiveInfo {
-                deposit_address: quote.deposit_address,
-                deposit_amount,
-                expected_received_amount,
-                destination_asset: destination_asset_symbol,
-                token_identifier: destination_token_identifier,
-                service_fee_amount,
-                service_fee_asset,
-                service_fee_asset_decimals,
-                expires_at: expires_at_secs,
-            },
-        })
+        Ok(prepared)
     }
 
     async fn send(
@@ -2178,15 +2479,14 @@ impl CrossChainService for OrchestraService {
         )?);
 
         // Step 1: Spark transfer to the Orchestra deposit address.
-        let asset_transfer = self
-            .client
-            .transfer_to_deposit(
-                deposit_address,
-                deposit_amount,
-                prepared.token_identifier.as_deref(),
-                transfer_id,
-            )
-            .await?;
+        let asset_transfer = flashnet::orchestra::transfer_to_deposit(
+            &self.spark_wallet,
+            deposit_address,
+            deposit_amount,
+            prepared.token_identifier.as_deref(),
+            transfer_id,
+        )
+        .await?;
         let spark_tx_hash = asset_transfer.id();
         debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
@@ -2410,6 +2710,37 @@ fn is_invalid_read_token(err: &FlashnetError) -> bool {
         err,
         FlashnetError::Network {
             code: Some(403),
+            ..
+        }
+    )
+}
+
+/// Whether the explorer answered its 404 "Operation not found": it has no
+/// order for the id. Any other 404 is a misrouted request.
+fn is_explorer_not_found(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network { code: Some(404), reason }
+            if reason.to_ascii_lowercase().contains("operation not found")
+    )
+}
+
+/// Whether the explorer refused the id as one it can't look up.
+fn is_explorer_invalid_query(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network {
+            code: Some(400),
+            ..
+        } | FlashnetError::InvalidRequest { code: 400, .. }
+    )
+}
+
+fn is_unauthorized(err: &FlashnetError) -> bool {
+    matches!(
+        err,
+        FlashnetError::Network {
+            code: Some(401),
             ..
         }
     )
@@ -3135,6 +3466,7 @@ mod tests {
             created_at: "now".to_string(),
             updated_at: "now".to_string(),
             completed_at: None,
+            superseded_by_operation_id: None,
         };
         let info = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await;
         match info {
@@ -3245,6 +3577,7 @@ mod tests {
             created_at: "now".to_string(),
             updated_at: "now".to_string(),
             completed_at: None,
+            superseded_by_operation_id: None,
         };
         let info = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await;
         match info {
@@ -4637,6 +4970,7 @@ mod tests {
                 created_at: "0".to_string(),
                 updated_at: "0".to_string(),
                 completed_at: None,
+                superseded_by_operation_id: None,
             },
             stages: Vec::new(),
         }
@@ -5193,6 +5527,29 @@ mod tests {
         assert!(top_up_for_shortfall(u128::MAX, 2, 1).is_err());
     }
 
+    #[test_all]
+    fn proportional_inflation_scales_two_18_decimal_amounts() {
+        // 100.15 USDT on both sides of an 18-decimal pair: the product
+        // overflows u128.
+        let target = 100_150_000_000_000_000_000_u128;
+        let delivered = 99_850_000_000_000_000_000_u128;
+        let inflated = proportional_inflation(target, target, delivered).unwrap();
+        assert_eq!(inflated, 100_450_901_352_028_042_063);
+    }
+
+    #[test_all]
+    fn mul_div_rounds_as_asked() {
+        assert_eq!(mul_div(7, 3, 2, false), Some(10));
+        assert_eq!(mul_div(7, 3, 2, true), Some(11));
+        assert_eq!(mul_div(1, 1, 0, false), None);
+    }
+
+    #[test_all]
+    fn mul_div_rejects_an_overflow_it_cannot_scale_away() {
+        // Dropping digits would wipe out `b` long before the product fits.
+        assert_eq!(mul_div(u128::MAX, 1_000, 10u128.pow(20), false), None);
+    }
+
     // ---- verify_quote_amount_in ----
 
     #[test_all]
@@ -5481,5 +5838,613 @@ mod tests {
             .await
             .unwrap();
         assert!(matched.is_none());
+    }
+
+    // ---- order lookup ----
+
+    fn order(status: &str) -> Order {
+        serde_json::from_value(serde_json::json!({
+            "id": "ord_1",
+            "status": status,
+            "quoteId": "q_1",
+            "sourceTxHash": "0xdeposit",
+            "destinationTxHash": "0xdelivery",
+            "amountIn": "10000000",
+            "amountOut": "9950000",
+            "refundTxHash": null,
+            "errorCode": null,
+            "createdAt": "2026-10-29T10:00:00Z",
+            "updatedAt": "2026-10-29T10:05:00Z",
+        }))
+        .unwrap()
+    }
+
+    /// Answers Orchestra's `/status` and its public explorer the way an order
+    /// lookup sees them, recording each request.
+    struct FakeOrchestra {
+        quote_status: (u16, serde_json::Value),
+        /// Explorer answers by the looked-up id. Any other id is not found.
+        explorer: HashMap<String, (u16, serde_json::Value)>,
+        requests: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeOrchestra {
+        fn new(
+            quote_status: (u16, serde_json::Value),
+            explorer: &[(&str, (u16, serde_json::Value))],
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                quote_status,
+                explorer: explorer
+                    .iter()
+                    .map(|(id, response)| ((*id).to_string(), response.clone()))
+                    .collect(),
+                requests: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
+
+        fn respond((status, body): &(u16, serde_json::Value)) -> platform_utils::HttpResponse {
+            platform_utils::HttpResponse {
+                status: *status,
+                body: body.to_string(),
+                headers: HashMap::new(),
+            }
+        }
+    }
+
+    fn status_body(status: &str) -> serde_json::Value {
+        let order = order(status);
+        serde_json::json!({
+            "order": {
+                "id": order.id,
+                "status": status,
+                "sourceTxHash": order.source_tx_hash,
+                "destinationTxHash": order.destination_tx_hash,
+                "amountIn": order.amount_in,
+                "amountOut": order.amount_out,
+                "createdAt": order.created_at,
+                "updatedAt": order.updated_at,
+            },
+            "stages": [],
+        })
+    }
+
+    /// An explorer answer listing `(order id, status, superseded by)` orders
+    /// under quote `q_1`.
+    fn explorer_body(orders: &[(&str, &str, Option<&str>)]) -> serde_json::Value {
+        let operations: Vec<serde_json::Value> = orders
+            .iter()
+            .map(|(id, status, successor)| {
+                let mut operation = status_body(status)["order"].clone();
+                operation["id"] = (*id).into();
+                operation["quoteId"] = "q_1".into();
+                operation["supersededByOperationId"] =
+                    successor.map_or(serde_json::Value::Null, Into::into);
+                serde_json::json!({ "operation": operation, "partner": null, "refs": [] })
+            })
+            .collect();
+        serde_json::json!({ "operations": operations, "nextOffset": null })
+    }
+
+    fn error_body(code: &str, message: &str) -> serde_json::Value {
+        serde_json::json!({ "error": { "code": code, "message": message } })
+    }
+
+    fn unused() -> (u16, serde_json::Value) {
+        (500, error_body("internal", "unused"))
+    }
+
+    #[macros::async_trait]
+    impl platform_utils::HttpClient for FakeOrchestra {
+        async fn get(
+            &self,
+            url: String,
+            headers: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            let headers = headers.unwrap_or_default();
+            let token = headers.get("X-Read-Token").cloned().unwrap_or_default();
+            let key = if headers.contains_key("Authorization") {
+                ""
+            } else {
+                " (no key)"
+            };
+            let request = format!("GET {url} {token}").trim_end().to_string() + key;
+            self.requests.lock().unwrap().push(request);
+            match url.split_once("/explorer/operations?q=") {
+                Some((_, id)) => Ok(Self::respond(
+                    self.explorer
+                        .get(id)
+                        .unwrap_or(&(404, error_body("not_found", "Operation not found"))),
+                )),
+                None => Ok(Self::respond(&self.quote_status)),
+            }
+        }
+
+        async fn post(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unreachable!("unexpected POST {url}")
+        }
+
+        async fn delete(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unreachable!("unexpected DELETE {url}")
+        }
+    }
+
+    struct FixedOrchestraConfig;
+
+    #[macros::async_trait]
+    impl OrchestraConfigResolver for FixedOrchestraConfig {
+        async fn resolve(&self) -> Result<OrchestraConfig, FlashnetError> {
+            Ok(OrchestraConfig {
+                base_url: "https://orchestra.test".to_string(),
+                api_key: "key".to_string(),
+            })
+        }
+    }
+
+    fn quoter(http: Arc<FakeOrchestra>) -> OrchestraQuoter {
+        OrchestraQuoter::new(
+            Arc::new(FixedOrchestraConfig),
+            None,
+            Arc::new(FailingFiat),
+            http,
+        )
+    }
+
+    const QUOTE_STATUS: &str =
+        "GET https://orchestra.test/v1/orchestration/status?quoteId=q_1 rt_quote";
+
+    fn explorer_request(id: &str) -> String {
+        format!("GET https://orchestra.test/v1/explorer/operations?q={id} (no key)")
+    }
+
+    #[async_test_all]
+    async fn find_order_reads_by_quote_with_a_token() {
+        let http = FakeOrchestra::new((200, status_body("completed")), &[]);
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", Some("rt_quote"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.status, OrderStatus::Completed);
+        assert_eq!(http.requests(), vec![QUOTE_STATUS]);
+    }
+
+    #[async_test_all]
+    async fn find_order_finds_none_before_a_deposit() {
+        let http = FakeOrchestra::new((404, error_body("not_found", "Order not found")), &[]);
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", Some("rt_quote"))
+            .await
+            .unwrap();
+        assert!(order.is_none());
+        assert_eq!(http.requests(), vec![QUOTE_STATUS]);
+    }
+
+    #[async_test_all]
+    async fn find_order_reads_the_explorer_once_the_token_is_refused() {
+        for refused in [
+            (
+                403,
+                error_body("invalid_read_token", "readToken is invalid or expired"),
+            ),
+            (401, error_body("unauthorized", "Invalid API key")),
+        ] {
+            let http = FakeOrchestra::new(
+                refused,
+                &[("q_1", (200, explorer_body(&[("ord_1", "completed", None)])))],
+            );
+            let order = quoter(Arc::clone(&http))
+                .find_order("q_1", Some("rt_quote"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(order.status, OrderStatus::Completed);
+            assert_eq!(
+                http.requests(),
+                vec![QUOTE_STATUS.to_string(), explorer_request("q_1")]
+            );
+        }
+    }
+
+    #[async_test_all]
+    async fn find_order_reads_the_explorer_without_a_token() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[("q_1", (200, explorer_body(&[("ord_1", "swapping", None)])))],
+        );
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.status, OrderStatus::Swapping);
+        assert_eq!(http.requests(), vec![explorer_request("q_1")]);
+    }
+
+    #[async_test_all]
+    async fn find_order_finds_none_when_the_explorer_has_no_order() {
+        let http = FakeOrchestra::new(unused(), &[]);
+        assert!(
+            quoter(http)
+                .find_order("q_1", None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[async_test_all]
+    async fn find_order_skips_an_explorer_order_for_another_quote() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[("q_2", (200, explorer_body(&[("ord_1", "completed", None)])))],
+        );
+        assert!(
+            quoter(http)
+                .find_order("q_2", None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[async_test_all]
+    async fn find_order_surfaces_a_misrouted_explorer_404() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[("q_1", (404, serde_json::json!("404 Not Found")))],
+        );
+        assert!(quoter(http).find_order("q_1", None).await.is_err());
+    }
+
+    #[async_test_all]
+    async fn find_order_rejects_an_id_the_explorer_cannot_look_up() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[(
+                "q_typo",
+                (
+                    400,
+                    error_body(
+                        "invalid_query",
+                        "q must be an order id, quote id, transaction id, or address",
+                    ),
+                ),
+            )],
+        );
+        assert!(matches!(
+            quoter(http).find_order("q_typo", None).await,
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
+
+    #[async_test_all]
+    async fn find_order_surfaces_a_provider_outage() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[("q_1", (503, error_body("internal", "Down for maintenance")))],
+        );
+        assert!(quoter(http).find_order("q_1", None).await.is_err());
+    }
+
+    #[async_test_all]
+    async fn find_order_prefers_the_order_that_recovered_a_replaced_deposit() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[(
+                "q_1",
+                (
+                    200,
+                    explorer_body(&[
+                        ("ord_1", "unfulfilled", Some("ord_2")),
+                        ("ord_2", "completed", None),
+                    ]),
+                ),
+            )],
+        );
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.id, "ord_2");
+        assert_eq!(http.requests(), vec![explorer_request("q_1")]);
+    }
+
+    #[async_test_all]
+    async fn find_order_follows_a_replaced_deposit_to_its_recovery() {
+        let mut replaced = status_body("unfulfilled");
+        replaced["order"]["supersededByOperationId"] = "ord_2".into();
+        let http = FakeOrchestra::new(
+            (200, replaced),
+            &[(
+                "ord_2",
+                (200, explorer_body(&[("ord_2", "completed", None)])),
+            )],
+        );
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", Some("rt_quote"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.id, "ord_2");
+        assert_eq!(order.status, OrderStatus::Completed);
+        assert_eq!(
+            http.requests(),
+            vec![QUOTE_STATUS.to_string(), explorer_request("ord_2")]
+        );
+    }
+
+    #[async_test_all]
+    async fn find_order_keeps_the_order_read_when_its_successor_cannot_be_read() {
+        let mut replaced = status_body("unfulfilled");
+        replaced["order"]["supersededByOperationId"] = "ord_2".into();
+        let http = FakeOrchestra::new(
+            (200, replaced),
+            &[(
+                "ord_2",
+                (429, error_body("rate_limited", "Too many requests")),
+            )],
+        );
+        let order = quoter(http)
+            .find_order("q_1", Some("rt_quote"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.id, "ord_1");
+        assert_eq!(order.status, OrderStatus::Unfulfilled);
+    }
+
+    #[async_test_all]
+    async fn find_order_takes_the_oldest_of_several_live_orders() {
+        let mut body = explorer_body(&[("ord_2", "refunded", None), ("ord_1", "completed", None)]);
+        body["operations"][0]["operation"]["createdAt"] = "2026-10-29T11:00:00Z".into();
+        let http = FakeOrchestra::new(unused(), &[("q_1", (200, body))]);
+        let order = quoter(http).find_order("q_1", None).await.unwrap().unwrap();
+        assert_eq!(order.id, "ord_1");
+    }
+
+    #[async_test_all]
+    async fn find_order_stops_following_a_recovery_loop() {
+        let http = FakeOrchestra::new(
+            unused(),
+            &[
+                (
+                    "q_1",
+                    (
+                        200,
+                        explorer_body(&[("ord_1", "unfulfilled", Some("ord_2"))]),
+                    ),
+                ),
+                (
+                    "ord_1",
+                    (
+                        200,
+                        explorer_body(&[("ord_1", "unfulfilled", Some("ord_2"))]),
+                    ),
+                ),
+                (
+                    "ord_2",
+                    (
+                        200,
+                        explorer_body(&[("ord_2", "unfulfilled", Some("ord_1"))]),
+                    ),
+                ),
+            ],
+        );
+        let order = quoter(Arc::clone(&http))
+            .find_order("q_1", None)
+            .await
+            .unwrap();
+        assert!(order.is_some());
+        assert_eq!(http.requests().len(), 1 + MAX_RECOVERY_HOPS);
+    }
+
+    /// Answers Orchestra's `/estimate` and `/quote`, quoting whatever amount
+    /// is asked for, and records each request.
+    struct FakeQuoting {
+        estimated_out: &'static str,
+        quoted_out: &'static str,
+        requests: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[macros::async_trait]
+    impl platform_utils::HttpClient for FakeQuoting {
+        async fn get(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            self.requests.lock().unwrap().push(format!("GET {url}"));
+            let body = serde_json::json!({
+                "estimatedOut": self.estimated_out, "feeAmount": "0", "feeBps": 0,
+                "totalFeeAmount": "0", "feeAsset": "USDC",
+            });
+            Ok(platform_utils::HttpResponse {
+                status: 200,
+                body: body.to_string(),
+                headers: HashMap::new(),
+            })
+        }
+
+        async fn post(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            let body = body.unwrap_or_default();
+            self.requests
+                .lock()
+                .unwrap()
+                .push(format!("POST {url} {body}"));
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let quote = serde_json::json!({
+                "quoteId": "q_c2c", "depositAddress": "0x00000000000000000000000000000000000000d0",
+                "amountIn": request["amount"], "estimatedOut": self.quoted_out,
+                "feeAmount": "0", "totalFeeAmount": "0", "feeAsset": "USDC", "feeBps": 0,
+                "expiresAt": "2026-09-23T07:08:28.560Z", "readToken": "rt_c2c",
+            });
+            Ok(platform_utils::HttpResponse {
+                status: 200,
+                body: quote.to_string(),
+                headers: HashMap::new(),
+            })
+        }
+
+        async fn delete(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unreachable!("unexpected DELETE {url}")
+        }
+    }
+
+    #[async_test_all]
+    async fn quote_deposit_sizes_a_deposit_between_two_18_decimal_stablecoins() {
+        // 100 USDT is 10^20 base units on both sides of BSC USDC to BSC USDT.
+        let http = Arc::new(FakeQuoting {
+            estimated_out: "99850000000000000000",
+            quoted_out: "100000000000000000000",
+            requests: std::sync::Mutex::new(Vec::new()),
+        });
+        let quoter = OrchestraQuoter::new(
+            Arc::new(FixedOrchestraConfig),
+            None,
+            Arc::new(FailingFiat),
+            Arc::clone(&http) as Arc<dyn platform_utils::HttpClient>,
+        );
+        let source = CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "bsc".to_string(),
+            chain_id: Some("56".to_string()),
+            asset: "USDC".to_string(),
+            contract_address: Some("0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d".to_string()),
+            decimals: 18,
+            exact_out_eligible: false,
+            accepted_assets: Vec::new(),
+            delivery_methods: Vec::new(),
+        };
+        let destination = DepositDestination {
+            chain: "bsc".to_string(),
+            asset: "USDT".to_string(),
+            decimals: 18,
+            token_identifier: None,
+        };
+
+        let quote = quoter
+            .quote_deposit(
+                &source,
+                &destination,
+                None,
+                "0x0000000000000000000000000000000000000001",
+                100_000_000_000_000_000_000,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let deposit = quote.prepared.info.deposit_amount;
+        assert!(
+            (100_150_000_000_000_000_000..100_160_000_000_000_000_000).contains(&deposit),
+            "the deposit covers the 0.15% the estimate falls short: {deposit}"
+        );
+    }
+
+    #[async_test_all]
+    async fn quote_deposit_sizes_a_deposit_between_two_chains() {
+        let http = Arc::new(FakeQuoting {
+            estimated_out: "10000000",
+            quoted_out: "10000000",
+            requests: std::sync::Mutex::new(Vec::new()),
+        });
+        let quoter = OrchestraQuoter::new(
+            Arc::new(FixedOrchestraConfig),
+            None,
+            Arc::new(FailingFiat),
+            Arc::clone(&http) as Arc<dyn platform_utils::HttpClient>,
+        );
+        // USDT on BSC has 18 decimals, USDC on Base 6.
+        let source = CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "bsc".to_string(),
+            chain_id: Some("56".to_string()),
+            asset: "USDT".to_string(),
+            contract_address: Some("0x55d398326f99059fF775485246999027B3197955".to_string()),
+            decimals: 18,
+            exact_out_eligible: false,
+            accepted_assets: Vec::new(),
+            delivery_methods: Vec::new(),
+        };
+        let destination = DepositDestination {
+            chain: "base".to_string(),
+            asset: "USDC".to_string(),
+            decimals: 6,
+            token_identifier: None,
+        };
+
+        let quote = quoter
+            .quote_deposit(
+                &source,
+                &destination,
+                None,
+                "0x0000000000000000000000000000000000000001",
+                10_000_000,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                0,
+                Some("0x0000000000000000000000000000000000000002"),
+            )
+            .await
+            .unwrap();
+
+        let requests = http.requests.lock().unwrap().clone();
+        let [estimate, quote_request] = requests.as_slice() else {
+            panic!("expected an estimate and a quote, got {requests:?}");
+        };
+        assert!(estimate.contains("sourceChain=bsc"), "{estimate}");
+        assert!(estimate.contains("destinationChain=base"), "{estimate}");
+        assert!(
+            estimate.contains("amount=10000000000000000000"),
+            "the probe is 10 USDC rescaled to 18 decimals: {estimate}"
+        );
+        assert!(quote_request.contains("\"destinationAsset\":\"USDC\""));
+        assert!(
+            quote_request
+                .contains("\"refundAddress\":\"0x0000000000000000000000000000000000000002\"")
+        );
+
+        let prepared = quote.prepared;
+        assert_eq!(prepared.quote_id, "q_c2c");
+        assert_eq!(prepared.quote_read_token.as_deref(), Some("rt_c2c"));
+        assert!(prepared.info.deposit_amount >= 10_000_000_000_000_000_000);
+        assert_eq!(prepared.info.expected_received_amount, 10_000_000);
+        assert_eq!(prepared.info.destination_asset, "USDC");
+        assert_eq!(prepared.info.token_identifier, None);
+        assert!(
+            prepared.payment_request.starts_with("ethereum:")
+                && prepared.payment_request.contains("@56"),
+            "{}",
+            prepared.payment_request
+        );
     }
 }

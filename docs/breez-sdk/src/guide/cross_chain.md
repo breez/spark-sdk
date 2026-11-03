@@ -4,7 +4,9 @@ The SDK can send and receive USDC and USDT between a Spark wallet and several su
 
 The send flow is documented on the [Sending payments](./send_payment.md#usdc-usdt) page; the receive flow on the [Receiving payments](./receive_payment.md#usdc-usdt) page. This page covers shared concepts: providers, lifecycle, retry safety, and limitations.
 
-Routes listed by {{#name get_cross_chain_routes}} with an unset {{#name delivery_method}} are the ones this wallet sends from or receives into. Setting it to {{#enum DeliveryMethod::Lightning}} lists the routes funded or paid out over Lightning by someone else, used by the [Cash App bridges](./cash_app.md).
+{{#name get_cross_chain_routes}} lists the routes this wallet sends from or receives into, with its {{#name delivery_method}} left unset.
+
+To have a payer on another chain or on Lightning pay a recipient directly, with no funds moving through the SDK, use a [bridging client](./bridging.md). It lists its own routes with {{#name get_routes}}, and also runs the [Cash App bridges](./cash_app.md).
 
 ## Supported address formats
 
@@ -76,7 +78,7 @@ A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, ca
 
 A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} indicates that a route is currently unavailable and the same request may succeed later, rather than requiring another route.
 
-When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. Enable it as described in [USDC/USDT configuration](./config.md#usdc-usdt).
+When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. Enable it as described in [USDC/USDT configuration](./config.md#usdc-usdt). A [bridging client](./bridging.md) doesn't need it.
 
 ## Slippage
 

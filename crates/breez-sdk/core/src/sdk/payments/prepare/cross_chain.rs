@@ -188,7 +188,8 @@ pub(crate) async fn prepare(
     })?;
     validate_address_family_against_route(address_family, route)?;
 
-    let known_contracts = known_token_contracts(sdk, address, address_family, route).await;
+    let known_contracts =
+        known_token_contracts(&sdk.cross_chain_context, address, address_family, route).await;
     validate_recipient_not_contract_address(address, address_family, &known_contracts)?;
 
     let provider_slippage_bps = resolve_slippage_bps(
@@ -1222,6 +1223,7 @@ mod tests {
                 deposit_address: "sp1...".to_string(),
                 deposit_amount: amount_in,
             },
+            quote_read_token: None,
         }
     }
 

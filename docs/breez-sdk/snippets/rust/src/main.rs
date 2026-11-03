@@ -1,3 +1,4 @@
+mod bridging;
 mod buying_bitcoin;
 mod cash_app;
 mod client_signing;

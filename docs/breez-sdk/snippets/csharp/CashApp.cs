@@ -5,70 +5,69 @@ namespace BreezSdkSnippets
 {
     class CashApp
     {
-        async Task BridgeFromCashApp(BreezSdk sdk)
+        async Task BridgeFromCashApp(BridgingClient client)
         {
             // ANCHOR: bridge-from-cash-app
-            // Parse the recipient's external-chain address (EVM/Solana/Tron).
-            var parsed = await sdk.Parse(input: "<recipient address>");
-            if (parsed is not InputType.CrossChainAddress crossChain)
-            {
-                throw new InvalidOperationException("Not a cross-chain address");
-            }
-            var addressDetails = crossChain.v1;
-
-            // List the stablecoin destinations Cash App can fund over Lightning
-            // and pick one, e.g. USDC on Base.
-            var filter = new CrossChainRouteFilter.Send(
-                addressDetails: addressDetails,
-                deliveryMethod: DeliveryMethod.Lightning
+            // List the routes to the recipient's external-chain address
+            // (EVM/Solana/Tron) and pick a stablecoin Cash App can fund over
+            // Lightning, e.g. USDC on Base.
+            var recipient = "<recipient address>";
+            var routes = (await client.GetRoutes(
+                request: new GetBridgeRoutesRequest(recipient: recipient)
+            )).routes;
+            var route = routes.First(
+                r => r.source.chain == "lightning"
+                    && r.destination.asset == "USDC"
+                    && r.destination.chain == "base"
             );
-            var routes = await sdk.GetCrossChainRoutes(filter: filter);
-            var route = routes.First(r => r.asset == "USDC" && r.chain == "base");
 
-            // Send $10 of USDC, funded by Cash App over Lightning. The amount
-            // is in the route asset's base units (USDC, 6 decimals), so
-            // 10_000_000 = 10 USDC, about $10.
-            var request = new BridgeFromCashAppRequest(
-                address: addressDetails.address,
+            // Send $10 of USDC, funded by Cash App over Lightning. The amount is in
+            // USDC base units (6 decimals), so 10_000_000 = 10 USDC, about $10.
+            var request = new CreateBridgeRequest(
+                recipient: recipient,
                 route: route,
                 amount: new BigInteger(10_000_000),
+                refundAddress: null,
                 feePolicy: null,
                 maxSlippageBps: null
             );
-            var response = await sdk.BridgeFromCashApp(request: request);
+            var response = await client.BridgeFromCashApp(request: request);
 
-            // Open this Cash App URL to pay. The recipient then receives the
+            // Open this Cash App link to pay. The recipient then receives the
             // stablecoin.
-            Console.WriteLine($"Open this URL in Cash App: {response.url}");
-            Console.WriteLine($"Recipient receives ~{response.estimatedOut} {response.asset}");
+            var info = response.info;
+            Console.WriteLine($"Open this URL in Cash App: {response.paymentRequest}");
+            Console.WriteLine(
+                $"Recipient receives ~{info.expectedReceivedAmount} {info.destinationAsset}"
+            );
             // ANCHOR_END: bridge-from-cash-app
         }
 
-        async Task BridgeToCashApp(BreezSdk sdk)
+        async Task BridgeToCashApp(BridgingClient client)
         {
             // ANCHOR: bridge-to-cash-app
-            // List the stablecoin sources that can pay a Cash App user over
-            // Lightning and pick one, e.g. USDC on Base.
-            var filter = new CrossChainRouteFilter.Receive(
-                contractAddress: null,
-                deliveryMethod: DeliveryMethod.Lightning
+            // List the routes to the Cash App user and pick what the payer pays in,
+            // e.g. USDC on Base.
+            var recipient = "$alice";
+            var routes = (await client.GetRoutes(
+                request: new GetBridgeRoutesRequest(recipient: recipient)
+            )).routes;
+            var route = routes.First(
+                r => r.source.asset == "USDC" && r.source.chain == "base"
             );
-            var routes = await sdk.GetCrossChainRoutes(filter: filter);
-            var route = routes.First(r => r.asset == "USDC" && r.chain == "base");
 
-            // Pay $10 of USDC to the Cash App user $alice. The amount is in
-            // the route asset's base units (USDC, 6 decimals), so
-            // 10_000_000 = 10 USDC, about $10. The deposit is refunded to the
-            // payer's address if delivery fails.
-            var request = new BridgeToCashAppRequest(
-                recipient: "$alice",
+            // Pay $10 of USDC to the Cash App user $alice. The amount is in USDC base
+            // units (6 decimals), so 10_000_000 = 10 USDC, about $10. The deposit is
+            // refunded to the payer's address if delivery fails.
+            var request = new CreateBridgeRequest(
+                recipient: recipient,
                 route: route,
                 amount: new BigInteger(10_000_000),
-                feePolicy: null,
                 refundAddress: "<payer address>",
+                feePolicy: null,
                 maxSlippageBps: null
             );
-            var response = await sdk.BridgeToCashApp(request: request);
+            var response = await client.BridgeToCashApp(request: request);
 
             // Show the payer what to pay. The recipient then receives Bitcoin.
             var info = response.info;

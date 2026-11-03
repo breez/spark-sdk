@@ -1155,7 +1155,7 @@ async fn build_stable_balance(
 }
 
 /// Builds the cross-chain context: provider registry + shared cached fiat
-/// service. Returns an empty registry when `config.cross_chain_config` is unset.
+/// service. The registry is empty when `config.cross_chain_config` is unset.
 #[allow(clippy::too_many_arguments)]
 async fn build_cross_chain_context(
     config: &Config,
@@ -1174,28 +1174,35 @@ async fn build_cross_chain_context(
             crate::cross_chain::DEFAULT_FIAT_CACHE_TTL,
         ));
     let mut providers = crate::cross_chain::CrossChainContext::new(Arc::clone(&cached_fiat));
-    if config.cross_chain_config.is_none() {
-        return providers;
-    }
 
     // Orchestra cross-chain is mainnet-only. Its base URL and API key are
     // fetched from Breez server (so the key can be rotated and revoked without
     // an SDK release) lazily on first cross-chain use, not at connect: see
     // `BreezServerOrchestraConfigResolver`. There is no bundled fallback key.
-    if matches!(config.network, Network::Mainnet) {
-        let config_resolver = Arc::new(
-            crate::cross_chain::BreezServerOrchestraConfigResolver::new(Arc::clone(breez_server)),
-        );
+    if !matches!(config.network, Network::Mainnet) {
+        return providers;
+    }
+    // The quoter makes no call until used, so every mainnet SDK gets one for
+    // bridging, including in server mode. It only becomes a payment provider,
+    // with the wallet-backed service and its monitor, when cross-chain
+    // payments are enabled.
+    let config_resolver = Arc::new(crate::cross_chain::BreezServerOrchestraConfigResolver::new(
+        Arc::clone(breez_server),
+    ));
+    let quoter = Arc::new(crate::cross_chain::OrchestraQuoter::new(
+        config_resolver,
+        config.api_key.as_deref().and_then(crate::sdk::partner_id),
+        Arc::clone(&cached_fiat),
+        Arc::clone(http_client),
+    ));
+    if config.cross_chain_config.is_some() {
         providers.insert(
             crate::cross_chain::CrossChainProvider::Orchestra,
             Arc::new(
                 crate::cross_chain::OrchestraService::new(
-                    config_resolver,
-                    config.api_key.as_deref().and_then(crate::sdk::partner_id),
+                    Arc::clone(&quoter),
                     Arc::clone(spark_wallet),
                     Arc::clone(storage),
-                    Arc::clone(&cached_fiat),
-                    Arc::clone(http_client),
                     Arc::clone(event_emitter),
                     shutdown_receiver,
                 )
@@ -1203,6 +1210,7 @@ async fn build_cross_chain_context(
             ),
         );
     }
+    providers.set_orchestra_quoter(quoter);
 
     providers
 }
@@ -2285,6 +2293,53 @@ mod tests {
             !sdk.remove_event_listener(&id).await,
             "listener should already be unregistered by disconnect"
         );
+    }
+
+    /// Off mainnet there is no bridging client, and the Cash App bridges fail
+    /// with "Only available on mainnet".
+    #[tokio::test]
+    async fn bridging_client_is_mainnet_only() {
+        use crate::{BridgeToCashAppRequest, CrossChainProvider, CrossChainRoutePair, SdkError};
+
+        let storage_dir = std::env::temp_dir()
+            .join(format!("breez-sdk-test-bridging-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let sdk = SdkBuilder::new(crate::default_server_config(Network::Regtest), test_seed())
+            .with_default_storage(storage_dir)
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        assert!(matches!(
+            sdk.get_bridging_client(),
+            Err(SdkError::Generic(message)) if message == "Only available on mainnet"
+        ));
+        let bridge = sdk
+            .bridge_to_cash_app(BridgeToCashAppRequest {
+                recipient: "alice".to_string(),
+                route: CrossChainRoutePair {
+                    provider: CrossChainProvider::Orchestra,
+                    chain: "base".to_string(),
+                    chain_id: None,
+                    asset: "USDC".to_string(),
+                    contract_address: None,
+                    decimals: 6,
+                    exact_out_eligible: false,
+                    accepted_assets: vec![],
+                    delivery_methods: vec![],
+                },
+                amount: 1_000_000,
+                fee_policy: None,
+                refund_address: "0x0000000000000000000000000000000000000001".to_string(),
+                max_slippage_bps: None,
+            })
+            .await;
+        assert!(
+            matches!(bridge, Err(SdkError::Generic(message)) if message == "Only available on mainnet")
+        );
+
+        sdk.disconnect().await.expect("disconnect should succeed");
     }
 
     fn test_spark_signer() -> std::sync::Arc<dyn spark_wallet::SparkSigner> {

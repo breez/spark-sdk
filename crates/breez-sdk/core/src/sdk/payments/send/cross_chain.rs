@@ -55,6 +55,7 @@ pub(in crate::sdk) async fn send(
         recipient_address: recipient_address.clone(),
         token_identifier: token_identifier.clone(),
         provider_context: provider_context.clone(),
+        quote_read_token: None,
     };
 
     // Token transfers may not trigger the same wallet event path as BTC

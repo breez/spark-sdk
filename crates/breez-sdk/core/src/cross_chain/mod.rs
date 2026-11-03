@@ -15,7 +15,9 @@ mod orchestra;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
 pub(crate) use orchestra::{
-    BreezServerOrchestraConfigResolver, OrchestraService, parse_rfc3339_to_unix_seconds,
+    BreezServerOrchestraConfigResolver, DepositDestination, OrchestraQuoter, OrchestraService,
+    delivery_method_from_wire, delivery_method_to_wire, parse_rfc3339_to_unix_seconds,
+    to_route_limits,
 };
 
 use std::collections::HashMap;
@@ -413,6 +415,8 @@ impl CrossChainRoutePair {
 pub(crate) struct CrossChainContext {
     providers: HashMap<CrossChainProvider, Arc<dyn CrossChainService>>,
     fiat_service: Arc<dyn FiatService>,
+    /// The Orchestra quoter, if one was set.
+    orchestra_quoter: Option<Arc<OrchestraQuoter>>,
 }
 
 impl CrossChainContext {
@@ -420,11 +424,21 @@ impl CrossChainContext {
         Self {
             providers: HashMap::new(),
             fiat_service,
+            orchestra_quoter: None,
         }
     }
 
     pub fn insert(&mut self, key: CrossChainProvider, service: Arc<dyn CrossChainService>) {
         self.providers.insert(key, service);
+    }
+
+    pub fn set_orchestra_quoter(&mut self, quoter: Arc<OrchestraQuoter>) {
+        self.orchestra_quoter = Some(quoter);
+    }
+
+    /// The Orchestra quoter, if one was set.
+    pub fn orchestra_quoter(&self) -> Option<&Arc<OrchestraQuoter>> {
+        self.orchestra_quoter.as_ref()
     }
 
     /// Fails with [`SdkError::CrossChainDisabled`] when no provider is
@@ -449,6 +463,34 @@ impl CrossChainContext {
 
     pub fn values(&self) -> impl Iterator<Item = &Arc<dyn CrossChainService>> {
         self.providers.values()
+    }
+
+    /// Every provider's routes for `filter`, limited to USD-pegged assets and
+    /// sorted. A provider whose listing fails is logged and left out.
+    pub async fn list_routes(
+        &self,
+        filter: &CrossChainRouteFilter,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        self.ensure_enabled()?;
+        let filter = &filter.normalized();
+        let mut all_routes = Vec::new();
+        for svc in self.values() {
+            match svc.get_routes(filter).await {
+                Ok(routes) => all_routes.extend(routes),
+                Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
+            }
+        }
+
+        // Filter to USD-pegged destinations only.
+        all_routes.retain(|r| is_usd_stable_asset(&r.asset));
+
+        all_routes.sort_by(|a, b| {
+            a.asset
+                .cmp(&b.asset)
+                .then_with(|| a.chain.cmp(&b.chain))
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
+        Ok(all_routes)
     }
 
     /// Cached fiat service shared with every cross-chain provider. Read
@@ -494,30 +536,37 @@ pub(crate) struct CrossChainReceivePrepared {
     /// Canonical cross-chain URI the sender can paste or scan to pay.
     pub payment_request: String,
     pub info: CrossChainReceiveInfo,
+    /// Provider quote id, which also identifies the order once funded.
+    pub quote_id: String,
+    /// Provider token for reading the quote's status, when it issued one.
+    pub quote_read_token: Option<String>,
 }
 
-/// Information about the cross-chain receive quote.
+/// Information about the cross-chain receive quote: what the sender deposits
+/// and what the receiver is expected to get.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CrossChainReceiveInfo {
-    /// Bare external deposit address the sender pays to.
+    /// Bare deposit address the sender pays to on the source chain, or the
+    /// BOLT11 invoice when the sender pays over Lightning.
     pub deposit_address: String,
     /// Amount the sender must deposit, in source-asset base units
-    /// (`route.decimals`). On `FeesExcluded` this may differ from the
-    /// request's `amount` because the SDK inflates the deposit to absorb
-    /// provider fees. Render this value to the sender.
+    /// (`route.decimals`, or sats over Lightning). On `FeesExcluded` this may
+    /// differ from the request's `amount` because the SDK inflates the deposit
+    /// to absorb provider fees. Render this value to the sender.
     pub deposit_amount: u128,
     /// Amount the receiver will see, net of provider fees, in
-    /// destination-asset base units. Sats when receiving BTC into Spark,
-    /// or token base units when receiving a Spark token (e.g. USDB). The
-    /// final delivered amount may move within the slippage tolerance.
+    /// destination-asset base units. Sats when receiving BTC, token base
+    /// units when receiving a Spark token (e.g. USDB), or stablecoin base
+    /// units when the receiver is on another chain. The final delivered
+    /// amount may move within the slippage tolerance.
     pub expected_received_amount: u128,
-    /// Symbol of the Spark-side asset `expected_received_amount` is
-    /// denominated in, as the provider reports it: `"BTC"` for sats, or the
-    /// token symbol (e.g. `"USDB"`).
+    /// Symbol of the asset `expected_received_amount` is denominated in, as
+    /// the provider reports it: `"BTC"` for sats, a Spark token symbol (e.g.
+    /// `"USDB"`), or the stablecoin when the receiver is on another chain.
     pub destination_asset: String,
-    /// Spark token identifier when the destination is a token. Absent when
-    /// the destination is BTC and the receiver will see sats.
+    /// Spark token identifier when the destination is a Spark token. Absent
+    /// otherwise.
     pub token_identifier: Option<String>,
     /// Provider-quoted total fee for this receive, including the partner fee
     /// when one is set, in `service_fee_asset` units.
@@ -576,6 +625,8 @@ pub(crate) struct CrossChainSendPrepared {
     pub token_identifier: Option<String>,
     /// Provider-internal state carried between `prepare` and `send`.
     pub provider_context: CrossChainProviderContext,
+    /// Provider token for reading the quote's status, when it issued one.
+    pub quote_read_token: Option<String>,
 }
 
 /// Abstraction over cross-chain bridge/swap providers.
@@ -627,11 +678,12 @@ pub(crate) trait CrossChainService: Send + Sync {
     ///   source-asset base units. The receiver lands `amount - fees`.
     ///   `target_overpay_bps` is ignored.
     ///
-    /// `delivery_method` is the rail the funds arrive on.
-    /// [`DeliveryMethod::Spark`] delivers to this wallet and tracks the
-    /// receive. [`DeliveryMethod::Lightning`] pays `recipient_address` (a
-    /// Lightning address) directly and is not tracked. `refund_address` is
-    /// where the provider returns the deposit if delivery fails.
+    /// `delivery_method` is the rail the funds arrive on:
+    /// [`DeliveryMethod::Spark`] pays `recipient_address` as a Spark address,
+    /// [`DeliveryMethod::Lightning`] as a Lightning address. A wallet-bound
+    /// implementation receives over Spark into its own wallet and tracks the
+    /// receive. `refund_address` is where the provider returns the deposit if
+    /// delivery fails.
     #[allow(clippy::too_many_arguments)]
     async fn prepare_receive(
         &self,
