@@ -89,8 +89,6 @@ let commandNames: [String] = [
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
-    "bridge-from-cash-app",
-    "bridge-to-cash-app",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -129,8 +127,6 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "refund-deposit":                    CommandEntry(name: "refund-deposit", description: "Refund an on-chain deposit", run: handleRefundDeposit),
         "list-unclaimed-deposits":           CommandEntry(name: "list-unclaimed-deposits", description: "List unclaimed on-chain deposits", run: handleListUnclaimedDeposits),
         "buy-bitcoin":                       CommandEntry(name: "buy-bitcoin", description: "Buy Bitcoin via MoonPay", run: handleBuyBitcoin),
-        "bridge-from-cash-app":              CommandEntry(name: "bridge-from-cash-app", description: "Bridge from Cash App to USDC/USDT on an external chain", run: handleBridgeFromCashApp),
-        "bridge-to-cash-app":                CommandEntry(name: "bridge-to-cash-app", description: "Bridge USDC/USDT from an external chain to a Cash App user", run: handleBridgeToCashApp),
         "check-lightning-address-available": CommandEntry(name: "check-lightning-address-available", description: "Check if a lightning address username is available", run: handleCheckLightningAddress),
         "get-lightning-address":             CommandEntry(name: "get-lightning-address", description: "Get registered lightning address", run: handleGetLightningAddress),
         "register-lightning-address":        CommandEntry(name: "register-lightning-address", description: "Register a lightning address", run: handleRegisterLightningAddress),
@@ -159,6 +155,7 @@ func printHelp(_ registry: [String: CommandEntry]) {
         print("  \(name.padding(toLength: 40, withPad: " ", startingAt: 0))\(cmd.description)")
     }
     print("\n  \("advanced <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Expert-only commands (use 'advanced help' for details)")
+    print("  \("bridging <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Bridging commands (use 'bridging help' for details)")
     print("  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
     print("  \("contacts <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Contacts commands (use 'contacts help' for details)")
     print("  \("webhooks <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Webhook commands (use 'webhooks help' for details)")
@@ -984,98 +981,6 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     }
 }
 
-// --- bridge-from-cash-app ---
-
-func handleBridgeFromCashApp(_ sdk: BreezSdk, _ args: [String]) async throws {
-    let fp = FlagParser(args)
-    guard let recipient = fp.positional.first,
-          let amountStr = fp.get("amount"),
-          let amount = BInt(amountStr) else {
-        print("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
-        return
-    }
-
-    let feesIncluded = fp.has("fees-included")
-    let maxSlippageBps = fp.get("max-slippage-bps").flatMap { UInt32($0) }
-
-    let parsed = try await sdk.parse(input: recipient)
-    guard case let .crossChainAddress(v1) = parsed else {
-        print("Error: Recipient must be a cross-chain (EVM/Solana/Tron) address")
-        return
-    }
-
-    let address = v1.address
-    let route = try await selectCrossChainRoute(
-        sdk: sdk,
-        filter: .send(addressDetails: v1, deliveryMethod: .lightning)
-    )
-
-    let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
-
-    let response = try await sdk.bridgeFromCashApp(
-        request: BridgeFromCashAppRequest(
-            address: address,
-            route: route,
-            amount: amount,
-            feePolicy: feePolicy,
-            maxSlippageBps: maxSlippageBps
-        ))
-
-    print("Open this URL in a browser to complete the purchase:")
-    print(response.url)
-    let serviceFeeDenom = serviceFeeDenomination(
-        asset: response.serviceFeeAsset,
-        decimals: response.serviceFeeAssetDecimals
-    )
-    print("Deposit ~\(response.amountSats) sats; recipient receives ~\(response.estimatedOut) \(response.asset), service fee \(response.serviceFeeAmount) \(serviceFeeDenom), expires \(response.expiresAt)")
-}
-
-// --- bridge-to-cash-app ---
-
-func handleBridgeToCashApp(_ sdk: BreezSdk, _ args: [String]) async throws {
-    let fp = FlagParser(args)
-    guard let recipient = fp.positional.first,
-          let amountStr = fp.get("amount"),
-          let amount = BInt(amountStr) else {
-        print("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]")
-        return
-    }
-
-    guard let refundAddress = fp.get("refund-address") else {
-        print("--refund-address is required")
-        return
-    }
-
-    let feesIncluded = fp.has("fees-included")
-    let maxSlippageBps = fp.get("max-slippage-bps").flatMap { UInt32($0) }
-
-    let route = try await selectCrossChainRoute(
-        sdk: sdk,
-        filter: .receive(contractAddress: nil, deliveryMethod: .lightning)
-    )
-
-    let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
-
-    let response = try await sdk.bridgeToCashApp(
-        request: BridgeToCashAppRequest(
-            recipient: recipient,
-            route: route,
-            amount: amount,
-            feePolicy: feePolicy,
-            refundAddress: refundAddress,
-            maxSlippageBps: maxSlippageBps
-        ))
-
-    let info = response.info
-    print("Ask the payer to pay:")
-    print(response.paymentRequest)
-    let serviceFeeDenom = serviceFeeDenomination(
-        asset: info.serviceFeeAsset,
-        decimals: info.serviceFeeAssetDecimals
-    )
-    print("Deposit \(info.depositAmount) \(route.asset) on \(route.chain) to \(info.depositAddress). Recipient receives ~\(info.expectedReceivedAmount) sats, service fee \(info.serviceFeeAmount) \(serviceFeeDenom), expires at \(info.expiresAt)")
-}
-
 // --- check-lightning-address-available ---
 
 func handleCheckLightningAddress(_ sdk: BreezSdk, _ args: [String]) async throws {
@@ -1383,7 +1288,7 @@ func selectCrossChainRoute(
     return routes[choice - 1]
 }
 
-private func maybeTruncateAddress(_ addr: String?) -> String {
+func maybeTruncateAddress(_ addr: String?) -> String {
     guard let c = addr else { return "" }
     if c.count > 12 {
         let prefix = c.prefix(6)

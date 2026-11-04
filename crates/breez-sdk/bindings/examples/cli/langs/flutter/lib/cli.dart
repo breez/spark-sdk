@@ -5,6 +5,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'advanced.dart';
+import 'bridging.dart';
 import 'commands.dart';
 import 'contacts.dart';
 import 'issuer.dart';
@@ -194,6 +195,7 @@ Future<void> _runRepl(
   final allCommands = [
     ...commandNames,
     ...advancedCommandNames,
+    ...bridgingCommandNames,
     ...issuerCommandNames,
     ...contactsCommandNames,
     ...webhookCommandNames,
@@ -230,6 +232,8 @@ Future<void> _runRepl(
 
       if (cmdName == 'advanced') {
         await dispatchAdvancedCommand(cmdArgs, sdk);
+      } else if (cmdName == 'bridging') {
+        await dispatchBridgingCommand(cmdArgs, sdk);
       } else if (cmdName == 'issuer') {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer);
       } else if (cmdName == 'contacts') {
@@ -273,6 +277,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   }
   stdout.writeln(
     '  ${'advanced <subcommand>'.padRight(40)} Expert-only commands (use \'advanced help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'bridging <subcommand>'.padRight(40)} Bridging commands (use \'bridging help\' for details)',
   );
   stdout.writeln(
     '  ${'issuer <subcommand>'.padRight(40)} Token issuer commands (use \'issuer help\' for details)',

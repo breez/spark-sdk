@@ -5,14 +5,13 @@
  *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
  *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit,
  *   fetch-claim-deposit-quote, parse, refund-deposit, list-unclaimed-deposits,
- *   buy-bitcoin, bridge-from-cash-app, bridge-to-cash-app,
- *   check-lightning-address-available, get-lightning-address,
+ *   buy-bitcoin, check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
- *   get-spark-status, advanced (subcommand), issuer (subcommand),
- *   contacts (subcommand), token-allowances (subcommand), pull-payment,
- *   webhooks (subcommand)
+ *   get-spark-status, advanced (subcommand), bridging (subcommand),
+ *   issuer (subcommand), contacts (subcommand), token-allowances (subcommand),
+ *   pull-payment, webhooks (subcommand)
  */
 
 import {
@@ -23,7 +22,6 @@ import {
   OnchainConfirmationSpeed,
   ConversionType,
   ConversionOptions,
-  DeliveryMethod,
   FeePolicy,
   PaymentType,
   PaymentStatus,
@@ -55,6 +53,7 @@ import type {
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
 import { dispatchAdvancedCommand } from './advanced'
+import { dispatchBridgingCommand } from './bridging'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
 import { dispatchTokenAllowancesCommand } from './token_allowances'
@@ -194,8 +193,7 @@ export const COMMAND_NAMES = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
-  'bridge-from-cash-app',
-  'bridge-to-cash-app',
+  'bridging',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -244,8 +242,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
     { name: 'buy-bitcoin', description: 'Buy Bitcoin via external provider', run: handleBuyBitcoin },
-    { name: 'bridge-from-cash-app', description: 'Bridge from Cash App to USDC/USDT on an external chain', run: handleBridgeFromCashApp },
-    { name: 'bridge-to-cash-app', description: 'Bridge USDC/USDT from an external chain to a Cash App user', run: handleBridgeToCashApp },
+    { name: 'bridging', description: 'Bridging commands (use "bridging help" for details)', run: handleBridging },
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
@@ -1200,108 +1197,10 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
   return lines.join('\n')
 }
 
-// --- bridge-from-cash-app ---
+// --- bridging (delegation) ---
 
-async function handleBridgeFromCashApp(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
-  if (positional.length < 1) {
-    return 'Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
-  }
-
-  const recipient = positional[0]
-  const amountStr = parseFlag(args, '--amount')
-  if (!amountStr) {
-    return 'Error: --amount is required'
-  }
-  const amount = BigInt(amountStr)
-  const feesIncluded = hasFlag(args, '--fees-included')
-  const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
-  const routeIndex = parseNumericFlag(args, '--route')
-
-  const parsed = await sdk.parse(recipient)
-  if (parsed.tag !== InputType_Tags.CrossChainAddress) {
-    return 'Error: Recipient must be a cross-chain (EVM/Solana/Tron) address'
-  }
-  const addressDetails = parsed.inner[0]
-
-  const routeResult = await selectCrossChainRoute(
-    sdk,
-    new CrossChainRouteFilter.Send({ addressDetails, deliveryMethod: DeliveryMethod.Lightning }),
-    routeIndex,
-  )
-
-  const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
-
-  const response = await sdk.bridgeFromCashApp({
-    address: addressDetails.address,
-    route: routeResult.route,
-    amount,
-    feePolicy,
-    maxSlippageBps,
-  })
-
-  const lines = [routeResult.message]
-  lines.push('Open this URL in a browser to complete the purchase:')
-  lines.push(response.url)
-  const serviceFeeAsset = serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)
-  lines.push(
-    `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
-    `service fee ${response.serviceFeeAmount} ${serviceFeeAsset}, expires ${response.expiresAt}`
-  )
-  return lines.join('\n')
-}
-
-// --- bridge-to-cash-app ---
-
-async function handleBridgeToCashApp(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
-  if (positional.length < 1) {
-    return 'Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
-  }
-
-  const recipient = positional[0]
-  const amountStr = parseFlag(args, '--amount')
-  if (!amountStr) {
-    return 'Error: --amount is required'
-  }
-  const amount = BigInt(amountStr)
-  const refundAddress = parseFlag(args, '--refund-address')
-  if (!refundAddress) {
-    return 'Error: --refund-address is required'
-  }
-  const feesIncluded = hasFlag(args, '--fees-included')
-  const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
-  const routeIndex = parseNumericFlag(args, '--route')
-
-  const routeResult = await selectCrossChainRoute(
-    sdk,
-    new CrossChainRouteFilter.Receive({ contractAddress: undefined, deliveryMethod: DeliveryMethod.Lightning }),
-    routeIndex,
-  )
-
-  const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
-
-  const response = await sdk.bridgeToCashApp({
-    recipient,
-    route: routeResult.route,
-    amount,
-    feePolicy,
-    refundAddress,
-    maxSlippageBps,
-  })
-
-  const info = response.info
-  const route = routeResult.route
-  const serviceFeeAsset = serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)
-  const lines = [routeResult.message]
-  lines.push('Ask the payer to pay:')
-  lines.push(response.paymentRequest)
-  lines.push(
-    `Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. ` +
-    `Recipient receives ~${info.expectedReceivedAmount} sats, service fee ${info.serviceFeeAmount} ${serviceFeeAsset}, ` +
-    `expires at ${info.expiresAt}`
-  )
-  return lines.join('\n')
+async function handleBridging(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchBridgingCommand(args, sdk)
 }
 
 // --- check-lightning-address-available ---

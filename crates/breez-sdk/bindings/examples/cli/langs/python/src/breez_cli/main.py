@@ -34,6 +34,7 @@ from breez_sdk_spark import (
 )
 
 from breez_cli.advanced import ADVANCED_COMMAND_NAMES, dispatch_advanced_command
+from breez_cli.bridging import BRIDGING_COMMAND_NAMES, dispatch_bridging_command
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
@@ -288,7 +289,7 @@ async def main(data_dir, network, spark_config_path, chain_api_url, chain_api_ty
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + TOKEN_ALLOWANCES_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(ADVANCED_COMMAND_NAMES + BRIDGING_COMMAND_NAMES + COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + TOKEN_ALLOWANCES_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -329,6 +330,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
 
             if cmd_name == "advanced":
                 await dispatch_advanced_command(cmd_args, sdk, session)
+            elif cmd_name == "bridging":
+                await dispatch_bridging_command(cmd_args, sdk, session)
             elif cmd_name == "contacts":
                 await dispatch_contacts_command(cmd_args, sdk)
             elif cmd_name == "issuer":
@@ -374,6 +377,7 @@ def print_help(registry):
         desc = parser.description or ""
         print(f"  {name:40s} {desc}")
     print(f"\n  {'advanced <subcommand>':40s} Advanced commands (use 'advanced help' for details)")
+    print(f"  {'bridging <subcommand>':40s} Bridging commands (use 'bridging help' for details)")
     print(f"  {'contacts <subcommand>':40s} Contacts commands (use 'contacts help' for details)")
     print(f"  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
     print(f"  {'stable-balance <subcommand>':40s} Stable balance commands (use 'stable-balance help' for details)")

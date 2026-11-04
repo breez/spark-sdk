@@ -494,6 +494,7 @@ static async Task RunInteractiveMode(
     var allCommands = new List<string>();
     allCommands.AddRange(CommandNames.All);
     allCommands.AddRange(AdvancedCommandNames.All);
+    allCommands.AddRange(BridgingCommandNames.All);
     allCommands.AddRange(IssuerCommandNames.All);
     allCommands.AddRange(ContactCommandNames.All);
     allCommands.AddRange(WebhookCommandNames.All);
@@ -585,6 +586,10 @@ static async Task RunInteractiveMode(
             if (cmdName == "advanced")
             {
                 await AdvancedCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "bridging")
+            {
+                await BridgingCommands.DispatchCommand(cmdArgs, sdk, Readline);
             }
             else if (cmdName == "issuer")
             {

@@ -4,6 +4,7 @@ const { Command, Option } = require('commander')
 const crypto = require('crypto')
 const { printValue } = require('./serialization')
 const { registerAdvancedCommands } = require('./advanced')
+const { registerBridgingCommands, BRIDGING_COMMAND_NAMES } = require('./bridging')
 const { registerIssuerCommands } = require('./issuer')
 const { registerContactsCommands } = require('./contacts')
 const { registerWebhooksCommands } = require('./webhooks')
@@ -34,8 +35,7 @@ const COMMAND_NAMES = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
-  'bridge-from-cash-app',
-  'bridge-to-cash-app',
+  ...BRIDGING_COMMAND_NAMES,
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -801,71 +801,6 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       }
     })
 
-  // --- bridge-from-cash-app ---
-  program
-    .command('bridge-from-cash-app')
-    .description('Bridge from Cash App to USDC/USDT on an external chain. Returns a cash.app link for the payer to open.')
-    .argument('<recipient>', 'Recipient address on the destination chain (EVM/Solana/Tron)')
-    .requiredOption('-a, --amount <number>', 'Amount in the destination stablecoin\'s base units (6 decimals for USDC/USDT)')
-    .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
-    .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
-    .action(async (recipient, options) => {
-      const sdk = getSdk()
-      const parsed = await sdk.parse(recipient)
-      if (!parsed || parsed.type !== 'crossChainAddress') {
-        throw new Error('Recipient must be a cross-chain (EVM/Solana/Tron) address')
-      }
-      const address = parsed.address
-      const route = await selectCrossChainRoute(sdk, rl, { type: 'send', addressDetails: parsed, deliveryMethod: 'lightning' })
-      const feePolicy = options.feesIncluded ? 'feesIncluded' : undefined
-      const response = await sdk.bridgeFromCashApp({
-        address,
-        route,
-        amount: BigInt(options.amount),
-        feePolicy,
-        maxSlippageBps: options.maxSlippageBps
-      })
-      console.log('Open this URL in a browser to complete the purchase:')
-      console.log(response.url)
-      console.log(
-        `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
-        `service fee ${response.serviceFeeAmount} ${serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, ` +
-        `expires ${response.expiresAt}`
-      )
-    })
-
-  // --- bridge-to-cash-app ---
-  program
-    .command('bridge-to-cash-app')
-    .description('Bridge USDC/USDT from an external chain to a Cash App user. Returns the deposit for the payer to make.')
-    .argument('<recipient>', 'Cash App username ($alice or alice) or Cash App Lightning address')
-    .requiredOption('-a, --amount <number>', 'Amount in the source stablecoin\'s base units (6 decimals for USDC/USDT)')
-    .requiredOption('--refund-address <address>', 'The payer\'s address on the source chain, refunded if delivery fails')
-    .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
-    .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
-    .action(async (recipient, options) => {
-      const sdk = getSdk()
-      const route = await selectCrossChainRoute(sdk, rl, { type: 'receive', contractAddress: undefined, deliveryMethod: 'lightning' })
-      const feePolicy = options.feesIncluded ? 'feesIncluded' : undefined
-      const response = await sdk.bridgeToCashApp({
-        recipient,
-        route,
-        amount: BigInt(options.amount),
-        feePolicy,
-        refundAddress: options.refundAddress,
-        maxSlippageBps: options.maxSlippageBps
-      })
-      const info = response.info
-      console.log('Ask the payer to pay:')
-      console.log(response.paymentRequest)
-      console.log(
-        `Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. ` +
-        `Recipient receives ~${info.expectedReceivedAmount} sats, ` +
-        `service fee ${info.serviceFeeAmount} ${serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)}, ` +
-        `expires at ${info.expiresAt}`
-      )
-    })
-
   // --- check-lightning-address-available ---
   program
     .command('check-lightning-address-available')
@@ -1067,6 +1002,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
   // --- advanced subcommands ---
   registerAdvancedCommands(program, getSdk, rl)
+
+  // --- bridging subcommands ---
+  registerBridgingCommands(program, getSdk, rl)
 
   // --- issuer subcommands ---
   registerIssuerCommands(program, getTokenIssuer)

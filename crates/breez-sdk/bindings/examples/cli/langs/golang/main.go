@@ -400,6 +400,7 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 	allCommands := make([]string, 0)
 	allCommands = append(allCommands, CommandNames...)
 	allCommands = append(allCommands, AdvancedCommandNames...)
+	allCommands = append(allCommands, BridgingCommandNames...)
 	allCommands = append(allCommands, IssuerCommandNames...)
 	allCommands = append(allCommands, ContactCommandNames...)
 	allCommands = append(allCommands, WebhookCommandNames...)
@@ -477,6 +478,8 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 
 		if cmdName == "advanced" {
 			DispatchAdvancedCommand(cmdArgs, sdk, rl)
+		} else if cmdName == "bridging" {
+			DispatchBridgingCommand(cmdArgs, sdk, rl)
 		} else if cmdName == "issuer" {
 			DispatchIssuerCommand(cmdArgs, tokenIssuer, rl)
 		} else if cmdName == "contacts" {

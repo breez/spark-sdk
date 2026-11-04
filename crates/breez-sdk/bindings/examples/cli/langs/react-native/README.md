@@ -86,6 +86,8 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`, `pull-payment`
 
+**Bridging**: `bridging create`, `bridging from-cash-app`, `bridging to-cash-app`, `bridging status`
+
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Contacts**: `contacts <subcommand>`
@@ -158,6 +160,28 @@ buy-bitcoin --provider cashapp --amount-sat 50000
 ```
 
 Supported providers: `moonpay` (default), `cashapp`.
+
+### Bridging
+
+Create bridge orders where a payer on another chain or on Lightning pays a recipient,
+with no funds moving through the SDK wallet:
+
+```
+# Create a bridge to any recipient (Spark address, Lightning address, EVM/Solana/Tron address)
+bridging create <recipient> --amount 1000000 [--refund-address <addr>] [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Bridge from Cash App to USDC/USDT on an external chain
+bridging from-cash-app <recipient> --amount 1000000 [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Bridge USDC/USDT from an external chain to a Cash App user
+bridging to-cash-app <recipient> --amount 1000000 --refund-address <addr> [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Check bridge status
+bridging status <bridge_id> [--status-token <token>]
+```
+
+Amounts are in stablecoin base units (6 decimals for USDC/USDT, so `1000000` = $1).
+Use `--route <n>` to select a specific route when multiple are available.
 
 ### Webhooks
 
