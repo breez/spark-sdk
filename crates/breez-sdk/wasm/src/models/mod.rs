@@ -2501,6 +2501,89 @@ pub struct BridgeToCashAppResponse {
     pub info: CrossChainReceiveInfo,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgingConfig)]
+pub struct BridgingConfig {
+    pub api_key: String,
+    /// Not supported on WASM: setting this always fails validation.
+    pub proxy: Option<ProxyConfig>,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeRoutesRequest)]
+pub struct GetBridgeRoutesRequest {
+    pub recipient: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeRoutesResponse)]
+pub struct GetBridgeRoutesResponse {
+    pub routes: Vec<BridgeRoutePair>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeRoutePair)]
+pub struct BridgeRoutePair {
+    pub provider: CrossChainProvider,
+    pub source: BridgeRoutePairSide,
+    pub destination: BridgeRoutePairSide,
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeRoutePairSide)]
+pub struct BridgeRoutePairSide {
+    pub chain: String,
+    pub chain_id: Option<String>,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateBridgeRequest)]
+pub struct CreateBridgeRequest {
+    pub recipient: String,
+    pub route: BridgeRoutePair,
+    pub amount: u128,
+    pub refund_address: Option<String>,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateBridgeResponse)]
+pub struct CreateBridgeResponse {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeStatusRequest)]
+pub struct GetBridgeStatusRequest {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeStatus)]
+pub enum BridgeStatus {
+    Created,
+    Pending,
+    Refunding,
+    Completed,
+    Refunded,
+    Failed,
+    Expired,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeStatusResponse)]
+pub struct GetBridgeStatusResponse {
+    pub status: BridgeStatus,
+    pub provider_status: Option<String>,
+    pub order_id: Option<String>,
+    pub amount_in: Option<u128>,
+    pub amount_out: Option<u128>,
+    pub deposit_tx_hash: Option<String>,
+    pub delivery_tx_hash: Option<String>,
+    pub refund_tx_hash: Option<String>,
+    pub error_code: Option<String>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]
 pub struct Contact {
     pub id: String,

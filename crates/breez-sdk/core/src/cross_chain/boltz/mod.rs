@@ -511,6 +511,7 @@ impl BoltzService {
             recipient_address: recipient_address.to_string(),
             token_identifier: None,
             provider_context,
+            quote_read_token: None,
         }
     }
 }

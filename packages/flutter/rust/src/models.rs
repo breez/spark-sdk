@@ -2219,6 +2219,88 @@ pub struct _BridgeToCashAppResponse {
     pub info: CrossChainReceiveInfo,
 }
 
+#[frb(mirror(BridgingConfig))]
+pub struct _BridgingConfig {
+    pub api_key: String,
+    pub proxy: Option<ProxyConfig>,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[frb(mirror(GetBridgeRoutesRequest))]
+pub struct _GetBridgeRoutesRequest {
+    pub recipient: String,
+}
+
+#[frb(mirror(GetBridgeRoutesResponse))]
+pub struct _GetBridgeRoutesResponse {
+    pub routes: Vec<BridgeRoutePair>,
+}
+
+#[frb(mirror(BridgeRoutePair))]
+pub struct _BridgeRoutePair {
+    pub provider: CrossChainProvider,
+    pub source: BridgeRoutePairSide,
+    pub destination: BridgeRoutePairSide,
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
+#[frb(mirror(BridgeRoutePairSide))]
+pub struct _BridgeRoutePairSide {
+    pub chain: String,
+    pub chain_id: Option<String>,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+}
+
+#[frb(mirror(CreateBridgeRequest))]
+pub struct _CreateBridgeRequest {
+    pub recipient: String,
+    pub route: BridgeRoutePair,
+    pub amount: u128,
+    pub refund_address: Option<String>,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[frb(mirror(CreateBridgeResponse))]
+pub struct _CreateBridgeResponse {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
+}
+
+#[frb(mirror(GetBridgeStatusRequest))]
+pub struct _GetBridgeStatusRequest {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+}
+
+#[frb(mirror(BridgeStatus))]
+pub enum _BridgeStatus {
+    Created,
+    Pending,
+    Refunding,
+    Completed,
+    Refunded,
+    Failed,
+    Expired,
+}
+
+#[frb(mirror(GetBridgeStatusResponse))]
+pub struct _GetBridgeStatusResponse {
+    pub status: BridgeStatus,
+    pub provider_status: Option<String>,
+    pub order_id: Option<String>,
+    pub amount_in: Option<u128>,
+    pub amount_out: Option<u128>,
+    pub deposit_tx_hash: Option<String>,
+    pub delivery_tx_hash: Option<String>,
+    pub refund_tx_hash: Option<String>,
+    pub error_code: Option<String>,
+}
+
 #[frb(mirror(ServiceStatus))]
 pub enum _ServiceStatus {
     Operational,

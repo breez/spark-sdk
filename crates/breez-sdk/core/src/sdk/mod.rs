@@ -1,4 +1,5 @@
 mod api;
+mod bridging;
 mod buy;
 mod chain_queries;
 mod contacts;
@@ -19,6 +20,11 @@ mod unilateral_exit;
 mod unilateral_exit_backup;
 mod watchtower_exit;
 
+pub use bridging::{
+    BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient, BridgingConfig,
+    CreateBridgeRequest, CreateBridgeResponse, GetBridgeRoutesRequest, GetBridgeRoutesResponse,
+    GetBridgeStatusRequest, GetBridgeStatusResponse, default_bridging_config, new_bridging_client,
+};
 pub(crate) use helpers::partner_id;
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};

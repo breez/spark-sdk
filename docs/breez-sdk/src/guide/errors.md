@@ -56,7 +56,7 @@ The USDC/USDT provider won't serve the route. When {{#name temporary}} is set, t
     <a class="header" href="#cross-chain-disabled">CrossChainDisabled</a>
 </h3>
 
-USDC/USDT payments are not enabled on this SDK instance, so every cross-chain call fails, including {{#name get_cross_chain_routes}}. Enable them by setting {{#name cross_chain_config}}, as described in [USDC/USDT configuration](./config.md#usdc-usdt).
+USDC/USDT payments are not enabled on this SDK instance, so every cross-chain call fails, including {{#name get_cross_chain_routes}}. Enable them by setting {{#name cross_chain_config}}, as described in [USDC/USDT configuration](./config.md#usdc-usdt). A [bridging client](./bridging.md) doesn't need it.
 
 <h3 id="network-error">
     <a class="header" href="#network-error">NetworkError</a>

@@ -374,6 +374,19 @@ pub struct StatusResponse {
     pub stages: Vec<Stage>,
 }
 
+/// `GET /v1/explorer/operations`: the public explorer's lookup by order,
+/// quote or transaction id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplorerOperationsResponse {
+    pub operations: Vec<ExplorerOperation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplorerOperation {
+    /// The order, with its addresses redacted.
+    pub operation: Order,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Order {
@@ -452,6 +465,10 @@ pub struct Order {
     pub updated_at: String,
     #[serde(default)]
     pub completed_at: Option<String>,
+    /// The order that recovered this order's replaced deposit. It carries the
+    /// delivered result.
+    #[serde(default)]
+    pub superseded_by_operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -509,6 +526,45 @@ mod limits_response_tests {
                 .and_then(|b| b.max_cents.as_deref()),
             Some("9030000")
         );
+    }
+
+    #[test]
+    fn deserializes_an_explorer_operation_as_an_order() {
+        let response: ExplorerOperationsResponse = serde_json::from_value(serde_json::json!({
+            "operations": [{
+                "operation": {
+                    "id": "ord_1",
+                    "type": "order",
+                    "status": "completed",
+                    "quoteId": "q_1",
+                    "sourceChain": "base",
+                    "sourceAsset": "USDC",
+                    "sourceTxHash": "0xdeposit",
+                    "sourceTxVout": null,
+                    "destinationChain": "polygon",
+                    "destinationAsset": "USDC",
+                    "destinationTxHash": "0xdelivery",
+                    "amountIn": "4000000",
+                    "amountOut": "3950396",
+                    "slippageBps": 50,
+                    "attempts": 1,
+                    "refundTxHash": null,
+                    "errorCode": null,
+                    "createdAt": "2026-11-02T10:54:40.000Z",
+                    "updatedAt": "2026-11-02T10:55:49.973Z",
+                    "completedAt": "2026-11-02T10:55:49.973Z",
+                },
+                "partner": null,
+                "refs": [{ "type": "source", "value": "0xdeposit", "chain": "base" }],
+            }],
+            "nextOffset": null,
+        }))
+        .unwrap();
+        let order = &response.operations[0].operation;
+        assert_eq!(order.status, OrderStatus::Completed);
+        assert_eq!(order.quote_id.as_deref(), Some("q_1"));
+        assert_eq!(order.amount_out.as_deref(), Some("3950396"));
+        assert_eq!(order.destination_tx_hash.as_deref(), Some("0xdelivery"));
     }
 
     #[test]

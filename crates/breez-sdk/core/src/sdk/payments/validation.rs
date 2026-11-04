@@ -11,11 +11,10 @@ use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, CrossChainRouteFilter,
     CrossChainRoutePair, FeePolicy, SparkInvoiceDetails,
     cross_chain::{
-        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+        CrossChainContext, DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
         MIN_CROSS_CHAIN_SLIPPAGE_BPS,
     },
     error::SdkError,
-    sdk::BreezSdk,
 };
 
 /// Validates that a Spark invoice can be paid by us: it has not expired, and it
@@ -156,7 +155,7 @@ pub(in crate::sdk) fn validate_recipient_not_contract_address(
 /// contributes rather than an error: this feeds a best-effort guard, and a
 /// provider being briefly unreachable must not block a valid send.
 pub(in crate::sdk) async fn known_token_contracts(
-    sdk: &BreezSdk,
+    cross_chain_context: &CrossChainContext,
     address: &str,
     address_family: input::CrossChainAddressFamily,
     route: &CrossChainRoutePair,
@@ -174,7 +173,7 @@ pub(in crate::sdk) async fn known_token_contracts(
         delivery_method: None,
     };
 
-    let mut listed = match sdk.get_cross_chain_routes(&filter).await {
+    let mut listed = match cross_chain_context.list_routes(&filter).await {
         Ok(routes) => routes,
         Err(e) => {
             tracing::warn!(

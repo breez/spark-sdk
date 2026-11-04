@@ -4,28 +4,17 @@
 
 ## How it works
 
-1. Parse the recipient's external-chain address and [select a destination route](./cash_app.md#selecting-a-route) with {{#enum CrossChainRouteFilter::Send}}.
-2. Call {{#name bridge_from_cash_app}} with the route and the USD amount. The SDK gets a quote from the cross-chain provider and returns a Cash App deep link plus the quote details.
-3. Open the returned {{#name url}}. The user completes payment in Cash App, and the provider delivers the stablecoin to the recipient.
+1. [Select a destination route](./cash_app.md#selecting-a-route) for the recipient's external-chain address.
+2. Call {{#name bridge_from_cash_app}} with the recipient, the route and the USD amount. The SDK gets a quote from the cross-chain provider and returns a Cash App deep link plus the quote details.
+3. Open the returned {{#name payment_request}}. The user completes payment in Cash App, and the provider delivers the stablecoin to the recipient.
 
-The SDK builds a `cash.app/launch/lightning/<bolt11>` deep link from the provider's invoice and returns it as the response {{#name url}}.
+The SDK builds a `cash.app/launch/lightning/<bolt11>` deep link from the provider's invoice and returns it as the response {{#name payment_request}}. The invoice itself is {{#name info.deposit_address}}.
 
 {{#tabs cash_app:bridge-from-cash-app}}
 
 ## Response fields
 
-{{#name BridgeFromCashAppResponse}} carries the payment URL and the quote:
-
-| Field | Meaning |
-| ----- | ------- |
-| {{#name url}} | The Cash App deep link to open. |
-| {{#name amount_sats}} | Bitcoin amount the user deposits through Cash App. |
-| {{#name estimated_out}} | Expected amount delivered to the recipient, in {{#name asset}} units. |
-| {{#name asset}} | The delivered stablecoin (e.g. `USDC`). |
-| {{#name service_fee_amount}} | Provider fee for the conversion, including your [partner fee](./cross_chain_partner_fees.md) if you set one. |
-| {{#name service_fee_asset}} | Denomination of the fee. Absent means the fee is in sats. |
-| {{#name service_fee_asset_decimals}} | Decimals of {{#name service_fee_asset}}, for formatting the fee. Absent when the fee is in sats or the provider did not report them. |
-| {{#name expires_at}} | Quote expiry, in seconds since the Unix epoch. Call {{#name bridge_from_cash_app}} again for a fresh quote if it lapses before the user starts paying. |
+{{#name bridge_from_cash_app}} returns a {{#name CreateBridgeResponse}}, described in [Bridging USDC/USDT](./bridging.md#response-fields). Its {{#name payment_request}} is the Cash App deep link to open.
 
 ## Opening the payment link
 

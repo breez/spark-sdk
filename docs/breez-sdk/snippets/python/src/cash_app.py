@@ -1,57 +1,54 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
-    BridgeFromCashAppRequest,
-    BridgeToCashAppRequest,
-    CrossChainRouteFilter,
-    DeliveryMethod,
-    InputType,
+    BridgingClient,
+    CreateBridgeRequest,
+    GetBridgeRoutesRequest,
 )
 
 
-async def bridge_from_cash_app(sdk: BreezSdk):
+async def bridge_from_cash_app(client: BridgingClient):
     # ANCHOR: bridge-from-cash-app
-    # Parse the recipient's external-chain address (EVM/Solana/Tron).
-    input_str = "<recipient address>"
     try:
-        parsed = await sdk.parse(input=input_str)
-        if not isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
-            raise ValueError("Not a cross-chain address")
-        address_details = parsed[0]
-
-        # List the stablecoin destinations Cash App can fund over Lightning and
-        # pick one, e.g. USDC on Base.
-        routes = await sdk.get_cross_chain_routes(
-            filter=CrossChainRouteFilter.SEND(
-                address_details=address_details,
-                delivery_method=DeliveryMethod.LIGHTNING,
-            )
+        # List the routes to the recipient's external-chain address
+        # (EVM/Solana/Tron) and pick a stablecoin Cash App can fund over
+        # Lightning, e.g. USDC on Base.
+        recipient = "<recipient address>"
+        routes_response = await client.get_routes(
+            request=GetBridgeRoutesRequest(recipient=recipient)
         )
         route = next(
-            (r for r in routes if r.asset == "USDC" and r.chain == "base"),
+            (
+                r
+                for r in routes_response.routes
+                if r.source.chain == "lightning"
+                and r.destination.asset == "USDC"
+                and r.destination.chain == "base"
+            ),
             None,
         )
         if route is None:
             raise ValueError("No USDC route on Base")
 
         # Send $10 of USDC, funded by Cash App over Lightning. The amount is in
-        # the route asset's base units (USDC, 6 decimals), so 10_000_000 =
-        # 10 USDC, about $10.
-        request = BridgeFromCashAppRequest(
-            address=address_details.address,
+        # USDC base units (6 decimals), so 10_000_000 = 10 USDC, about $10.
+        request = CreateBridgeRequest(
+            recipient=recipient,
             route=route,
             amount=10_000_000,
+            refund_address=None,
             fee_policy=None,
             max_slippage_bps=None,
         )
-        response = await sdk.bridge_from_cash_app(request=request)
+        response = await client.bridge_from_cash_app(request=request)
 
-        # Open this Cash App URL to pay. The recipient then receives the
+        # Open this Cash App link to pay. The recipient then receives the
         # stablecoin.
-        logging.debug(f"Open this URL in Cash App: {response.url}")
+        info = response.info
+        logging.debug(f"Open this URL in Cash App: {response.payment_request}")
         logging.debug(
-            f"Recipient receives ~{response.estimated_out} {response.asset}"
+            f"Recipient receives ~{info.expected_received_amount} "
+            f"{info.destination_asset}"
         )
     except Exception as error:
         logging.error(error)
@@ -59,37 +56,38 @@ async def bridge_from_cash_app(sdk: BreezSdk):
     # ANCHOR_END: bridge-from-cash-app
 
 
-async def bridge_to_cash_app(sdk: BreezSdk):
+async def bridge_to_cash_app(client: BridgingClient):
     # ANCHOR: bridge-to-cash-app
     try:
-        # List the stablecoin sources that can pay a Cash App user over
-        # Lightning and pick one, e.g. USDC on Base.
-        routes = await sdk.get_cross_chain_routes(
-            filter=CrossChainRouteFilter.RECEIVE(
-                contract_address=None,
-                delivery_method=DeliveryMethod.LIGHTNING,
-            )
+        # List the routes to the Cash App user and pick what the payer pays in,
+        # e.g. USDC on Base.
+        recipient = "$alice"
+        routes_response = await client.get_routes(
+            request=GetBridgeRoutesRequest(recipient=recipient)
         )
         route = next(
-            (r for r in routes if r.asset == "USDC" and r.chain == "base"),
+            (
+                r
+                for r in routes_response.routes
+                if r.source.asset == "USDC" and r.source.chain == "base"
+            ),
             None,
         )
         if route is None:
-            raise ValueError("No USDC route on Base")
+            raise ValueError("No route from USDC on Base")
 
-        # Pay $10 of USDC to the Cash App user $alice. The amount is in the
-        # route asset's base units (USDC, 6 decimals), so 10_000_000 =
-        # 10 USDC, about $10. The deposit is refunded to the payer's address
-        # if delivery fails.
-        request = BridgeToCashAppRequest(
-            recipient="$alice",
+        # Pay $10 of USDC to the Cash App user $alice. The amount is in USDC base
+        # units (6 decimals), so 10_000_000 = 10 USDC, about $10. The deposit is
+        # refunded to the payer's address if delivery fails.
+        request = CreateBridgeRequest(
+            recipient=recipient,
             route=route,
             amount=10_000_000,
-            fee_policy=None,
             refund_address="<payer address>",
+            fee_policy=None,
             max_slippage_bps=None,
         )
-        response = await sdk.bridge_to_cash_app(request=request)
+        response = await client.bridge_to_cash_app(request=request)
 
         # Show the payer what to pay. The recipient then receives Bitcoin.
         info = response.info
