@@ -33,6 +33,7 @@ None of the following per-instance background work is started when {{#name backg
 - **Lightning-address recovery**: the SDK does not refresh the registered lightning address on startup.
 - **Spark private-mode init**: the [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) preset is **not** applied automatically on first startup; you must opt in once via {{#name update_user_settings}} (see [User settings](user_settings.md)).
 - **Flashnet conversion refunder**: no periodic refund pass for failed token conversions.
+- **Cash App purchases**: {{#name buy_bitcoin}} with {{#enum BuyBitcoinRequest::CashApp}} returns an error, because a background monitor tracks the order until its funds arrive.
 - **Stable Balance** is not supported in this configuration because its conversion worker is a background service. Do not rely on automatic Bitcoin-to-token conversion on receive, activation/deactivation conversion, or other Stable Balance background behavior in this configuration.
 
 Explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this configuration.

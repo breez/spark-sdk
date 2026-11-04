@@ -98,9 +98,7 @@ pub(crate) async fn attach_receive_metadata_for_payment(
     if already_attached {
         return Ok(false);
     }
-    let Some(conversion_info) =
-        orchestra::receive_conversion_info_for_invoice(storage, invoice).await?
-    else {
+    let Some(conversion_info) = orchestra::link_receive_for_invoice(storage, invoice).await? else {
         return Ok(false);
     };
     storage
@@ -536,8 +534,6 @@ pub(crate) struct CrossChainReceivePrepared {
     /// Canonical cross-chain URI the sender can paste or scan to pay.
     pub payment_request: String,
     pub info: CrossChainReceiveInfo,
-    /// Provider quote id, which also identifies the order once funded.
-    pub quote_id: String,
     /// Provider token for reading the quote's status, when it issued one.
     pub quote_read_token: Option<String>,
 }
@@ -547,6 +543,9 @@ pub(crate) struct CrossChainReceivePrepared {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CrossChainReceiveInfo {
+    /// The provider's id for this receive. The incoming payment carries the
+    /// same id in its conversion info, so it can be matched to this receive.
+    pub quote_id: String,
     /// Bare deposit address the sender pays to on the source chain, or the
     /// BOLT11 invoice when the sender pays over Lightning.
     pub deposit_address: String,
@@ -1683,6 +1682,7 @@ mod tests {
                 quote_read_token: None,
                 recipient_address: "sp1rcv".to_string(),
                 spark_invoice: Some(invoice.to_string()),
+                paid: false,
                 source_chain: "arbitrum".to_string(),
                 source_asset: "USDC".to_string(),
                 source_chain_id: Some("42161".to_string()),

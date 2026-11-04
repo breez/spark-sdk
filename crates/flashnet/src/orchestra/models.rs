@@ -301,6 +301,91 @@ impl std::fmt::Debug for ReadToken {
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/orchestration/onramp
+// ---------------------------------------------------------------------------
+
+/// An order funded over Lightning, paid from Cash App or another wallet.
+///
+/// Fee fields are not modelled: Orchestra refuses `appFees` from client keys,
+/// and `affiliateIds` on routes without fee settlement, such as Lightning to
+/// Spark.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnrampRequest {
+    pub destination_chain: String,
+    pub destination_asset: String,
+    pub recipient_address: String,
+    /// In the source leg's smallest units (sats).
+    pub amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount_mode: Option<AmountMode>,
+    /// Lightning address or amountless BOLT11 invoice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refund_address: Option<String>,
+    /// Label carried by the order. Up to 64 letters, digits and `.`, `_`,
+    /// `:`, `-`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// Links that open a wallet on the order's invoice.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentLinks {
+    pub cash_app: String,
+    #[serde(default)]
+    pub short_url: Option<String>,
+}
+
+/// A created onramp order and the invoice that funds it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnrampResponse {
+    pub order_id: String,
+    pub quote_id: String,
+    /// The BOLT11 invoice to pay.
+    pub deposit_address: String,
+    #[serde(default)]
+    pub payment_links: Option<PaymentLinks>,
+    pub amount_in: String,
+    pub estimated_out: String,
+    pub fee_amount: String,
+    pub total_fee_amount: String,
+    pub fee_asset: String,
+    #[serde(default)]
+    pub fee_asset_details: Option<FeeAssetDetails>,
+    pub fee_bps: u32,
+    /// When the invoice and order expire. A payment made before then can
+    /// still settle afterwards.
+    pub expires_at: String,
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// Request fields the server dropped.
+    #[serde(default)]
+    pub ignored_fields: Vec<String>,
+    /// Token for `GET /status?id=`, bound to the order. Issued to client keys.
+    #[serde(default)]
+    pub read_token: Option<ReadToken>,
+}
+
+/// What `/onramp` answered.
+#[derive(Debug, Clone)]
+pub enum OnrampOutcome {
+    /// The order was created and its invoice can be paid.
+    Created(Box<OnrampResponse>),
+    /// The order is held for screening review and has no invoice to pay yet.
+    HeldForReview { order_id: String, status: String },
+}
+
+/// The `202` body of an order held for review.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OnrampHeldResponse {
+    pub order_id: String,
+    pub status: String,
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/orchestration/submit
 // ---------------------------------------------------------------------------
 

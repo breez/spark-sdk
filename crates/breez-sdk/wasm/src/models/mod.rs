@@ -1475,6 +1475,7 @@ pub struct ReceivePaymentResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainReceiveInfo)]
 pub struct CrossChainReceiveInfo {
+    pub quote_id: String,
     pub deposit_address: String,
     pub deposit_amount: u128,
     pub expected_received_amount: u128,

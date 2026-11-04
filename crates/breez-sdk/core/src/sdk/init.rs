@@ -44,6 +44,7 @@ impl BreezSdk {
             stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
             cross_chain_context: params.cross_chain_context,
+            orchestra: params.orchestra,
             lightning_sender: params.lightning_sender,
         };
 

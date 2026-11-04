@@ -301,27 +301,6 @@ impl BreezSdk {
 
 // Private payment methods
 impl BreezSdk {
-    pub(crate) async fn receive_bolt11_invoice(
-        &self,
-        description: String,
-        amount_sats: Option<u64>,
-        expiry_secs: Option<u32>,
-        payment_hash: Option<String>,
-        receiver_identity_public_key: Option<String>,
-        preimage: Option<String>,
-    ) -> Result<ReceivePaymentResponse, SdkError> {
-        receive::receive_bolt11_invoice(
-            self,
-            description,
-            amount_sats,
-            expiry_secs,
-            payment_hash,
-            receiver_identity_public_key,
-            preimage,
-        )
-        .await
-    }
-
     pub(crate) async fn receive_bolt11_invoice_inner(
         &self,
         description: String,

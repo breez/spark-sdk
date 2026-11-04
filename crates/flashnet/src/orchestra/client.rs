@@ -9,8 +9,9 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 
 use super::models::{
-    EstimateRequest, EstimateResponse, ExplorerOperationsResponse, LimitsResponse, QuoteRequest,
-    QuoteResponse, RouteWithLimits, StatusResponse, SubmitRequest, SubmitResponse,
+    EstimateRequest, EstimateResponse, ExplorerOperationsResponse, LimitsResponse,
+    OnrampHeldResponse, OnrampOutcome, OnrampRequest, OnrampResponse, QuoteRequest, QuoteResponse,
+    RouteWithLimits, StatusResponse, SubmitRequest, SubmitResponse,
 };
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
@@ -138,6 +139,29 @@ impl OrchestraClient {
             .await
     }
 
+    /// Create an onramp order: a quote and order in one, funded by paying the
+    /// returned BOLT11 invoice. `idempotency_key` is sent as
+    /// `X-Idempotency-Key`, and reusing it replays the same order.
+    pub async fn onramp(
+        &self,
+        request: OnrampRequest,
+        idempotency_key: String,
+    ) -> Result<OnrampOutcome, FlashnetError> {
+        debug!(
+            "Orchestra: POST /v1/orchestration/onramp (dest={}/{})",
+            request.destination_chain, request.destination_asset
+        );
+        let response = self
+            .post_raw(
+                "v1/orchestration/onramp",
+                &request,
+                true,
+                Some(idempotency_key),
+            )
+            .await?;
+        onramp_outcome(response.status, &response.body)
+    }
+
     /// Submit a quote.
     ///
     /// `idempotency_key` is sent as `X-Idempotency-Key`. Reusing a key
@@ -164,8 +188,8 @@ impl OrchestraClient {
 
     /// Look up an order by its id.
     ///
-    /// `read_token` is the opaque token returned by `/submit` — required by
-    /// Orchestra to authorise status reads for partner API keys.
+    /// `read_token` is the opaque token returned by `/submit` or `/onramp`,
+    /// required by Orchestra to authorise status reads for partner API keys.
     pub async fn status_by_id(
         &self,
         order_id: &str,
@@ -300,6 +324,23 @@ impl OrchestraClient {
         S: serde::Serialize,
         D: serde::de::DeserializeOwned,
     {
+        self.post_raw(endpoint, body, authed, idempotency_key)
+            .await?
+            .json::<D>()
+            .map_err(|e| FlashnetError::Generic(format!("Failed to parse orchestra response: {e}")))
+    }
+
+    /// POSTs `body` and returns the response when its status is a success.
+    async fn post_raw<S>(
+        &self,
+        endpoint: &str,
+        body: &S,
+        authed: bool,
+        idempotency_key: Option<String>,
+    ) -> Result<platform_utils::HttpResponse, FlashnetError>
+    where
+        S: serde::Serialize,
+    {
         let config = self.config().await?;
         let url = format!("{}/{}", config.base_url, endpoint);
         let body_json = serde_json::to_string(body).map_err(|e| {
@@ -331,9 +372,7 @@ impl OrchestraClient {
             return Err(error_from_body(&response.body, response.status));
         }
 
-        response
-            .json::<D>()
-            .map_err(|e| FlashnetError::Generic(format!("Failed to parse orchestra response: {e}")))
+        Ok(response)
     }
 }
 
@@ -385,6 +424,23 @@ pub async fn transfer_to_deposit(
             Ok(AssetTransfer::Token(token_tx))
         }
     }
+}
+
+/// Reads a successful `/onramp` response: `202` holds the order for screening
+/// review, any other success carries the order and its invoice.
+fn onramp_outcome(status: u16, body: &str) -> Result<OnrampOutcome, FlashnetError> {
+    let parse_error = |e: serde_json::Error| {
+        FlashnetError::Generic(format!("Failed to parse onramp response: {e}"))
+    };
+    if status == 202 {
+        let held: OnrampHeldResponse = serde_json::from_str(body).map_err(parse_error)?;
+        return Ok(OnrampOutcome::HeldForReview {
+            order_id: held.order_id,
+            status: held.status,
+        });
+    }
+    let created: OnrampResponse = serde_json::from_str(body).map_err(parse_error)?;
+    Ok(OnrampOutcome::Created(Box::new(created)))
 }
 
 /// Build a deterministic idempotency key so that retrying the same logical
@@ -564,6 +620,74 @@ mod error_body_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestra::models::AmountMode;
+
+    #[test]
+    fn onramp_created_order_carries_its_invoice() {
+        let body = serde_json::json!({
+            "orderId": "ord_1", "quoteId": "q_1", "depositAddress": "lnbc65u1pinvoice",
+            "paymentLinks": {
+                "cashApp": "https://cash.app/launch/lightning/lnbc65u1pinvoice",
+                "shortUrl": "https://flashnet.xyz/p/abc"
+            },
+            "amountIn": "6500", "estimatedOut": "6450", "feeAmount": "50",
+            "totalFeeAmount": "50", "feeAsset": "BTC", "feeBps": 30, "route": ["BTC"],
+            "expiresAt": "2026-11-05T12:00:00Z", "tag": "partner", "readToken": "rt_1",
+            "effectiveSlippageBps": 1000, "ignoredFields": ["refundAddress"]
+        })
+        .to_string();
+        let Ok(OnrampOutcome::Created(order)) = onramp_outcome(200, &body) else {
+            panic!("expected a created order");
+        };
+        assert_eq!(order.order_id, "ord_1");
+        assert_eq!(order.deposit_address, "lnbc65u1pinvoice");
+        assert_eq!(
+            order.payment_links.unwrap().cash_app,
+            "https://cash.app/launch/lightning/lnbc65u1pinvoice"
+        );
+        assert_eq!(order.read_token.unwrap().0, "rt_1");
+        assert_eq!(order.ignored_fields, vec!["refundAddress".to_string()]);
+    }
+
+    #[test]
+    fn onramp_202_is_held_for_review() {
+        let body = r#"{"orderId":"ord_2","status":"paused"}"#;
+        let Ok(OnrampOutcome::HeldForReview { order_id, status }) = onramp_outcome(202, body)
+        else {
+            panic!("expected an order held for review");
+        };
+        assert_eq!(order_id, "ord_2");
+        assert_eq!(status, "paused");
+    }
+
+    #[test]
+    fn onramp_200_without_an_invoice_fails_to_parse() {
+        let body = r#"{"orderId":"ord_2","status":"paused"}"#;
+        assert!(matches!(
+            onramp_outcome(200, body),
+            Err(FlashnetError::Generic(_))
+        ));
+    }
+
+    #[test]
+    fn onramp_request_skips_unset_fields() {
+        let request = OnrampRequest {
+            destination_chain: "spark".to_string(),
+            destination_asset: "BTC".to_string(),
+            recipient_address: "spark1inv".to_string(),
+            amount: "6500".to_string(),
+            amount_mode: Some(AmountMode::ExactIn),
+            refund_address: None,
+            tag: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({
+                "destinationChain": "spark", "destinationAsset": "BTC",
+                "recipientAddress": "spark1inv", "amount": "6500", "amountMode": "exact_in"
+            })
+        );
+    }
 
     /// Same scope + same input must always produce the same key.
     #[test]

@@ -1647,15 +1647,16 @@ pub enum BuyBitcoinRequest {
         redirect_url: Option<String>,
     },
     /// `CashApp`: Pay via the Lightning Network.
-    /// Generates a bolt11 invoice for the given amount and returns a
-    /// `cash.app` deep link. Only available on mainnet.
+    /// Returns a `cash.app` deep link to a bolt11 invoice. A conversion
+    /// provider delivers the payment to the wallet over Spark, and the payer
+    /// pays its fee on top of the amount. Only available on mainnet.
     ///
     /// The amount is required. With an amountless invoice, Cash App only
     /// lets the payer fund from their existing Cash App BTC balance. With
     /// a fixed-amount invoice, Cash App opens up funding via fiat balance
     /// and debit card.
     CashApp {
-        /// Amount in satoshis for the Lightning invoice. Must be non-zero.
+        /// Amount in satoshis the wallet receives. Must be non-zero.
         amount_sats: u64,
     },
 }
@@ -1702,7 +1703,8 @@ impl Default for MoonpayDelivery {
 pub struct BuyBitcoinResponse {
     /// The URL to open in a browser to complete the purchase
     pub url: String,
-    /// The conversion quote, populated only for cross-chain delivery.
+    /// The conversion quote, populated for cross-chain delivery and for
+    /// `CashApp`, whose purchase is delivered through a conversion provider.
     pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 

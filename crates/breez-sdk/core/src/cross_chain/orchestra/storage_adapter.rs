@@ -31,6 +31,9 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 ///   order id with `read_token` when `/submit` issued one, otherwise by quote
 ///   id with `quote_read_token`. `/submit` is idempotent, so a rejected token
 ///   is replaced by probing it.
+/// * **Lightning-funded** (`source_chain` is `lightning`): `order_id` is set
+///   from creation, before anyone pays. The order is polled only once `paid`
+///   records its payment, and an unpaid one is closed locally after expiry.
 ///
 /// Live status / `sparkTxHash` / `amountOut` / refund tx are always read
 /// off the poll response, never cached here.
@@ -59,6 +62,10 @@ pub(crate) struct OrchestraSwapData {
     /// `sparkTxHash` alone.
     #[serde(default)]
     pub spark_invoice: Option<String>,
+    /// Whether a payment fulfilling `spark_invoice` has come in. Recorded on
+    /// Lightning-funded rows only.
+    #[serde(default)]
+    pub paid: bool,
     pub source_chain: String,
     pub source_asset: String,
     /// Source chain identifier (e.g. EVM `chainId` as a decimal string).
@@ -223,6 +230,7 @@ mod tests {
             quote_read_token: None,
             recipient_address: "sp1...".to_string(),
             spark_invoice: Some("spark1inv...".to_string()),
+            paid: false,
             source_chain: "base".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("8453".to_string()),
@@ -249,6 +257,7 @@ mod tests {
             quote_read_token: None,
             recipient_address: "sp1...".to_string(),
             spark_invoice: None,
+            paid: false,
             source_chain: "arbitrum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("42161".to_string()),

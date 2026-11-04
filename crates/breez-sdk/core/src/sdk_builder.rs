@@ -605,8 +605,9 @@ impl SdkBuilder {
             shutdown_sender.clone(),
         ));
 
-        let cross_chain_context = build_cross_chain_context(
+        let (cross_chain_context, orchestra) = build_cross_chain_context(
             &self.config,
+            background_services_enabled,
             &context.breez_server,
             &context.http_client,
             &spark_wallet,
@@ -652,6 +653,7 @@ impl SdkBuilder {
             stable_balance,
             sync_coordinator,
             cross_chain_context,
+            orchestra,
             lightning_sender,
         })
         .await?;
@@ -1154,11 +1156,15 @@ async fn build_stable_balance(
     ))
 }
 
-/// Builds the cross-chain context: provider registry + shared cached fiat
-/// service. The registry is empty when `config.cross_chain_config` is unset.
+/// Builds the cross-chain context (provider registry + shared cached fiat
+/// service) and the wallet-backed Orchestra service. The registry is empty
+/// when `config.cross_chain_config` is unset. The service is built on mainnet
+/// with background services on, and registered as a provider only when
+/// cross-chain is enabled.
 #[allow(clippy::too_many_arguments)]
 async fn build_cross_chain_context(
     config: &Config,
+    background_services_enabled: bool,
     breez_server: &Arc<BreezServer>,
     http_client: &Arc<dyn platform_utils::HttpClient>,
     spark_wallet: &Arc<SparkWallet>,
@@ -1166,7 +1172,10 @@ async fn build_cross_chain_context(
     fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
     event_emitter: &Arc<EventEmitter>,
     shutdown_receiver: watch::Receiver<()>,
-) -> crate::cross_chain::CrossChainContext {
+) -> (
+    crate::cross_chain::CrossChainContext,
+    Option<Arc<crate::cross_chain::OrchestraService>>,
+) {
     // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
     let cached_fiat: Arc<dyn breez_sdk_common::fiat::FiatService> =
         Arc::new(crate::cross_chain::CachedFiatService::new(
@@ -1175,17 +1184,15 @@ async fn build_cross_chain_context(
         ));
     let mut providers = crate::cross_chain::CrossChainContext::new(Arc::clone(&cached_fiat));
 
-    // Orchestra cross-chain is mainnet-only. Its base URL and API key are
-    // fetched from Breez server (so the key can be rotated and revoked without
-    // an SDK release) lazily on first cross-chain use, not at connect: see
+    // Orchestra is mainnet-only. Its base URL and API key are fetched from
+    // Breez server (so the key can be rotated and revoked without an SDK
+    // release) lazily on first use, not at connect: see
     // `BreezServerOrchestraConfigResolver`. There is no bundled fallback key.
     if !matches!(config.network, Network::Mainnet) {
-        return providers;
+        return (providers, None);
     }
     // The quoter makes no call until used, so every mainnet SDK gets one for
-    // bridging, including in server mode. It only becomes a payment provider,
-    // with the wallet-backed service and its monitor, when cross-chain
-    // payments are enabled.
+    // bridging, including in server mode.
     let config_resolver = Arc::new(crate::cross_chain::BreezServerOrchestraConfigResolver::new(
         Arc::clone(breez_server),
     ));
@@ -1195,24 +1202,31 @@ async fn build_cross_chain_context(
         Arc::clone(&cached_fiat),
         Arc::clone(http_client),
     ));
+    providers.set_orchestra_quoter(Arc::clone(&quoter));
+    // The wallet-backed service needs background services for its monitor to
+    // finish the receives it opens.
+    if !background_services_enabled {
+        return (providers, None);
+    }
+    let orchestra = Arc::new(
+        crate::cross_chain::OrchestraService::new(
+            quoter,
+            Arc::clone(spark_wallet),
+            Arc::clone(storage),
+            Arc::clone(event_emitter),
+            shutdown_receiver,
+            config.cross_chain_config.is_some(),
+        )
+        .await,
+    );
     if config.cross_chain_config.is_some() {
         providers.insert(
             crate::cross_chain::CrossChainProvider::Orchestra,
-            Arc::new(
-                crate::cross_chain::OrchestraService::new(
-                    Arc::clone(&quoter),
-                    Arc::clone(spark_wallet),
-                    Arc::clone(storage),
-                    Arc::clone(event_emitter),
-                    shutdown_receiver,
-                )
-                .await,
-            ),
+            Arc::clone(&orchestra) as Arc<dyn crate::cross_chain::CrossChainService>,
         );
     }
-    providers.set_orchestra_quoter(quoter);
 
-    providers
+    (providers, Some(orchestra))
 }
 
 #[cfg(test)]

@@ -823,7 +823,7 @@ pub(crate) async fn execute_command(
             println!("Open this URL in a browser to complete the purchase:");
             println!("{}", value.url);
             if let Some(info) = &value.cross_chain_info {
-                println!("Delivered as USDC on Solana. Quote:");
+                println!("Conversion quote:");
                 print_value(info)?;
             }
             Ok(true)

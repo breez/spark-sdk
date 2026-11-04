@@ -16,9 +16,9 @@ use breez_sdk_common::fiat::FiatService;
 use breez_sdk_common::input::CrossChainAddressFamily;
 use chrono::DateTime;
 use flashnet::orchestra::{
-    AffiliateErrorMode, AmountMode, EstimateRequest, EstimateResponse, Order, OrderStatus,
-    QuoteRequest, QuoteResponse, Route, RouteAsset, RouteLimits, RouteWithLimits, StatusResponse,
-    SubmitResponse,
+    AffiliateErrorMode, AmountMode, EstimateRequest, EstimateResponse, OnrampOutcome,
+    OnrampRequest, OnrampResponse, Order, OrderStatus, QuoteRequest, QuoteResponse, Route,
+    RouteAsset, RouteLimits, RouteWithLimits, StatusResponse, SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::Duration;
@@ -67,6 +67,10 @@ const SOURCE_CHAIN_BITCOIN: &str = "bitcoin";
 /// How many replaced deposits a status lookup follows to the order that
 /// recovered them.
 const MAX_RECOVERY_HOPS: usize = 3;
+
+/// Orchestra's wire symbol for Bitcoin, and its decimals (sats).
+const BTC_ASSET: &str = "BTC";
+const BTC_DECIMALS: u32 = 8;
 
 /// The Orchestra chain wire value for a [`DeliveryMethod`].
 pub(crate) fn delivery_method_to_wire(delivery_method: DeliveryMethod) -> &'static str {
@@ -117,6 +121,16 @@ const USDB_RECEIVE_ROUNDING_MARGIN: u128 = 10_000;
 /// Legitimate rounding at provider-side precision boundaries is bounded.
 /// Anything larger is provider misbehavior we refuse to persist.
 const QUOTE_AMOUNT_IN_TOLERANCE_BPS: u32 = 10;
+
+/// How long the monitor waits between passes while no send or receive is in
+/// flight. Work started on this device wakes it at once, so the wait only
+/// delays work that arrives from another device.
+const IDLE_MONITOR_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// How many more onramp orders a Lightning receive may create when the last
+/// one delivers less than requested. The first resize normally lands, since
+/// it is sized from the fee the first order charged.
+const MAX_LIGHTNING_RECEIVE_RESIZES: u32 = 2;
 
 /// Resolves the Orchestra config from Breez server.
 ///
@@ -208,6 +222,14 @@ fn fulfilled_invoice(payment: &Payment) -> Option<String> {
     }
 }
 
+/// A Lightning receive order, not yet tracked.
+pub(crate) struct LightningReceiveOrder {
+    data: OrchestraSwapData,
+    pub(crate) info: CrossChainReceiveInfo,
+    /// The order's proportional fee rate, which a minimum fee can exceed.
+    fee_bps: u32,
+}
+
 /// Orchestra quoting: routes, estimates, quotes and order status, with no
 /// wallet or storage.
 pub(crate) struct OrchestraQuoter {
@@ -245,6 +267,9 @@ pub(crate) struct OrchestraService {
     /// Whether any receive row is still open. Refreshed by every monitor
     /// pass, set when a receive is prepared.
     has_active_receives: Arc<AtomicBool>,
+    /// Whether the monitor polls send orders. Sends only exist when the
+    /// service is a cross-chain payment provider.
+    polls_sends: bool,
 }
 
 impl OrchestraService {
@@ -255,6 +280,7 @@ impl OrchestraService {
         storage: Arc<dyn Storage>,
         event_emitter: Arc<EventEmitter>,
         shutdown_receiver: watch::Receiver<()>,
+        polls_sends: bool,
     ) -> Self {
         let client = Arc::clone(&quoter.client);
         let fiat_service = Arc::clone(&quoter.fiat_service);
@@ -277,6 +303,7 @@ impl OrchestraService {
             event_emitter,
             monitor_trigger: monitor_trigger.clone(),
             has_active_receives,
+            polls_sends,
         };
         info!("Orchestra service initialized");
         service.spawn_monitor(shutdown_receiver, &monitor_trigger);
@@ -299,6 +326,8 @@ impl OrchestraService {
         let fiat_service = Arc::clone(&self.fiat_service);
         let event_emitter = Arc::clone(&self.event_emitter);
         let has_active_receives = Arc::clone(&self.has_active_receives);
+        let quoter = Arc::clone(&self.quoter);
+        let polls_sends = self.polls_sends;
         let mut trigger_receiver = monitor_trigger.subscribe();
 
         platform_utils::spawn(async move {
@@ -313,21 +342,25 @@ impl OrchestraService {
             // Spark invoice of the inbound payment that woke this pass.
             let mut paid_invoice: Option<String> = None;
             loop {
-                if let Err(e) = Self::poll_in_flight_sends(
-                    &storage,
-                    &client,
-                    &spark_wallet,
-                    &event_emitter,
-                    &mut order_statuses,
-                )
-                .await
-                {
-                    error!("Orchestra send-monitor poll failed: {e:?}");
-                }
-                if let Err(e) = Self::poll_in_flight_receives(
+                let pending_sends = if polls_sends {
+                    Self::poll_in_flight_sends(
+                        &storage,
+                        &client,
+                        &spark_wallet,
+                        &event_emitter,
+                        &mut order_statuses,
+                    )
+                    .await
+                    .inspect_err(|e| error!("Orchestra send-monitor poll failed: {e:?}"))
+                    .ok()
+                } else {
+                    Some(0)
+                };
+                let receives = Self::poll_in_flight_receives(
                     &storage,
                     &swap_storage,
                     &client,
+                    &quoter,
                     &spark_wallet,
                     fiat_service.as_ref(),
                     &event_emitter,
@@ -336,9 +369,11 @@ impl OrchestraService {
                     paid_invoice.take().as_deref(),
                 )
                 .await
-                {
-                    error!("Orchestra receive-monitor poll failed: {e:?}");
-                }
+                .inspect_err(|e| error!("Orchestra receive-monitor poll failed: {e:?}"));
+                let interval = monitor_interval(
+                    pending_sends,
+                    receives.is_ok() && !has_active_receives.load(Ordering::Relaxed),
+                );
 
                 select! {
                     _ = shutdown_receiver.changed() => {
@@ -349,7 +384,7 @@ impl OrchestraService {
                         debug!("Orchestra monitor triggered");
                         paid_invoice = wake.ok().flatten();
                     }
-                    () = tokio::time::sleep(super::MONITOR_INTERVAL) => {}
+                    () = tokio::time::sleep(interval) => {}
                 }
             }
         });
@@ -419,6 +454,7 @@ impl OrchestraService {
     /// calls the Orchestra `/status` endpoint for each, and updates the
     /// `ConversionInfo::Orchestra` metadata when the order reaches a terminal
     /// state (replacing the estimated output with the real `amount_out`).
+    /// Returns how many send orders were pending.
     #[allow(clippy::too_many_lines)]
     async fn poll_in_flight_sends(
         storage: &Arc<dyn Storage>,
@@ -426,7 +462,7 @@ impl OrchestraService {
         spark_wallet: &Arc<SparkWallet>,
         event_emitter: &EventEmitter,
         order_statuses: &mut HashMap<String, OrderStatus>,
-    ) -> Result<(), SdkError> {
+    ) -> Result<usize, SdkError> {
         // Receives carry a Pending conversion too, from the moment their
         // invoice is matched, and are the receive monitor's to finish.
         let pending = storage
@@ -631,7 +667,7 @@ impl OrchestraService {
         }
 
         retain_pending_orders(order_statuses, pending.iter().map(|p| p.id.as_str()));
-        Ok(())
+        Ok(pending.len())
     }
 
     /// Polls Orchestra for status updates on active cross-chain receive orders.
@@ -647,6 +683,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
+        quoter: &OrchestraQuoter,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
         event_emitter: &EventEmitter,
@@ -668,36 +705,51 @@ impl OrchestraService {
         let mut submits_throttled = false;
         for (row, data) in active {
             let quote_id = data.quote_id.clone();
-            // Long-stop for unfunded quotes
-            if data.order_id.is_none() && is_past_receive_grace(&data) {
-                info!(
-                    "Orchestra receive {quote_id}: unfunded {RECEIVE_GRACE_SECS}s past expiry, closing row"
-                );
-                if let Err(e) = swap_storage.mark_terminal(row).await {
-                    error!(
-                        "Orchestra receive {quote_id}: failed to mark unfunded row terminal: {e:?}"
-                    );
-                }
-                continue;
-            }
-
-            let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
-                swap_storage,
-                client,
-                row,
-                data,
-                probe_clock,
-                invoice_paid,
-                &mut submits_throttled,
-            )
-            .await
-            else {
-                continue;
-            };
+            let (row, data, order_id, status) =
+                if is_unfunded(&data) && is_past_receive_grace(&data) {
+                    // Long-stop for unfunded quotes
+                    match Self::recheck_unfunded_row(quoter, swap_storage, data).await {
+                        UnfundedRow::Paid(paid) => {
+                            let (data, status) = *paid;
+                            let order_id = status.order.id.clone();
+                            (row, data, order_id, Some(status))
+                        }
+                        UnfundedRow::Retry => continue,
+                        UnfundedRow::Close => {
+                            info!(
+                                "Orchestra receive {quote_id}: unfunded {RECEIVE_GRACE_SECS}s past \
+                             expiry, closing row"
+                            );
+                            if let Err(e) = swap_storage.mark_terminal(row).await {
+                                error!(
+                                    "Orchestra receive {quote_id}: failed to mark unfunded row \
+                                 terminal: {e:?}"
+                                );
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
+                        swap_storage,
+                        client,
+                        row,
+                        data,
+                        probe_clock,
+                        invoice_paid,
+                        &mut submits_throttled,
+                    )
+                    .await
+                    else {
+                        continue;
+                    };
+                    (row, data, order_id, status)
+                };
             if let Err(e) = Self::poll_receive_order_status(
                 storage,
                 swap_storage,
                 client,
+                quoter,
                 spark_wallet,
                 fiat_service,
                 event_emitter,
@@ -717,6 +769,49 @@ impl OrchestraService {
         Ok(())
     }
 
+    /// What to do with a row still unfunded a grace window past expiry. A
+    /// Lightning order can be paid while the wallet is offline, its payment
+    /// not synced yet. Its read token has expired by then, so it is looked up
+    /// in the explorer, and an order that took the payment is recorded paid.
+    async fn recheck_unfunded_row(
+        quoter: &OrchestraQuoter,
+        swap_storage: &OrchestraStorageAdapter,
+        mut data: OrchestraSwapData,
+    ) -> UnfundedRow {
+        let quote_id = data.quote_id.clone();
+        if !is_lightning_funded(&data) {
+            return UnfundedRow::Close;
+        }
+        let order = match quoter.find_order(&quote_id, None).await {
+            Ok(Some(order)) if took_lightning_payment(order.status) => order,
+            Ok(_) => return UnfundedRow::Close,
+            Err(e) => {
+                warn!(
+                    "Orchestra receive {quote_id}: order lookup failed, keeping the row for the \
+                     next pass: {e:?}"
+                );
+                return UnfundedRow::Retry;
+            }
+        };
+        info!(
+            "Orchestra receive {quote_id}: Lightning order {:?} past the grace window, \
+             recording it paid",
+            order.status
+        );
+        data.paid = true;
+        if let Err(e) = swap_storage.upsert(&data).await {
+            error!("Orchestra receive {quote_id}: failed to record payment: {e:?}");
+            return UnfundedRow::Retry;
+        }
+        UnfundedRow::Paid(Box::new((
+            data,
+            StatusResponse {
+                order,
+                stages: Vec::new(),
+            },
+        )))
+    }
+
     /// Resolves a row to the `(row, data, order_id)` triple `/status` needs,
     /// with the status the lookup fetched when it found the order. A row
     /// without an order handle is looked up by quote id when it holds the
@@ -724,7 +819,8 @@ impl OrchestraService {
     /// means there is nothing to poll this tick.
     ///
     /// `invoice_paid` marks a row whose invoice an inbound payment just
-    /// fulfilled. It is checked even when the probe clock would hold it off.
+    /// fulfilled. It is checked even when the probe clock would hold it off,
+    /// or before a Lightning-funded row is recorded as paid.
     /// `submits_throttled` is set once `/submit` answers 429, and holds off
     /// further submits for the rest of the pass.
     async fn ensure_receive_order_handle(
@@ -736,10 +832,13 @@ impl OrchestraService {
         invoice_paid: bool,
         submits_throttled: &mut bool,
     ) -> Option<(ReceiveOrderHandle, Option<StatusResponse>)> {
+        let quote_id = data.quote_id.clone();
         if let Some(order_id) = data.order_id.clone() {
+            if is_awaiting_lightning_payment(&data, invoice_paid) {
+                return None;
+            }
             return Some(((row, data, order_id), None));
         }
-        let quote_id = data.quote_id.clone();
         // A live quote is checked every tick. Past expiry it drops to the
         // slower clock.
         if is_past_quote_expiry(&data) && !is_probe_due(probe_clock, &quote_id) && !invoice_paid {
@@ -926,6 +1025,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
         client: &Arc<OrchestraClient>,
+        quoter: &OrchestraQuoter,
         spark_wallet: &Arc<SparkWallet>,
         fiat_service: &dyn FiatService,
         event_emitter: &EventEmitter,
@@ -951,21 +1051,35 @@ impl OrchestraService {
                 // one against the same order, so the next tick can poll again.
                 // On the probe clock, so a token the provider keeps rejecting
                 // costs one submit per window rather than one per tick.
-                if is_invalid_read_token(&e) && is_probe_due(probe_clock, &quote_id) {
-                    info!(
-                        "Orchestra receive {quote_id}: read token rejected, re-acquiring via submit"
-                    );
-                    Self::submit_probe_unless_throttled(
-                        swap_storage,
-                        client,
-                        row,
-                        data,
-                        probe_clock,
-                        submits_throttled,
-                    )
-                    .await;
+                if !is_invalid_read_token(&e) || !is_probe_due(probe_clock, &quote_id) {
+                    return Ok(());
                 }
-                return Ok(());
+                info!("Orchestra receive {quote_id}: read token rejected, re-acquiring via submit");
+                let renewed = Self::submit_probe_unless_throttled(
+                    swap_storage,
+                    client,
+                    row.clone(),
+                    data.clone(),
+                    probe_clock,
+                    submits_throttled,
+                )
+                .await;
+                // A Lightning order can outlive its quote's `/submit`. The
+                // explorer reads it with no token.
+                if renewed.is_some() || *submits_throttled || !is_lightning_funded(&data) {
+                    return Ok(());
+                }
+                match quoter.find_order(&quote_id, None).await {
+                    Ok(Some(order)) => StatusResponse {
+                        order,
+                        stages: Vec::new(),
+                    },
+                    Ok(None) => return Ok(()),
+                    Err(e) => {
+                        warn!("Orchestra receive {quote_id}: explorer lookup failed: {e:?}");
+                        return Ok(());
+                    }
+                }
             }
         };
         let order = resp.order;
@@ -1013,10 +1127,115 @@ impl OrchestraService {
                 );
                 swap_storage.mark_terminal(row).await?;
             }
+            status if is_abandoned_lightning_order(&data, status, now_secs()) => {
+                info!(
+                    "Orchestra receive {quote_id}: Lightning order {:?} {RECEIVE_GRACE_SECS}s \
+                     past expiry, closing row",
+                    order.status
+                );
+                swap_storage.mark_terminal(row).await?;
+            }
             // Non-terminal status.
             _ => {}
         }
         Ok(())
+    }
+
+    /// Creates an onramp order for a Lightning payment of `amount_sats` that
+    /// Orchestra delivers to this wallet as Bitcoin over Spark. The order's
+    /// `deposit_address` is the BOLT11 invoice the payer pays. If the order
+    /// fails before delivery, Orchestra refunds the payment to
+    /// `refund_address`, a Lightning address. Nothing is tracked until the
+    /// order is passed to [`Self::track_lightning_receive`].
+    pub(crate) async fn create_lightning_receive(
+        &self,
+        amount_sats: u64,
+        refund_address: Option<&str>,
+    ) -> Result<LightningReceiveOrder, SdkError> {
+        let recipient_address = self
+            .spark_wallet
+            .get_spark_address()?
+            .to_address_string()
+            .map_err(|e| {
+                SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
+            })?;
+        // Same tie as a Spark-delivered `prepare_receive`: Orchestra fulfils
+        // this invoice on delivery, which links the inbound payment to the row.
+        let spark_invoice = self
+            .spark_wallet
+            .create_spark_invoice(None, None, None, None, None)
+            .await?;
+        let request = lightning_receive_request(
+            amount_sats,
+            spark_invoice.clone(),
+            refund_address,
+            self.quoter.attribution.tag(),
+        );
+        debug!(
+            "Orchestra: creating onramp order: amount={}",
+            request.amount
+        );
+        let order = match self
+            .client
+            .onramp(request, uuid::Uuid::new_v4().to_string())
+            .await?
+        {
+            OnrampOutcome::Created(order) => order,
+            OnrampOutcome::HeldForReview { order_id, status } => {
+                info!("Orchestra: onramp order {order_id} held for review ({status})");
+                return Err(SdkError::Generic(
+                    "The provider is reviewing this purchase and has no invoice to pay yet"
+                        .to_string(),
+                ));
+            }
+        };
+        debug!("Orchestra: onramp order response: {order:?}");
+        if !order.ignored_fields.is_empty() {
+            warn!(
+                "Orchestra: onramp order {} ignored fields {:?}",
+                order.order_id, order.ignored_fields
+            );
+        }
+        let fee_bps = order.fee_bps;
+        let (data, info) =
+            lightning_receive_from_order(*order, amount_sats, recipient_address, spark_invoice)?;
+        Ok(LightningReceiveOrder {
+            data,
+            info,
+            fee_bps,
+        })
+    }
+
+    /// Like [`Self::create_lightning_receive`], but sized so the order
+    /// delivers at least `receive_sats`, the payer paying the fee on top.
+    ///
+    /// Orchestra has no exact-out onramp to Spark, and `/estimate` does not
+    /// price onramps, so an order for `receive_sats` itself prices the fee
+    /// and the next order is sized from it. Orders that come up short are
+    /// left unpaid to expire.
+    pub(crate) async fn create_lightning_receive_delivering(
+        &self,
+        receive_sats: u64,
+        refund_address: Option<&str>,
+    ) -> Result<LightningReceiveOrder, SdkError> {
+        resize_lightning_receive(receive_sats, |amount_sats| {
+            self.create_lightning_receive(amount_sats, refund_address)
+        })
+        .await
+    }
+
+    /// Persists an order from [`Self::create_lightning_receive`] so the
+    /// monitor ties the delivery to its payment, and returns its details.
+    pub(crate) async fn track_lightning_receive(
+        &self,
+        order: LightningReceiveOrder,
+    ) -> Result<CrossChainReceiveInfo, SdkError> {
+        OrchestraStorageAdapter::new(Arc::clone(&self.storage))
+            .upsert(&order.data)
+            .await?;
+        self.has_active_receives.store(true, Ordering::Relaxed);
+        self.trigger_monitor();
+        Ok(order.info)
     }
 }
 
@@ -1361,6 +1580,98 @@ fn proportional_inflation(
     Ok(inflated.max(source_amount))
 }
 
+/// The wait before the monitor's next pass: the idle interval when the last
+/// pass found no pending send and no open receive, the regular one otherwise.
+/// `pending_sends` is unset when the send poll failed.
+fn monitor_interval(pending_sends: Option<usize>, no_open_receives: bool) -> Duration {
+    if pending_sends == Some(0) && no_open_receives {
+        IDLE_MONITOR_INTERVAL
+    } else {
+        super::MONITOR_INTERVAL
+    }
+}
+
+/// Creates orders through `create` until one delivers at least
+/// `receive_sats`. The first resize is sized from the first order's fee, any
+/// later one from the rate of the last order. Gives up after
+/// [`MAX_LIGHTNING_RECEIVE_RESIZES`] resizes.
+async fn resize_lightning_receive<F, Fut>(
+    receive_sats: u64,
+    mut create: F,
+) -> Result<LightningReceiveOrder, SdkError>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = Result<LightningReceiveOrder, SdkError>>,
+{
+    let target = u128::from(receive_sats);
+    let mut order = create(receive_sats).await?;
+    for resize in 0..MAX_LIGHTNING_RECEIVE_RESIZES {
+        if order.info.expected_received_amount >= target {
+            return Ok(order);
+        }
+        let amount_in = if resize == 0 {
+            deposit_covering_fee(
+                target,
+                order.info.deposit_amount,
+                order.info.expected_received_amount,
+                order.fee_bps,
+            )
+        } else {
+            deposit_delivering(
+                target,
+                order.info.deposit_amount,
+                order.info.expected_received_amount,
+            )?
+        };
+        debug!(
+            "Orchestra: onramp order for {} sats delivers {}, resizing to {amount_in} sats \
+             to deliver {receive_sats}",
+            order.info.deposit_amount, order.info.expected_received_amount
+        );
+        let amount_in = u64::try_from(amount_in).map_err(|_| {
+            SdkError::InvalidInput(format!("Amount of {amount_in} sats is too large"))
+        })?;
+        order = create(amount_in).await?;
+    }
+    if order.info.expected_received_amount < target {
+        return Err(SdkError::Generic(format!(
+            "The provider's order for {} sats delivers {} of the requested {receive_sats} sats",
+            order.info.deposit_amount, order.info.expected_received_amount
+        )));
+    }
+    Ok(order)
+}
+
+/// The deposit that delivers `target` when the fee is the larger of a minimum
+/// and `fee_bps` of the deposit, from an order for `target` that turned
+/// `probe_in` into `probe_out`. Below the minimum's threshold the fee stays
+/// the probe's, above it the deposit is `target` grossed up by `fee_bps`.
+fn deposit_covering_fee(target: u128, probe_in: u128, probe_out: u128, fee_bps: u32) -> u128 {
+    let flat = target.saturating_add(probe_in.saturating_sub(probe_out));
+    let proportional = 10_000u32
+        .checked_sub(fee_bps)
+        .filter(|&net_bps| net_bps > 0)
+        .map_or(0, |net_bps| {
+            target.saturating_mul(10_000).div_ceil(u128::from(net_bps))
+        });
+    flat.max(proportional)
+}
+
+/// The deposit that delivers `target` at the rate of an order that turned
+/// `probe_in` into `probe_out`, rounded up. Errors on a zero `probe_out` or
+/// overflow.
+fn deposit_delivering(target: u128, probe_in: u128, probe_out: u128) -> Result<u128, SdkError> {
+    if probe_out == 0 {
+        return Err(SdkError::Generic(
+            "Cross-chain: the provider's order delivers nothing".to_string(),
+        ));
+    }
+    target
+        .checked_mul(probe_in)
+        .map(|scaled| scaled.div_ceil(probe_out))
+        .ok_or_else(|| SdkError::Generic("Cross-chain: deposit scaling overflow".to_string()))
+}
+
 /// Source units that add `shortfall` to delivery at the probe's rate, rounded
 /// up. Errors on a zero `probe_out` or overflow.
 fn top_up_for_shortfall(
@@ -1538,6 +1849,139 @@ fn receive_poll_priority(
         probe_clock.get(&data.quote_id).copied(),
         std::cmp::Reverse(data.expires_at),
     )
+}
+
+/// The `/onramp` request for a Lightning payment of `amount_sats` delivered to
+/// `spark_invoice`, refunded to `refund_address` if the order fails before
+/// delivery. Carries the partner tag but no affiliate ids, which Orchestra
+/// refuses on this route since it cannot settle fees on it.
+fn lightning_receive_request(
+    amount_sats: u64,
+    spark_invoice: String,
+    refund_address: Option<&str>,
+    tag: Option<String>,
+) -> OnrampRequest {
+    OnrampRequest {
+        destination_chain: SOURCE_CHAIN_SPARK.to_string(),
+        destination_asset: BTC_ASSET.to_string(),
+        recipient_address: spark_invoice,
+        amount: amount_sats.to_string(),
+        amount_mode: Some(AmountMode::ExactIn),
+        refund_address: refund_address.map(str::to_string),
+        tag,
+    }
+}
+
+/// The receive row to persist and the details to report for an onramp order.
+/// The row holds the order id and read token from the start, so the monitor
+/// polls the order directly. Rejects an order whose `amountIn` is not the
+/// requested `amount_sats`, a provider fault.
+fn lightning_receive_from_order(
+    order: OnrampResponse,
+    amount_sats: u64,
+    recipient_address: String,
+    spark_invoice: String,
+) -> Result<(OrchestraSwapData, CrossChainReceiveInfo), SdkError> {
+    let deposit_amount = parse_amount(&order.amount_in, "amountIn")?;
+    verify_quote_amount_in(u128::from(amount_sats), deposit_amount).map_err(|_| {
+        SdkError::Generic(format!(
+            "The provider's order is for {deposit_amount} sats, not the requested {amount_sats}"
+        ))
+    })?;
+    let expected_received_amount = parse_amount(&order.estimated_out, "estimatedOut")?;
+    let service_fee_amount = parse_amount(&order.total_fee_amount, "totalFeeAmount")?;
+    let (service_fee_asset, service_fee_asset_decimals) =
+        if order.fee_asset.eq_ignore_ascii_case(BTC_ASSET) {
+            (None, None)
+        } else {
+            (
+                Some(order.fee_asset.clone()),
+                order.fee_asset_details.as_ref().map(|d| d.decimals),
+            )
+        };
+    let expires_at = parse_rfc3339_to_unix_seconds(&order.expires_at)?;
+    let data = OrchestraSwapData {
+        quote_id: order.quote_id,
+        order_id: Some(order.order_id),
+        read_token: order.read_token.map(|t| t.0),
+        quote_read_token: None,
+        recipient_address,
+        spark_invoice: Some(spark_invoice),
+        paid: false,
+        source_chain: SOURCE_CHAIN_LIGHTNING.to_string(),
+        source_asset: BTC_ASSET.to_string(),
+        source_chain_id: None,
+        source_contract_address: None,
+        source_decimals: BTC_DECIMALS,
+        destination_chain: SOURCE_CHAIN_SPARK.to_string(),
+        destination_asset: BTC_ASSET.to_string(),
+        destination_decimals: BTC_DECIMALS,
+        token_identifier: None,
+        amount_in: order.amount_in,
+        expected_amount_out: expected_received_amount.to_string(),
+        fee_amount: Some(service_fee_amount.to_string()),
+        fee_asset: Some(order.fee_asset),
+        fee_asset_decimals: service_fee_asset_decimals,
+        expires_at,
+    };
+    let info = CrossChainReceiveInfo {
+        quote_id: data.quote_id.clone(),
+        deposit_address: order.deposit_address,
+        deposit_amount,
+        expected_received_amount,
+        destination_asset: BTC_ASSET.to_string(),
+        token_identifier: None,
+        service_fee_amount,
+        service_fee_asset,
+        service_fee_asset_decimals,
+        expires_at,
+    };
+    Ok((data, info))
+}
+
+/// Whether a receive row is funded over Lightning. Such a row carries its
+/// order from creation, whether or not the invoice is ever paid.
+fn is_lightning_funded(data: &OrchestraSwapData) -> bool {
+    data.source_chain
+        .eq_ignore_ascii_case(SOURCE_CHAIN_LIGHTNING)
+}
+
+/// Whether a row is a Lightning-funded order nobody has paid. Its order has
+/// nothing to report until the payment comes in, which links the payment to
+/// the row and marks it paid, so it is not polled. `invoice_paid` says the
+/// payment just came in.
+fn is_awaiting_lightning_payment(data: &OrchestraSwapData, invoice_paid: bool) -> bool {
+    is_lightning_funded(data) && !data.paid && !invoice_paid
+}
+
+/// Whether nothing has been paid into a receive row yet: a quote with no
+/// order, or a Lightning-funded order nobody has paid.
+fn is_unfunded(data: &OrchestraSwapData) -> bool {
+    data.order_id.is_none() || (is_lightning_funded(data) && !data.paid)
+}
+
+/// What the monitor does with a row still unfunded past its grace window.
+enum UnfundedRow {
+    Close,
+    /// Keep it, and look again on the next pass.
+    Retry,
+    /// A Lightning order that took the payment, recorded paid, and its status.
+    Paid(Box<(OrchestraSwapData, StatusResponse)>),
+}
+
+/// Whether a Lightning-funded order's status shows it took the payment.
+/// Before that it is processing, and it expires if never paid.
+fn took_lightning_payment(status: OrderStatus) -> bool {
+    !matches!(status, OrderStatus::Processing | OrderStatus::Expired)
+}
+
+/// Whether a paid Lightning-funded order is still processing, or has expired,
+/// a grace window after its expiry. A payment made before expiry settles well
+/// within the window, so such an order will not complete.
+fn is_abandoned_lightning_order(data: &OrchestraSwapData, status: OrderStatus, now: u64) -> bool {
+    is_lightning_funded(data)
+        && !took_lightning_payment(status)
+        && now >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
 }
 
 /// Errors if `quoted_amount_in` differs from `requested_source_amount` by
@@ -2224,6 +2668,7 @@ impl OrchestraQuoter {
             prepared: CrossChainReceivePrepared {
                 payment_request,
                 info: CrossChainReceiveInfo {
+                    quote_id: quote.quote_id,
                     deposit_address: quote.deposit_address,
                     deposit_amount,
                     expected_received_amount,
@@ -2234,7 +2679,6 @@ impl OrchestraQuoter {
                     service_fee_asset_decimals,
                     expires_at: expires_at_secs,
                 },
-                quote_id: quote.quote_id,
                 quote_read_token: quote.read_token.map(|t| t.0),
             },
             amount_in: quote.amount_in,
@@ -2422,12 +2866,13 @@ impl CrossChainService for OrchestraService {
         // no funds reach this wallet, so there is no order to track.
         if spark_invoice.is_some() {
             let data = OrchestraSwapData {
-                quote_id: prepared.quote_id.clone(),
+                quote_id: prepared.info.quote_id.clone(),
                 order_id: None,
                 read_token: None,
                 quote_read_token: prepared.quote_read_token.clone(),
                 recipient_address: recipient_address.to_string(),
                 spark_invoice,
+                paid: false,
                 source_chain: route.chain.clone(),
                 source_asset: route.asset.clone(),
                 source_chain_id: route.chain_id.clone(),
@@ -2447,6 +2892,7 @@ impl CrossChainService for OrchestraService {
             let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
             adapter.upsert(&data).await?;
             self.has_active_receives.store(true, Ordering::Relaxed);
+            self.trigger_monitor();
         }
 
         Ok(prepared)
@@ -3033,22 +3479,30 @@ async fn attach_receive_metadata(
     Ok(ReceiveMetadataOutcome::Pending)
 }
 
-/// Conversion info for an inbound payment that fulfilled the invoice of an
-/// open receive row, or `None` when no open row carries that invoice.
-/// Pending, with quote-time amounts: the monitor fills in the delivered
-/// amount and deposit hash once Orchestra confirms the order.
-pub(crate) async fn receive_conversion_info_for_invoice(
+/// Links an inbound payment to the open receive row whose invoice it
+/// fulfilled, returning the row's conversion info, or `None` when no open
+/// row carries that invoice. Pending, with quote-time amounts: the monitor
+/// fills in the delivered amount and deposit hash once Orchestra confirms
+/// the order. A Lightning-funded row is recorded as paid, which starts the
+/// monitor polling its order.
+pub(crate) async fn link_receive_for_invoice(
     storage: &Arc<dyn Storage>,
     invoice: &str,
 ) -> Result<Option<ConversionInfo>, SdkError> {
-    let rows = OrchestraStorageAdapter::new(Arc::clone(storage))
+    let adapter = OrchestraStorageAdapter::new(Arc::clone(storage));
+    let Some((_, mut data)) = adapter
         .list_active()
-        .await?;
-    let matched = rows
+        .await?
         .into_iter()
         .find(|(_, data)| data.spark_invoice.as_deref() == Some(invoice))
-        .map(|(_, data)| quote_time_receive_conversion_info(&data));
-    Ok(matched)
+    else {
+        return Ok(None);
+    };
+    if is_lightning_funded(&data) && !data.paid {
+        data.paid = true;
+        adapter.upsert(&data).await?;
+    }
+    Ok(Some(quote_time_receive_conversion_info(&data)))
 }
 
 /// The service fee a receive row recorded at quote time, in the shape
@@ -3076,6 +3530,12 @@ fn quote_fee(data: &OrchestraSwapData) -> QuoteFee {
     };
     let asset_decimals = data.fee_asset_decimals;
     let in_source_units = match (amount, data.fee_asset.as_deref()) {
+        (Some(fee), Some(asset))
+            if asset.eq_ignore_ascii_case(BTC_ASSET)
+                && data.source_asset.eq_ignore_ascii_case(BTC_ASSET) =>
+        {
+            Some(fee)
+        }
         (Some(fee), Some(asset)) if super::is_usd_stable_asset(asset) => asset_decimals
             .and_then(|decimals| super::rescale_decimals(fee, decimals, data.source_decimals).ok()),
         _ => None,
@@ -3217,7 +3677,12 @@ async fn compute_receive_fee(
 ) -> Option<u128> {
     let amount_in = asset_amount_in?;
     let amount_out = delivered_amount?;
-    let delivered_in_source = if data.token_identifier.is_some() {
+    let delivered_in_source = if data.source_asset.eq_ignore_ascii_case(BTC_ASSET)
+        && data.token_identifier.is_none()
+    {
+        // Bitcoin in and out (a Lightning receive): both sides are sats.
+        amount_out
+    } else if data.token_identifier.is_some() {
         // Token destination (USDB): source and destination are both USD-stable.
         // Rescale destination units to source-asset decimals and subtract.
         super::rescale_decimals(amount_out, data.destination_decimals, data.source_decimals).ok()?
@@ -3411,6 +3876,7 @@ mod tests {
             quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
+            paid: false,
             source_chain: "ethereum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("1".to_string()),
@@ -3468,44 +3934,42 @@ mod tests {
             completed_at: None,
             superseded_by_operation_id: None,
         };
-        let info = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await;
-        match info {
-            ConversionInfo::Orchestra {
-                order_id,
-                quote_id,
-                chain,
-                asset,
-                recipient_address,
-                asset_amount_in,
-                estimated_out,
-                delivered_amount,
-                external_tx_hash,
-                status,
-                fee_amount,
-                service_fee_asset,
-                service_fee_asset_decimals,
-                ..
-            } => {
-                assert_eq!(order_id, "ord_xyz");
-                assert_eq!(quote_id, "q_xyz");
-                // chain/asset describe the NON-Spark side (source on receive).
-                assert_eq!(chain, "ethereum");
-                assert_eq!(asset, "USDC");
-                assert_eq!(recipient_address, "sp1rcv");
-                assert_eq!(asset_amount_in, Some(100));
-                assert_eq!(estimated_out, 50_000);
-                assert_eq!(delivered_amount, Some(49_500));
-                // Receive: the external side is the source.
-                assert_eq!(external_tx_hash.as_deref(), Some("0xeth-tx"));
-                assert_eq!(status, ConversionStatus::Completed);
-                // The fiat lookup fails, so the fee falls back to the quote's,
-                // rescaled from the fee asset (6dp) to the source (6dp).
-                assert_eq!(fee_amount, Some(250));
-                assert_eq!(service_fee_asset.as_deref(), Some("USDC"));
-                assert_eq!(service_fee_asset_decimals, Some(6));
-            }
-            _ => panic!("expected Orchestra variant"),
-        }
+        let ConversionInfo::Orchestra {
+            order_id,
+            quote_id,
+            chain,
+            asset,
+            recipient_address,
+            asset_amount_in,
+            estimated_out,
+            delivered_amount,
+            external_tx_hash,
+            status,
+            fee_amount,
+            service_fee_asset,
+            service_fee_asset_decimals,
+            ..
+        } = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(order_id, "ord_xyz");
+        assert_eq!(quote_id, "q_xyz");
+        // chain/asset describe the NON-Spark side (source on receive).
+        assert_eq!(chain, "ethereum");
+        assert_eq!(asset, "USDC");
+        assert_eq!(recipient_address, "sp1rcv");
+        assert_eq!(asset_amount_in, Some(100));
+        assert_eq!(estimated_out, 50_000);
+        assert_eq!(delivered_amount, Some(49_500));
+        // Receive: the external side is the source.
+        assert_eq!(external_tx_hash.as_deref(), Some("0xeth-tx"));
+        assert_eq!(status, ConversionStatus::Completed);
+        // The fiat lookup fails, so the fee falls back to the quote's,
+        // rescaled from the fee asset (6dp) to the source (6dp).
+        assert_eq!(fee_amount, Some(250));
+        assert_eq!(service_fee_asset.as_deref(), Some("USDC"));
+        assert_eq!(service_fee_asset_decimals, Some(6));
     }
 
     /// USDB destination: `compute_receive_fee` takes the rescale-and-subtract
@@ -3520,6 +3984,7 @@ mod tests {
             quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
+            paid: false,
             source_chain: "arbitrum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("42161".to_string()),
@@ -4660,6 +5125,7 @@ mod tests {
             quote_read_token: None,
             recipient_address: "sp1rcv".to_string(),
             spark_invoice: None,
+            paid: false,
             source_chain: "ethereum".to_string(),
             source_asset: "USDC".to_string(),
             source_chain_id: Some("1".to_string()),
@@ -5808,7 +6274,7 @@ mod tests {
         data.spark_invoice = Some("spark1inv".to_string());
         adapter.upsert(&data).await.unwrap();
 
-        let matched = receive_conversion_info_for_invoice(&storage, "spark1inv")
+        let matched = link_receive_for_invoice(&storage, "spark1inv")
             .await
             .unwrap();
         assert!(matches!(
@@ -5817,7 +6283,7 @@ mod tests {
                 if quote_id == "q_xyz"
         ));
 
-        let other = receive_conversion_info_for_invoice(&storage, "spark1other")
+        let other = link_receive_for_invoice(&storage, "spark1other")
             .await
             .unwrap();
         assert!(other.is_none());
@@ -5834,7 +6300,7 @@ mod tests {
         let (row, _) = adapter.list_active().await.unwrap().remove(0);
         adapter.mark_terminal(row).await.unwrap();
 
-        let matched = receive_conversion_info_for_invoice(&storage, "spark1inv")
+        let matched = link_receive_for_invoice(&storage, "spark1inv")
             .await
             .unwrap();
         assert!(matched.is_none());
@@ -6434,7 +6900,7 @@ mod tests {
         );
 
         let prepared = quote.prepared;
-        assert_eq!(prepared.quote_id, "q_c2c");
+        assert_eq!(prepared.info.quote_id, "q_c2c");
         assert_eq!(prepared.quote_read_token.as_deref(), Some("rt_c2c"));
         assert!(prepared.info.deposit_amount >= 10_000_000_000_000_000_000);
         assert_eq!(prepared.info.expected_received_amount, 10_000_000);
@@ -6446,5 +6912,411 @@ mod tests {
             "{}",
             prepared.payment_request
         );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn linking_a_payment_marks_a_lightning_row_paid() {
+        let storage = sqlite_storage();
+        let adapter = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let lightning = lightning_receive_row("6500");
+        let other = OrchestraSwapData {
+            quote_id: "q_other".to_string(),
+            spark_invoice: Some("spark1other".to_string()),
+            ..receive_swap_data()
+        };
+        adapter.upsert(&lightning).await.unwrap();
+        adapter.upsert(&other).await.unwrap();
+
+        for invoice in ["spark1inv", "spark1other"] {
+            assert!(
+                link_receive_for_invoice(&storage, invoice)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        let rows = adapter.list_active().await.unwrap();
+        let paid = |quote_id: &str| {
+            rows.iter()
+                .find(|(_, data)| data.quote_id == quote_id)
+                .map(|(_, data)| data.paid)
+                .unwrap()
+        };
+        assert!(paid("q_ln"));
+        // Only a Lightning-funded row records it.
+        assert!(!paid("q_other"));
+    }
+
+    /// An onramp order Orchestra created for 6,500 sats.
+    fn onramp_order(amount_in: &str) -> OnrampResponse {
+        serde_json::from_value(serde_json::json!({
+            "orderId": "ord_ln", "quoteId": "q_ln", "depositAddress": "lnbc65u1pinvoice",
+            "amountIn": amount_in, "estimatedOut": "6450", "feeAmount": "50",
+            "totalFeeAmount": "50", "feeAsset": "BTC", "feeBps": 30,
+            "expiresAt": "2026-11-05T12:00:00Z", "readToken": "rt_order",
+        }))
+        .unwrap()
+    }
+
+    fn lightning_receive_row(amount_in: &str) -> OrchestraSwapData {
+        lightning_receive_from_order(
+            onramp_order(amount_in),
+            6_500,
+            "spark1wallet".to_string(),
+            "spark1inv".to_string(),
+        )
+        .unwrap()
+        .0
+    }
+
+    #[test_all]
+    fn lightning_receive_request_has_no_fee_fields() {
+        let request = lightning_receive_request(
+            6_500,
+            "spark1inv".to_string(),
+            Some("alice@breez.tips"),
+            Some("partner".to_string()),
+        );
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({
+                "destinationChain": "spark", "destinationAsset": "BTC",
+                "recipientAddress": "spark1inv", "amount": "6500", "amountMode": "exact_in",
+                "refundAddress": "alice@breez.tips", "tag": "partner",
+            })
+        );
+        // Without a refund address the field is left out.
+        let request = lightning_receive_request(6_500, "spark1inv".to_string(), None, None);
+        assert!(
+            serde_json::to_value(&request)
+                .unwrap()
+                .get("refundAddress")
+                .is_none()
+        );
+    }
+
+    #[test_all]
+    fn lightning_receive_order_is_tracked_by_its_order_id() {
+        let (data, info) = lightning_receive_from_order(
+            onramp_order("6500"),
+            6_500,
+            "spark1wallet".to_string(),
+            "spark1inv".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(info.quote_id, "q_ln");
+        assert_eq!(info.deposit_address, "lnbc65u1pinvoice");
+        assert_eq!(info.deposit_amount, 6_500);
+        assert_eq!(info.expected_received_amount, 6_450);
+        assert_eq!(info.destination_asset, "BTC");
+        assert_eq!(info.token_identifier, None);
+        assert_eq!(info.service_fee_amount, 50);
+        assert_eq!(info.service_fee_asset, None);
+
+        assert_eq!(data.quote_id, "q_ln");
+        assert_eq!(data.order_id.as_deref(), Some("ord_ln"));
+        assert_eq!(data.read_token.as_deref(), Some("rt_order"));
+        assert_eq!(data.quote_read_token, None);
+        assert_eq!(data.recipient_address, "spark1wallet");
+        assert_eq!(data.spark_invoice.as_deref(), Some("spark1inv"));
+        assert!(is_lightning_funded(&data));
+        assert_eq!(
+            (data.source_chain.as_str(), data.source_asset.as_str()),
+            ("lightning", "BTC")
+        );
+        assert_eq!(
+            (
+                data.destination_chain.as_str(),
+                data.destination_asset.as_str()
+            ),
+            ("spark", "BTC")
+        );
+        assert_eq!((data.source_decimals, data.destination_decimals), (8, 8));
+        assert_eq!(data.amount_in, "6500");
+        assert_eq!(data.expected_amount_out, "6450");
+        assert_eq!(data.fee_amount.as_deref(), Some("50"));
+        assert_eq!(data.expires_at, info.expires_at);
+    }
+
+    #[test_all]
+    fn lightning_receive_order_for_another_amount_is_rejected() {
+        let result = lightning_receive_from_order(
+            onramp_order("7000"),
+            6_500,
+            "spark1wallet".to_string(),
+            "spark1inv".to_string(),
+        );
+        assert!(matches!(result, Err(SdkError::Generic(_))));
+    }
+
+    #[async_test_all]
+    async fn a_late_lightning_order_counts_as_paid_once_it_took_the_payment() {
+        for (status, paid) in [
+            ("processing", false),
+            ("expired", false),
+            ("delivering", true),
+            ("completed", true),
+            ("refunded", true),
+        ] {
+            let http = FakeOrchestra::new(
+                unused(),
+                &[("q_1", (200, explorer_body(&[("ord_1", status, None)])))],
+            );
+            let order = quoter(Arc::clone(&http))
+                .find_order("q_1", None)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(took_lightning_payment(order.status), paid, "{status}");
+            assert_eq!(http.requests(), vec![explorer_request("q_1")]);
+        }
+    }
+
+    #[test_all]
+    fn the_monitor_idles_only_with_nothing_in_flight() {
+        assert_eq!(monitor_interval(Some(0), true), IDLE_MONITOR_INTERVAL);
+        for (pending_sends, no_open_receives) in [(Some(1), true), (Some(0), false), (None, true)] {
+            assert_eq!(
+                monitor_interval(pending_sends, no_open_receives),
+                super::super::MONITOR_INTERVAL
+            );
+        }
+    }
+
+    #[test_all]
+    fn only_lightning_funded_rows_are_lightning_funded() {
+        assert!(!is_lightning_funded(&receive_swap_data()));
+        assert!(!is_lightning_funded(&bsc_receive_data()));
+    }
+
+    #[test_all]
+    fn an_unpaid_lightning_order_is_not_polled_until_its_payment_comes_in() {
+        let data = lightning_receive_row("6500");
+        assert!(is_awaiting_lightning_payment(&data, false));
+        assert!(is_unfunded(&data));
+        // Its payment just woke the monitor.
+        assert!(!is_awaiting_lightning_payment(&data, true));
+        // Its payment was linked to it.
+        let paid = OrchestraSwapData { paid: true, ..data };
+        assert!(!is_awaiting_lightning_payment(&paid, false));
+        assert!(!is_unfunded(&paid));
+        // Other receives poll their order as soon as they have one.
+        let ordered = OrchestraSwapData {
+            order_id: Some("ord".to_string()),
+            ..receive_swap_data()
+        };
+        assert!(!is_awaiting_lightning_payment(&ordered, false));
+        assert!(!is_unfunded(&ordered));
+        assert!(is_unfunded(&receive_swap_data()));
+    }
+
+    #[test_all]
+    fn a_lightning_order_still_waiting_after_the_grace_window_is_abandoned() {
+        let data = lightning_receive_row("6500");
+        let closed_at = data.expires_at.saturating_add(RECEIVE_GRACE_SECS);
+        for status in [OrderStatus::Processing, OrderStatus::Expired] {
+            assert!(!is_abandoned_lightning_order(
+                &data,
+                status,
+                closed_at.saturating_sub(1)
+            ));
+            assert!(is_abandoned_lightning_order(&data, status, closed_at));
+        }
+        // An order that took the payment is not abandoned.
+        for status in [OrderStatus::Delivering, OrderStatus::Unfulfilled] {
+            assert!(!is_abandoned_lightning_order(&data, status, closed_at));
+        }
+        // Nor is a waiting order of another receive.
+        let other = receive_swap_data();
+        assert!(!is_abandoned_lightning_order(
+            &other,
+            OrderStatus::Processing,
+            other.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+        ));
+    }
+
+    #[async_test_all]
+    async fn lightning_receive_conversion_info_reports_the_fee_in_sats() {
+        let data = lightning_receive_row("6500");
+
+        // Quote time: the fee is already in sats.
+        let ConversionInfo::Orchestra { fee_amount, .. } =
+            quote_time_receive_conversion_info(&data)
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(fee_amount, Some(50));
+
+        // Delivered: sats in minus sats out, with no fiat rate needed.
+        let order: Order = serde_json::from_value(serde_json::json!({
+            "id": "ord_ln", "status": "completed", "sparkTxHash": "spark-tx-hash",
+            "amountIn": "6500", "amountOut": "6448", "createdAt": "now", "updatedAt": "now",
+        }))
+        .unwrap();
+        let ConversionInfo::Orchestra {
+            chain,
+            asset,
+            asset_amount_in,
+            delivered_amount,
+            fee_amount,
+            service_fee_amount,
+            service_fee_asset,
+            ..
+        } = build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!((chain.as_str(), asset.as_str()), ("lightning", "BTC"));
+        assert_eq!(asset_amount_in, Some(6_500));
+        assert_eq!(delivered_amount, Some(6_448));
+        assert_eq!(fee_amount, Some(52));
+        assert_eq!(service_fee_amount, Some(50));
+        assert_eq!(service_fee_asset, None);
+    }
+
+    /// An onramp order for `amount_in` sats charging Orchestra's observed
+    /// mainnet fee on this route: 30 bps with a 50 sat minimum.
+    fn priced_lightning_order(amount_in: u64) -> LightningReceiveOrder {
+        let fee = (amount_in.saturating_mul(30) / 10_000).max(50);
+        let order: OnrampResponse = serde_json::from_value(serde_json::json!({
+            "orderId": "ord_ln", "quoteId": "q_ln", "depositAddress": "lnbc1pinvoice",
+            "amountIn": amount_in.to_string(),
+            "estimatedOut": amount_in.saturating_sub(fee).to_string(),
+            "feeAmount": fee.to_string(), "totalFeeAmount": fee.to_string(),
+            "feeAsset": "BTC", "feeBps": 30,
+            "expiresAt": "2026-11-05T12:00:00Z", "readToken": "rt_order",
+        }))
+        .unwrap();
+        let (data, info) = lightning_receive_from_order(
+            order,
+            amount_in,
+            "spark1wallet".to_string(),
+            "spark1inv".to_string(),
+        )
+        .unwrap();
+        LightningReceiveOrder {
+            data,
+            info,
+            fee_bps: 30,
+        }
+    }
+
+    /// Runs [`resize_lightning_receive`] against `price`, returning the
+    /// amounts it ordered and its result.
+    async fn resize_with(
+        receive_sats: u64,
+        price: impl Fn(u64) -> LightningReceiveOrder,
+    ) -> (Vec<u64>, Result<LightningReceiveOrder, SdkError>) {
+        let ordered = std::cell::RefCell::new(Vec::new());
+        let result = resize_lightning_receive(receive_sats, |amount| {
+            ordered.borrow_mut().push(amount);
+            let order = price(amount);
+            async move { Ok(order) }
+        })
+        .await;
+        (ordered.into_inner(), result)
+    }
+
+    #[test_all]
+    fn deposit_delivering_matches_mainnet_orders() {
+        // Orders Orchestra created on mainnet, and the deposit each one's
+        // rate gives for delivering its own amount in.
+        assert_eq!(deposit_delivering(5_000, 5_000, 4_950).unwrap(), 5_051);
+        assert_eq!(deposit_delivering(20_000, 20_000, 19_940).unwrap(), 20_061);
+        assert_eq!(
+            deposit_delivering(1_000_000, 1_000_000, 997_000).unwrap(),
+            1_003_010
+        );
+        assert!(deposit_delivering(5_000, 5_000, 0).is_err());
+    }
+
+    #[test_all]
+    fn deposit_covering_fee_adds_a_minimum_fee_and_grosses_up_a_proportional_one() {
+        // Under the 50 sat minimum the fee is the probe's.
+        assert_eq!(deposit_covering_fee(100, 100, 50, 30), 150);
+        assert_eq!(deposit_covering_fee(5_000, 5_000, 4_950, 30), 5_050);
+        // Above it the deposit is grossed up by the rate.
+        assert_eq!(deposit_covering_fee(20_000, 20_000, 19_940, 30), 20_061);
+        assert_eq!(
+            deposit_covering_fee(1_000_000, 1_000_000, 997_000, 30),
+            1_003_010
+        );
+        // A rate of 100% or more leaves only the flat fee.
+        assert_eq!(deposit_covering_fee(100, 100, 50, 10_000), 150);
+    }
+
+    #[async_test_all]
+    async fn lightning_receive_puts_the_fee_on_top() {
+        for receive_sats in [100u64, 1_000, 5_000, 16_650, 16_700, 20_000, 1_000_000] {
+            let (ordered, result) = resize_with(receive_sats, priced_lightning_order).await;
+            let order = result.unwrap();
+            assert_eq!(ordered.len(), 2, "{receive_sats}: {ordered:?}");
+            // Delivers what was asked, overpaying by at most a sat of rounding.
+            let over = order
+                .info
+                .expected_received_amount
+                .checked_sub(u128::from(receive_sats))
+                .unwrap();
+            assert!(over <= 1, "{receive_sats}: delivers {over} sats more");
+        }
+    }
+
+    #[async_test_all]
+    async fn lightning_receive_without_a_fee_creates_one_order() {
+        let (ordered, result) = resize_with(5_000, |amount| {
+            let mut order = priced_lightning_order(amount);
+            order.info.expected_received_amount = u128::from(amount);
+            order
+        })
+        .await;
+        assert_eq!(ordered, vec![5_000]);
+        assert_eq!(result.unwrap().info.expected_received_amount, 5_000);
+    }
+
+    #[async_test_all]
+    async fn lightning_receive_gives_up_on_a_provider_that_stays_short() {
+        let (ordered, result) = resize_with(5_000, |amount| {
+            let mut order = priced_lightning_order(amount);
+            order.info.expected_received_amount = 4_999;
+            order
+        })
+        .await;
+        assert_eq!(
+            u32::try_from(ordered.len()).unwrap(),
+            MAX_LIGHTNING_RECEIVE_RESIZES.saturating_add(1)
+        );
+        assert!(matches!(result, Err(SdkError::Generic(_))));
+    }
+
+    #[async_test_all]
+    async fn lightning_receive_payment_carries_the_quote_id_of_its_receive() {
+        let (data, info) = lightning_receive_from_order(
+            onramp_order("6500"),
+            6_500,
+            "spark1wallet".to_string(),
+            "spark1inv".to_string(),
+        )
+        .unwrap();
+
+        // On the payment's first event, and once the order completes.
+        let ConversionInfo::Orchestra { quote_id, .. } = quote_time_receive_conversion_info(&data)
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(quote_id, info.quote_id);
+        let order: Order = serde_json::from_value(serde_json::json!({
+            "id": "ord_ln", "status": "completed", "sparkTxHash": "spark-tx-hash",
+            "amountIn": "6500", "amountOut": "6450", "createdAt": "now", "updatedAt": "now",
+        }))
+        .unwrap();
+        let ConversionInfo::Orchestra { quote_id, .. } =
+            build_orchestra_receive_conversion_info(&data, &order, &FailingFiat).await
+        else {
+            panic!("expected Orchestra variant");
+        };
+        assert_eq!(quote_id, info.quote_id);
     }
 }

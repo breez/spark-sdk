@@ -20,7 +20,7 @@ The {{#name amount}} is in USD at 6 decimals, so `1_000_000` is $1. By default t
 
 {{#tabs buying_bitcoin:buy-bitcoin-cross-chain}}
 
-The response's {{#name cross_chain_info}} describes the quote. Use it to show the user how much USDC MoonPay buys ({{#name deposit_amount}}), what they can expect to receive ({{#name expected_received_amount}} in {{#name destination_asset}}), and the conversion fee ({{#name service_fee_amount}}). MoonPay's own fees are shown in its checkout.
+The response's {{#name cross_chain_info}} describes the quote. Use it to show the user how much USDC MoonPay buys ({{#name deposit_amount}}), what they can expect to receive ({{#name expected_received_amount}} in {{#name destination_asset}}), and the conversion fee ({{#name service_fee_amount}}). MoonPay's own fees are shown in its checkout. The incoming payment's {{#name conversion_info}} carries the same {{#name quote_id}}, so it can be matched to the purchase.
 
 These figures are estimates. The amount is a prefill the user can change in MoonPay, and a purchase completed after the quote expires is converted at the live rate. See [Quote expiry](./cross_chain.md#quote-expiry-1). MoonPay also enforces its own minimum order, which the user sees in the checkout.
 
@@ -35,11 +35,13 @@ MoonPay supports Apple Pay and Google Pay, but these payment methods will not wo
 
 ## CashApp
 
-CashApp uses **Lightning (bolt11 invoices)** to receive purchased funds. The caller specifies the amount in satoshis; the SDK generates a bolt11 invoice for that amount and returns a CashApp deep link (`cash.app/launch/lightning/...`) that opens CashApp so the user can complete payment.
+CashApp pays a **Lightning (bolt11) invoice** for the purchase. The caller specifies the amount in satoshis the wallet receives; the SDK gets a bolt11 invoice from a conversion provider and returns a CashApp deep link (`cash.app/launch/lightning/...`) that opens CashApp so the user can complete payment. The invoice asks for that amount plus the provider's fee. Once paid, the provider delivers the funds to the wallet over Spark. If it can't, it refunds the payment to the wallet's [Lightning address](./receive_lnurl_pay.md) when one is registered. The response's {{#name cross_chain_info}} holds the invoice amount ({{#name deposit_amount}}), the amount the wallet receives ({{#name expected_received_amount}}) and the fee ({{#name service_fee_amount}}).
 
 <div class="warning">
 <h4>Developer note</h4>
 The amount is <strong>required</strong>. With an amountless invoice, Cash App only lets the payer fund from their existing Cash App BTC balance. When the invoice carries an amount, Cash App opens up funding via fiat balance and debit card.
+
+CashApp needs [background tasks](./config.md#background-tasks-enabled), which track the order until its funds arrive. With {{#name background_tasks_enabled}} set to `false`, as in the [multi-user server configuration](./server_mode.md), {{#name buy_bitcoin}} returns an error for CashApp.
 </div>
 
 To initiate a Bitcoin purchase via CashApp:
@@ -51,7 +53,11 @@ The returned URL is a CashApp universal link (`https://cash.app/launch/lightning
 ### Recommended UX
 
 1. Collect a non-zero amount before calling {{#name buy_bitcoin}}.
-2. On mobile, redirect to the returned URL. On desktop, render it as a QR code and dismiss when {{#enum SdkEvent::PaymentSucceeded}} fires for the invoice.
+2. On mobile, redirect to the returned URL. On desktop, render it as a QR code and dismiss it once the purchase arrives.
+
+### Detecting the payment
+
+The purchase arrives as an incoming Spark payment, not as a payment of the returned invoice. Its {{#name conversion_info}} is an {{#enum ConversionInfo::Orchestra}} whose {{#name quote_id}} is the {{#name quote_id}} of the response's {{#name cross_chain_info}}. The {{#enum SdkEvent::PaymentSucceeded}} event carrying that payment means the purchase was received. A later {{#enum SdkEvent::PaymentMetadataUpdated}} adds the delivered amount once the provider confirms the order. See [Status lifecycle](./cross_chain.md#status-lifecycle).
 
 ### Popup blockers on the web
 

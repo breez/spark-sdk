@@ -1,4 +1,5 @@
 use breez_sdk_common::buy::{cashapp::CashAppProvider, moonpay::USDC_SOLANA_PRECISION};
+use tracing::warn;
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, MoonpayDelivery, Network, ReceivePaymentMethod,
@@ -10,7 +11,7 @@ use crate::{
     error::SdkError,
 };
 
-use super::{BreezSdk, helpers::get_deposit_address};
+use super::{BreezSdk, bridging::check_deposit_target, helpers::get_deposit_address};
 
 const SOLANA_CHAIN: &str = "solana";
 const USDC_ASSET: &str = "USDC";
@@ -84,17 +85,11 @@ impl BreezSdk {
                         "CashApp requires a non-zero amount".to_string(),
                     ));
                 }
-                let receive_response = self
-                    .receive_bolt11_invoice(
-                        "breez-onramp".to_string(),
-                        Some(amount_sats),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                CashAppProvider::build_url(&receive_response.payment_request)
+                let (url, info) = self.cash_app_purchase(amount_sats).await?;
+                return Ok(BuyBitcoinResponse {
+                    url,
+                    cross_chain_info: Some(info),
+                });
             }
         };
 
@@ -106,6 +101,44 @@ impl BreezSdk {
 }
 
 impl BreezSdk {
+    /// The `cash.app` link for a Cash App purchase that delivers `amount_sats`,
+    /// and the order behind it. Cash App pays the invoice of a Flashnet
+    /// Orchestra onramp order, which delivers the sats to this wallet, or
+    /// refunds them to its Lightning address, when one is registered, if the
+    /// order fails. The link is built around the invoice checked here rather
+    /// than taken from the order.
+    async fn cash_app_purchase(
+        &self,
+        amount_sats: u64,
+    ) -> Result<(String, CrossChainReceiveInfo), SdkError> {
+        let orchestra = self.orchestra.as_ref().ok_or_else(|| {
+            SdkError::Generic(
+                "CashApp is not available when background tasks are disabled".to_string(),
+            )
+        })?;
+        // Best effort: without an address the order has no refund destination.
+        let refund_address = self
+            .get_lightning_address()
+            .await
+            .inspect_err(|e| warn!("CashApp: no refund address, lookup failed: {e}"))
+            .ok()
+            .flatten()
+            .map(|info| info.lightning_address);
+        let order = orchestra
+            .create_lightning_receive_delivering(amount_sats, refund_address.as_deref())
+            .await?;
+        let invoice = order.info.deposit_address.clone();
+        let expected_sats = u64::try_from(order.info.deposit_amount).map_err(|_| {
+            SdkError::Generic(format!(
+                "Deposit amount {} sats exceeds u64::MAX",
+                order.info.deposit_amount
+            ))
+        })?;
+        check_deposit_target(&self.parse(&invoice).await, expected_sats)?;
+        let info = orchestra.track_lightning_receive(order).await?;
+        Ok((CashAppProvider::build_url(&invoice), info))
+    }
+
     /// Quotes a USDC-on-Solana receive for a `MoonPay` purchase to fund.
     /// `amount` is in USD at 6 decimals. Returns the quote, with its deposit
     /// rounded up to whole cents, and the route's decimals.

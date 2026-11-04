@@ -132,6 +132,9 @@ pub struct BreezSdk {
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub(crate) cross_chain_context: crate::cross_chain::CrossChainContext,
+    /// The wallet-backed Orchestra service, built whether or not cross-chain
+    /// payments are enabled. Set on mainnet with background tasks on.
+    pub(crate) orchestra: Option<Arc<crate::cross_chain::OrchestraService>>,
     /// Shared helper for paying LN invoices and persisting the resulting
     /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
     /// need to pay an LN invoice as part of a larger flow.
@@ -163,6 +166,7 @@ pub(crate) struct BreezSdkParams {
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_context: crate::cross_chain::CrossChainContext,
+    pub orchestra: Option<Arc<crate::cross_chain::OrchestraService>>,
     pub lightning_sender: Arc<LightningSender>,
 }
 

@@ -1002,7 +1002,7 @@ fn check_lightning_address_accepts(
 
 fn create_bridge_response(prepared: CrossChainReceivePrepared) -> CreateBridgeResponse {
     CreateBridgeResponse {
-        bridge_id: prepared.quote_id,
+        bridge_id: prepared.info.quote_id.clone(),
         status_token: prepared.quote_read_token,
         payment_request: prepared.payment_request,
         info: prepared.info,
@@ -1023,10 +1023,11 @@ fn lightning_funded_bridge_response(
         ));
     };
     Ok(CreateBridgeResponse {
-        bridge_id: quote_id,
+        bridge_id: quote_id.clone(),
         status_token: prepared.quote_read_token,
         payment_request: deposit_target.clone(),
         info: CrossChainReceiveInfo {
+            quote_id,
             deposit_address: deposit_target,
             deposit_amount: u128::from(amount_sats),
             expected_received_amount: prepared.estimated_out,
@@ -1050,7 +1051,7 @@ fn route_supports_delivery_method(route: &CrossChainRoutePair, required: Deliver
 /// Verifies the provider's deposit `target` is a BOLT11 invoice requesting
 /// exactly `expected_sats`, the Lightning payment request the payer funds. A
 /// wrong type, wrong amount, or unparseable target indicates a provider bug.
-fn check_deposit_target(
+pub(super) fn check_deposit_target(
     parsed_target: &Result<InputType, SdkError>,
     expected_sats: u64,
 ) -> Result<(), SdkError> {
