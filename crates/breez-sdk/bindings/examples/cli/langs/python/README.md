@@ -83,6 +83,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
+**Bridging**: `bridging create`, `bridging from-cash-app`, `bridging to-cash-app`, `bridging status`
+
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`

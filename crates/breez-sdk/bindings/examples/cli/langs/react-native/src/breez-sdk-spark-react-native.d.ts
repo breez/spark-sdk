@@ -136,6 +136,18 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const SkippedLeafReason_Tags: any;
   export type SkippedLeafReason = any;
 
+  // --- bridging ---
+  export type BridgingClientInterface = any;
+  export type BridgeRoutePair = any;
+  export type BridgeRoutePairSide = any;
+  export type CreateBridgeResponse = any;
+
+  export const BridgeStatus: any;
+  export type BridgeStatus = any;
+
+  export const defaultBridgingConfig: any;
+  export const newBridgingClient: any;
+
   // --- proxy ---
   export type ProxyConfig = any;
 

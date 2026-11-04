@@ -98,6 +98,8 @@ Once inside the REPL, type `help` for all commands:
 
 **Token Allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`, `pull-payment`
 
+**Bridging**: `bridging <subcommand>` (cross-chain bridges: `create`, `from-cash-app`, `to-cash-app`, `status`)
+
 **Advanced**: `advanced <subcommand>` (expert-only commands for building raw transactions), including `advanced recover-funds` and `advanced check-recover-funds`
 
 **Contacts**: `contacts <subcommand>`
