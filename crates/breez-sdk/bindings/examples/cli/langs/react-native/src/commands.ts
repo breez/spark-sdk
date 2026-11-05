@@ -1191,7 +1191,7 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
     result.url,
   ]
   if (result.crossChainInfo) {
-    lines.push('Delivered as USDC on Solana. Quote:')
+    lines.push('Conversion quote:')
     lines.push(formatValue(result.crossChainInfo))
   }
   return lines.join('\n')

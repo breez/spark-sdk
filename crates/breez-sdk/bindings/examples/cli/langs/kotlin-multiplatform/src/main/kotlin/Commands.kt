@@ -1088,7 +1088,7 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     println("Open this URL in a browser to complete the purchase:")
     println(result.url)
     result.crossChainInfo?.let { info ->
-        println("Delivered as USDC on Solana. Quote:")
+        println("Conversion quote:")
         printValue(info)
     }
 }

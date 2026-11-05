@@ -1329,7 +1329,7 @@ public static class Commands
         Console.WriteLine(result.url);
         if (result.crossChainInfo is { } info)
         {
-            Console.WriteLine("Delivered as USDC on Solana. Quote:");
+            Console.WriteLine("Conversion quote:");
             Serialization.PrintValue(info);
         }
     }
