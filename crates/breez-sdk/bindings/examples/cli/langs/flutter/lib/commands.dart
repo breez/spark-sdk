@@ -1089,7 +1089,7 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   print(result.url);
   final info = result.crossChainInfo;
   if (info != null) {
-    print('Delivered as USDC on Solana. Quote:');
+    print('Conversion quote:');
     printValue(info);
   }
 }

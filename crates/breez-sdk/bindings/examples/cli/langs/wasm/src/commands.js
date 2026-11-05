@@ -796,7 +796,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       console.log('Open this URL in a browser to complete the purchase:')
       console.log(value.url)
       if (value.crossChainInfo) {
-        console.log('Delivered as USDC on Solana. Quote:')
+        console.log('Conversion quote:')
         printValue(value.crossChainInfo)
       }
     })

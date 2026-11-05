@@ -1284,7 +1284,7 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(result.Url)
 	if result.CrossChainInfo != nil {
-		fmt.Println("Delivered as USDC on Solana. Quote:")
+		fmt.Println("Conversion quote:")
 		printValue(result.CrossChainInfo)
 	}
 	return nil

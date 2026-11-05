@@ -924,7 +924,7 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
     if result.cross_chain_info is not None:
-        print("Delivered as USDC on Solana. Quote:")
+        print("Conversion quote:")
         print_value(result.cross_chain_info)
 
 

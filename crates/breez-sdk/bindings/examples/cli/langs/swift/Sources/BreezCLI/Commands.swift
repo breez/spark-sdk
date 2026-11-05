@@ -976,7 +976,7 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
     if let info = result.crossChainInfo {
-        print("Delivered as USDC on Solana. Quote:")
+        print("Conversion quote:")
         printValue(info)
     }
 }
