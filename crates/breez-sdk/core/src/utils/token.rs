@@ -36,8 +36,10 @@ pub async fn get_tokens_metadata_cached_or_query(
         }
     }
 
+    // Skips the token output store: its rows can predate a metadata field, and caching one here
+    // would leave that field unset for good.
     let queried_results = spark_wallet
-        .get_tokens_metadata(uncached_identifiers.as_slice(), &[])
+        .query_tokens_metadata(uncached_identifiers.as_slice(), &[])
         .await?
         .into_iter()
         .map(Into::into)

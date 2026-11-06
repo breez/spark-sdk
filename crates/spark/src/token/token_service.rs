@@ -345,12 +345,9 @@ impl TokenService {
         }
 
         // Query metadata for uncached tokens
-        let mut queried_metadata = Vec::new();
-        if !uncached_identifiers.is_empty() || !uncached_issuer_public_keys.is_empty() {
-            queried_metadata = self
-                .query_tokens_metadata(&uncached_identifiers, &uncached_issuer_public_keys)
-                .await?;
-        }
+        let queried_metadata = self
+            .query_tokens_metadata(&uncached_identifiers, &uncached_issuer_public_keys)
+            .await?;
 
         // Combine cached and queried metadata
         let mut all_metadata = cached_metadata;
@@ -359,11 +356,17 @@ impl TokenService {
         Ok(all_metadata)
     }
 
-    async fn query_tokens_metadata(
+    /// Returns the metadata for the given token identifiers as the SE reports it, without reading
+    /// the local cache.
+    pub async fn query_tokens_metadata(
         &self,
         token_identifiers: &[&str],
         issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        if token_identifiers.is_empty() && issuer_public_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let token_identifiers = token_identifiers
             .iter()
             .map(|id| {

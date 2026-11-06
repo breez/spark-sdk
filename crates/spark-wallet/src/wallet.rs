@@ -2299,13 +2299,15 @@ impl SparkWallet {
         .to_string())
     }
 
-    pub async fn get_tokens_metadata(
+    /// Returns the metadata for the given tokens as the operators report it, without reading the
+    /// token output store.
+    pub async fn query_tokens_metadata(
         &self,
         token_identifiers: &[&str],
         issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
         self.token_service
-            .get_tokens_metadata(token_identifiers, issuer_public_keys)
+            .query_tokens_metadata(token_identifiers, issuer_public_keys)
             .await
             .map_err(Into::into)
     }

@@ -819,9 +819,11 @@ impl MysqlTokenStore {
             ],
             // Migration 6: token extra metadata. Rows cached before it read as absent until the
             // next refresh rewrites them.
-            vec![Migration::sql(
-                "ALTER TABLE brz_token_metadata ADD COLUMN extra_metadata VARBINARY(1024) NULL",
-            )],
+            vec![Migration::AddColumn {
+                table: "brz_token_metadata",
+                column: "extra_metadata",
+                definition: "VARBINARY(1024) NULL",
+            }],
         ]
     }
 
