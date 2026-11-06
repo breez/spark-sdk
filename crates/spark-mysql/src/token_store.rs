@@ -326,7 +326,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let rows: Vec<Row> = conn
             .exec(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          CAST(COALESCE(SUM(
                             CASE
                               WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
@@ -341,7 +341,8 @@ impl TokenOutputStore for MysqlTokenStore {
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = ?
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                           m.extra_metadata",
                 (self.identity.clone(),),
             )
             .await
@@ -364,7 +365,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let rows: Vec<Row> = conn
             .exec(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
@@ -438,7 +439,7 @@ impl TokenOutputStore for MysqlTokenStore {
 
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                     m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                     m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                      o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
@@ -816,6 +817,11 @@ impl MysqlTokenStore {
                 ),
                 Migration::sql("ALTER TABLE brz_token_outputs DROP COLUMN id"),
             ],
+            // Migration 6: token extra metadata. Rows cached before it read as absent until the
+            // next refresh rewrites them.
+            vec![Migration::sql(
+                "ALTER TABLE brz_token_metadata ADD COLUMN extra_metadata VARBINARY(1024) NULL",
+            )],
         ]
     }
 
@@ -1567,8 +1573,8 @@ impl MysqlTokenStore {
         tx.exec_drop(
             r"INSERT INTO brz_token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-                 is_freezable, creation_entity_public_key)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_freezable, creation_entity_public_key, extra_metadata)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
                 issuer_public_key = VALUES(issuer_public_key),
                 name = VALUES(name),
@@ -1576,7 +1582,8 @@ impl MysqlTokenStore {
                 decimals = VALUES(decimals),
                 max_supply = VALUES(max_supply),
                 is_freezable = VALUES(is_freezable),
-                creation_entity_public_key = VALUES(creation_entity_public_key)",
+                creation_entity_public_key = VALUES(creation_entity_public_key),
+                extra_metadata = VALUES(extra_metadata)",
             (
                 self.identity.clone(),
                 &metadata.identifier,
@@ -1587,6 +1594,7 @@ impl MysqlTokenStore {
                 metadata.max_supply.to_string(),
                 metadata.is_freezable,
                 metadata.creation_entity_public_key.map(|pk| pk.to_string()),
+                metadata.extra_metadata.clone(),
             ),
         )
         .await
@@ -1684,6 +1692,9 @@ impl MysqlTokenStore {
         let creation_entity_pk_str: Option<String> = row
             .get::<Option<String>, _>("creation_entity_public_key")
             .unwrap_or(None);
+        let extra_metadata: Option<Vec<u8>> = row
+            .get::<Option<Vec<u8>>, _>("extra_metadata")
+            .unwrap_or(None);
 
         Ok(TokenMetadata {
             identifier,
@@ -1696,6 +1707,7 @@ impl MysqlTokenStore {
             creation_entity_public_key: creation_entity_pk_str
                 .map(|s| s.parse().map_err(map_err))
                 .transpose()?,
+            extra_metadata,
         })
     }
 

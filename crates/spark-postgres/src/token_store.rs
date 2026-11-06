@@ -483,7 +483,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let rows = client
             .query(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          COALESCE(SUM(
                             CASE
                               WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
@@ -498,7 +498,8 @@ impl TokenOutputStore for PostgresTokenStore {
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = $1
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                           m.extra_metadata",
                 &[&self.identity],
             )
             .await
@@ -521,7 +522,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let rows = client
             .query(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
@@ -592,7 +593,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                     m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                     m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                      o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
@@ -1122,6 +1123,9 @@ impl PostgresTokenStore {
                     .to_string(),
                 "ALTER TABLE brz_token_outputs DROP COLUMN id".to_string(),
             ],
+            // Migration 5: token extra metadata. Rows cached before it read as absent until the
+            // next refresh rewrites them.
+            vec!["ALTER TABLE brz_token_metadata ADD COLUMN extra_metadata BYTEA".to_string()],
         ]
     }
 
@@ -1378,8 +1382,8 @@ impl PostgresTokenStore {
         tx.execute(
             r"INSERT INTO brz_token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-                 is_freezable, creation_entity_public_key)
-              VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
+                 is_freezable, creation_entity_public_key, extra_metadata)
+              VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8, $10)
               ON CONFLICT (user_id, identifier) DO UPDATE SET
                 issuer_public_key = EXCLUDED.issuer_public_key,
                 name = EXCLUDED.name,
@@ -1387,7 +1391,8 @@ impl PostgresTokenStore {
                 decimals = EXCLUDED.decimals,
                 max_supply = EXCLUDED.max_supply,
                 is_freezable = EXCLUDED.is_freezable,
-                creation_entity_public_key = EXCLUDED.creation_entity_public_key",
+                creation_entity_public_key = EXCLUDED.creation_entity_public_key,
+                extra_metadata = EXCLUDED.extra_metadata",
             &[
                 &metadata.identifier,
                 &metadata.issuer_public_key.to_string(),
@@ -1398,6 +1403,7 @@ impl PostgresTokenStore {
                 &metadata.is_freezable,
                 &metadata.creation_entity_public_key.map(|pk| pk.to_string()),
                 &self.identity,
+                &metadata.extra_metadata,
             ],
         )
         .await
@@ -1480,6 +1486,7 @@ impl PostgresTokenStore {
         let max_supply_str: String = row.get("max_supply");
         let is_freezable: bool = row.get("is_freezable");
         let creation_entity_pk_str: Option<String> = row.get("creation_entity_public_key");
+        let extra_metadata: Option<Vec<u8>> = row.get("extra_metadata");
 
         Ok(TokenMetadata {
             identifier,
@@ -1492,6 +1499,7 @@ impl PostgresTokenStore {
             creation_entity_public_key: creation_entity_pk_str
                 .map(|s| s.parse().map_err(map_err))
                 .transpose()?,
+            extra_metadata,
         })
     }
 

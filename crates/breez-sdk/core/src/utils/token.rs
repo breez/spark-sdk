@@ -255,7 +255,11 @@ pub(crate) fn payments_from_token_transaction(
             timestamp,
             method: PaymentMethod::Token,
             details: Some(PaymentDetails::Token {
-                metadata: metadata.clone(),
+                // Left out to keep up to 1 KiB per token from being copied into every payment.
+                metadata: TokenMetadata {
+                    extra_metadata: None,
+                    ..metadata.clone()
+                },
                 tx_hash: transaction.hash.clone(),
                 tx_type,
                 invoice_details: invoice.map(Into::into),
@@ -674,6 +678,37 @@ mod tests {
             result,
             Err(TokenPaymentsError::MissingMetadata(_))
         ));
+    }
+
+    #[macros::test_all]
+    fn payments_leave_out_extra_metadata() {
+        let identity = pk(1);
+        let metadata = TokenMetadata {
+            identifier: TOKEN.to_string(),
+            issuer_public_key: hex::encode(identity.serialize()),
+            name: "Token".to_string(),
+            ticker: "TKN".to_string(),
+            decimals: 2,
+            max_supply: 1_000,
+            is_freezable: false,
+            extra_metadata: Some(vec![1, 2, 3]),
+        };
+        let metadata_by_token = HashMap::from([(TOKEN.to_string(), metadata)]);
+
+        let payments = payments_from_token_transaction(
+            &mint_to(identity),
+            &metadata_by_token,
+            identity,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(payments.len(), 1);
+        let Some(PaymentDetails::Token { metadata, .. }) = &payments[0].details else {
+            panic!("expected token payment details");
+        };
+        assert_eq!(metadata.identifier, TOKEN);
+        assert_eq!(metadata.extra_metadata, None);
     }
 
     // The web `SystemTime` cannot represent a time before the epoch.

@@ -360,6 +360,7 @@ async fn test_migration_from_v17_to_v18() {
                 decimals: 6,
                 max_supply: 2000000,
                 is_freezable: true,
+                extra_metadata: None,
             },
             tx_hash: "0x1111222233334444".to_string(),
             tx_type: breez_sdk_spark::TokenTransactionType::Mint,

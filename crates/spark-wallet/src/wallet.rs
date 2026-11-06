@@ -2333,10 +2333,18 @@ impl SparkWallet {
         decimals: u32,
         is_freezable: bool,
         max_supply: u128,
+        extra_metadata: Option<Vec<u8>>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         let token_transaction = self
             .token_service
-            .create_issuer_token(name, ticker, decimals, is_freezable, max_supply)
+            .create_issuer_token(
+                name,
+                ticker,
+                decimals,
+                is_freezable,
+                max_supply,
+                extra_metadata,
+            )
             .await?;
         Ok(token_transaction)
     }

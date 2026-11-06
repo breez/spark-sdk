@@ -43,7 +43,8 @@ const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
 // Note: the key "static_deposit_address" may still exist in storage from older versions.
-const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
+// Versioned: entries under the unversioned "token_metadata_" prefix lack `extra_metadata`.
+const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_v2_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const PUBLISHED_PACKAGE_KEY_PREFIX: &str = "published_package_";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";

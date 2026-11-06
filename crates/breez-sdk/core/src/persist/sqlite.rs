@@ -2617,6 +2617,7 @@ mod tests {
                     decimals: 6,
                     max_supply: 2_000_000,
                     is_freezable: true,
+                    extra_metadata: None,
                 },
                 tx_hash: "0x1111222233334444".to_string(),
                 tx_type: TokenTransactionType::Mint,

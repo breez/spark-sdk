@@ -2039,6 +2039,9 @@ pub struct TokenMetadata {
     pub decimals: u32,
     pub max_supply: u128,
     pub is_freezable: bool,
+    /// Arbitrary data the issuer attached when creating the token, such as an icon or a JSON
+    /// description. Unset when the issuer attached none, and always unset in payment details.
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 /// Request to sync the wallet with the Spark network
