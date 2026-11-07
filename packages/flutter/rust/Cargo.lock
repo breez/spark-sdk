@@ -2153,6 +2153,7 @@ dependencies = [
  "encoding_rs",
  "futures",
  "http",
+ "hyper",
  "hyper-util",
  "macros",
  "mime",
