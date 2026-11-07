@@ -41,6 +41,8 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
         max_supply: 1_000_000,
         is_freezable: false,
         creation_entity_public_key: None,
+        // Odd tokens carry extra metadata so stores are checked with and without it.
+        extra_metadata: (identifier_no % 2 == 1).then(|| vec![0, 1, 2, 255]),
     };
 
     let outputs = output_amounts
@@ -127,6 +129,10 @@ pub async fn test_get_token_outputs(store: &dyn TokenOutputStore) {
         .await
         .unwrap();
     assert_eq!(stored_token1.metadata.identifier, "token-1");
+    assert_eq!(
+        stored_token1.metadata.extra_metadata,
+        Some(vec![0, 1, 2, 255])
+    );
     assert_eq!(stored_token1.available.len(), 3);
 
     let pk1 = create_public_key(1);
@@ -143,6 +149,7 @@ pub async fn test_get_token_outputs(store: &dyn TokenOutputStore) {
         .await
         .unwrap();
     assert_eq!(stored_token2.metadata.identifier, "token-2");
+    assert_eq!(stored_token2.metadata.extra_metadata, None);
     assert_eq!(stored_token2.available.len(), 2);
 
     let pk2 = create_public_key(2);

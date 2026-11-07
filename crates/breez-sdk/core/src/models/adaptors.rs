@@ -509,6 +509,7 @@ impl From<spark_wallet::TokenMetadata> for TokenMetadata {
             decimals: value.decimals,
             max_supply: value.max_supply,
             is_freezable: value.is_freezable,
+            extra_metadata: value.extra_metadata,
         }
     }
 }

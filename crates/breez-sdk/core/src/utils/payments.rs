@@ -594,6 +594,7 @@ mod tests {
             decimals: 6,
             max_supply: 21_000_000,
             is_freezable: false,
+            extra_metadata: None,
         }
     }
 

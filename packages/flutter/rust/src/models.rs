@@ -573,6 +573,7 @@ pub struct _TokenMetadata {
     pub decimals: u32,
     pub max_supply: u128,
     pub is_freezable: bool,
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 #[frb(mirror(GetPaymentRequest))]
@@ -1942,6 +1943,7 @@ pub struct _CreateIssuerTokenRequest {
     pub decimals: u32,
     pub is_freezable: bool,
     pub max_supply: u128,
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 #[frb(mirror(MintIssuerTokenRequest))]

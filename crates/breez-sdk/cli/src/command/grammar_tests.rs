@@ -809,6 +809,7 @@ fn issuer_subcommands() {
         decimals,
         is_freezable,
         max_supply,
+        extra_metadata,
     }) = parse_ok("issuer create-token MyToken MTK 6 -f 1000000")
     else {
         panic!("expected CreateToken");
@@ -818,6 +819,14 @@ fn issuer_subcommands() {
     assert_eq!(decimals, 6);
     assert!(is_freezable);
     assert_eq!(max_supply, 1_000_000);
+    assert_eq!(extra_metadata, None);
+
+    let Command::Issuer(IssuerCommand::CreateToken { extra_metadata, .. }) =
+        parse_ok(r#"issuer create-token MyToken MTK 6 1000000 -e '{"icon":"x"}'"#)
+    else {
+        panic!("expected CreateToken");
+    };
+    assert_eq!(extra_metadata.as_deref(), Some(r#"{"icon":"x"}"#));
 
     assert!(matches!(
         parse_ok("issuer mint-token 500"),

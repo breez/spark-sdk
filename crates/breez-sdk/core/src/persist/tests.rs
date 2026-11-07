@@ -394,6 +394,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         decimals: 8,
         max_supply: 21_000_000,
         is_freezable: false,
+        extra_metadata: None,
     };
     let token_transfer_payment = Payment {
         id: "token_transfer_pmt456".to_string(),
@@ -2337,6 +2338,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
                 decimals: 8,
                 max_supply: 1_000_000,
                 is_freezable: false,
+                extra_metadata: None,
             },
             tx_hash: "tx_hash_1".to_string(),
             tx_type: TokenTransactionType::Transfer,
@@ -2644,6 +2646,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
                 decimals: 8,
                 max_supply: 1_000_000_000,
                 is_freezable: false,
+                extra_metadata: None,
             },
             tx_hash: "txhash1".to_string(),
             tx_type: TokenTransactionType::Transfer,
@@ -3098,6 +3101,7 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
         decimals: 8,
         max_supply: 21_000_000,
         is_freezable: false,
+        extra_metadata: None,
     };
     // Create payments with different transaction types
     let payment1 = Payment {

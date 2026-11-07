@@ -52,8 +52,9 @@ pub use spark::{
     silent_payment::{SilentPaymentAddress, SilentPaymentAddressError},
     ssp::*,
     token::{
-        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore, MAX_TOKEN_TX_OUTPUTS,
-        NewTokenAllowance, PreparedTokenPackage, PreparedTokenPull, PreparedTokenReceiverOutput,
+        BURN_PUBLIC_KEY, GetTokenOutputsFilter, InMemoryTokenOutputStore,
+        MAX_TOKEN_EXTRA_METADATA_BYTES, MAX_TOKEN_TX_OUTPUTS, NewTokenAllowance,
+        PreparedTokenPackage, PreparedTokenPull, PreparedTokenReceiverOutput,
         PreparedTokenTransfer, PullReceiver, ReservationPurpose as TokenReservationPurpose,
         ReservationTarget, SelectionStrategy, TokenAllowance, TokenAllowanceFailure,
         TokenAllowanceQuery, TokenAllowanceRole, TokenAllowanceStatus, TokenMetadata,
