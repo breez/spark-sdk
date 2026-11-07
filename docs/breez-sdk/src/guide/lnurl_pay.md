@@ -32,7 +32,7 @@ When [stable balance](./stable_balance.md) is active, you can send your entire w
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
 - **Prepare Response** - The response from the [Preparing LNURL Payments](lnurl_pay.md#preparing-lnurl-payments) step.
-- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made. The payment's id is the idempotency key.
 
 {{#tabs lnurl_pay:lnurl-pay}}
 

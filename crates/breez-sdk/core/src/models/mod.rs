@@ -251,7 +251,8 @@ impl FromStr for PaymentMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Payment {
-    /// Unique identifier for the payment
+    /// Unique identifier for the payment. A second payment of the same invoice has a
+    /// different id.
     pub id: String,
     /// Type of payment (send or receive)
     pub payment_type: PaymentType,
@@ -2363,7 +2364,7 @@ pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
-    /// The idempotency key must be a valid UUID.
+    /// The idempotency key must be a valid UUID. The payment's id is the idempotency key.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
 }
@@ -2721,7 +2722,7 @@ pub struct SendPaymentRequest {
     /// and cross-chain sends).
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
-    /// The idempotency key must be a valid UUID.
+    /// The idempotency key must be a valid UUID. The payment's id is the idempotency key.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
 }

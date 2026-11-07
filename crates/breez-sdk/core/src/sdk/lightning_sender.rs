@@ -274,6 +274,9 @@ impl LightningSender {
                     htlc_details,
                 )?;
                 let completion_rx = self.spawn_poll(&payment, ssp_id);
+                // Save the send before waiting, so that get_payment and
+                // list_payments return it while it is in flight.
+                self.storage.apply_payment_update(payment.clone()).await?;
                 if completion_timeout_secs == 0 {
                     payment
                 } else {
