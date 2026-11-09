@@ -352,7 +352,7 @@ async fn test_migration_from_v17_to_v18() {
         timestamp: 1234567893,
         method: breez_sdk_spark::PaymentMethod::Token,
         details: Some(breez_sdk_spark::PaymentDetails::Token {
-            metadata: breez_sdk_spark::TokenMetadata {
+            metadata: breez_sdk_spark::PaymentTokenMetadata {
                 identifier: "another-token-id".to_string(),
                 issuer_public_key: "02".to_string() + &"b".repeat(64),
                 name: "Another Token".to_string(),
@@ -360,7 +360,6 @@ async fn test_migration_from_v17_to_v18() {
                 decimals: 6,
                 max_supply: 2000000,
                 is_freezable: true,
-                extra_metadata: None,
             },
             tx_hash: "0x1111222233334444".to_string(),
             tx_type: breez_sdk_spark::TokenTransactionType::Mint,

@@ -5,9 +5,9 @@ use chrono::Utc;
 use crate::{
     ChainTransaction, DepositClaimError, InstantClaimStatus, LeafRecovery, LnurlWithdrawInfo,
     MaxFee, MaxOnchainFee, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus,
-    PaymentType, RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage,
-    StoredWatchtowerExitOutput, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
-    UpdateLeafRecovery, UpdateWatchedAddressPayload, WatchtowerExitRecovery,
+    PaymentTokenMetadata, PaymentType, RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage,
+    StoredWatchtowerExitOutput, TokenTransactionType, UpdateDepositPayload, UpdateLeafRecovery,
+    UpdateWatchedAddressPayload, WatchtowerExitRecovery,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -340,7 +340,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
 #[allow(clippy::too_many_lines)]
 pub async fn test_storage(storage: Box<dyn Storage>) {
     use crate::SetLnurlMetadataItem;
-    use crate::models::{LnurlPayInfo, TokenMetadata};
+    use crate::models::{LnurlPayInfo, PaymentTokenMetadata};
 
     // Test 1: Spark invoice payment
     let spark_payment = Payment {
@@ -385,7 +385,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     // Test 3: Transfer token payment with invoice
-    let token_metadata = TokenMetadata {
+    let token_metadata = PaymentTokenMetadata {
         identifier: "token123".to_string(),
         issuer_public_key: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
             .to_string(),
@@ -394,7 +394,6 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         decimals: 8,
         max_supply: 21_000_000,
         is_freezable: false,
-        extra_metadata: None,
     };
     let token_transfer_payment = Payment {
         id: "token_transfer_pmt456".to_string(),
@@ -2281,7 +2280,7 @@ pub async fn test_payment_status_filtering(storage: Box<dyn Storage>) {
 
 #[allow(clippy::too_many_lines)]
 pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
-    use crate::models::TokenMetadata;
+    use crate::models::PaymentTokenMetadata;
 
     // Create payments with different asset types
     let spark_payment = Payment {
@@ -2330,7 +2329,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         timestamp: 3000,
         method: PaymentMethod::Token,
         details: Some(PaymentDetails::Token {
-            metadata: TokenMetadata {
+            metadata: PaymentTokenMetadata {
                 identifier: "token_id_1".to_string(),
                 issuer_public_key: "pubkey".to_string(),
                 name: "Token 1".to_string(),
@@ -2338,7 +2337,6 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
                 decimals: 8,
                 max_supply: 1_000_000,
                 is_freezable: false,
-                extra_metadata: None,
             },
             tx_hash: "tx_hash_1".to_string(),
             tx_type: TokenTransactionType::Transfer,
@@ -2638,7 +2636,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         timestamp: 1000,
         method: PaymentMethod::Token,
         details: Some(PaymentDetails::Token {
-            metadata: crate::TokenMetadata {
+            metadata: crate::PaymentTokenMetadata {
                 identifier: "token1".to_string(),
                 issuer_public_key: "pubkey1".to_string(),
                 name: "Test Token".to_string(),
@@ -2646,7 +2644,6 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
                 decimals: 8,
                 max_supply: 1_000_000_000,
                 is_freezable: false,
-                extra_metadata: None,
             },
             tx_hash: "txhash1".to_string(),
             tx_type: TokenTransactionType::Transfer,
@@ -3092,7 +3089,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
 
 #[allow(clippy::too_many_lines)]
 pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
-    let token_metadata = TokenMetadata {
+    let token_metadata = PaymentTokenMetadata {
         identifier: "token123".to_string(),
         issuer_public_key: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
             .to_string(),
@@ -3101,7 +3098,6 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
         decimals: 8,
         max_supply: 21_000_000,
         is_freezable: false,
-        extra_metadata: None,
     };
     // Create payments with different transaction types
     let payment1 = Payment {

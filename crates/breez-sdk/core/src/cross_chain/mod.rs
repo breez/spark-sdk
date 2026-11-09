@@ -1659,8 +1659,8 @@ mod tests {
     mod receive_matching {
         use super::*;
         use crate::{
-            PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SparkInvoicePaymentDetails,
-            TokenMetadata, TokenTransactionType,
+            PaymentDetails, PaymentMethod, PaymentStatus, PaymentTokenMetadata, PaymentType,
+            SparkInvoicePaymentDetails, TokenTransactionType,
         };
 
         fn sqlite_storage() -> Arc<dyn crate::Storage> {
@@ -1737,7 +1737,7 @@ mod tests {
 
         fn token_details(invoice: &str) -> PaymentDetails {
             PaymentDetails::Token {
-                metadata: TokenMetadata {
+                metadata: PaymentTokenMetadata {
                     identifier: "btkn1usdb".to_string(),
                     issuer_public_key: "02aa".to_string(),
                     name: "Bitcoin USD".to_string(),
@@ -1745,7 +1745,6 @@ mod tests {
                     decimals: 6,
                     max_supply: 0,
                     is_freezable: true,
-                    extra_metadata: None,
                 },
                 tx_hash: "abcd".to_string(),
                 tx_type: TokenTransactionType::Transfer,
