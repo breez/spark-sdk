@@ -62,7 +62,7 @@ pub async fn sign_signing_jobs(
             sighash: sighash.to_raw_hash().to_byte_array(),
             verifying_key: signing_job.verifying_public_key,
             operator_commitments: commitments_at(&signing_commitments, i)?,
-            adaptor_public_key: None,
+            adaptor: None,
         });
     }
 

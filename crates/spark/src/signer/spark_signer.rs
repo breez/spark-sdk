@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
-use super::SignerError;
+use super::{FrostAdaptor, SignerError};
 use crate::services::TransferId;
 use crate::tree::{TreeNode, TreeNodeId};
 
@@ -83,8 +83,8 @@ pub struct FrostJob {
     pub verifying_key: PublicKey,
     /// Per-operator round-1 commitments fetched from the coordinator.
     pub operator_commitments: BTreeMap<Identifier, SigningCommitments>,
-    /// Optional adaptor public key (atomic-swap flows).
-    pub adaptor_public_key: Option<PublicKey>,
+    /// Set for an adaptor signature (atomic-swap flows).
+    pub adaptor: Option<FrostAdaptor>,
 }
 
 /// The user-side FROST share plus the nonce commitment it was bound to, ready
@@ -388,6 +388,11 @@ pub trait SparkSigner: Send + Sync + 'static {
     fn is_remote(&self) -> bool {
         false
     }
+
+    /// Whether [`sign_frost`](Self::sign_frost) can sign jobs whose
+    /// [`FrostAdaptor::v2`] is set. Callers only request version 2 adaptor
+    /// signing from a signer that supports it.
+    fn supports_adaptor_v2(&self) -> bool;
 
     /// Returns the static-deposit public key at `index`. The wallet hands this
     /// to the operators to derive a static-deposit address. Analogous to

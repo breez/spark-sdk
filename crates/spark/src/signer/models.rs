@@ -5,6 +5,16 @@ use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 use k256::{PublicKey as k256PublicKey, Scalar};
 
+/// The adaptor point of an adaptor signature (atomic swaps), and the adaptor
+/// signing version to sign it with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrostAdaptor {
+    pub public_key: PublicKey,
+    /// Version 2 adaptor signing, whose FROST binding factors include the
+    /// adaptor point. Every signer and the aggregator must use the same version.
+    pub v2: bool,
+}
+
 #[derive(Clone)]
 pub struct SecretShare {
     /// Number of shares required to recover the secret
@@ -69,7 +79,7 @@ pub struct SignFrostRequest<'a> {
     pub verifying_key: &'a PublicKey,
     pub self_nonce_commitment: &'a SigningCommitments,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-    pub adaptor_public_key: Option<&'a PublicKey>,
+    pub adaptor: Option<FrostAdaptor>,
 }
 
 /// A [`SignFrostRequest`] without the nonce commitment: the signer generates
@@ -80,7 +90,7 @@ pub struct CommitAndSignFrostRequest<'a> {
     pub private_key: &'a SecretSource,
     pub verifying_key: &'a PublicKey,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-    pub adaptor_public_key: Option<&'a PublicKey>,
+    pub adaptor: Option<FrostAdaptor>,
 }
 
 /// The round-1 commitment and round-2 share from one
@@ -101,7 +111,7 @@ pub struct AggregateFrostRequest<'a> {
     pub self_commitment: &'a SigningCommitments,
     pub public_key: &'a PublicKey,
     pub self_signature: &'a SignatureShare,
-    pub adaptor_public_key: Option<&'a PublicKey>,
+    pub adaptor: Option<FrostAdaptor>,
 }
 
 #[cfg(test)]

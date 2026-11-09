@@ -50,6 +50,11 @@ pub trait ExternalSparkSigner: Send + Sync {
         false
     }
 
+    /// Whether [`sign_frost`](Self::sign_frost) can sign jobs whose
+    /// `adaptor_v2` is set, with version 2 adaptor signing. The SDK only sets it
+    /// for a signer that returns true.
+    fn supports_adaptor_v2(&self) -> bool;
+
     /// The static-deposit signing public key at `index`.
     async fn get_static_deposit_public_key(
         &self,

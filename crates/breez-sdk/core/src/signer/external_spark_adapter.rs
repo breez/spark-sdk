@@ -73,6 +73,10 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
         self.inner.is_remote()
     }
 
+    fn supports_adaptor_v2(&self) -> bool {
+        self.inner.supports_adaptor_v2()
+    }
+
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         self.inner
             .get_static_deposit_public_key(index)
