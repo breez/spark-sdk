@@ -57,7 +57,7 @@ rec {
     cargoRoot = "signer";
     buildAndTestSubdir = "signer/spark-frost-signer";
     # Moves with the operator pin in spark-so-private.dockerfile.
-    cargoHash = "sha256-h46NASyr91dfEfff31Wu874jY2N9e1nj3LViA3H3eSw=";
+    cargoHash = "sha256-b27kZif+G+IteD2H1oYHL58M8Wng/V1PvsHCKJYKHdA=";
     nativeBuildInputs = [ pkgs.protobuf ];
     doCheck = false;
   };
