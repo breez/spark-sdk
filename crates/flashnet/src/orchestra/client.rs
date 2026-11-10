@@ -640,12 +640,12 @@ mod tests {
             panic!("expected a created order");
         };
         assert_eq!(order.order_id, "ord_1");
-        assert_eq!(order.deposit_address, "lnbc65u1pinvoice");
+        assert_eq!(order.quote.deposit_address, "lnbc65u1pinvoice");
         assert_eq!(
             order.payment_links.unwrap().cash_app,
             "https://cash.app/launch/lightning/lnbc65u1pinvoice"
         );
-        assert_eq!(order.read_token.unwrap().0, "rt_1");
+        assert_eq!(order.quote.read_token.unwrap().0, "rt_1");
         assert_eq!(order.ignored_fields, vec!["refundAddress".to_string()]);
     }
 
@@ -679,6 +679,7 @@ mod tests {
             amount_mode: Some(AmountMode::ExactIn),
             refund_address: None,
             tag: None,
+            affiliate_ids: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(&request).unwrap(),

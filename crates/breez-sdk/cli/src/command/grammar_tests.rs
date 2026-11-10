@@ -558,6 +558,7 @@ fn bridge_from_cash_app() {
     let Command::Bridging(BridgingCommand::FromCashApp {
         recipient,
         amount,
+        refund_address,
         fees_included,
         max_slippage_bps,
     }) = parse_ok("bridging from-cash-app 0xabc --amount 1000000")
@@ -566,19 +567,23 @@ fn bridge_from_cash_app() {
     };
     assert_eq!(recipient, "0xabc");
     assert_eq!(amount, 1_000_000);
+    assert!(refund_address.is_none());
     assert!(!fees_included);
     assert!(max_slippage_bps.is_none());
 
     let Command::Bridging(BridgingCommand::FromCashApp {
+        refund_address,
         fees_included,
         max_slippage_bps,
         ..
     }) = parse_ok(
-        "bridging from-cash-app 0xabc --amount 500000 --fees-included --max-slippage-bps 1000",
+        "bridging from-cash-app 0xabc --amount 500000 --refund-address $alice --fees-included \
+         --max-slippage-bps 1000",
     )
     else {
         panic!("expected bridging from-cash-app");
     };
+    assert_eq!(refund_address.as_deref(), Some("$alice"));
     assert!(fees_included);
     assert_eq!(max_slippage_bps, Some(1000));
 }

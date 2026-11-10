@@ -44,7 +44,9 @@ The {{#name amount}} is in the base units of the stablecoin the recipient receiv
 
 When the payer pays from another chain, {{#name refund_address}} is their address on that chain. If the recipient can't be paid, the provider refunds the payment there. It must belong to the {{#name source}} chain's family, e.g. an EVM `0x...` address for USDC on Base.
 
-It's required to pay a Lightning address, and recommended whenever the payer pays from another chain: without one, the provider has no address to refund to. A payer paying over Lightning needs none, and any address given is ignored.
+When the payer pays over Lightning, it's a Lightning address, Cash App `$cashtag` or amountless BOLT11 invoice, refunded if the payment fails before the swap. An invoice must not expire before the bridge's {{#name expires_at}}, and must still be valid when the refund is paid. Anything else is rejected with {{#enum SdkError::InvalidInput}}.
+
+It's required to pay a Lightning address, and recommended otherwise: without one, the provider has no address to refund to.
 
 ### Response fields
 
@@ -73,13 +75,13 @@ Read a bridge's status with {{#name get_bridge_status}}, passing the {{#name bri
 
 | Status | Meaning |
 | ------ | ------- |
-| {{#enum BridgeStatus::Created}} | The bridge was created, and the payer hasn't paid yet. An unpaid bridge stays {{#enum BridgeStatus::Created}} after its {{#name expires_at}}. A late deposit on another chain may still be accepted at a new price. Stop polling when you no longer expect a payment. |
+| {{#enum BridgeStatus::Created}} | The bridge was created, and the payer hasn't paid yet. A bridge from Cash App becomes {{#enum BridgeStatus::Expired}} once it can no longer be paid. Other unpaid bridges stay {{#enum BridgeStatus::Created}} after their {{#name expires_at}}, and a late deposit on another chain may still be accepted at a new price. Stop polling when you no longer expect a payment. |
 | {{#enum BridgeStatus::Pending}} | The provider is processing the payment, from confirming the deposit to paying the recipient. {{#name provider_status}} gives the stage. |
 | {{#enum BridgeStatus::Refunding}} | The recipient can't be paid, and the payment is being refunded. |
 | {{#enum BridgeStatus::Completed}} | The recipient was paid. {{#name amount_out}} and {{#name delivery_tx_hash}} record the delivery. |
 | {{#enum BridgeStatus::Refunded}} | The payment was refunded to the {{#name refund_address}}. |
 | {{#enum BridgeStatus::Failed}} | The bridge failed. {{#name error_code}} gives the reason. |
-| {{#enum BridgeStatus::Expired}} | The provider's order expired without a payment. |
+| {{#enum BridgeStatus::Expired}} | The bridge can no longer be paid, and nobody paid it. |
 
 ## Limitations
 

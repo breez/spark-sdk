@@ -5,12 +5,18 @@
 ## How it works
 
 1. [Select a destination route](./cash_app.md#selecting-a-route) for the recipient's external-chain address.
-2. Call {{#name bridge_from_cash_app}} with the recipient, the route and the USD amount. The SDK gets a quote from the cross-chain provider and returns a Cash App deep link plus the quote details.
+2. Call {{#name bridge_from_cash_app}} with the recipient, the route and the USD amount. The SDK creates an order with the cross-chain provider and returns a Cash App deep link plus the order details.
 3. Open the returned {{#name payment_request}}. The user completes payment in Cash App, and the provider delivers the stablecoin to the recipient.
 
 The SDK builds a `cash.app/launch/lightning/<bolt11>` deep link from the provider's invoice and returns it as the response {{#name payment_request}}. The invoice itself is {{#name info.deposit_address}}.
 
 {{#tabs cash_app:bridge-from-cash-app}}
+
+## Slippage and refunds
+
+The provider allows these payments up to 10% of price movement between the quote and the delivery, whatever {{#name max_slippage_bps}} says. With fees excluded, {{#name max_slippage_bps}} still bounds how far the quoted delivery may fall short of the {{#name amount}}: a bridge quoted below it fails before the user sees a link. With fees included, the quoted delivery isn't checked.
+
+If the payment fails before the swap, the provider refunds it to the [refund address](./bridging.md#refund-address): a Lightning address, Cash App `$cashtag` or amountless BOLT11 invoice. An invoice must not expire before the bridge, and must still be valid when the refund is paid. Without a refund address, the payment can't be refunded automatically.
 
 ## Response fields
 

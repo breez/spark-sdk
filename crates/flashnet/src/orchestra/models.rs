@@ -306,9 +306,7 @@ impl std::fmt::Debug for ReadToken {
 
 /// An order funded over Lightning, paid from Cash App or another wallet.
 ///
-/// Fee fields are not modelled: Orchestra refuses `appFees` from client keys,
-/// and `affiliateIds` on routes without fee settlement, such as Lightning to
-/// Spark.
+/// `appFees` is not modelled: Orchestra refuses it from client keys.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnrampRequest {
@@ -326,6 +324,9 @@ pub struct OnrampRequest {
     /// `:`, `-`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// Refused on routes without fee settlement, such as Lightning to Spark.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub affiliate_ids: Vec<String>,
 }
 
 /// Links that open a wallet on the order's invoice.
@@ -342,30 +343,19 @@ pub struct PaymentLinks {
 #[serde(rename_all = "camelCase")]
 pub struct OnrampResponse {
     pub order_id: String,
-    pub quote_id: String,
-    /// The BOLT11 invoice to pay.
-    pub deposit_address: String,
+    /// The order's quote. Its `deposit_address` is the BOLT11 invoice to pay,
+    /// its `expires_at` is when the invoice and order expire (a payment made
+    /// before then can still settle afterwards), and its `read_token` is bound
+    /// to the order: read it with `GET /status?id=`.
+    #[serde(flatten)]
+    pub quote: QuoteResponse,
     #[serde(default)]
     pub payment_links: Option<PaymentLinks>,
-    pub amount_in: String,
-    pub estimated_out: String,
-    pub fee_amount: String,
-    pub total_fee_amount: String,
-    pub fee_asset: String,
-    #[serde(default)]
-    pub fee_asset_details: Option<FeeAssetDetails>,
-    pub fee_bps: u32,
-    /// When the invoice and order expire. A payment made before then can
-    /// still settle afterwards.
-    pub expires_at: String,
     #[serde(default)]
     pub tag: Option<String>,
     /// Request fields the server dropped.
     #[serde(default)]
     pub ignored_fields: Vec<String>,
-    /// Token for `GET /status?id=`, bound to the order. Issued to client keys.
-    #[serde(default)]
-    pub read_token: Option<ReadToken>,
 }
 
 /// What `/onramp` answered.

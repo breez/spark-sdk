@@ -407,8 +407,9 @@ impl BreezSdk {
     ///
     /// Creates a cross-chain order and returns a `cash.app` deep link the payer
     /// opens. Once paid over Lightning, the provider delivers the stablecoin to
-    /// `address`. No funds move through the Spark wallet, and nothing is
-    /// tracked. Only available on mainnet.
+    /// `address`, or refunds a failure before the swap to this wallet's
+    /// Lightning address, when one is registered. Nothing is tracked. Only
+    /// available on mainnet.
     pub async fn bridge_from_cash_app(
         &self,
         request: BridgeFromCashAppRequest,
@@ -417,8 +418,10 @@ impl BreezSdk {
             return Err(SdkError::Generic("Only available on mainnet".to_string()));
         }
         self.cross_chain_context.ensure_enabled()?;
-        self.get_bridging_client()?
-            .legacy_bridge_from_cash_app(request)
+        let bridging_client = self.get_bridging_client()?;
+        let refund_address = self.wallet_refund_address().await;
+        bridging_client
+            .legacy_bridge_from_cash_app(request, refund_address.as_deref())
             .await
     }
 

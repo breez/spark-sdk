@@ -81,9 +81,11 @@ pub struct CreateBridgeRequest {
     pub amount: u128,
     /// The payer's address on the source chain, where the deposit is refunded
     /// if the recipient can't be paid. Required to pay a Lightning address,
-    /// and recommended whenever the payer pays from another chain: without
-    /// one the provider has no address to refund to. Ignored when the payer
-    /// pays over Lightning.
+    /// and recommended otherwise: without one the provider has no address to
+    /// refund to. When the payer pays over Lightning, it is a Lightning
+    /// address, a Cash App `$cashtag` or an amountless BOLT11 invoice that
+    /// doesn't expire before the bridge, refunded if the payment fails before
+    /// the swap. Anything else is rejected.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub refund_address: Option<String>,
     /// Whether fees are added on top of `amount` (`FeesExcluded`, the default)
@@ -125,9 +127,10 @@ pub struct GetBridgeStatusRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum BridgeStatus {
-    /// The bridge was created, and the payer hasn't paid yet. An unpaid bridge
-    /// stays `Created` after its `expires_at`. A late deposit on another chain
-    /// may still be accepted at a new price.
+    /// The bridge was created, and the payer hasn't paid yet. A bridge from
+    /// Cash App becomes `Expired` once it can no longer be paid. Other unpaid
+    /// bridges stay `Created` after their `expires_at`, and a late deposit on
+    /// another chain may still be accepted at a new price.
     Created,
     /// The provider is processing the payment, from confirming the deposit to
     /// paying the recipient. `provider_status` gives the stage.
@@ -140,7 +143,7 @@ pub enum BridgeStatus {
     Refunded,
     /// The bridge failed. `error_code` gives the reason.
     Failed,
-    /// The provider's order expired without a payment.
+    /// The bridge can no longer be paid, and nobody paid it.
     Expired,
 }
 

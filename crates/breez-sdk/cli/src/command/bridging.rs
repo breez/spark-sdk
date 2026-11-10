@@ -46,6 +46,11 @@ pub enum BridgingCommand {
         #[arg(long)]
         amount: u128,
 
+        /// Lightning address, `$cashtag` or amountless BOLT11 invoice refunded
+        /// if the payment fails before the swap
+        #[arg(long)]
+        refund_address: Option<String>,
+
         /// Deduct fees from the amount instead of adding them on top
         #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
         fees_included: bool,
@@ -130,6 +135,7 @@ pub async fn handle_command(
         BridgingCommand::FromCashApp {
             recipient,
             amount,
+            refund_address,
             fees_included,
             max_slippage_bps,
         } => {
@@ -153,7 +159,7 @@ pub async fn handle_command(
                     recipient,
                     route,
                     amount,
-                    refund_address: None,
+                    refund_address,
                     fee_policy,
                     max_slippage_bps,
                 })

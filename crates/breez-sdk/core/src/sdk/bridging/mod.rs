@@ -13,7 +13,7 @@ use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     buy::cashapp::{CashAppProvider, cash_app_lightning_address},
     fiat::FiatService,
-    input::{CrossChainAddressFamily, detect_address_family},
+    input::{CrossChainAddressFamily, detect_address_family, validate_lightning_address_format},
     lnurl::pay::validate_user_input,
 };
 
@@ -31,9 +31,10 @@ use crate::{
         parse_rfc3339_to_unix_seconds, rescale_decimals,
     },
     error::SdkError,
+    utils::time::now_secs,
 };
 
-use self::orchestra::{bridge_status_response, to_bridge_route_pair};
+use self::orchestra::{bridge_status_response, is_unpaid_onramp_order, to_bridge_route_pair};
 use super::SdkInputParser;
 use super::helpers::{partner_id, validate_breez_api_key};
 use super::payments::receive::{
@@ -194,14 +195,8 @@ impl BridgingClient {
         &self,
         request: CreateBridgeRequest,
     ) -> Result<CreateBridgeResponse, SdkError> {
-        validate_amount(Some(request.amount))?;
-        if !matches!(request.route.provider, CrossChainProvider::Orchestra) {
-            return Err(SdkError::InvalidInput(
-                "Bridging is only supported on Orchestra routes".to_string(),
-            ));
-        }
-        let recipient = self.parse_recipient(&request.recipient).await?;
-        self.create_bridge_for(&recipient, request).await
+        self.create_bridge_with(request, LightningInvoice::Quote)
+            .await
     }
 
     /// Reads a bridge's status from the provider.
@@ -217,16 +212,25 @@ impl BridgingClient {
             .as_deref()
             .map(str::trim)
             .filter(|token| !token.is_empty());
-        let order = self
-            .quoter
-            .find_order(request.bridge_id.trim(), status_token)
-            .await?;
+        let bridge_id = request.bridge_id.trim();
+        // Only a bridge from Cash App is an order, created before payment.
+        let order = if is_order_id(bridge_id) {
+            self.quoter
+                .find_order_by_id(bridge_id, status_token)
+                .await?
+                .filter(|order| !is_unpaid_onramp_order(order))
+        } else {
+            self.quoter.find_order(bridge_id, status_token).await?
+        };
         Ok(bridge_status_response(order.as_ref()))
     }
 
     /// Pays a recipient on another chain from Cash App. Takes a route for the
     /// address that the payer funds over Lightning, and returns the bridge
-    /// with the Cash App link as its `payment_request`.
+    /// with the Cash App link as its `payment_request`. The provider allows
+    /// these payments 10% slippage when they execute. With fees excluded,
+    /// `max_slippage_bps` bounds how far the quoted delivery may fall short of
+    /// `amount` when the bridge is created.
     pub async fn bridge_from_cash_app(
         &self,
         request: CreateBridgeRequest,
@@ -236,7 +240,9 @@ impl BridgingClient {
                 "Cash App pays a recipient on another chain over Lightning".to_string(),
             ));
         }
-        let mut response = self.create_bridge(request).await?;
+        let mut response = self
+            .create_bridge_with(request, LightningInvoice::CashApp)
+            .await?;
         response.payment_request = CashAppProvider::build_url(&response.info.deposit_address);
         Ok(response)
     }
@@ -263,10 +269,12 @@ impl BridgingClient {
 }
 
 impl BridgingClient {
-    /// Bridges from Cash App over a `CrossChainRoutePair` route.
+    /// Bridges from Cash App over a `CrossChainRoutePair` route. A failure
+    /// before the swap is refunded to `refund_address`, a Lightning address.
     pub(crate) async fn legacy_bridge_from_cash_app(
         &self,
         request: BridgeFromCashAppRequest,
+        refund_address: Option<&str>,
     ) -> Result<BridgeFromCashAppResponse, SdkError> {
         validate_amount(Some(request.amount))?;
 
@@ -307,19 +315,21 @@ impl BridgingClient {
         self.validate_cross_chain_recipient(&recipient, &route)
             .await?;
 
-        let (prepared, deposit_target, amount_sats) = self
+        let funded = self
             .quote_lightning_funded(
                 &recipient.address,
                 &route,
                 amount,
                 fee_policy,
                 max_slippage_bps,
+                LightningInvoice::CashApp,
+                refund_address,
             )
             .await?;
 
-        let url = CashAppProvider::build_url(&deposit_target);
+        let url = CashAppProvider::build_url(&funded.deposit_target);
 
-        bridge_from_cash_app_response(prepared, url, amount_sats)
+        bridge_from_cash_app_response(funded.prepared, url, funded.amount_sats)
     }
 
     /// Bridges to a Cash App user over a `CrossChainRoutePair` route.
@@ -410,11 +420,27 @@ impl BridgingClient {
         }
     }
 
+    async fn create_bridge_with(
+        &self,
+        request: CreateBridgeRequest,
+        invoice: LightningInvoice,
+    ) -> Result<CreateBridgeResponse, SdkError> {
+        validate_amount(Some(request.amount))?;
+        if !matches!(request.route.provider, CrossChainProvider::Orchestra) {
+            return Err(SdkError::InvalidInput(
+                "Bridging is only supported on Orchestra routes".to_string(),
+            ));
+        }
+        let recipient = self.parse_recipient(&request.recipient).await?;
+        self.create_bridge_for(&recipient, request, invoice).await
+    }
+
     /// Creates a bridge to a parsed `recipient`.
     async fn create_bridge_for(
         &self,
         recipient: &BridgeRecipient,
         request: CreateBridgeRequest,
+        invoice: LightningInvoice,
     ) -> Result<CreateBridgeResponse, SdkError> {
         let CreateBridgeRequest {
             route,
@@ -457,6 +483,7 @@ impl BridgingClient {
                     refund_address.as_deref(),
                     fee_policy,
                     max_slippage_bps,
+                    invoice,
                 )
                 .await
             }
@@ -582,8 +609,10 @@ impl BridgingClient {
     }
 
     /// Quotes an order the payer funds over Lightning, delivering `amount` of
-    /// `route`'s asset to `recipient_address`. Returns the quote, the BOLT11
-    /// the payer pays and its amount in sats.
+    /// `route`'s asset to `recipient_address`, with an `invoice` of that kind.
+    /// A failure before the swap is refunded to `refund_address`, which must
+    /// be one [`Self::lightning_refund_address`] accepts.
+    #[allow(clippy::too_many_arguments)]
     async fn quote_lightning_funded(
         &self,
         recipient_address: &str,
@@ -591,9 +620,12 @@ impl BridgingClient {
         amount: u128,
         fee_policy: Option<FeePolicy>,
         max_slippage_bps: Option<u32>,
-    ) -> Result<(CrossChainSendPrepared, String, u64), SdkError> {
-        let service = self.cross_chain_context.get(route.provider)?;
+        invoice: LightningInvoice,
+        refund_address: Option<&str>,
+    ) -> Result<LightningFunded, SdkError> {
         let slippage_bps = resolve_slippage_bps(max_slippage_bps, self.default_slippage_bps())?;
+        let refund = self.lightning_refund_address(refund_address).await?;
+        let refund_address = refund.as_ref().map(|r| r.address.as_str());
 
         // `amount` is in the destination asset's base units (the route's
         // `decimals`); for these USD-pegged stablecoins it equals the USD value
@@ -618,37 +650,103 @@ impl BridgingClient {
         )?;
         let source_sats = resolve_direct_overpay_amount(source_sats, fee_policy, overpay_bps);
 
-        let prepared = service
-            .prepare_send(
-                recipient_address,
-                route,
-                source_sats,
-                Some(DeliveryMethod::Lightning),
-                None,
-                slippage_bps,
-                fee_policy.into(),
-            )
-            .await?;
+        let (prepared, order_id) = match invoice {
+            LightningInvoice::Quote => {
+                let prepared = self
+                    .quoter
+                    .quote_send(
+                        recipient_address,
+                        route,
+                        source_sats,
+                        DeliveryMethod::Lightning,
+                        None,
+                        slippage_bps,
+                        fee_policy.into(),
+                        refund_address,
+                    )
+                    .await?;
+                (prepared, None)
+            }
+            LightningInvoice::CashApp => {
+                let order = self
+                    .quoter
+                    .prepare_onramp_send(
+                        recipient_address,
+                        route,
+                        source_sats,
+                        slippage_bps,
+                        fee_policy.into(),
+                        refund_address,
+                    )
+                    .await?;
+                (order.prepared, Some(order.order_id))
+            }
+        };
 
+        let checked = match check_refund_outlives(refund.as_ref(), &prepared.expires_at) {
+            Ok(()) => self.check_lightning_funded(&prepared).await,
+            Err(e) => Err(e),
+        };
+        let (deposit_target, amount_sats) = checked.inspect_err(|e| {
+            // The order exists and expires unpaid, but support may ask for it.
+            if let Some(order_id) = &order_id {
+                tracing::warn!("Bridging: discarding order {order_id}: {e}");
+            }
+        })?;
+
+        Ok(LightningFunded {
+            prepared,
+            deposit_target,
+            amount_sats,
+            order_id,
+        })
+    }
+
+    /// The BOLT11 the payer funds and its amount in sats, checked against the
+    /// quote before the payer is sent to it.
+    async fn check_lightning_funded(
+        &self,
+        prepared: &CrossChainSendPrepared,
+    ) -> Result<(String, u64), SdkError> {
         let amount_sats = u64::try_from(prepared.amount_in).map_err(|_| {
             SdkError::Generic(format!(
                 "Deposit amount {} sats exceeds u64::MAX",
                 prepared.amount_in
             ))
         })?;
-
-        // The provider returns the BOLT11 the external payer funds in its
-        // context. We never call the send stage: the external payer funds the
-        // provider's deposit directly, so there is no Spark-side transfer to
-        // make and the provider delivers autonomously once the payer settles.
+        // The payer funds the provider's invoice directly, and the provider
+        // delivers once it is paid: there is no Spark transfer to make.
         let deposit_target = deposit_target(&prepared.provider_context);
-
-        // Verify the provider's target is a BOLT11 for the quoted amount before
-        // sending the payer to it.
         let parsed_target = self.parse(&deposit_target).await;
         check_deposit_target(&parsed_target, amount_sats)?;
+        Ok((deposit_target, amount_sats))
+    }
 
-        Ok((prepared, deposit_target, amount_sats))
+    /// The refund destination a Lightning-funded order takes for
+    /// `refund_address`: a Lightning address, a `$cashtag` as its Cash App
+    /// Lightning address, or an unexpired amountless mainnet BOLT11. Anything
+    /// else fails with `InvalidInput`.
+    async fn lightning_refund_address(
+        &self,
+        refund_address: Option<&str>,
+    ) -> Result<Option<LightningRefund>, SdkError> {
+        let Some(input) = refund_address.map(str::trim).filter(|a| !a.is_empty()) else {
+            return Ok(None);
+        };
+        let parsed = if input.starts_with('$') || validate_lightning_address_format(input) {
+            None
+        } else {
+            self.parse(input).await.ok()
+        };
+        accepted_lightning_refund(input, parsed.as_ref(), now_secs())
+            .map(Some)
+            .ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "A Lightning refund address must be a Lightning address, a $cashtag or an \
+                     unexpired amountless mainnet BOLT11 invoice"
+                        .to_string(),
+                )
+            })
     }
 
     /// Quotes an order the payer funds with a deposit on `route`'s chain,
@@ -690,6 +788,7 @@ impl BridgingClient {
 
     /// Creates a bridge to a recipient on another chain, funded over Lightning
     /// or by a stablecoin deposit, as `route` says.
+    #[allow(clippy::too_many_arguments)]
     async fn create_bridge_to_other_chain(
         &self,
         recipient: &CrossChainAddressDetails,
@@ -698,6 +797,7 @@ impl BridgingClient {
         refund_address: Option<&str>,
         fee_policy: Option<FeePolicy>,
         max_slippage_bps: Option<u32>,
+        invoice: LightningInvoice,
     ) -> Result<CreateBridgeResponse, SdkError> {
         if delivery_method(&route.source) == Some(DeliveryMethod::Lightning) {
             let destination = external_pair(
@@ -707,16 +807,18 @@ impl BridgingClient {
             );
             self.validate_cross_chain_recipient(recipient, &destination)
                 .await?;
-            let (prepared, deposit_target, amount_sats) = self
+            let funded = self
                 .quote_lightning_funded(
                     &recipient.address,
                     &destination,
                     amount,
                     fee_policy,
                     max_slippage_bps,
+                    invoice,
+                    refund_address,
                 )
                 .await?;
-            return lightning_funded_bridge_response(prepared, deposit_target, amount_sats);
+            return lightning_funded_bridge_response(funded);
         }
 
         let source = external_pair(route, &route.source, None);
@@ -1011,19 +1113,24 @@ fn create_bridge_response(prepared: CrossChainReceivePrepared) -> CreateBridgeRe
 
 /// The response for a bridge the payer funds over Lightning: the deposit is
 /// the provider's BOLT11 for `amount_sats`, and the recipient receives the
-/// route's stablecoin.
+/// route's stablecoin. The bridge is the order when there is one, otherwise
+/// the quote.
 fn lightning_funded_bridge_response(
-    prepared: CrossChainSendPrepared,
-    deposit_target: String,
-    amount_sats: u64,
+    funded: LightningFunded,
 ) -> Result<CreateBridgeResponse, SdkError> {
+    let LightningFunded {
+        prepared,
+        deposit_target,
+        amount_sats,
+        order_id,
+    } = funded;
     let CrossChainProviderContext::Orchestra { quote_id, .. } = prepared.provider_context else {
         return Err(SdkError::Generic(
             "Bridging is only supported on Orchestra routes".to_string(),
         ));
     };
     Ok(CreateBridgeResponse {
-        bridge_id: quote_id.clone(),
+        bridge_id: order_id.unwrap_or_else(|| quote_id.clone()),
         status_token: prepared.quote_read_token,
         payment_request: deposit_target.clone(),
         info: CrossChainReceiveInfo {
@@ -1039,6 +1146,92 @@ fn lightning_funded_bridge_response(
             expires_at: parse_rfc3339_to_unix_seconds(&prepared.expires_at)?,
         },
     })
+}
+
+/// Where a bridge the payer funds over Lightning gets its invoice.
+#[derive(Debug, Clone, Copy)]
+enum LightningInvoice {
+    /// A quote's invoice.
+    Quote,
+    /// An onramp order's invoice.
+    CashApp,
+}
+
+/// A bridge the payer funds over Lightning, before it is reported.
+struct LightningFunded {
+    prepared: CrossChainSendPrepared,
+    /// The BOLT11 invoice the payer pays.
+    deposit_target: String,
+    amount_sats: u64,
+    /// The order, when the invoice is an onramp order's.
+    order_id: Option<String>,
+}
+
+/// Where a Lightning-funded bridge refunds a failure before the swap.
+#[derive(Debug, PartialEq)]
+struct LightningRefund {
+    address: String,
+    /// When the refund can no longer be paid, for an invoice.
+    expires_at: Option<u64>,
+}
+
+/// What [`BridgingClient::lightning_refund_address`] accepts for `input`,
+/// which parsed as `parsed` when it is neither a cashtag nor a Lightning
+/// address.
+fn accepted_lightning_refund(
+    input: &str,
+    parsed: Option<&InputType>,
+    now: u64,
+) -> Option<LightningRefund> {
+    let address = |address: String| LightningRefund {
+        address,
+        expires_at: None,
+    };
+    if input.starts_with('$') {
+        return cash_app_lightning_address(input).map(address);
+    }
+    if validate_lightning_address_format(input) {
+        return Some(address(input.to_string()));
+    }
+    match parsed {
+        // Orchestra refuses an invoice with an amount: the refund sets it.
+        Some(InputType::Bolt11Invoice(details))
+            if details.network == BitcoinNetwork::Bitcoin
+                && details.amount_msat.is_none()
+                && details.timestamp.saturating_add(details.expiry) > now =>
+        {
+            Some(LightningRefund {
+                address: details.invoice.bolt11.clone(),
+                expires_at: Some(details.timestamp.saturating_add(details.expiry)),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Errors if `refund` is an invoice that expires before the bridge, which
+/// can be paid until `bridge_expires_at`: a failure after a late payment
+/// could not be refunded.
+fn check_refund_outlives(
+    refund: Option<&LightningRefund>,
+    bridge_expires_at: &str,
+) -> Result<(), SdkError> {
+    let Some(refund_expires_at) = refund.and_then(|r| r.expires_at) else {
+        return Ok(());
+    };
+    if refund_expires_at < parse_rfc3339_to_unix_seconds(bridge_expires_at)? {
+        return Err(SdkError::InvalidInput(
+            "The refund invoice expires before the bridge does".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a bridge id names an order rather than a quote. Orchestra's API
+/// documents order ids as `ord_...` (`GET /v1/explorer/operations/{id}`), and
+/// its quote ids start with `q_`.
+fn is_order_id(bridge_id: &str) -> bool {
+    bridge_id.starts_with("ord_")
 }
 
 /// Whether `route` advertises `required` as a fundable delivery method. An
@@ -1116,17 +1309,19 @@ mod tests {
     use macros::{async_test_all, test_all};
 
     use super::{
-        BridgeRecipient, BridgeRoutePair, BridgeRoutePairSide, BridgingClient, CreateBridgeRequest,
-        bridge_from_cash_app_response, check_lightning_address_accepts, deposit_target,
-        external_pair, is_listed, lightning_funded_bridge_response, route_pays,
+        BridgeRecipient, BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient,
+        CreateBridgeRequest, GetBridgeStatusRequest, LightningFunded, LightningInvoice,
+        LightningRefund, accepted_lightning_refund, bridge_from_cash_app_response,
+        check_lightning_address_accepts, check_refund_outlives, deposit_target, external_pair,
+        is_listed, is_order_id, lightning_funded_bridge_response, route_pays,
         route_supports_delivery_method, source_units, validate_spark_recipient,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
     use crate::{
-        BitcoinNetwork, CrossChainAddressDetails, CrossChainAddressFamily, CrossChainFeeMode,
-        CrossChainProvider, CrossChainRouteLimits, CrossChainRoutePair, DeliveryMethod,
-        LightningAddressDetails, LnurlPayRequestDetails, PaymentRequestSource, SdkError,
-        SparkAddressDetails, SparkAsset,
+        BitcoinNetwork, Bolt11Invoice, Bolt11InvoiceDetails, CrossChainAddressDetails,
+        CrossChainAddressFamily, CrossChainFeeMode, CrossChainProvider, CrossChainRouteLimits,
+        CrossChainRoutePair, DeliveryMethod, InputType, LightningAddressDetails,
+        LnurlPayRequestDetails, PaymentRequestSource, SdkError, SparkAddressDetails, SparkAsset,
     };
 
     #[cfg(feature = "browser-tests")]
@@ -1357,6 +1552,13 @@ mod tests {
             }
         }
 
+        client_with(Arc::new(Unreachable), Arc::new(NoConfig))
+    }
+
+    fn client_with(
+        http: Arc<dyn platform_utils::HttpClient>,
+        config: Arc<dyn flashnet::OrchestraConfigResolver>,
+    ) -> BridgingClient {
         struct NoFiat;
 
         #[macros::async_trait]
@@ -1379,10 +1581,9 @@ mod tests {
             }
         }
 
-        let http: Arc<dyn platform_utils::HttpClient> = Arc::new(Unreachable);
         let fiat: Arc<dyn breez_sdk_common::fiat::FiatService> = Arc::new(NoFiat);
         let quoter = Arc::new(crate::cross_chain::OrchestraQuoter::new(
-            Arc::new(NoConfig),
+            config,
             None,
             Arc::clone(&fiat),
             Arc::clone(&http),
@@ -1393,6 +1594,168 @@ mod tests {
             None,
         ));
         BridgingClient::new(None, quoter, fiat, input_parser)
+    }
+
+    #[test_all]
+    fn a_lightning_refund_takes_a_lightning_address_cashtag_or_amountless_invoice() {
+        let invoice = |amount_msat: Option<u64>, timestamp: u64| {
+            InputType::Bolt11Invoice(Bolt11InvoiceDetails {
+                amount_msat,
+                description: None,
+                description_hash: None,
+                expiry: 3600,
+                invoice: Bolt11Invoice {
+                    bolt11: "lnbc1refund".to_string(),
+                    source: PaymentRequestSource::default(),
+                },
+                min_final_cltv_expiry_delta: 144,
+                network: BitcoinNetwork::Bitcoin,
+                payee_pubkey: String::new(),
+                payment_hash: String::new(),
+                payment_secret: String::new(),
+                routing_hints: vec![],
+                timestamp,
+            })
+        };
+        let now = 1_000_000;
+        let accepted = |input: &str, parsed: Option<InputType>| {
+            accepted_lightning_refund(input, parsed.as_ref(), now).map(|r| r.address)
+        };
+
+        assert_eq!(
+            accepted("alice@example.com", None).as_deref(),
+            Some("alice@example.com")
+        );
+        assert_eq!(accepted("$alice", None).as_deref(), Some("alice@cash.app"));
+        assert_eq!(accepted("$not-a-tag", None), None);
+        assert_eq!(
+            accepted("lightning:lnbc1refund", Some(invoice(None, now))).as_deref(),
+            Some("lnbc1refund")
+        );
+        // The refund sets the amount, and an expired invoice can't take it.
+        assert_eq!(accepted("lnbc1", Some(invoice(Some(1_000), now))), None);
+        assert_eq!(accepted("lnbc1", Some(invoice(None, now - 3600))), None);
+        // Bridges run on mainnet, where a refund can't pay a test network.
+        let mut testnet = invoice(None, now);
+        if let InputType::Bolt11Invoice(details) = &mut testnet {
+            details.network = BitcoinNetwork::Testnet3;
+        }
+        assert_eq!(accepted("lntb1", Some(testnet)), None);
+        assert_eq!(accepted("0xabc", None), None);
+        assert_eq!(
+            accepted_lightning_refund("lnbc1", Some(&invoice(None, now)), now)
+                .and_then(|r| r.expires_at),
+            Some(now + 3600)
+        );
+    }
+
+    #[test_all]
+    fn a_refund_invoice_must_outlive_the_bridge() {
+        let bridge_expires_at = "2026-11-10T12:00:00Z";
+        let bridge_secs = super::parse_rfc3339_to_unix_seconds(bridge_expires_at).unwrap();
+        let invoice = |expires_at| LightningRefund {
+            address: "lnbc1refund".to_string(),
+            expires_at: Some(expires_at),
+        };
+        let address = LightningRefund {
+            address: "alice@cash.app".to_string(),
+            expires_at: None,
+        };
+        assert!(check_refund_outlives(None, bridge_expires_at).is_ok());
+        assert!(check_refund_outlives(Some(&address), bridge_expires_at).is_ok());
+        assert!(check_refund_outlives(Some(&invoice(bridge_secs)), bridge_expires_at).is_ok());
+        assert_invalid_input(
+            check_refund_outlives(Some(&invoice(bridge_secs - 1)), bridge_expires_at),
+            "expires before the bridge",
+        );
+    }
+
+    /// A client whose Orchestra knows one Lightning-funded order, `ord_1`, with
+    /// `status`. Its explorer names the source chain and `/status` doesn't.
+    fn explorer_client(status: &'static str) -> BridgingClient {
+        struct Explorer(&'static str);
+
+        #[macros::async_trait]
+        impl platform_utils::HttpClient for Explorer {
+            async fn get(
+                &self,
+                url: String,
+                _: Option<std::collections::HashMap<String, String>>,
+            ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+                let mut operation = serde_json::json!({
+                    "id": "ord_1",
+                    "status": self.0,
+                    "destinationChain": "base",
+                    "createdAt": "2026-11-10T10:00:00Z",
+                    "updatedAt": "2026-11-10T10:00:00Z",
+                });
+                let body = if url.contains("/v1/orchestration/status?id=ord_1") {
+                    serde_json::json!({ "order": operation, "stages": [] })
+                } else {
+                    assert!(url.ends_with("/v1/explorer/operations?q=ord_1"), "{url}");
+                    operation["sourceChain"] = "lightning".into();
+                    serde_json::json!({
+                        "operations": [{ "operation": operation, "partner": null, "refs": [] }],
+                        "nextOffset": null,
+                    })
+                };
+                Ok(platform_utils::HttpResponse {
+                    status: 200,
+                    body: body.to_string(),
+                    headers: std::collections::HashMap::new(),
+                })
+            }
+            async fn post(
+                &self,
+                url: String,
+                _: Option<std::collections::HashMap<String, String>>,
+                _: Option<String>,
+            ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+                panic!("unexpected POST {url}")
+            }
+            async fn delete(
+                &self,
+                url: String,
+                _: Option<std::collections::HashMap<String, String>>,
+                _: Option<String>,
+            ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+                panic!("unexpected DELETE {url}")
+            }
+        }
+
+        struct FixedConfig;
+
+        #[macros::async_trait]
+        impl flashnet::OrchestraConfigResolver for FixedConfig {
+            async fn resolve(&self) -> Result<flashnet::OrchestraConfig, flashnet::FlashnetError> {
+                Ok(flashnet::OrchestraConfig {
+                    base_url: "https://orchestra.test".to_string(),
+                    api_key: "key".to_string(),
+                })
+            }
+        }
+
+        client_with(Arc::new(Explorer(status)), Arc::new(FixedConfig))
+    }
+
+    #[async_test_all]
+    async fn an_unpaid_cash_app_bridge_is_created_until_its_order_expires() {
+        for (order_status, expected) in [
+            ("processing", BridgeStatus::Created),
+            ("expired", BridgeStatus::Expired),
+            ("swapping", BridgeStatus::Pending),
+        ] {
+            for status_token in [None, Some("rt_order".to_string())] {
+                let response = explorer_client(order_status)
+                    .get_bridge_status(GetBridgeStatusRequest {
+                        bridge_id: "ord_1".to_string(),
+                        status_token: status_token.clone(),
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(response.status, expected, "{order_status} {status_token:?}");
+            }
+        }
     }
 
     fn create_request(recipient: &str, route: BridgeRoutePair) -> CreateBridgeRequest {
@@ -1406,7 +1769,7 @@ mod tests {
         }
     }
 
-    fn assert_invalid_input(result: Result<super::CreateBridgeResponse, SdkError>, contains: &str) {
+    fn assert_invalid_input<T: std::fmt::Debug>(result: Result<T, SdkError>, contains: &str) {
         match result {
             Err(SdkError::InvalidInput(message)) => {
                 assert!(message.contains(contains), "{message}");
@@ -1653,7 +2016,11 @@ mod tests {
         ] {
             assert_invalid_input(
                 client
-                    .create_bridge_for(&recipient, create_request("", route))
+                    .create_bridge_for(
+                        &recipient,
+                        create_request("", route),
+                        LightningInvoice::Quote,
+                    )
                     .await,
                 "doesn't pay this recipient",
             );
@@ -1676,6 +2043,7 @@ mod tests {
             .create_bridge_for(
                 &lightning_recipient(),
                 create_request("", pair(base_usdc(), lightning_btc())),
+                LightningInvoice::Quote,
             )
             .await;
         assert_invalid_input(result, "refund address is required");
@@ -1697,6 +2065,7 @@ mod tests {
             .create_bridge_for(
                 &BridgeRecipient::Spark(spark_address(BitcoinNetwork::Regtest)),
                 create_request("", pair(base_usdc(), spark_btc())),
+                LightningInvoice::Quote,
             )
             .await;
         assert_invalid_input(result, "not a mainnet address");
@@ -1757,13 +2126,39 @@ mod tests {
         }
     }
 
+    #[async_test_all]
+    async fn a_lightning_bridge_rejects_a_refund_address_it_cannot_refund() {
+        let client = offline_client();
+        assert_eq!(client.lightning_refund_address(None).await.unwrap(), None);
+        assert_eq!(
+            client.lightning_refund_address(Some("  ")).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            client
+                .lightning_refund_address(Some(" $alice "))
+                .await
+                .unwrap()
+                .map(|r| r.address)
+                .as_deref(),
+            Some("alice@cash.app")
+        );
+        assert_invalid_input(
+            client
+                .lightning_refund_address(Some("0x0000000000000000000000000000000000000001"))
+                .await,
+            "Lightning refund address",
+        );
+    }
+
     #[test_all]
     fn lightning_funded_response_describes_the_invoice_and_the_stablecoin() {
-        let response = lightning_funded_bridge_response(
-            prepared(orchestra_context()),
-            "lnbc100u1pxyz".to_string(),
-            5000,
-        )
+        let response = lightning_funded_bridge_response(LightningFunded {
+            prepared: prepared(orchestra_context()),
+            deposit_target: "lnbc100u1pxyz".to_string(),
+            amount_sats: 5000,
+            order_id: None,
+        })
         .unwrap();
         assert_eq!(response.bridge_id, "q1");
         assert_eq!(response.payment_request, "lnbc100u1pxyz");
@@ -1774,5 +2169,20 @@ mod tests {
         assert_eq!(response.info.token_identifier, None);
         assert_eq!(response.info.service_fee_asset.as_deref(), Some("USDC"));
         assert_eq!(response.info.expires_at, 1_784_966_966);
+    }
+
+    #[test_all]
+    fn an_onramp_bridge_is_identified_by_its_order() {
+        let response = lightning_funded_bridge_response(LightningFunded {
+            prepared: prepared(orchestra_context()),
+            deposit_target: "lnbc100u1pxyz".to_string(),
+            amount_sats: 5000,
+            order_id: Some("ord_1".to_string()),
+        })
+        .unwrap();
+        assert_eq!(response.bridge_id, "ord_1");
+        assert_eq!(response.info.quote_id, "q1");
+        assert!(is_order_id(&response.bridge_id));
+        assert!(!is_order_id("q1"));
     }
 }

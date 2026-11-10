@@ -101,6 +101,18 @@ impl BreezSdk {
 }
 
 impl BreezSdk {
+    /// The wallet's Lightning address, where a failed Cash App order is
+    /// refunded. Best effort: unset when none is registered or the lookup
+    /// fails, and the order then has no refund destination.
+    pub(super) async fn wallet_refund_address(&self) -> Option<String> {
+        self.get_lightning_address()
+            .await
+            .inspect_err(|e| warn!("CashApp: no refund address, lookup failed: {e}"))
+            .ok()
+            .flatten()
+            .map(|info| info.lightning_address)
+    }
+
     /// The `cash.app` link for a Cash App purchase that delivers `amount_sats`,
     /// and the order behind it. Cash App pays the invoice of a Flashnet
     /// Orchestra onramp order, which delivers the sats to this wallet, or
@@ -116,14 +128,7 @@ impl BreezSdk {
                 "CashApp is not available when background tasks are disabled".to_string(),
             )
         })?;
-        // Best effort: without an address the order has no refund destination.
-        let refund_address = self
-            .get_lightning_address()
-            .await
-            .inspect_err(|e| warn!("CashApp: no refund address, lookup failed: {e}"))
-            .ok()
-            .flatten()
-            .map(|info| info.lightning_address);
+        let refund_address = self.wallet_refund_address().await;
         let order = orchestra
             .create_lightning_receive_delivering(amount_sats, refund_address.as_deref())
             .await?;

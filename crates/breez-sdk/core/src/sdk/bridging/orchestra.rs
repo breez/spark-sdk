@@ -27,6 +27,13 @@ fn to_bridge_route_pair_side(side: &RouteAsset) -> BridgeRoutePairSide {
     }
 }
 
+/// Whether nobody has paid `order`, an onramp order. It exists from its
+/// creation, and stays `processing` until paid. `/status` may leave out its
+/// `sourceChain`, so the order's kind comes from how the bridge reads it.
+pub(super) fn is_unpaid_onramp_order(order: &Order) -> bool {
+    order.status == OrderStatus::Processing
+}
+
 /// The status of a bridge whose order is `order`, or `Created` before it has
 /// one.
 pub(super) fn bridge_status_response(order: Option<&Order>) -> GetBridgeStatusResponse {
@@ -123,6 +130,13 @@ mod tests {
             "updatedAt": "2026-10-29T10:05:00Z",
         }))
         .unwrap()
+    }
+
+    #[test_all]
+    fn an_onramp_order_is_unpaid_while_processing() {
+        assert!(is_unpaid_onramp_order(&order("processing")));
+        assert!(!is_unpaid_onramp_order(&order("swapping")));
+        assert!(!is_unpaid_onramp_order(&order("expired")));
     }
 
     #[test_all]
