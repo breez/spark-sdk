@@ -62,7 +62,7 @@ jobs:
 
   build-package:
     name: Build package
-    runs-on: macOS-14
+    runs-on: macos-latest
     needs: build-language-bindings
     steps:
       - name: Checkout
