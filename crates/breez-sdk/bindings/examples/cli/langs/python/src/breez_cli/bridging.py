@@ -140,6 +140,9 @@ def _build_from_cash_app_parser():
     p.add_argument("--amount", type=int, required=True,
                    help="Amount in the destination stablecoin's base units "
                    "(6 decimals for USDC/USDT)")
+    p.add_argument("--refund-address", default=None,
+                   help="Lightning address, $cashtag or amountless BOLT11 invoice "
+                   "refunded if the payment fails before the swap")
     p.add_argument("--fees-included", action="store_true", default=False,
                    help="Deduct fees from the amount instead of adding them on top")
     p.add_argument("--max-slippage-bps", type=int, default=None,
@@ -163,7 +166,7 @@ async def _handle_from_cash_app(sdk, session, args):
             recipient=args.recipient,
             route=route,
             amount=args.amount,
-            refund_address=None,
+            refund_address=args.refund_address,
             fee_policy=fee_policy,
             max_slippage_bps=args.max_slippage_bps,
         )

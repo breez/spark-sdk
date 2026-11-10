@@ -121,11 +121,12 @@ suspend fun handleBridgingCreate(sdk: BreezSdk, reader: LineReader, args: List<S
 suspend fun handleBridgingFromCashApp(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
     val amountStr = fp.getString("amount")
+    val refundAddress = fp.getString("refund-address")
     val feesIncluded = fp.hasFlag("fees-included")
     val maxSlippageBps = fp.getUInt("max-slippage-bps")
 
     if (fp.positional.isEmpty() || amountStr == null) {
-        println("Usage: bridging from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+        println("Usage: bridging from-cash-app <recipient> --amount <amount> [--refund-address <address>] [--fees-included] [--max-slippage-bps <bps>]")
         return
     }
 
@@ -148,7 +149,7 @@ suspend fun handleBridgingFromCashApp(sdk: BreezSdk, reader: LineReader, args: L
             recipient = recipient,
             route = route,
             amount = amount,
-            refundAddress = null,
+            refundAddress = refundAddress,
             feePolicy = feePolicy,
             maxSlippageBps = maxSlippageBps,
         )

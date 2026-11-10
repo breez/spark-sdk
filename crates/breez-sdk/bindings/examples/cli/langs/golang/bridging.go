@@ -133,6 +133,7 @@ func handleBridgingCreate(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, 
 func handleBridgingFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("bridging from-cash-app", flag.ContinueOnError)
 	amountStr := fs.String("amount", "", "Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
+	refundAddress := fs.String("refund-address", "", "Lightning address, $cashtag or amountless BOLT11 invoice refunded if the payment fails before the swap")
 	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
 	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
 	if err := fs.Parse(args); err != nil {
@@ -141,7 +142,7 @@ func handleBridgingFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Insta
 
 	positional := fs.Args()
 	if len(positional) < 1 || *amountStr == "" {
-		fmt.Println("Usage: bridging from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+		fmt.Println("Usage: bridging from-cash-app <recipient> --amount <amount> [--refund-address <addr>] [--fees-included] [--max-slippage-bps <bps>]")
 		return nil
 	}
 	recipient := positional[0]
@@ -186,6 +187,9 @@ func handleBridgingFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Insta
 		Route:     route,
 		Amount:    amount,
 		FeePolicy: feePolicy,
+	}
+	if *refundAddress != "" {
+		req.RefundAddress = refundAddress
 	}
 	if *maxSlippageStr != "" {
 		val, err := strconv.ParseUint(*maxSlippageStr, 10, 32)

@@ -98,10 +98,11 @@ func handleBridgingFromCashApp(_ sdk: BreezSdk, _ args: [String]) async throws {
     guard let recipient = fp.positional.first,
           let amountStr = fp.get("amount"),
           let amount = BInt(amountStr) else {
-        print("Usage: bridging from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
+        print("Usage: bridging from-cash-app <recipient> --amount <amount> [--refund-address <address>] [--fees-included] [--max-slippage-bps <bps>]")
         return
     }
 
+    let refundAddress = fp.get("refund-address")
     let feesIncluded = fp.has("fees-included")
     let maxSlippageBps = fp.get("max-slippage-bps").flatMap { UInt32($0) }
 
@@ -117,7 +118,7 @@ func handleBridgingFromCashApp(_ sdk: BreezSdk, _ args: [String]) async throws {
             recipient: recipient,
             route: route,
             amount: amount,
-            refundAddress: nil,
+            refundAddress: refundAddress,
             feePolicy: feePolicy,
             maxSlippageBps: maxSlippageBps
         ))
