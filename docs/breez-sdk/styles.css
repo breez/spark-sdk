@@ -232,19 +232,24 @@ html.light .sidebar, html.rust .sidebar { border-right: 1px solid var(--table-bo
     margin: 22px 0 6px;
     padding: 0 11px;
 }
+/* mdBook lays out each item as a flex row of the link and its fold chevron.
+   The highlight is on the row, and the link spans the rest of the row so
+   a click anywhere beside the chevron opens the page. */
 .chapter li.chapter-item {
     margin: 1px 0;
     line-height: 1.4;
-}
-.chapter li a {
     border-radius: 7px;
-    padding: 6px 10px;
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.12s;
 }
-.chapter li a:hover { background: rgba(255, 255, 255, 0.06); }
-html.light .chapter li a:hover, html.rust .chapter li a:hover { background: var(--theme-hover); }
+.chapter li.chapter-item > a:first-child { flex: 1; }
+.chapter li a {
+    padding: 6px 10px;
+    transition: color 0.12s;
+}
+.chapter li.chapter-item:hover { background: rgba(255, 255, 255, 0.06); }
+html.light .chapter li.chapter-item:hover, html.rust .chapter li.chapter-item:hover { background: var(--theme-hover); }
+.chapter li.chapter-item:has(> a.active) { background: rgba(0, 133, 251, 0.12); }
 .chapter li a.active {
-    background: rgba(0, 133, 251, 0.12);
     color: var(--brz-blue-soft);
     font-weight: 600;
 }
