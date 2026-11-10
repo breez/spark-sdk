@@ -69,4 +69,4 @@ Looking for a quick way to try the SDK in your browser or as PWA? Check out the 
 
 ## Support
 
-Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at [contact@breez.technology](mailto:contact@breez.technology).
+Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at [contact@breez.technology](mailto:contact@breez.technology). Found a problem? See [Reporting an issue](reporting_an_issue.md).

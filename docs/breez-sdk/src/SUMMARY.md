@@ -78,6 +78,7 @@
   - [Managing webhooks](guide/webhooks.md)
   - [Recovering funds](guide/recover_funds.md)
 - [Moving to production](guide/moving_to_production.md)
+- [Reporting an issue](guide/reporting_an_issue.md)
 
 ---
 
