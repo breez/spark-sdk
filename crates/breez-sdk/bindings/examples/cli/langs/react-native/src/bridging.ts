@@ -101,7 +101,7 @@ function printBridgingHelp(): string {
     '',
     'Bridging subcommands:',
     '  bridging create <recipient> --amount <n> [--refund-address <addr>] [--fees-included] [--max-slippage-bps <bps>] [--route <n>]',
-    '  bridging from-cash-app <recipient> --amount <n> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]',
+    '  bridging from-cash-app <recipient> --amount <n> [--refund-address <addr>] [--fees-included] [--max-slippage-bps <bps>] [--route <n>]',
     '  bridging to-cash-app <recipient> --amount <n> --refund-address <addr> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]',
     '  bridging status <bridge_id> [--status-token <token>]',
     '',
@@ -215,7 +215,7 @@ async function handleCreate(client: BridgingClientInterface, args: string[]): Pr
 async function handleFromCashApp(client: BridgingClientInterface, args: string[]): Promise<string> {
   const pos = positionalArgs(args, ['--fees-included'])
   if (pos.length < 1) {
-    return 'Usage: bridging from-cash-app <recipient> --amount <n> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
+    return 'Usage: bridging from-cash-app <recipient> --amount <n> [--refund-address <addr>] [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
   }
 
   const recipient = pos[0]
@@ -224,6 +224,7 @@ async function handleFromCashApp(client: BridgingClientInterface, args: string[]
     return 'Error: --amount is required'
   }
   const amount = BigInt(amountStr)
+  const refundAddress = parseFlag(args, '--refund-address')
   const feesIncluded = hasFlag(args, '--fees-included')
   const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
   const routeIndex = parseNumericFlag(args, '--route')
@@ -238,7 +239,7 @@ async function handleFromCashApp(client: BridgingClientInterface, args: string[]
     recipient,
     route: routeResult.route,
     amount,
-    refundAddress: undefined,
+    refundAddress,
     feePolicy,
     maxSlippageBps,
   })

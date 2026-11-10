@@ -207,12 +207,13 @@ public static class BridgingCommands
     {
         var positional = GetPositionalArgs(args);
         var amountStr = GetFlag(args, "--amount");
+        var refundAddress = GetFlag(args, "--refund-address");
         var feesIncluded = HasFlag(args, "--fees-included");
         var maxSlippageStr = GetFlag(args, "--max-slippage-bps");
 
         if (positional.Length < 1 || amountStr == null)
         {
-            Console.WriteLine("Usage: bridging from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]");
+            Console.WriteLine("Usage: bridging from-cash-app <recipient> --amount <amount> [--refund-address <addr>] [--fees-included] [--max-slippage-bps <bps>]");
             return;
         }
 
@@ -234,7 +235,7 @@ public static class BridgingCommands
             recipient: recipient,
             route: route,
             amount: BigInteger.Parse(amountStr),
-            refundAddress: null,
+            refundAddress: refundAddress,
             feePolicy: feePolicy,
             maxSlippageBps: ParseOptionalUint(maxSlippageStr)
         ));

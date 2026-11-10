@@ -144,6 +144,10 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
           mandatory: true,
           help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
         )
+        ..addOption(
+          'refund-address',
+          help: 'Lightning address, \$cashtag or amountless BOLT11 invoice refunded if the payment fails',
+        )
         ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
         ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
   final results = _parseArgs(parser, args, 'bridging from-cash-app <recipient> --amount <amount> [options]');
@@ -155,6 +159,7 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
   }
   final recipient = results.rest.first;
   final amount = BigInt.parse(results.option('amount')!);
+  final refundAddress = results.option('refund-address');
   final feesIncluded = results.flag('fees-included');
   final maxSlippageBpsStr = results.option('max-slippage-bps');
   final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
@@ -172,7 +177,7 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
       recipient: recipient,
       route: route,
       amount: amount,
-      refundAddress: null,
+      refundAddress: refundAddress,
       feePolicy: feePolicy,
       maxSlippageBps: maxSlippageBps,
     ),

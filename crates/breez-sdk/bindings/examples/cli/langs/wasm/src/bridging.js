@@ -59,6 +59,7 @@ function registerBridgingCommands(program, getSdk, rl) {
     .description('Bridge from Cash App to USDC/USDT on an external chain. Returns a cash.app link for the payer to open.')
     .argument('<recipient>', 'Recipient address on the destination chain (EVM/Solana/Tron)')
     .requiredOption('--amount <number>', 'Amount in the destination stablecoin\'s base units (6 decimals for USDC/USDT)')
+    .option('--refund-address <address>', 'Lightning address, $cashtag or amountless BOLT11 invoice refunded if the payment fails before the swap')
     .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
     .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
     .action(async (recipient, options) => {
@@ -72,7 +73,7 @@ function registerBridgingCommands(program, getSdk, rl) {
         recipient,
         route,
         amount: BigInt(options.amount),
-        refundAddress: undefined,
+        refundAddress: options.refundAddress,
         feePolicy,
         maxSlippageBps: options.maxSlippageBps
       })
