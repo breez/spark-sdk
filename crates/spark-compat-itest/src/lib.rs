@@ -72,7 +72,10 @@ macro_rules! version_module {
                         address: format!("https://127.0.0.1:{}", operator.host_port).parse()?,
                         ca_cert: Some(operator.ca_cert.as_bytes().to_vec()),
                         id: operator.index,
-                        identifier: operator.identifier,
+                        // Rebuilt from the index (the fixture's identifier is index + 1):
+                        // each build links its own FROST version, so the fixture's
+                        // `Identifier` type is not this build's.
+                        identifier: u16::try_from(operator.index + 1)?.try_into()?,
                         identity_public_key: operator.public_key,
                         user_agent: None,
                     });
