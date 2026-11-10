@@ -1665,7 +1665,10 @@ mod tests {
         assert!(check_refund_outlives(Some(&address), bridge_expires_at).is_ok());
         assert!(check_refund_outlives(Some(&invoice(bridge_secs)), bridge_expires_at).is_ok());
         assert_invalid_input(
-            check_refund_outlives(Some(&invoice(bridge_secs - 1)), bridge_expires_at),
+            check_refund_outlives(
+                Some(&invoice(bridge_secs.checked_sub(1).unwrap())),
+                bridge_expires_at,
+            ),
             "expires before the bridge",
         );
     }
