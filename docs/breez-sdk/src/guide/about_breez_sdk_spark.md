@@ -41,7 +41,7 @@ The Breez SDK is **free** for developers.
 
 ## Support
 
-Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at <contact@breez.technology>.
+Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at <contact@breez.technology>. Found a problem? See [Reporting an issue](reporting_an_issue.md).
 
 ## API Key
 
