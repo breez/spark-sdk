@@ -129,10 +129,11 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
     let transport_proxy = proxy.as_ref().map(platform_utils::ProxyConfig::from);
     let http_client = create_http_client_with_proxy(Some(&user_agent), transport_proxy.as_ref())
         .map_err(|e| SdkError::InvalidInput(format!("Failed to build proxied HTTP client: {e}")))?;
+    let api_key = config.api_key;
     let breez_server = Arc::new(
         BreezServer::new(
             PRODUCTION_BREEZSERVER_URL,
-            None,
+            api_key.clone(),
             &user_agent,
             transport_proxy.as_ref(),
         )
@@ -142,7 +143,6 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
     // only when an API key is configured. Skip the provider entirely otherwise
     // — there is no token to fetch. SDKs sharing this context will share the
     // one in-memory JWT and one background refresh task.
-    let api_key = config.api_key;
     let jwt_header_provider = if matches!(config.network, Network::Mainnet)
         && let Some(ref key) = api_key
     {

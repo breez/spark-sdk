@@ -79,7 +79,7 @@ pub async fn new_bridging_client(config: BridgingConfig) -> Result<Arc<BridgingC
     let breez_server = Arc::new(
         BreezServer::new(
             PRODUCTION_BREEZSERVER_URL,
-            None,
+            Some(config.api_key.clone()),
             &user_agent,
             transport_proxy.as_ref(),
         )
