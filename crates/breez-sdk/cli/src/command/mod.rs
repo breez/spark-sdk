@@ -14,14 +14,14 @@ use breez_sdk_spark::{
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
     ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
     CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MaxOnchainFee, MoonpayDelivery,
-    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
-    PrepareSendPaymentRequest, PullReceiver, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod,
-    SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
+    FetchConversionLimitsRequest, FetchLightningSendStatusRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, MaxOnchainFee, MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest,
+    PrepareSendBatchRequest, PrepareSendPaymentRequest, PullReceiver, ReceivePaymentMethod,
+    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
+    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
     SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
     TransferAuthorization, UpdateUserSettingsRequest,
 };
@@ -157,6 +157,12 @@ pub enum Command {
     GetPayment {
         /// The ID of the payment to retrieve
         payment_id: String,
+    },
+
+    /// Fetch the status of this wallet's Lightning payment of a Bolt11 invoice from the operators
+    FetchLightningSendStatus {
+        /// The Bolt11 invoice to look up
+        invoice: String,
     },
     Sync,
     /// Lists payments
@@ -625,6 +631,13 @@ pub(crate) async fn execute_command(
         }
         Command::GetPayment { payment_id } => {
             let value = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::FetchLightningSendStatus { invoice } => {
+            let value = sdk
+                .fetch_lightning_send_status(FetchLightningSendStatusRequest { invoice })
+                .await?;
             print_value(&value)?;
             Ok(true)
         }

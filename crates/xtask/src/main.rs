@@ -1081,6 +1081,7 @@ fn itest_cmd() -> Result<()> {
         "idempotency_tests",
         "lightning_hodl",
         "lightning_send_server_mode",
+        "lightning_send_status",
         "message_signing",
         "optimization",
         "rtsync",

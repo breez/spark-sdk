@@ -1873,6 +1873,17 @@ pub struct GetPaymentResponse {
     pub payment: Payment,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchLightningSendStatusRequest)]
+pub struct FetchLightningSendStatusRequest {
+    pub invoice: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchLightningSendStatusResponse)]
+pub struct FetchLightningSendStatusResponse {
+    pub status: Option<PaymentStatus>,
+    pub preimage: Option<String>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LogEntry)]
 pub struct LogEntry {
     pub line: String,

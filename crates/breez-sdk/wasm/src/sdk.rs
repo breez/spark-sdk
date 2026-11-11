@@ -517,6 +517,18 @@ impl BreezSdk {
         Ok(self.sdk.get_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "fetchLightningSendStatus")]
+    pub async fn fetch_lightning_send_status(
+        &self,
+        request: FetchLightningSendStatusRequest,
+    ) -> WasmResult<FetchLightningSendStatusResponse> {
+        Ok(self
+            .sdk
+            .fetch_lightning_send_status(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "claimDeposit")]
     pub async fn claim_deposit(
         &self,

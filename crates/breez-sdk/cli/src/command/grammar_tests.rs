@@ -68,6 +68,17 @@ fn get_payment() {
 }
 
 #[test]
+fn fetch_lightning_send_status() {
+    let Command::FetchLightningSendStatus { invoice } =
+        parse_ok("fetch-lightning-send-status lnbcrt1abc")
+    else {
+        panic!("expected FetchLightningSendStatus");
+    };
+    assert_eq!(invoice, "lnbcrt1abc");
+    parse_err("fetch-lightning-send-status");
+}
+
+#[test]
 fn sync() {
     assert!(matches!(parse_ok("sync"), Command::Sync));
 }

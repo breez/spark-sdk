@@ -867,6 +867,30 @@ impl SparkWallet {
             .await?)
     }
 
+    /// Queries the operators for the preimage requests this wallet sent for a payment hash.
+    pub async fn query_sent_preimage_requests(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Vec<PreimageRequest>, SparkWalletError> {
+        Ok(self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    payment_hashes: vec![payment_hash.to_string()],
+                    identity_public_key: self.identity_public_key,
+                    status: None,
+                    transfer_ids: Vec::new(),
+                    match_role: PreimageRequestRole::Sender,
+                },
+                None,
+            )
+            .await?
+            .items
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     pub fn extract_spark_address(
         &self,
         invoice: &str,
