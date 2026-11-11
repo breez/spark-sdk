@@ -186,7 +186,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
-# nested-signing branch
+# main branch
 frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
 frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
 futures = { version = "0.3", default-features = false }
