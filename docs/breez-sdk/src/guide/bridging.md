@@ -22,6 +22,8 @@ An app that already runs the SDK, including in [server mode](./server_mode.md), 
 
 {{#tabs bridging:create-bridge}}
 
+When a Cash App user pays, use [{{#name bridge_from_cash_app}}](#from-cash-app) instead.
+
 ### Recipients
 
 | Recipient | Payer pays from | Recipient receives |
@@ -56,7 +58,7 @@ It's required to pay a Lightning address, and recommended otherwise: without one
 | ----- | ------- |
 | {{#name bridge_id}} | Identifies the bridge. Store it to look its status up. |
 | {{#name status_token}} | Pass it to {{#name get_bridge_status}} with the {{#name bridge_id}}. |
-| {{#name payment_request}} | What the payer pays: an EIP-681 URI on EVM chains, a BOLT11 invoice over Lightning, otherwise the bare deposit address. |
+| {{#name payment_request}} | What the payer pays: an EIP-681 URI on EVM chains, a BOLT11 invoice over Lightning ([a Cash App link](#from-cash-app) from {{#name bridge_from_cash_app}}), otherwise the bare deposit address. |
 | {{#name info.deposit_address}} | The deposit address on the source chain, or the BOLT11 invoice over Lightning. |
 | {{#name info.deposit_amount}} | The amount the payer pays, in the source asset's base units (sats over Lightning). |
 | {{#name info.expected_received_amount}} | The amount the recipient is expected to receive, in {{#name info.destination_asset}} base units (sats for Bitcoin). |
@@ -67,9 +69,29 @@ It's required to pay a Lightning address, and recommended otherwise: without one
 | {{#name info.service_fee_asset_decimals}} | Decimals of {{#name info.service_fee_asset}}, for formatting the fee. Absent when the fee is in sats or the provider did not report them. |
 | {{#name info.expires_at}} | Quote expiry, in seconds since the Unix epoch. Create the bridge again for a fresh quote if it lapses before the payer pays. |
 
+## Cash App
+
+Two functions create a bridge with a Cash App user on one side. They take the same {{#name CreateBridgeRequest}} as {{#name create_bridge}}, return a {{#name CreateBridgeResponse}}, and are [tracked](#tracking-a-bridge) the same way.
+
+### From Cash App
+
+When a Cash App user pays a USDC/USDT recipient, call {{#name bridge_from_cash_app}} with a route whose {{#name source}} is on `lightning`. {{#name create_bridge}} doesn't do this for you: on the same route it returns a plain BOLT11 invoice. {{#name bridge_from_cash_app}} differs in three ways:
+
+- Its {{#name payment_request}} is a `cash.app` link that opens Cash App on the invoice.
+- The provider's order exists from the start. The bridge can be paid until its {{#name expires_at}}, then becomes {{#enum BridgeStatus::Expired}}.
+- The provider allows up to 10% of price movement, whatever {{#name max_slippage_bps}} says. See [Slippage and refunds](./cash_app_to_usdc_usdt.md#slippage-and-refunds).
+
+See [Cash App to USDC/USDT](./cash_app_to_usdc_usdt.md) for a walkthrough.
+
+### To Cash App
+
+To pay a Cash App user from USDC/USDT on another chain, call {{#name bridge_to_cash_app}}. It creates the same bridge as {{#name create_bridge}} with the user's `$cashtag`, and fails with {{#enum SdkError::InvalidInput}} for a recipient who isn't a Cash App user. As for any Lightning address, a [refund address](#refund-address) is required.
+
+See [USDC/USDT to Cash App](./usdc_usdt_to_cash_app.md) for a walkthrough.
+
 ## Tracking a bridge
 
-Read a bridge's status with {{#name get_bridge_status}}, passing the {{#name bridge_id}} and {{#name status_token}} that {{#name create_bridge}} returned.
+Read a bridge's status with {{#name get_bridge_status}}, passing the {{#name bridge_id}} and {{#name status_token}} that the bridge was created with.
 
 {{#tabs bridging:get-bridge-status}}
 
