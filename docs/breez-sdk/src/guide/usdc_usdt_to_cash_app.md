@@ -4,9 +4,10 @@
 
 ## How it works
 
-1. [Select a source route](./cash_app.md#selecting-a-route) for the Cash App user.
-2. Call {{#name bridge_to_cash_app}} with the recipient, the route, the USD amount and the payer's refund address. The SDK checks the recipient and gets a quote from the cross-chain provider.
-3. Show the payer the returned {{#name payment_request}}, and store the {{#name bridge_id}} and {{#name status_token}} to [track the bridge](#tracking-the-bridge). Once their deposit lands, the provider pays the recipient.
+1. Get a [bridging client](./bridging.md#getting-a-bridging-client): build one from your API key with {{#name new_bridging_client}}, or call {{#name get_bridging_client}} on a connected SDK.
+2. [Select a source route](./cash_app.md#selecting-a-route) for the Cash App user.
+3. Call {{#name bridge_to_cash_app}} with the recipient, the route, the USD amount and the payer's refund address. The SDK checks the recipient and gets a quote from the cross-chain provider.
+4. Show the payer the returned {{#name payment_request}}, and store the {{#name bridge_id}} and {{#name status_token}} to [track the bridge](#tracking-the-bridge). Once their deposit lands, the provider pays the recipient.
 
 {{#tabs cash_app:bridge-to-cash-app}}
 

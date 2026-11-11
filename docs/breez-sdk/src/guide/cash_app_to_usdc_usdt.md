@@ -4,9 +4,10 @@
 
 ## How it works
 
-1. [Select a destination route](./cash_app.md#selecting-a-route) for the recipient's external-chain address.
-2. Call {{#name bridge_from_cash_app}} with the recipient, the route and the USD amount. The SDK creates an order with the cross-chain provider and returns a Cash App deep link plus the order details.
-3. Open the returned {{#name payment_request}}, and store the {{#name bridge_id}} and {{#name status_token}} to [track the bridge](#tracking-the-bridge). The user completes payment in Cash App, and the provider delivers the stablecoin to the recipient.
+1. Get a [bridging client](./bridging.md#getting-a-bridging-client): build one from your API key with {{#name new_bridging_client}}, or call {{#name get_bridging_client}} on a connected SDK.
+2. [Select a destination route](./cash_app.md#selecting-a-route) for the recipient's external-chain address.
+3. Call {{#name bridge_from_cash_app}} with the recipient, the route and the USD amount. The SDK creates an order with the cross-chain provider and returns a Cash App deep link plus the order details.
+4. Open the returned {{#name payment_request}}, and store the {{#name bridge_id}} and {{#name status_token}} to [track the bridge](#tracking-the-bridge). The user completes payment in Cash App, and the provider delivers the stablecoin to the recipient.
 
 The SDK builds a `cash.app/launch/lightning/<bolt11>` deep link from the provider's invoice and returns it as the response {{#name payment_request}}. The invoice itself is {{#name info.deposit_address}}.
 
