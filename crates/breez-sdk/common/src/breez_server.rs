@@ -79,6 +79,19 @@ impl BreezServer {
         InformationClient::new(self.grpc_client.lock().await.clone().into_inner())
     }
 
+    pub async fn get_information_client_with_api_key(
+        &self,
+    ) -> Result<
+        InformationClient<InterceptedService<Transport, ApiKeyInterceptor>>,
+        ServiceConnectivityError,
+    > {
+        let api_key_metadata = self.api_key_metadata()?;
+        Ok(InformationClient::with_interceptor(
+            self.grpc_client.lock().await.clone().into_inner(),
+            ApiKeyInterceptor { api_key_metadata },
+        ))
+    }
+
     pub async fn get_signer_client(&self) -> SignerClient<Transport> {
         SignerClient::new(self.grpc_client.lock().await.clone().into_inner())
     }
@@ -175,12 +188,13 @@ impl BreezServer {
     }
 
     /// Fetches the Flashnet Orchestra (cross-chain) config from Breez server.
+    /// The config can differ per partner, so the call carries the API key.
     /// Returns `None` when the server has no orchestra config (either field
     /// empty), in which case the caller skips the orchestra provider.
     pub async fn fetch_orchestra_config(
         &self,
     ) -> Result<Option<OrchestraServerConfig>, ServiceConnectivityError> {
-        let mut client = self.get_information_client().await;
+        let mut client = self.get_information_client_with_api_key().await?;
         let reply = with_connection_retry!(client.orchestra_config(OrchestraConfigRequest {}))
             .await
             .map_err(|e| {
@@ -218,5 +232,46 @@ impl Interceptor for ApiKeyInterceptor {
                 .insert("authorization", api_key_metadata.clone());
         }
         Ok(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tonic::Request;
+    use tonic::service::Interceptor;
+
+    use super::{ApiKeyInterceptor, BreezServer, PRODUCTION_BREEZSERVER_URL};
+
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn authorization_header(api_key: Option<&str>) -> Option<String> {
+        let server = BreezServer::new(
+            PRODUCTION_BREEZSERVER_URL,
+            api_key.map(str::to_string),
+            "test",
+            None,
+        )
+        .unwrap();
+        let mut interceptor = ApiKeyInterceptor {
+            api_key_metadata: server.api_key_metadata().unwrap(),
+        };
+        let req = interceptor.call(Request::new(())).unwrap();
+        req.metadata()
+            .get("authorization")
+            .map(|v| v.to_str().unwrap().to_string())
+    }
+
+    #[macros::async_test_all]
+    async fn api_key_is_sent_as_bearer_authorization() {
+        assert_eq!(
+            authorization_header(Some("dGVzdA==")).as_deref(),
+            Some("Bearer dGVzdA==")
+        );
+    }
+
+    #[macros::async_test_all]
+    async fn no_authorization_without_api_key() {
+        assert_eq!(authorization_header(None), None);
     }
 }
