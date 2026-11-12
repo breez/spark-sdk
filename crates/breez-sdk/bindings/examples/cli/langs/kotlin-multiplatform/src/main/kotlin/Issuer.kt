@@ -102,9 +102,10 @@ suspend fun handleCreateToken(issuer: TokenIssuer, reader: LineReader, args: Lis
     val decimals = fp.getUInt("decimals") ?: 6u
     val freezable = fp.hasFlag("freezable")
     val maxSupplyStr = fp.getString("max-supply")
+    val extraMetadataStr = fp.getString("e", "extra-metadata")
 
     if (name == null || ticker == null) {
-        println("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N]")
+        println("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N] [-e <metadata>]")
         return
     }
 
@@ -119,6 +120,8 @@ suspend fun handleCreateToken(issuer: TokenIssuer, reader: LineReader, args: Lis
         BigInteger.ZERO
     }
 
+    val extraMetadata = extraMetadataStr?.toByteArray(Charsets.UTF_8)
+
     val result = issuer.createIssuerToken(
         CreateIssuerTokenRequest(
             name = name,
@@ -126,6 +129,7 @@ suspend fun handleCreateToken(issuer: TokenIssuer, reader: LineReader, args: Lis
             decimals = decimals,
             isFreezable = freezable,
             maxSupply = maxSupply,
+            extraMetadata = extraMetadata,
         )
     )
     printValue(result)

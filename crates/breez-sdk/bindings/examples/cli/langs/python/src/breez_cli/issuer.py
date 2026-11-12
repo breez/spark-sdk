@@ -56,9 +56,12 @@ def _build_create_token_parser():
     p.add_argument("-f", "--is-freezable", action="store_true", default=False,
                    help="Whether the token is freezable")
     p.add_argument("max_supply", type=int, help="Maximum supply")
+    p.add_argument("-e", "--extra-metadata", default=None,
+                   help="Text to attach to the token, such as a JSON description (at most 1024 bytes)")
     return p
 
 async def _handle_create_token(token_issuer, args):
+    extra = args.extra_metadata.encode("utf-8") if args.extra_metadata else None
     result = await token_issuer.create_issuer_token(
         CreateIssuerTokenRequest(
             name=args.name,
@@ -66,6 +69,7 @@ async def _handle_create_token(token_issuer, args):
             decimals=args.decimals,
             is_freezable=args.is_freezable,
             max_supply=args.max_supply,
+            extra_metadata=extra,
         )
     )
     print_value(result)

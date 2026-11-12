@@ -92,13 +92,15 @@ private func handleCreateToken(_ issuer: TokenIssuer, _ args: [String]) async th
     let decimals = fp.get("decimals").flatMap { UInt32($0) } ?? 6
     let freezable = fp.has("freezable", "f")
     let maxSupply: BInt = fp.get("max-supply").flatMap { BInt($0) } ?? BInt(0)
+    let extraMetadata: Data? = fp.get("e", "extra-metadata").map { Data($0.utf8) }
 
     let result = try await issuer.createIssuerToken(request: CreateIssuerTokenRequest(
         name: name,
         ticker: ticker,
         decimals: decimals,
         isFreezable: freezable,
-        maxSupply: maxSupply
+        maxSupply: maxSupply,
+        extraMetadata: extraMetadata
     ))
     printValue(result)
 }
