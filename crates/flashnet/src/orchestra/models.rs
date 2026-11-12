@@ -426,7 +426,9 @@ pub enum OrderStatus {
     FallbackDelivered,
     /// The order expired without a deposit.
     Expired,
-    /// The deposit was unconfirmed or replaced. The order can resume.
+    /// The deposit was unconfirmed or replaced. The order can resume. A
+    /// Lightning order whose invoice expired unpaid also ends here, with
+    /// error `lightning_deposit_timeout`.
     Unfulfilled,
     /// Catch-all for any status variant Orchestra adds in the future.
     #[serde(other)]

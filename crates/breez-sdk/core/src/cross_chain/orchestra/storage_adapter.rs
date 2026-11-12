@@ -3,15 +3,16 @@
 //! Orchestra has no money-critical secrets to keep at rest, so `secrets` is
 //! always empty. The row's `data` JSON carries the lookup key and the
 //! quote-time values that don't appear on the live `Order` polled per tick.
-//! Live status / `sparkTxHash` / `amountOut` / refund tx are read off the
-//! `/status` response, never cached.
+//! Live status / `sparkTxHash` / `amountOut` are read off the `/status`
+//! response. Only a failed or refunded receive records its outcome, on the
+//! closed row, which syncs so every device can show the same failed payment.
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Storage,
+    ConversionStatus, PaymentTokenMetadata, Storage,
     error::SdkError,
     persist::{StorageError, StoredCrossChainSwap},
     utils::time::now_secs,
@@ -35,9 +36,9 @@ pub(crate) const PROVIDER_TAG_ORCHESTRA: &str = "orchestra";
 ///   from creation, before anyone pays. The order is polled only once `paid`
 ///   records its payment, and an unpaid one is closed locally after expiry.
 ///
-/// Live status / `sparkTxHash` / `amountOut` / refund tx are always read
-/// off the poll response, never cached here.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Live status / `sparkTxHash` / `amountOut` are read off the poll response.
+/// Only the outcome of a failed or refunded order is kept, in `failure`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OrchestraSwapData {
     pub quote_id: String,
@@ -107,10 +108,38 @@ pub(crate) struct OrchestraSwapData {
     /// Quote expiry, unix seconds. Not authoritative for the receive
     /// lifecycle: Orchestra may reprice late deposits.
     pub expires_at: u64,
+    /// How the order ended, when Orchestra failed or refunded it. Written as
+    /// the row closes.
+    #[serde(default)]
+    pub failure: Option<ReceiveFailure>,
 }
 
 fn default_destination_decimals() -> u32 {
     8
+}
+
+/// The outcome of a receive whose order Orchestra failed or refunded: what a
+/// device needs to record the failed payment without calling Orchestra or
+/// Spark.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReceiveFailure {
+    /// `Refunded` or `Failed`.
+    pub status: ConversionStatus,
+    /// The deposit Orchestra received, in source-asset base units.
+    #[serde(default)]
+    pub deposit_amount: Option<String>,
+    /// The deposit transaction on the source chain.
+    #[serde(default)]
+    pub deposit_tx_hash: Option<String>,
+    /// The transaction that returned the deposit to the sender.
+    #[serde(default)]
+    pub refund_tx_hash: Option<String>,
+    /// When Orchestra created the order, unix seconds.
+    pub created_at: u64,
+    /// Metadata of `token_identifier`, set on token destinations.
+    #[serde(default)]
+    pub token_metadata: Option<PaymentTokenMetadata>,
 }
 
 /// Thin wrapper over [`Storage`]'s `cross_chain_swaps` methods, keyed to
@@ -200,6 +229,18 @@ impl OrchestraStorageAdapter {
         Ok((row, data))
     }
 
+    /// Closes a row, writing `data` in the same update so the closed row
+    /// syncs with it.
+    pub(crate) async fn close_with(
+        &self,
+        mut row: StoredCrossChainSwap,
+        data: &OrchestraSwapData,
+    ) -> Result<(), SdkError> {
+        row.data = serde_json::to_string(data)
+            .map_err(|e| SdkError::Generic(format!("Failed to serialize Orchestra row: {e}")))?;
+        self.mark_terminal(row).await
+    }
+
     /// Flip a row terminal.
     pub(crate) async fn mark_terminal(
         &self,
@@ -246,6 +287,7 @@ mod tests {
             fee_asset: Some("USDC".to_string()),
             fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
+            failure: None,
         }
     }
 
@@ -275,6 +317,7 @@ mod tests {
             fee_asset: None,
             fee_asset_decimals: None,
             expires_at: 1_700_000_120,
+            failure: None,
         }
     }
 
@@ -327,6 +370,47 @@ mod tests {
         json.as_object_mut().unwrap().remove("quoteReadToken");
         let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
         assert_eq!(decoded.quote_read_token, None);
+    }
+
+    pub(super) fn sample_failure() -> ReceiveFailure {
+        ReceiveFailure {
+            status: ConversionStatus::Refunded,
+            deposit_amount: Some("98".to_string()),
+            deposit_tx_hash: Some("0xdeposit".to_string()),
+            refund_tx_hash: Some("0xrefund".to_string()),
+            created_at: 1_700_000_000,
+            token_metadata: Some(PaymentTokenMetadata {
+                identifier: "btkn1usdb".to_string(),
+                issuer_public_key: "02issuer".to_string(),
+                name: "USDB".to_string(),
+                ticker: "USDB".to_string(),
+                decimals: 6,
+                max_supply: u128::MAX,
+                is_freezable: false,
+            }),
+        }
+    }
+
+    /// A closed row's failure, token metadata included, survives the trip
+    /// through the row's JSON.
+    #[test]
+    fn data_roundtrip_preserves_the_failure() {
+        let data = OrchestraSwapData {
+            failure: Some(sample_failure()),
+            ..sample_data_usdb_destination()
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        let decoded: OrchestraSwapData = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    /// Rows written before failures were recorded decode without one.
+    #[test]
+    fn data_written_without_a_failure_decodes() {
+        let mut json: serde_json::Value = serde_json::to_value(sample_data()).unwrap();
+        json.as_object_mut().unwrap().remove("failure");
+        let decoded: OrchestraSwapData = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.failure, None);
     }
 
     /// Forward compatibility: future fields added by the server must not
@@ -474,5 +558,28 @@ mod storage_tests {
 
         let active = adapter.list_active().await.unwrap();
         assert!(active.is_empty());
+    }
+
+    /// `close_with` writes the data and closes the row in one update.
+    #[tokio::test]
+    async fn close_with_writes_the_data_and_closes_the_row() {
+        let adapter = make_adapter();
+        let mut data = sample_data();
+        adapter.upsert(&data).await.unwrap();
+        let (row, _) = adapter.list_active().await.unwrap().remove(0);
+
+        data.failure = Some(sample_failure());
+        adapter.close_with(row, &data).await.unwrap();
+
+        let after = adapter
+            .storage
+            .get_cross_chain_swap(PROVIDER_TAG_ORCHESTRA.to_string(), data.quote_id.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after.is_terminal);
+        let stored: OrchestraSwapData = serde_json::from_str(&after.data).unwrap();
+        assert_eq!(stored.failure, Some(sample_failure()));
+        assert!(adapter.list_active().await.unwrap().is_empty());
     }
 }

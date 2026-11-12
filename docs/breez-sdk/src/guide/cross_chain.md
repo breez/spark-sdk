@@ -118,13 +118,14 @@ The Spark-side transfer and the external cross-chain leg have distinct status fi
 | {{#name conversion_info.status}}                      | The provider-driven cross-chain leg                                         |
 | {{#name conversion_info.delivered_amount}}            | Final amount delivered to the recipient, set when terminal                  |
 | {{#name conversion_info.external_tx_hash}}            | Transaction on the non-Spark chain: the delivery, or the funding deposit    |
+| {{#name conversion_info.refund_tx_hash}}              | Transaction that refunded the payer, set once refunded                      |
 
 The cross-chain status walks one of:
 
 - **{{#enum ConversionStatus::Pending}}**: deposit/transfer submitted, provider working on the cross-chain leg.
 - **{{#enum ConversionStatus::Completed}}**: provider reports the order terminal-successful; {{#name delivered_amount}} is set, and {{#name external_tx_hash}} identifies the transaction on the non-Spark chain: the delivery on a send, the funding deposit on a receive. Boltz-provider conversions leave the hash unset.
 - **{{#enum ConversionStatus::RefundNeeded}}**: the cross-chain leg was rejected after deposit (typically because the realized rate exceeded {{#name max_slippage_bps}}); the deposit is awaiting refund. *(send only)*
-- **{{#enum ConversionStatus::Refunded}}**: the funds have been refunded back to the wallet.
+- **{{#enum ConversionStatus::Refunded}}**: the provider refunded the payer: the amount sent on a send, the sender's deposit on a receive. {{#name refund_tx_hash}} identifies the refund transaction when the provider reports one.
 - **{{#enum ConversionStatus::Failed}}**: terminal failure with no refund pending.
 
 A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment carries its {{#name conversion_info}} from its first event, with the same {{#name quote_id}} as the {{#name cross_chain_info}} returned for the receive. The delivered amount and the deposit transaction follow in that event once the provider confirms the order.
@@ -182,6 +183,10 @@ On Solana, the deposit address is a wallet address, not a token account. Each qu
 Most wallet apps, such as Phantom, create the token account when sending, so a payer using one needs no extra step. A transaction built in code must create the deposit address's associated token account for the route's mint (e.g. with `createAssociatedTokenAccountIdempotentInstruction` from `@solana/spl-token`), then transfer to that account. A transfer to the deposit address itself fails, and no funds move. Creating the account costs the payer a small rent deposit (at most about 0.002 SOL).
 
 EVM and Tron deposits need no extra step, since token balances live in the token contract.
+
+### Refunds and failures
+
+If the provider can't complete a receive, for example because the deposit is below the route's minimum, it refunds the deposit to the sender or fails the order. Nothing arrives over Spark, so the SDK records a receive {{#name Payment}} with status {{#enum PaymentStatus::Failed}} and emits {{#enum SdkEvent::PaymentFailed}}. Its amount is what the quote expected to deliver. A receive into a token is recorded as a token payment with an empty {{#name tx_hash}}, since no token transaction took place. The payment's {{#name conversion_info}} carries the receive's {{#name quote_id}}, the deposit in {{#name asset_amount_in}} and {{#name external_tx_hash}}, and the status {{#enum ConversionStatus::Refunded}} or {{#enum ConversionStatus::Failed}}. A refund also carries its {{#name refund_tx_hash}}.
 
 ## Limitations
 
