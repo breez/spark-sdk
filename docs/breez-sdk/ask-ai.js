@@ -829,6 +829,18 @@
             }
         });
 
+        // mdBook binds "?" (its keyboard-shortcuts dialog) and the arrow keys
+        // (chapter navigation) on document without checking the event target.
+        // Keep keys typed in the panel from reaching those handlers, otherwise
+        // "?" never makes it into the textarea and Left/Right change pages.
+        // Escape and Tab still bubble so onKeyDown above can close and trap.
+        root.addEventListener("keydown", function (event) {
+            if (event.key === "Escape" || event.key === "Tab") {
+                return;
+            }
+            event.stopPropagation();
+        });
+
         restoreState();
     }
 
