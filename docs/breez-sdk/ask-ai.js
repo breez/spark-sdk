@@ -9,13 +9,22 @@
 //   }
 //
 // The widget reads /ask-api/ask/stream (Server-Sent Events) and renders the
-// Markdown answer. Each question is answered independently; there is no
-// conversation context.
+// Markdown answer. The server is stateless: the browser keeps the transcript in
+// sessionStorage and sends the last few question/answer pairs back with every
+// request.
 (function () {
     "use strict";
 
     var ENDPOINT = "/ask-api/ask/stream";
-    var SESSION_KEY = "ask-ai-state-v1";
+    var SESSION_KEY = "ask-ai-state-v2";
+
+    // How many completed exchanges are sent to the API. The server also caps
+    // this (MAX_HISTORY_TURNS) and reports its value in the relevance event,
+    // which overrides this default.
+    var CONTEXT_EXCHANGES = 3;
+    // How many exchanges stay in the panel (and in sessionStorage). Older ones
+    // are dropped so the tab does not grow without bound.
+    var MAX_EXCHANGES = 10;
 
     // Soft-launch switch. Keep true while the team reviews the widget; set to
     // false when it should be visible to everyone.
@@ -58,8 +67,17 @@
             '    <div>',
             '      <div class="ask-ai-title" id="ask-ai-title">Ask AI <span class="ask-ai-badge" id="ask-ai-badge">Preview</span></div>',
             '      <div class="ask-ai-subtitle">Answers from the Breez SDK docs</div>',
+            '      <div class="ask-ai-context" id="ask-ai-context" hidden></div>',
             '    </div>',
-            '    <button class="ask-ai-icon" id="ask-ai-close" type="button" aria-label="Close Ask AI">&times;</button>',
+            '    <div class="ask-ai-head-actions">',
+            '      <button class="ask-ai-icon" id="ask-ai-new" type="button" aria-label="Start a new conversation" title="New conversation">',
+            '        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+            '          <path d="M3 12a9 9 0 1 0 3-6.7"></path>',
+            '          <path d="M3 4v5h5"></path>',
+            '        </svg>',
+            '      </button>',
+            '      <button class="ask-ai-icon" id="ask-ai-close" type="button" aria-label="Close Ask AI">&times;</button>',
+            '    </div>',
             '  </div>',
             '  <div class="ask-ai-body" id="ask-ai-body">',
             '    <div class="ask-ai-empty" id="ask-ai-empty">',
@@ -70,15 +88,7 @@
             '        <button type="button" data-ask-question="How do I use passkey login?">How do I use passkey login?</button>',
             '      </div>',
             '    </div>',
-            '    <div class="ask-ai-turn" id="ask-ai-turn" hidden>',
-            '      <div class="ask-ai-question" id="ask-ai-question"></div>',
-            '      <div class="ask-ai-status" id="ask-ai-status" hidden>',
-            '        <span class="ask-ai-spinner" aria-hidden="true"></span>',
-            '        <span id="ask-ai-status-text"></span>',
-            '      </div>',
-            '      <div class="ask-ai-answer" id="ask-ai-answer" hidden></div>',
-            '      <div class="ask-ai-sources" id="ask-ai-sources" hidden></div>',
-            '    </div>',
+            '    <div class="ask-ai-transcript" id="ask-ai-transcript"></div>',
             '  </div>',
             '  <form class="ask-ai-form" id="ask-ai-form">',
             '    <textarea id="ask-ai-input" rows="2" maxlength="2000" placeholder="Ask about the Breez SDK&hellip;" aria-label="Your question"></textarea>',
@@ -102,53 +112,83 @@
         var trigger = document.getElementById("ask-ai-trigger");
         var panel = document.getElementById("ask-ai-panel");
         var closeButton = document.getElementById("ask-ai-close");
+        var newButton = document.getElementById("ask-ai-new");
         var body = document.getElementById("ask-ai-body");
         var empty = document.getElementById("ask-ai-empty");
-        var turn = document.getElementById("ask-ai-turn");
-        var questionEl = document.getElementById("ask-ai-question");
-        var statusEl = document.getElementById("ask-ai-status");
-        var statusText = document.getElementById("ask-ai-status-text");
-        var answerEl = document.getElementById("ask-ai-answer");
-        var sourcesEl = document.getElementById("ask-ai-sources");
+        var transcript = document.getElementById("ask-ai-transcript");
+        var contextEl = document.getElementById("ask-ai-context");
         var form = document.getElementById("ask-ai-form");
         var input = document.getElementById("ask-ai-input");
         var sendButton = document.getElementById("ask-ai-send");
         var stopButton = document.getElementById("ask-ai-stop");
 
+        // exchanges holds the whole visible conversation, oldest first. Each
+        // item is {question, kind, answer, sources, message, stage}, where kind
+        // is "pending", "answer", "note" or "error".
+        var exchanges = [];
+        var contextExchanges = CONTEXT_EXCHANGES;
         var controller = null;
         var streaming = false;
         var currentAnswer = "";
         var renderTimer = null;
+        var live = null;
         var sawDone = false;
         var sawError = false;
-        var lastSources = [];
-        var lastKind = "";
-        var lastMessage = "";
 
-        function loadSession() {
+        function loadState() {
             try {
                 var raw = window.sessionStorage.getItem(SESSION_KEY);
                 if (!raw) {
                     return null;
                 }
                 var state = JSON.parse(raw);
-                return state && typeof state === "object" ? state : null;
+                if (!state || typeof state !== "object" || !Array.isArray(state.exchanges)) {
+                    return null;
+                }
+                var limit = state.contextExchanges;
+                return {
+                    open: !!state.open,
+                    contextExchanges: typeof limit === "number" && isFinite(limit) && limit >= 0
+                        ? Math.floor(limit)
+                        : null,
+                    exchanges: state.exchanges.map(normalizeExchange).filter(Boolean)
+                };
             } catch (err) {
                 return null;
             }
         }
 
-        function saveCurrent() {
-            var state = {
-                open: !panel.hidden,
-                question: questionEl.textContent || "",
-                answer: currentAnswer || "",
-                sources: lastSources || [],
-                kind: lastKind || "",
-                message: lastMessage || ""
+        function normalizeExchange(value) {
+            if (!value || typeof value !== "object" || typeof value.question !== "string") {
+                return null;
+            }
+            var kind = value.kind;
+            if (["pending", "answer", "note", "error"].indexOf(kind) === -1) {
+                kind = "answer";
+            }
+            return {
+                question: value.question,
+                kind: kind,
+                answer: typeof value.answer === "string" ? value.answer : "",
+                sources: Array.isArray(value.sources)
+                    ? value.sources.filter(function (url) {
+                        return typeof url === "string";
+                    })
+                    : [],
+                message: typeof value.message === "string" ? value.message : "",
+                stage: typeof value.stage === "string" ? value.stage : ""
             };
+        }
+
+        function saveState() {
             try {
-                window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(state));
+                window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+                    open: !panel.hidden,
+                    // Remember the window the server asked for, so the first
+                    // request after a navigation already uses it.
+                    contextExchanges: contextExchanges,
+                    exchanges: exchanges.slice(-MAX_EXCHANGES)
+                }));
             } catch (err) {
                 // sessionStorage may be unavailable; the widget still works.
             }
@@ -162,7 +202,7 @@
             trigger.setAttribute("aria-expanded", "true");
             document.addEventListener("keydown", onKeyDown);
             document.addEventListener("click", onDocumentClick, true);
-            saveCurrent();
+            saveState();
             if (focus !== false) {
                 window.setTimeout(function () {
                     input.focus();
@@ -181,7 +221,7 @@
             if (controller) {
                 controller.abort();
             }
-            saveCurrent();
+            saveState();
             trigger.focus();
         }
 
@@ -222,9 +262,139 @@
             }
         }
 
+        function contextSize() {
+            var completed = 0;
+            exchanges.forEach(function (entry) {
+                if (entry.kind !== "pending") {
+                    completed++;
+                }
+            });
+            return Math.min(completed, contextExchanges);
+        }
+
+        function updateContextLabel() {
+            var size = contextSize();
+            if (size === 0) {
+                contextEl.hidden = true;
+                contextEl.textContent = "";
+                return;
+            }
+            contextEl.textContent = "Context: last " + size +
+                (size === 1 ? " exchange" : " exchanges");
+            contextEl.hidden = false;
+        }
+
+        // renderTranscript rebuilds the whole conversation. It is only called
+        // outside of streaming; during streaming the live exchange is updated
+        // in place.
+        function renderTranscript() {
+            transcript.innerHTML = "";
+            live = null;
+            empty.hidden = exchanges.length > 0;
+
+            var completed = 0;
+            exchanges.forEach(function (entry) {
+                if (entry.kind !== "pending") {
+                    completed++;
+                }
+            });
+            // Everything before this index is no longer sent to the API.
+            var outOfContext = Math.max(0, completed - contextExchanges);
+
+            exchanges.forEach(function (entry, index) {
+                if (outOfContext > 0 && index === outOfContext) {
+                    var divider = document.createElement("div");
+                    divider.className = "ask-ai-boundary";
+                    divider.textContent = "Earlier messages are no longer included in the assistant's context";
+                    transcript.appendChild(divider);
+                }
+
+                var turn = document.createElement("div");
+                turn.className = "ask-ai-turn";
+                if (index < outOfContext) {
+                    turn.className += " ask-ai-turn-stale";
+                }
+
+                var question = document.createElement("div");
+                question.className = "ask-ai-question";
+                question.textContent = entry.question;
+                turn.appendChild(question);
+
+                var status = document.createElement("div");
+                status.className = "ask-ai-status";
+                var spinner = document.createElement("span");
+                spinner.className = "ask-ai-spinner";
+                spinner.setAttribute("aria-hidden", "true");
+                var statusText = document.createElement("span");
+                status.appendChild(spinner);
+                status.appendChild(statusText);
+                status.hidden = true;
+                turn.appendChild(status);
+
+                var answer = document.createElement("div");
+                answer.className = "ask-ai-answer";
+                answer.hidden = true;
+                turn.appendChild(answer);
+
+                var sources = document.createElement("div");
+                sources.className = "ask-ai-sources";
+                sources.hidden = true;
+                turn.appendChild(sources);
+
+                transcript.appendChild(turn);
+
+                var item = {
+                    entry: entry,
+                    status: status,
+                    statusText: statusText,
+                    answer: answer,
+                    sources: sources
+                };
+                applyEntry(item);
+
+                if (index === exchanges.length - 1) {
+                    live = item;
+                }
+            });
+
+            updateContextLabel();
+        }
+
+        function applyEntry(item) {
+            var entry = item.entry;
+            if (entry.kind === "pending") {
+                item.answer.hidden = true;
+                item.sources.hidden = true;
+                item.statusText.textContent = entry.stage === "answer"
+                    ? "Generating answer\u2026"
+                    : "Checking relevance\u2026";
+                item.status.hidden = false;
+                return;
+            }
+
+            item.status.hidden = true;
+            if (entry.kind === "answer" && entry.answer) {
+                item.answer.className = "ask-ai-answer";
+                item.answer.innerHTML = renderMarkdown(entry.answer);
+                item.answer.hidden = false;
+            } else if (entry.kind === "error") {
+                item.answer.className = "ask-ai-answer ask-ai-error";
+                item.answer.textContent = entry.message || "Something went wrong.";
+                item.answer.hidden = false;
+            } else {
+                item.answer.className = "ask-ai-answer ask-ai-note";
+                item.answer.textContent = entry.message || "No answer was returned.";
+                item.answer.hidden = false;
+            }
+            renderSources(item.sources, entry.sources);
+        }
+
         function setStatus(text) {
-            statusText.textContent = text;
-            statusEl.hidden = false;
+            if (!live) {
+                return;
+            }
+            live.statusText.textContent = text;
+            live.status.hidden = false;
         }
 
         function setBusy(busy) {
@@ -234,58 +404,18 @@
             stopButton.hidden = !busy;
         }
 
-        function resetTurn(question) {
-            empty.hidden = true;
-            turn.hidden = false;
-            questionEl.textContent = question;
-            answerEl.className = "ask-ai-answer";
-            answerEl.innerHTML = "";
-            answerEl.hidden = true;
-            sourcesEl.innerHTML = "";
-            sourcesEl.hidden = true;
-            currentAnswer = "";
-            lastSources = [];
-            lastKind = "pending";
-            lastMessage = "";
-            sawDone = false;
-            body.scrollTop = 0;
-            sawError = false;
-            setStatus("Checking relevance\u2026");
-            saveCurrent();
-        }
-
-        function showError(message) {
-            lastKind = "error";
-            lastMessage = message;
-            lastSources = [];
-            answerEl.className = "ask-ai-answer ask-ai-error";
-            answerEl.textContent = message;
-            answerEl.hidden = false;
-            statusEl.hidden = true;
-            scrollBottom();
-            saveCurrent();
-        }
-
-        function showNote(message) {
-            lastKind = "note";
-            lastMessage = message;
-            lastSources = [];
-            answerEl.className = "ask-ai-answer ask-ai-note";
-            answerEl.textContent = message;
-            answerEl.hidden = false;
-            statusEl.hidden = true;
-            scrollBottom();
-            saveCurrent();
-        }
-
         function renderNow() {
             if (renderTimer) {
                 window.clearTimeout(renderTimer);
                 renderTimer = null;
             }
-            answerEl.className = "ask-ai-answer";
-            answerEl.innerHTML = renderMarkdown(currentAnswer);
-            answerEl.hidden = false;
+            if (!live) {
+                return;
+            }
+            live.entry.answer = currentAnswer;
+            live.answer.className = "ask-ai-answer";
+            live.answer.innerHTML = renderMarkdown(currentAnswer);
+            live.answer.hidden = false;
             scrollBottom();
         }
 
@@ -299,20 +429,19 @@
             }, 80);
         }
 
-        function renderSources(urls) {
-            lastSources = Array.isArray(urls) ? urls.slice() : [];
-            sourcesEl.innerHTML = "";
-            if (!lastSources.length) {
-                sourcesEl.hidden = true;
+        function renderSources(el, urls) {
+            el.innerHTML = "";
+            if (!urls || !urls.length) {
+                el.hidden = true;
                 return;
             }
             var title = document.createElement("div");
             title.className = "ask-ai-sources-title";
             title.textContent = "Sources";
-            sourcesEl.appendChild(title);
+            el.appendChild(title);
 
             var list = document.createElement("ul");
-            lastSources.forEach(function (url) {
+            urls.forEach(function (url) {
                 var item = document.createElement("li");
                 var link = document.createElement("a");
                 link.href = url;
@@ -322,8 +451,8 @@
                 item.appendChild(link);
                 list.appendChild(item);
             });
-            sourcesEl.appendChild(list);
-            sourcesEl.hidden = false;
+            el.appendChild(list);
+            el.hidden = false;
         }
 
         function prettyUrl(url) {
@@ -345,40 +474,55 @@
             }
         }
 
-        function restoreSession() {
-            var state = loadSession();
+        // restoreState brings back the transcript and the open/closed state
+        // from this tab's previous page.
+        function restoreState() {
+            var state = loadState();
             if (!state) {
                 return;
             }
 
-            var question = typeof state.question === "string" ? state.question : "";
-            if (question) {
-                empty.hidden = true;
-                turn.hidden = false;
-                questionEl.textContent = question;
-                currentAnswer = typeof state.answer === "string" ? state.answer : "";
-                lastSources = Array.isArray(state.sources) ? state.sources.slice() : [];
-                lastKind = typeof state.kind === "string" ? state.kind : "";
-                lastMessage = typeof state.message === "string" ? state.message : "";
-
-                if (lastKind === "answer" && currentAnswer) {
-                    renderNow();
-                } else if (lastKind === "error") {
-                    showError(lastMessage || "Something went wrong.");
-                } else if (lastKind === "pending") {
-                    showNote("The previous question was interrupted.");
-                } else if (lastMessage) {
-                    showNote(lastMessage);
-                } else {
-                    showNote("No answer was returned.");
-                }
-                renderSources(lastSources);
-                statusEl.hidden = true;
+            exchanges = state.exchanges.slice(-MAX_EXCHANGES);
+            if (state.contextExchanges !== null) {
+                contextExchanges = state.contextExchanges;
             }
+            exchanges.forEach(function (entry) {
+                if (entry.kind === "pending") {
+                    entry.kind = "note";
+                    entry.message = "The previous question was interrupted.";
+                    entry.stage = "";
+                }
+            });
+            renderTranscript();
 
             if (state.open) {
                 openPanel(false);
             }
+        }
+
+        // buildHistory returns the completed exchanges to send as conversation
+        // context: the last contextExchanges question/answer pairs, oldest
+        // first. Exchanges that never produced an answer are skipped.
+        function buildHistory() {
+            if (contextExchanges <= 0) {
+                return [];
+            }
+
+            var completed = exchanges.filter(function (entry) {
+                return entry.kind === "answer" || entry.kind === "note";
+            });
+            completed = completed.slice(-contextExchanges);
+
+            var history = [];
+            completed.forEach(function (entry) {
+                var content = entry.kind === "answer" ? entry.answer : entry.message;
+                if (!content) {
+                    return;
+                }
+                history.push({ role: "user", content: entry.question });
+                history.push({ role: "assistant", content: content });
+            });
+            return history;
         }
 
         async function ask(question) {
@@ -387,18 +531,40 @@
                 return;
             }
 
+            var history = buildHistory();
+            exchanges.push({
+                question: question,
+                kind: "pending",
+                answer: "",
+                sources: [],
+                message: "",
+                stage: "relevance"
+            });
+            if (exchanges.length > MAX_EXCHANGES) {
+                exchanges = exchanges.slice(-MAX_EXCHANGES);
+            }
+            renderTranscript();
+            scrollBottom();
+
             controller = new AbortController();
             setBusy(true);
-            resetTurn(question);
+            currentAnswer = "";
+            sawDone = false;
+            sawError = false;
 
             try {
+                var payload = { question: question };
+                if (history.length) {
+                    payload.history = history;
+                }
+
                 var response = await fetch(ENDPOINT, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
                         "Accept": "text/event-stream"
                     },
-                    body: JSON.stringify({ question: question }),
+                    body: JSON.stringify(payload),
                     signal: controller.signal
                 });
 
@@ -417,32 +583,74 @@
                 if (!sawDone && !sawError) {
                     if (currentAnswer) {
                         renderNow();
-                        lastKind = "answer";
-                        lastMessage = "";
-                        saveCurrent();
+                        finishAnswer([]);
                         setStatus("Connection closed.");
                     } else {
-                        showError("The connection closed before the answer finished.");
+                        finishError("The connection closed before the answer finished.");
                     }
                 }
             } catch (err) {
                 if (err && err.name === "AbortError") {
                     if (currentAnswer) {
                         renderNow();
-                        lastKind = "answer";
-                        lastMessage = "";
-                        saveCurrent();
+                        finishAnswer([]);
                         setStatus("Stopped.");
                     } else {
-                        showNote("Stopped.");
+                        finishNote("Stopped.");
                     }
                 } else {
-                    showError((err && err.message) || "Something went wrong. Please try again.");
+                    finishError((err && err.message) || "Something went wrong. Please try again.");
                 }
             } finally {
                 controller = null;
                 setBusy(false);
             }
+        }
+
+        function finishAnswer(sources) {
+            if (!live) {
+                return;
+            }
+            live.entry.kind = "answer";
+            live.entry.answer = currentAnswer;
+            live.entry.sources = Array.isArray(sources) ? sources : [];
+            live.entry.message = "";
+            live.entry.stage = "";
+            // Rebuild so the context boundary and the stale styling follow the
+            // exchange that just completed.
+            renderTranscript();
+            scrollBottom();
+            saveState();
+        }
+
+        function finishNote(message) {
+            if (!live) {
+                return;
+            }
+            live.entry.kind = "note";
+            live.entry.answer = "";
+            live.entry.sources = [];
+            live.entry.message = message;
+            live.entry.stage = "";
+            currentAnswer = "";
+            renderTranscript();
+            scrollBottom();
+            saveState();
+        }
+
+        function finishError(message) {
+            if (!live) {
+                return;
+            }
+            live.entry.kind = "error";
+            live.entry.answer = "";
+            live.entry.sources = [];
+            live.entry.message = message;
+            live.entry.stage = "";
+            currentAnswer = "";
+            renderTranscript();
+            scrollBottom();
+            saveState();
         }
 
         async function consume(stream) {
@@ -494,6 +702,12 @@
             }
 
             if (eventName === "relevance") {
+                if (typeof payload.history_exchanges === "number" && payload.history_exchanges >= 0) {
+                    contextExchanges = payload.history_exchanges;
+                }
+                if (live) {
+                    live.entry.stage = payload.relevant ? "answer" : "relevance";
+                }
                 if (payload.relevant) {
                     setStatus("Generating answer\u2026");
                 } else {
@@ -512,31 +726,21 @@
 
             if (eventName === "done") {
                 sawDone = true;
-                if (payload.answer) {
-                    currentAnswer = payload.answer;
-                }
-                if (currentAnswer) {
-                    lastKind = "answer";
-                    lastMessage = "";
-                    renderNow();
+                var answer = payload.answer || currentAnswer;
+                if (answer) {
+                    currentAnswer = answer;
+                    finishAnswer(payload.sources);
                 } else if (payload.message) {
-                    lastKind = "note";
-                    lastMessage = payload.message;
-                    showNote(payload.message);
+                    finishNote(payload.message);
                 } else {
-                    lastKind = "note";
-                    lastMessage = "No answer was returned.";
-                    showNote("No answer was returned.");
+                    finishNote("No answer was returned.");
                 }
-                renderSources(payload.sources || []);
-                statusEl.hidden = true;
-                saveCurrent();
                 return;
             }
 
             if (eventName === "error") {
                 sawError = true;
-                showError(payload.error || "The answer request failed.");
+                finishError(payload.error || "The answer request failed.");
             }
         }
 
@@ -563,6 +767,18 @@
             return "Too many requests. Please try again shortly.";
         }
 
+        function startNewConversation() {
+            if (controller) {
+                controller.abort();
+            }
+            exchanges = [];
+            currentAnswer = "";
+            renderTranscript();
+            input.value = "";
+            saveState();
+            input.focus();
+        }
+
         trigger.addEventListener("click", function () {
             if (panel.hidden) {
                 openPanel();
@@ -571,6 +787,7 @@
             }
         });
         closeButton.addEventListener("click", closePanel);
+        newButton.addEventListener("click", startNewConversation);
         stopButton.addEventListener("click", function () {
             if (controller) {
                 controller.abort();
@@ -612,7 +829,7 @@
             }
         });
 
-        restoreSession();
+        restoreState();
     }
 
     function escapeHtml(value) {

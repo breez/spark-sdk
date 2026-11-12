@@ -465,3 +465,63 @@ html.rust .ask-ai-error {
         display: none !important;
     }
 }
+
+.ask-ai-head-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+}
+
+.ask-ai-head-actions .ask-ai-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ask-ai-context {
+    margin-top: 4px;
+    color: var(--fg);
+    font-size: 11px;
+    line-height: 1.35;
+    opacity: 0.5;
+}
+
+.ask-ai-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.ask-ai-turn {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Turns that have scrolled out of the context sent to the assistant. */
+.ask-ai-turn-stale {
+    opacity: 0.45;
+}
+
+.ask-ai-turn-stale:hover {
+    opacity: 0.8;
+}
+
+.ask-ai-boundary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg);
+    font-size: 10.5px;
+    line-height: 1.35;
+    text-align: center;
+    opacity: 0.55;
+}
+
+.ask-ai-boundary::before,
+.ask-ai-boundary::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--table-border-color, rgba(128, 128, 128, 0.35));
+}
