@@ -2,10 +2,11 @@
  * Command registry and all command handlers for the Breez SDK React Native CLI.
  *
  * Mirrors ALL commands from the Rust CLI:
- *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
- *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit,
- *   fetch-claim-deposit-quote, parse, refund-deposit, list-unclaimed-deposits,
- *   buy-bitcoin, check-lightning-address-available, get-lightning-address,
+ *   get-info, get-payment, fetch-lightning-send-status, sync, list-payments,
+ *   receive, pay, pay-batch, lnurl-pay, lnurl-withdraw, lnurl-auth,
+ *   claim-htlc-payment, claim-deposit, fetch-claim-deposit-quote, parse,
+ *   refund-deposit, list-unclaimed-deposits, buy-bitcoin,
+ *   check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
@@ -178,6 +179,7 @@ export function splitArgs(line: string): string[] {
 export const COMMAND_NAMES = [
   'get-info',
   'get-payment',
+  'fetch-lightning-send-status',
   'sync',
   'list-payments',
   'receive',
@@ -227,6 +229,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
   const commands: CommandDef[] = [
     { name: 'get-info', description: 'Get balance information', run: handleGetInfo },
     { name: 'get-payment', description: 'Get the payment with the given ID', run: handleGetPayment },
+    { name: 'fetch-lightning-send-status', description: 'Fetch the status of a Lightning payment of a Bolt11 invoice from the operators', run: handleFetchLightningSendStatus },
     { name: 'sync', description: 'Sync wallet state', run: handleSync },
     { name: 'list-payments', description: 'List payments', run: handleListPayments },
     { name: 'receive', description: 'Receive a payment', run: handleReceive },
@@ -371,6 +374,17 @@ async function handleGetPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
   }
 
   const result = await sdk.getPayment({ paymentId: args[0] })
+  return formatValue(result)
+}
+
+// --- fetch-lightning-send-status ---
+
+async function handleFetchLightningSendStatus(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  if (args.length < 1) {
+    return 'Usage: fetch-lightning-send-status <invoice>'
+  }
+
+  const result = await sdk.fetchLightningSendStatus({ invoice: args[0] })
   return formatValue(result)
 }
 

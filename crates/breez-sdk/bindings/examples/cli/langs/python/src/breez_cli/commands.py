@@ -21,6 +21,7 @@ from breez_sdk_spark import (
     FeePolicy,
     FetchClaimDepositQuoteRequest,
     FetchConversionLimitsRequest,
+    FetchLightningSendStatusRequest,
     GetInfoRequest,
     GetPaymentRequest,
     GetSparkStatusRequest,
@@ -77,6 +78,7 @@ def _service_fee_denomination(asset, decimals):
 COMMAND_NAMES = [
     "get-info",
     "get-payment",
+    "fetch-lightning-send-status",
     "sync",
     "list-payments",
     "receive",
@@ -152,6 +154,21 @@ def _build_get_payment_parser():
 
 async def _handle_get_payment(sdk, _token_issuer, _session, args):
     result = await sdk.get_payment(request=GetPaymentRequest(payment_id=args.payment_id))
+    print_value(result)
+
+
+# --- fetch-lightning-send-status ---
+
+def _build_fetch_lightning_send_status_parser():
+    p = _parser("fetch-lightning-send-status",
+                "Fetch the status of a Lightning payment of a Bolt11 invoice from the operators")
+    p.add_argument("invoice", help="The Bolt11 invoice to look up")
+    return p
+
+async def _handle_fetch_lightning_send_status(sdk, _token_issuer, _session, args):
+    result = await sdk.fetch_lightning_send_status(
+        request=FetchLightningSendStatusRequest(invoice=args.invoice)
+    )
     print_value(result)
 
 
@@ -1284,6 +1301,7 @@ def build_command_registry():
     return {
         "get-info": (_build_get_info_parser(), _handle_get_info),
         "get-payment": (_build_get_payment_parser(), _handle_get_payment),
+        "fetch-lightning-send-status": (_build_fetch_lightning_send_status_parser(), _handle_fetch_lightning_send_status),
         "sync": (_build_sync_parser(), _handle_sync),
         "list-payments": (_build_list_payments_parser(), _handle_list_payments),
         "receive": (_build_receive_parser(), _handle_receive),

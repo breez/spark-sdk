@@ -74,6 +74,7 @@ struct CommandEntry {
 let commandNames: [String] = [
     "get-info",
     "get-payment",
+    "fetch-lightning-send-status",
     "sync",
     "list-payments",
     "receive",
@@ -112,6 +113,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
     [
         "get-info":                          CommandEntry(name: "get-info", description: "Get balance information", run: handleGetInfo),
         "get-payment":                       CommandEntry(name: "get-payment", description: "Get the payment with the given ID", run: handleGetPayment),
+        "fetch-lightning-send-status":       CommandEntry(name: "fetch-lightning-send-status", description: "Fetch the status of a Lightning payment of a Bolt11 invoice", run: handleFetchLightningSendStatus),
         "sync":                              CommandEntry(name: "sync", description: "Sync wallet state", run: handleSync),
         "list-payments":                     CommandEntry(name: "list-payments", description: "List payments", run: handleListPayments),
         "receive":                           CommandEntry(name: "receive", description: "Receive a payment", run: handleReceive),
@@ -267,6 +269,19 @@ func handleGetPayment(_ sdk: BreezSdk, _ args: [String]) async throws {
         return
     }
     let result = try await sdk.getPayment(request: GetPaymentRequest(paymentId: args[0]))
+    printValue(result)
+}
+
+// --- fetch-lightning-send-status ---
+
+func handleFetchLightningSendStatus(_ sdk: BreezSdk, _ args: [String]) async throws {
+    guard !args.isEmpty else {
+        print("Usage: fetch-lightning-send-status <invoice>")
+        return
+    }
+    let result = try await sdk.fetchLightningSendStatus(request: FetchLightningSendStatusRequest(
+        invoice: args[0]
+    ))
     printValue(result)
 }
 
