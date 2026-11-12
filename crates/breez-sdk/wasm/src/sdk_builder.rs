@@ -221,11 +221,16 @@ pub async fn default_session_store(
     Ok(DefaultSessionStore { inner })
 }
 
+enum IdentitySource {
+    Seed(breez_sdk_spark::Seed),
+    Signer(Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>),
+}
+
 #[wasm_bindgen]
 pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
     network: breez_sdk_spark::Network,
-    seed: breez_sdk_spark::Seed,
+    identity_source: IdentitySource,
     /// Storage backend selected via `withDefaultStorage` / `withStorageBackend`.
     storage_config: Option<WasmStorageConfig>,
     storage: Option<Storage>,
@@ -245,7 +250,7 @@ impl SdkBuilder {
 
         Self {
             network: config.network,
-            seed: seed.clone(),
+            identity_source: IdentitySource::Seed(seed.clone()),
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
             storage_config: None,
             storage: None,
@@ -272,7 +277,7 @@ impl SdkBuilder {
 
         Self {
             network: config_core.network,
-            seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
+            identity_source: IdentitySource::Signer(Arc::clone(&spark_signer_adapter)),
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(
                 config_core,
                 signer_adapter,
@@ -307,7 +312,7 @@ impl SdkBuilder {
 
         Self {
             network: config_core.network,
-            seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
+            identity_source: IdentitySource::Signer(Arc::clone(&spark_signer_adapter)),
             builder: breez_sdk_spark::SdkBuilder::new_with_signing_only_signer(
                 config_core,
                 signer_adapter,
@@ -440,15 +445,7 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
-        // Derive the tenant identity from the seed. The JS-side stores use it
-        // to scope every read/write by `user_id`.
-        let identity_bytes = identity_public_key(
-            &self.seed.to_bytes()?,
-            self.network.into(),
-            self.account_number,
-        )
-        .map_err(WasmError::new)?
-        .serialize();
+        let identity_bytes = self.wallet_identity().await?.serialize();
 
         let custom_storage = match (
             self.storage_config,
@@ -489,6 +486,20 @@ impl SdkBuilder {
         self.builder = self.builder.with_storage_backend(custom_storage);
         let sdk = self.builder.build().await?;
         Ok(BreezSdk { sdk: Rc::new(sdk) })
+    }
+}
+
+impl SdkBuilder {
+    async fn wallet_identity(&self) -> WasmResult<PublicKey> {
+        match &self.identity_source {
+            IdentitySource::Seed(seed) => {
+                identity_public_key(&seed.to_bytes()?, self.network.into(), self.account_number)
+                    .map_err(WasmError::new)
+            }
+            IdentitySource::Signer(signer) => {
+                Ok(signer.get_identity_public_key().await?.to_public_key()?)
+            }
+        }
     }
 }
 
@@ -697,4 +708,50 @@ extern "C" {
         data_dir: &str,
         logger: Option<&Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
+}
+
+#[cfg(test)]
+mod tests {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    use super::SdkBuilder;
+    use crate::{
+        models::{Network, Seed},
+        sdk::{default_config, default_external_signers},
+    };
+
+    const MNEMONIC_A: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
+                              abandon abandon abandon about";
+    const MNEMONIC_B: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+
+    fn seed_builder(mnemonic: &str) -> SdkBuilder {
+        SdkBuilder::new(
+            default_config(Network::Regtest),
+            Seed::Mnemonic {
+                mnemonic: mnemonic.to_string(),
+                passphrase: None,
+            },
+        )
+    }
+
+    fn signer_builder(mnemonic: &str) -> SdkBuilder {
+        let signers =
+            default_external_signers(mnemonic.to_string(), None, Network::Regtest, None).unwrap();
+        SdkBuilder::new_with_signer(
+            default_config(Network::Regtest),
+            JsValue::from(signers.breez_signer()).unchecked_into(),
+            JsValue::from(signers.spark_signer()).unchecked_into(),
+        )
+    }
+
+    #[wasm_bindgen_test]
+    async fn signer_builder_uses_signer_identity() {
+        let a = signer_builder(MNEMONIC_A).wallet_identity().await.unwrap();
+        let b = signer_builder(MNEMONIC_B).wallet_identity().await.unwrap();
+
+        assert_ne!(a, b);
+        assert_eq!(a, seed_builder(MNEMONIC_A).wallet_identity().await.unwrap());
+        assert_eq!(b, seed_builder(MNEMONIC_B).wallet_identity().await.unwrap());
+    }
 }
