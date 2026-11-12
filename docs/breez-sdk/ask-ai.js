@@ -286,8 +286,12 @@
 
         // renderTranscript rebuilds the whole conversation. It is only called
         // outside of streaming; during streaming the live exchange is updated
-        // in place.
-        function renderTranscript() {
+        // in place. Rebuilding collapses the container for a moment, which
+        // resets scrollTop, so the scroll position is restored here.
+        function renderTranscript(forceBottom) {
+            var follow = forceBottom || isNearBottom();
+            var previousTop = body.scrollTop;
+
             transcript.innerHTML = "";
             live = null;
             empty.hidden = exchanges.length > 0;
@@ -358,6 +362,12 @@
             });
 
             updateContextLabel();
+
+            if (follow) {
+                body.scrollTop = body.scrollHeight;
+            } else {
+                body.scrollTop = previousTop;
+            }
         }
 
         function applyEntry(item) {
@@ -467,9 +477,12 @@
             }
         }
 
+        function isNearBottom() {
+            return body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+        }
+
         function scrollBottom() {
-            var distance = body.scrollHeight - body.scrollTop - body.clientHeight;
-            if (distance < 80) {
+            if (isNearBottom()) {
                 body.scrollTop = body.scrollHeight;
             }
         }
@@ -493,10 +506,13 @@
                     entry.stage = "";
                 }
             });
-            renderTranscript();
+            renderTranscript(true);
 
             if (state.open) {
                 openPanel(false);
+                // The panel was hidden while rendering, so scroll now that it
+                // has a layout and show the most recent exchange.
+                body.scrollTop = body.scrollHeight;
             }
         }
 
@@ -543,8 +559,7 @@
             if (exchanges.length > MAX_EXCHANGES) {
                 exchanges = exchanges.slice(-MAX_EXCHANGES);
             }
-            renderTranscript();
-            scrollBottom();
+            renderTranscript(true);
 
             controller = new AbortController();
             setBusy(true);
@@ -618,8 +633,7 @@
             live.entry.stage = "";
             // Rebuild so the context boundary and the stale styling follow the
             // exchange that just completed.
-            renderTranscript();
-            scrollBottom();
+            renderTranscript(false);
             saveState();
         }
 
@@ -633,8 +647,7 @@
             live.entry.message = message;
             live.entry.stage = "";
             currentAnswer = "";
-            renderTranscript();
-            scrollBottom();
+            renderTranscript(false);
             saveState();
         }
 
@@ -648,8 +661,7 @@
             live.entry.message = message;
             live.entry.stage = "";
             currentAnswer = "";
-            renderTranscript();
-            scrollBottom();
+            renderTranscript(false);
             saveState();
         }
 
@@ -773,7 +785,7 @@
             }
             exchanges = [];
             currentAnswer = "";
-            renderTranscript();
+            renderTranscript(true);
             input.value = "";
             saveState();
             input.focus();
