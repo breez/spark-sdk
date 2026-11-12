@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:args/args.dart';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
@@ -77,16 +79,19 @@ Future<void> _handleTokenMetadata(TokenIssuer tokenIssuer, List<String> args) as
 // --- create-token ---
 
 Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) async {
-  final parser = ArgParser()..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
+  final parser =
+      ArgParser()
+        ..addFlag('is-freezable', abbr: 'f', defaultsTo: false)
+        ..addOption('extra-metadata', abbr: 'e', help: 'Text to attach to the token (at most 1024 bytes)');
   if (args.contains('help') || args.contains('--help')) {
-    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]');
+    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f] [-e <metadata>]');
     print(parser.usage);
     return;
   }
   final results = parser.parse(args);
 
   if (results.rest.length < 4) {
-    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]');
+    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f] [-e <metadata>]');
     return;
   }
   final name = results.rest[0];
@@ -94,6 +99,7 @@ Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) asyn
   final decimals = int.parse(results.rest[2]);
   final maxSupply = BigInt.parse(results.rest[3]);
   final isFreezable = results.flag('is-freezable');
+  final extraMetadataStr = results.option('extra-metadata');
 
   final result = await tokenIssuer.createIssuerToken(
     request: CreateIssuerTokenRequest(
@@ -102,6 +108,7 @@ Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) asyn
       decimals: decimals,
       isFreezable: isFreezable,
       maxSupply: maxSupply,
+      extraMetadata: extraMetadataStr != null ? Uint8List.fromList(extraMetadataStr.codeUnits) : null,
     ),
   );
   printValue(result);

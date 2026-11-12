@@ -137,12 +137,14 @@ func handleCreateToken(issuer *breez_sdk_spark.TokenIssuer, _ *readline.Instance
 	decimals := fs.Uint("decimals", 6, "Token decimals")
 	freezable := fs.Bool("freezable", false, "Whether the token can be frozen")
 	maxSupplyStr := fs.String("max-supply", "", "Maximum supply (optional)")
+	extraMetadata := fs.String("e", "", "Text to attach to the token, such as a JSON description (at most 1024 bytes)")
+	fs.StringVar(extraMetadata, "extra-metadata", "", "Text to attach to the token, such as a JSON description (at most 1024 bytes)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *name == "" || *ticker == "" {
-		fmt.Println("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N]")
+		fmt.Println("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N] [-e|--extra-metadata TEXT]")
 		return nil
 	}
 
@@ -160,6 +162,11 @@ func handleCreateToken(issuer *breez_sdk_spark.TokenIssuer, _ *readline.Instance
 			return fmt.Errorf("invalid max-supply: %s", *maxSupplyStr)
 		}
 		req.MaxSupply = maxSupply
+	}
+
+	if *extraMetadata != "" {
+		b := []byte(*extraMetadata)
+		req.ExtraMetadata = &b
 	}
 
 	result, err := issuer.CreateIssuerToken(req)

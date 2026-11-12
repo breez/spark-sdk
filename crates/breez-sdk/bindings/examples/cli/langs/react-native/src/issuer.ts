@@ -83,7 +83,7 @@ function printIssuerHelp(): string {
     'Issuer subcommands:',
     '  issuer token-balance                   Get issuer token balance',
     '  issuer token-metadata                  Get issuer token metadata',
-    '  issuer create-token <name> <ticker> <decimals> <max_supply> [-f]',
+    '  issuer create-token <name> <ticker> <decimals> <max_supply> [-f] [-e <extra_metadata>]',
     '                                         Create a new issuer token',
     '  issuer mint-token <amount>             Mint supply of the issuer token',
     '  issuer burn-token <amount>             Burn supply of the issuer token',
@@ -120,13 +120,20 @@ async function handleCreateToken(tokenIssuer: TokenIssuerInterface, args: string
   let decimalsStr = parseFlag(args, '--decimals')
   let maxSupplyStr = parseFlag(args, '--max-supply')
   let isFreezable = hasFlag(args, '--freezable') || hasFlag(args, '-f')
+  let extraMetadata = parseFlag(args, '--extra-metadata') ?? parseFlag(args, '-e')
 
   // Fall back to positional arguments
   if (!name && !ticker) {
-    const positional = args.filter(a => !a.startsWith('-'))
+    const flagsWithValues = new Set(['-e', '--extra-metadata', '--name', '--ticker', '--decimals', '--max-supply'])
+    const positional: string[] = []
+    for (let i = 0; i < args.length; i++) {
+      if (flagsWithValues.has(args[i])) { i++; continue }
+      if (args[i].startsWith('-')) continue
+      positional.push(args[i])
+    }
     if (positional.length < 4) {
-      return 'Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]\n' +
-        '   or: issuer create-token --name <name> --ticker <ticker> --decimals <decimals> --max-supply <supply> [--freezable]'
+      return 'Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f] [-e <extra_metadata>]\n' +
+        '   or: issuer create-token --name <name> --ticker <ticker> --decimals <decimals> --max-supply <supply> [--freezable] [--extra-metadata <text>]'
     }
     name = positional[0]
     ticker = positional[1]
@@ -135,7 +142,7 @@ async function handleCreateToken(tokenIssuer: TokenIssuerInterface, args: string
   }
 
   if (!name || !ticker) {
-    return 'Usage: issuer create-token --name <name> --ticker <ticker> --decimals <decimals> --max-supply <supply> [--freezable]'
+    return 'Usage: issuer create-token --name <name> --ticker <ticker> --decimals <decimals> --max-supply <supply> [--freezable] [--extra-metadata <text>]'
   }
 
   const decimals = parseInt(decimalsStr ?? '6', 10)
@@ -151,6 +158,7 @@ async function handleCreateToken(tokenIssuer: TokenIssuerInterface, args: string
     decimals,
     isFreezable,
     maxSupply,
+    extraMetadata: extraMetadata != null ? Array.from(new TextEncoder().encode(extraMetadata)) : undefined,
   })
   return formatValue(result)
 }

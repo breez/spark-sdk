@@ -43,6 +43,7 @@ function registerIssuerCommands(program, getTokenIssuer) {
     .argument('<decimals>', 'Number of decimal places for the token')
     .argument('<max_supply>', 'Maximum supply of the token')
     .option('-f, --is-freezable', 'Whether the token is freezable', false)
+    .option('-e, --extra-metadata <text>', 'Text to attach to the token, such as a JSON description (at most 1024 bytes)')
     .action(async (name, ticker, decimals, maxSupply, options) => {
       const tokenIssuer = getTokenIssuer()
       const metadata = await tokenIssuer.createIssuerToken({
@@ -50,7 +51,10 @@ function registerIssuerCommands(program, getTokenIssuer) {
         ticker,
         decimals: parseInt(decimals, 10),
         isFreezable: options.isFreezable,
-        maxSupply: BigInt(maxSupply)
+        maxSupply: BigInt(maxSupply),
+        extraMetadata: options.extraMetadata
+          ? Array.from(new TextEncoder().encode(options.extraMetadata))
+          : undefined
       })
       printValue(metadata)
     })
