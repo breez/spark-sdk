@@ -2350,6 +2350,8 @@ pub enum ConversionInfo {
         delivered_amount: Option<u128>,
         #[serde(default)]
         external_tx_hash: Option<String>,
+        #[serde(default)]
+        refund_tx_hash: Option<String>,
         status: ConversionStatus,
         fee_amount: Option<u128>,
         service_fee_amount: Option<u128>,

@@ -59,10 +59,11 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Serializes the conversion writes onto an inbound cross-chain receive. The
-/// invoice match writes a Pending conversion when the payment is seen; the
-/// provider monitor writes the Completed one and closes the receive row in
-/// the same critical section. A match racing the monitor would otherwise
-/// put Pending back for good.
+/// invoice match writes a Pending conversion when the payment is seen. The
+/// provider monitor closes the receive row in the same critical section as
+/// its own write: the Completed conversion, or the failed payment of an order
+/// that failed or was refunded. A match racing the monitor would otherwise
+/// put Pending back for good, or reopen the closed row.
 static RECEIVE_CONVERSION_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Links an inbound payment to the cross-chain receive whose Spark invoice it
@@ -111,6 +112,21 @@ pub(crate) async fn attach_receive_metadata_for_payment(
         )
         .await?;
     Ok(true)
+}
+
+/// Records what a synced cross-chain swap row implies locally: a receive that
+/// closed failed or refunded becomes a failed payment, which `emit`
+/// announces.
+pub(crate) async fn apply_synced_swap(
+    storage: &Arc<dyn crate::Storage>,
+    event_emitter: &crate::EventEmitter,
+    swap: &crate::persist::StoredCrossChainSwap,
+    emit: bool,
+) -> Result<(), SdkError> {
+    if swap.provider == orchestra::storage_adapter::PROVIDER_TAG_ORCHESTRA {
+        orchestra::record_synced_failed_receive(storage, event_emitter, swap, emit).await?;
+    }
+    Ok(())
 }
 
 /// Attaches a cross-chain [`ConversionInfo`] to a freshly-converted
@@ -1698,6 +1714,7 @@ mod tests {
                 fee_asset: Some("USDC".to_string()),
                 fee_asset_decimals: Some(6),
                 expires_at: 1_700_000_120,
+                failure: None,
             };
             orchestra::storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
                 .upsert(&data)
@@ -1861,6 +1878,7 @@ mod tests {
                 estimated_out: 1146,
                 delivered_amount: Some(1146),
                 external_tx_hash: Some("0xdeposit".to_string()),
+                refund_tx_hash: None,
                 status: crate::ConversionStatus::Pending,
                 fee_amount: Some(10_000),
                 service_fee_amount: Some(10_000),

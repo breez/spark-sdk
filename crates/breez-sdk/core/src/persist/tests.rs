@@ -2853,6 +2853,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             estimated_out: 99_500_000,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: crate::ConversionStatus::Pending,
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),
@@ -2901,6 +2902,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             estimated_out: 50_000_000,
             delivered_amount: None,
             external_tx_hash: Some("3hNfQ8xLpQqZ1vJm5rWt7YkC2dGbApS9eFhNzUvXwR4t".to_string()),
+            refund_tx_hash: None,
             status: crate::ConversionStatus::Completed,
             fee_amount: Some(500_000),
             service_fee_amount: Some(250),
@@ -2939,6 +2941,75 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         .await
         .unwrap();
 
+    // Add a refunded Orchestra receive (should NOT match OrchestraPending).
+    // Nothing arrived over Spark, so the row carries only the conversion.
+    let orchestra_refunded_metadata = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo::Orchestra {
+            order_id: "ord_345".to_string(),
+            quote_id: "q_678".to_string(),
+            chain: "base".to_string(),
+            chain_id: Some("8453".to_string()),
+            asset: "USDC".to_string(),
+            recipient_address: "spark1recipient".to_string(),
+            asset_amount_in: Some(2_000_000),
+            estimated_out: 3_000,
+            delivered_amount: None,
+            external_tx_hash: Some("0xdeposit".to_string()),
+            refund_tx_hash: Some("0xrefund".to_string()),
+            status: crate::ConversionStatus::Refunded,
+            fee_amount: Some(20_000),
+            service_fee_amount: Some(20_000),
+            service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
+            read_token: None,
+            asset_decimals: 6,
+            asset_contract: Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()),
+        }),
+        ..Default::default()
+    };
+    let orchestra_refunded_payment = Payment {
+        id: "q_678".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Failed,
+        amount: 3_000,
+        fees: 0,
+        timestamp: 6000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage
+        .insert_payment_metadata("q_678".to_string(), orchestra_refunded_metadata)
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(orchestra_refunded_payment)
+        .await
+        .unwrap();
+    let refunded = storage
+        .get_payment_by_id("q_678".to_string())
+        .await
+        .unwrap();
+    assert_eq!(refunded.status, PaymentStatus::Failed);
+    let Some(PaymentDetails::Spark {
+        conversion_info:
+            Some(crate::ConversionInfo::Orchestra {
+                status,
+                refund_tx_hash,
+                ..
+            }),
+        ..
+    }) = refunded.details
+    else {
+        panic!("Expected Spark details with Orchestra conversion info");
+    };
+    assert_eq!(status, crate::ConversionStatus::Refunded);
+    assert_eq!(refund_tx_hash.as_deref(), Some("0xrefund"));
+
     // OrchestraPending should return only the pending orchestra payment
     let orchestra_pending_filter = storage
         .list_payments(StorageListPaymentsRequest {
@@ -2967,7 +3038,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
     assert_eq!(amm_only.len(), 1);
     assert_eq!(amm_only[0].id, "without_refund");
 
-    // No filter should return all spark payments (original 2 + 2 orchestra = 4)
+    // No filter should return all spark payments (original 2 + 3 orchestra = 5)
     let all_spark_with_orchestra = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
@@ -2978,7 +3049,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         })
         .await
         .unwrap();
-    assert_eq!(all_spark_with_orchestra.len(), 4);
+    assert_eq!(all_spark_with_orchestra.len(), 5);
 
     // -----------------------------------------------------------------
     // Boltz-specific filter tests
