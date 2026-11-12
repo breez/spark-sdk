@@ -2978,6 +2978,33 @@ pub struct GetPaymentResponse {
     pub payment: Payment,
 }
 
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchLightningSendStatusRequest {
+    /// The Bolt11 invoice to look up
+    pub invoice: String,
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchLightningSendStatusResponse {
+    /// The status of this wallet's Lightning payments of the invoice: completed if one completed,
+    /// pending if one is in flight, failed if every one was returned. Unset when there is none.
+    /// A payment made by a direct Spark transfer to the invoice's Spark address is not found, so
+    /// unset does not mean the invoice is unpaid.
+    pub status: Option<PaymentStatus>,
+    /// The hex-encoded preimage that proves the payment, set when the status is completed
+    pub preimage: Option<String>,
+}
+
+impl fmt::Debug for FetchLightningSendStatusResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FetchLightningSendStatusResponse")
+            .field("status", &self.status)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait Logger: Send + Sync {
     fn log(&self, l: LogEntry);
@@ -3961,6 +3988,23 @@ mod tests {
         };
 
         let written = format!("{method:?}");
+
+        assert!(
+            written.contains(r#"preimage: Some("<redacted>")"#),
+            "{written}"
+        );
+        assert!(!written.contains(&preimage), "{written}");
+    }
+
+    #[test_all]
+    fn debug_fmt_redacts_the_preimage_of_a_lightning_send_status() {
+        let preimage = "ab".repeat(32);
+        let response = FetchLightningSendStatusResponse {
+            status: Some(PaymentStatus::Completed),
+            preimage: Some(preimage.clone()),
+        };
+
+        let written = format!("{response:?}");
 
         assert!(
             written.contains(r#"preimage: Some("<redacted>")"#),

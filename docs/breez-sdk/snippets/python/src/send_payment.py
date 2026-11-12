@@ -3,9 +3,11 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     FeePolicy,
+    FetchLightningSendStatusRequest,
     GetInfoRequest,
     OnchainConfirmationSpeed,
     PaymentRequest,
+    PaymentStatus,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
     SendPaymentRequest,
@@ -235,6 +237,26 @@ async def send_payment_spark(
         logging.error(error)
         raise
     # ANCHOR_END: send-payment-spark
+
+
+async def fetch_lightning_send_status(sdk: BreezSdk):
+    # ANCHOR: fetch-lightning-send-status
+    invoice = "<bolt11 invoice>"
+    try:
+        request = FetchLightningSendStatusRequest(invoice=invoice)
+        response = await sdk.fetch_lightning_send_status(request=request)
+        if response.status == PaymentStatus.COMPLETED:
+            logging.debug("Paid")
+        elif response.status == PaymentStatus.PENDING:
+            logging.debug("Payment in flight")
+        elif response.status == PaymentStatus.FAILED:
+            logging.debug("Payment failed")
+        elif response.status is None:
+            logging.debug("No Lightning payment found")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: fetch-lightning-send-status
 
 
 async def prepare_send_payment_fees_included(sdk: BreezSdk):

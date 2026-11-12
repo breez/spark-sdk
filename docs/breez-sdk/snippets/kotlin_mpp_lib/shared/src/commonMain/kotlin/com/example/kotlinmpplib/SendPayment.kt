@@ -309,4 +309,31 @@ class SendPayment {
         }
         // ANCHOR_END: send-payment-spark
     }
+
+    suspend fun fetchLightningSendStatus(sdk: BreezSdk) {
+        // ANCHOR: fetch-lightning-send-status
+        try {
+            val invoice = "<bolt11 invoice>"
+            val response = sdk.fetchLightningSendStatus(
+                FetchLightningSendStatusRequest(invoice = invoice)
+            )
+            when (response.status) {
+                PaymentStatus.COMPLETED -> {
+                    // Log.v("Breez", "Paid")
+                }
+                PaymentStatus.PENDING -> {
+                    // Log.v("Breez", "Payment in flight")
+                }
+                PaymentStatus.FAILED -> {
+                    // Log.v("Breez", "Payment failed")
+                }
+                null -> {
+                    // Log.v("Breez", "No Lightning payment found")
+                }
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: fetch-lightning-send-status
+    }
 }

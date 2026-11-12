@@ -195,6 +195,31 @@ const exampleSendPaymentSpark = async (
   console.log(payment)
 }
 
+const exampleFetchLightningSendStatus = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-lightning-send-status
+  const invoice = '<bolt11 invoice>'
+  const response = await sdk.fetchLightningSendStatus({ invoice })
+  switch (response.status) {
+    case 'completed': {
+      console.log('Paid')
+      break
+    }
+    case 'pending': {
+      console.log('Payment in flight')
+      break
+    }
+    case 'failed': {
+      console.log('Payment failed')
+      break
+    }
+    case undefined: {
+      console.log('No Lightning payment found')
+      break
+    }
+  }
+  // ANCHOR_END: fetch-lightning-send-status
+}
+
 const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-fees-included
   // By default ({ type: 'feesExcluded' }), fees are added on top of the amount.

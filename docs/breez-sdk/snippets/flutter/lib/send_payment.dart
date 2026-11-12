@@ -192,6 +192,28 @@ Future<SendPaymentResponse> sendPaymentSpark(
   return response;
 }
 
+Future<void> fetchLightningSendStatus(BreezSdk sdk) async {
+  // ANCHOR: fetch-lightning-send-status
+  String invoice = "<bolt11 invoice>";
+  final request = FetchLightningSendStatusRequest(invoice: invoice);
+  final response = await sdk.fetchLightningSendStatus(request: request);
+  switch (response.status) {
+    case PaymentStatus.completed:
+      print("Paid");
+      break;
+    case PaymentStatus.pending:
+      print("Payment in flight");
+      break;
+    case PaymentStatus.failed:
+      print("Payment failed");
+      break;
+    case null:
+      print("No Lightning payment found");
+      break;
+  }
+  // ANCHOR_END: fetch-lightning-send-status
+}
+
 Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-fees-included

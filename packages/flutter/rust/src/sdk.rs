@@ -284,6 +284,13 @@ impl BreezSdk {
         self.inner.get_payment(request).await
     }
 
+    pub async fn fetch_lightning_send_status(
+        &self,
+        request: FetchLightningSendStatusRequest,
+    ) -> Result<FetchLightningSendStatusResponse, SdkError> {
+        self.inner.fetch_lightning_send_status(request).await
+    }
+
     pub async fn claim_deposit(
         &self,
         request: ClaimDepositRequest,

@@ -172,3 +172,21 @@ The {{#enum SdkEvent::Synced}} event is also emitted as the SDK syncs in the bac
 | -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The deposit transfer has been submitted to the provider. The cross-chain leg is awaiting settlement.     | Show payment as pending; the bridge leg may take several minutes depending on the provider and destination chain. |
 | **PaymentSucceeded** | The provider reports the cross-chain order terminal. The amount actually delivered to the recipient is carried on the conversion info. | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
+
+## Checking a Lightning payment
+
+The payment list syncs in the background, so after a wallet is restored it may not yet show payments sent before the restore or from another device. To check whether this wallet has already paid a BOLT11 invoice without waiting for the sync, call {{#name fetch_lightning_send_status}}. It asks the Spark operators instead of reading the payment list.
+
+The response's {{#name status}} is:
+
+- {{#enum PaymentStatus::Completed}} when a payment of the invoice completed. {{#name preimage}} then holds the preimage that proves it.
+- {{#enum PaymentStatus::Pending}} when a payment is still in flight.
+- {{#enum PaymentStatus::Failed}} when every payment of the invoice failed.
+- Unset when this wallet has not sent a Lightning payment for the invoice.
+
+{{#tabs send_payment:fetch-lightning-send-status}}
+
+<div class="warning">
+<h4>Developer note</h4>
+Only Lightning payments are found. An invoice paid by a direct Spark transfer to its Spark address (see <a href="send_payment.md#lightning-1">Prefer Spark</a>) is not, so an unset status does not mean the invoice is unpaid.
+</div>

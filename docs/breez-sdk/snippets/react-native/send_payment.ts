@@ -2,6 +2,7 @@ import {
   OnchainConfirmationSpeed,
   FeePolicy,
   PaymentRequest,
+  PaymentStatus,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
@@ -194,6 +195,31 @@ const exampleSendPaymentSpark = async (
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-spark
   console.log(payment)
+}
+
+const exampleFetchLightningSendStatus = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-lightning-send-status
+  const invoice = '<bolt11 invoice>'
+  const response = await sdk.fetchLightningSendStatus({ invoice })
+  switch (response.status) {
+    case PaymentStatus.Completed: {
+      console.log('Paid')
+      break
+    }
+    case PaymentStatus.Pending: {
+      console.log('Payment in flight')
+      break
+    }
+    case PaymentStatus.Failed: {
+      console.log('Payment failed')
+      break
+    }
+    case undefined: {
+      console.log('No Lightning payment found')
+      break
+    }
+  }
+  // ANCHOR_END: fetch-lightning-send-status
 }
 
 const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {

@@ -225,6 +225,22 @@ async fn send_payment_spark(
     Ok(())
 }
 
+async fn fetch_lightning_send_status(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-lightning-send-status
+    let invoice = "<bolt11 invoice>".to_string();
+    let response = sdk
+        .fetch_lightning_send_status(FetchLightningSendStatusRequest { invoice })
+        .await?;
+    match response.status {
+        Some(PaymentStatus::Completed) => info!("Paid"),
+        Some(PaymentStatus::Pending) => info!("Payment in flight"),
+        Some(PaymentStatus::Failed) => info!("Payment failed"),
+        None => info!("No Lightning payment found"),
+    }
+    // ANCHOR_END: fetch-lightning-send-status
+    Ok(())
+}
+
 async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-fees-included
     // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.

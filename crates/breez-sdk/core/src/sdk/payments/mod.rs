@@ -3,7 +3,8 @@ use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse,
+    FetchConversionLimitsResponse, FetchLightningSendStatusRequest,
+    FetchLightningSendStatusResponse, GetPaymentRequest, GetPaymentResponse,
     RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
@@ -22,6 +23,7 @@ use super::BreezSdk;
 
 pub(in crate::sdk) mod client_signing;
 pub(in crate::sdk) mod conversion;
+mod lightning_send_status;
 mod polling;
 pub(in crate::sdk) mod prepare;
 pub(in crate::sdk) mod receive;
@@ -296,6 +298,16 @@ impl BreezSdk {
             get_payment_with_conversion_details(request.payment_id, self.storage.clone()).await?;
 
         Ok(GetPaymentResponse { payment })
+    }
+
+    /// Fetches the status of this wallet's Lightning payment of a Bolt11 invoice from the Spark
+    /// operators, without reading the local payment history. A payment made by a direct Spark
+    /// transfer to the invoice's Spark address is not covered.
+    pub async fn fetch_lightning_send_status(
+        &self,
+        request: FetchLightningSendStatusRequest,
+    ) -> Result<FetchLightningSendStatusResponse, SdkError> {
+        lightning_send_status::fetch_lightning_send_status(self, request).await
     }
 }
 

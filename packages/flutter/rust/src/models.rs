@@ -597,6 +597,17 @@ pub struct _GetPaymentResponse {
     pub payment: Payment,
 }
 
+#[frb(mirror(FetchLightningSendStatusRequest))]
+pub struct _FetchLightningSendStatusRequest {
+    pub invoice: String,
+}
+
+#[frb(mirror(FetchLightningSendStatusResponse))]
+pub struct _FetchLightningSendStatusResponse {
+    pub status: Option<PaymentStatus>,
+    pub preimage: Option<String>,
+}
+
 #[frb(mirror(InputType))]
 pub enum _InputType {
     BitcoinAddress(BitcoinAddressDetails),
