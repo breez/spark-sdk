@@ -190,7 +190,7 @@ public static class IssuerCommands
             isFreezable: freezable,
             maxSupply: maxSupply,
             extraMetadata: extraMetadata != null
-                ? System.Text.Encoding.UTF8.GetBytes(extraMetadata).ToList()
+                ? System.Text.Encoding.UTF8.GetBytes(extraMetadata)
                 : null
         ));
         Serialization.PrintValue(result);
