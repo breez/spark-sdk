@@ -182,7 +182,7 @@ Future<void> _handleFetchLightningSendStatus(BreezSdk sdk, TokenIssuer tokenIssu
     print('Usage: fetch-lightning-send-status <invoice>');
     return;
   }
-  final invoice = args.first!;
+  final invoice = args.first;
   final result = await sdk.fetchLightningSendStatus(
     request: FetchLightningSendStatusRequest(invoice: invoice),
   );
