@@ -2495,8 +2495,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn test_migration_tx_type() {
         use crate::{
-            Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, Storage,
-            TokenMetadata, TokenTransactionType,
+            Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentTokenMetadata,
+            PaymentType, Storage, TokenTransactionType,
             persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
         };
         use rusqlite::{Connection, params};
@@ -2609,7 +2609,7 @@ mod tests {
             timestamp: 1_234_567_891,
             method: PaymentMethod::Token,
             details: Some(PaymentDetails::Token {
-                metadata: TokenMetadata {
+                metadata: PaymentTokenMetadata {
                     identifier: "another-token-id".to_string(),
                     issuer_public_key: format!("02{}", "b".repeat(64)),
                     name: "Another Token".to_string(),

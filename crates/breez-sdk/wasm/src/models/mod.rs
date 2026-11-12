@@ -626,7 +626,7 @@ pub enum PaymentDetails {
         conversion_info: Option<ConversionInfo>,
     },
     Token {
-        metadata: TokenMetadata,
+        metadata: PaymentTokenMetadata,
         tx_hash: String,
         tx_type: TokenTransactionType,
         invoice_details: Option<SparkInvoicePaymentDetails>,
@@ -1252,6 +1252,18 @@ pub struct TokenBalance {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenMetadata)]
 pub struct TokenMetadata {
+    pub identifier: String,
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
+    pub extra_metadata: Option<Vec<u8>>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentTokenMetadata)]
+pub struct PaymentTokenMetadata {
     pub identifier: String,
     pub issuer_public_key: String,
     pub name: String,

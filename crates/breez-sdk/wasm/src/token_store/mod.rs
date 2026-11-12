@@ -86,6 +86,7 @@ struct WasmTokenMetadata {
     max_supply: String,
     is_freezable: bool,
     creation_entity_public_key: Option<String>,
+    extra_metadata: Option<Vec<u8>>,
 }
 
 impl From<&TokenMetadata> for WasmTokenMetadata {
@@ -99,6 +100,7 @@ impl From<&TokenMetadata> for WasmTokenMetadata {
             max_supply: m.max_supply.to_string(),
             is_freezable: m.is_freezable,
             creation_entity_public_key: m.creation_entity_public_key.map(|pk| pk.to_string()),
+            extra_metadata: m.extra_metadata.clone(),
         }
     }
 }
@@ -119,6 +121,7 @@ impl TryFrom<WasmTokenMetadata> for TokenMetadata {
                 .creation_entity_public_key
                 .map(|s| s.parse().map_err(map_parse_err))
                 .transpose()?,
+            extra_metadata: w.extra_metadata,
         })
     }
 }

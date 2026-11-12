@@ -10,6 +10,12 @@ Create a custom token with configurable parameters. Define the decimal precision
 
 {{#tabs issuing_tokens:create-token}}
 
+### Attaching extra metadata
+
+You can attach up to 1024 bytes of your own data to the token with {{#name extra_metadata}}, such as an icon URL or a JSON description. It is part of the token identifier, so it cannot be changed after the token is created.
+
+Wallets read it from the {{#name extra_metadata}} field of the token metadata returned by {{#name get_tokens_metadata}} and {{#name get_issuer_token_metadata}}, and of the token balances returned by {{#name get_info}}. Payment details leave it out, so look it up with {{#name get_tokens_metadata}} using the payment's token identifier.
+
 ### Creating multiple tokens
 
 Token creation is limited to one token per issuer wallet. If you need to create and then manage more than one token using the same mnemonic, we recommend using different account numbers when initializing the SDK.

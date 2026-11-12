@@ -4900,7 +4900,7 @@ mod tests {
     #[test_all]
     fn with_orchestra_info_injects_into_token_details_and_preserves_metadata() {
         let original_details = PaymentDetails::Token {
-            metadata: crate::TokenMetadata {
+            metadata: crate::PaymentTokenMetadata {
                 identifier: "btkn1usdb".to_string(),
                 issuer_public_key: "issuer".to_string(),
                 name: "Bitcoin USD".to_string(),
@@ -4964,7 +4964,7 @@ mod tests {
         let mut payment = dummy_payment(
             crate::PaymentMethod::Token,
             PaymentDetails::Token {
-                metadata: crate::TokenMetadata {
+                metadata: crate::PaymentTokenMetadata {
                     identifier: "token123".to_string(),
                     issuer_public_key: "02abcdef".to_string(),
                     name: "Test Token".to_string(),

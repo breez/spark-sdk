@@ -581,12 +581,12 @@ mod tests {
         ConversionInfo, ConversionStatus, SparkHtlcDetails, SparkHtlcStatus,
         models::{
             ConversionDetails, ConversionProvider, Payment, PaymentDetails, PaymentMethod,
-            PaymentStatus, PaymentType, TokenMetadata, TokenTransactionType,
+            PaymentStatus, PaymentTokenMetadata, PaymentType, TokenTransactionType,
         },
     };
 
-    fn test_token_metadata() -> TokenMetadata {
-        TokenMetadata {
+    fn test_token_metadata() -> PaymentTokenMetadata {
+        PaymentTokenMetadata {
             identifier: "token123".to_string(),
             issuer_public_key: "02abcdef".to_string(),
             name: "USD Balance".to_string(),

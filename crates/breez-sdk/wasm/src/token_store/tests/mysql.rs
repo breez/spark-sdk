@@ -74,6 +74,12 @@ async fn test_update_token_outputs_skips_spent_output() {
 }
 
 #[wasm_bindgen_test]
+async fn test_get_token_outputs() {
+    let store = create_test_token_store("mysql_token_get_outputs").await;
+    breez_sdk_spark::token_store_tests::test_get_token_outputs(&store).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_select_token_outputs() {
     let store = create_test_token_store("mysql_token_select_outputs").await;
     breez_sdk_spark::token_store_tests::test_select_token_outputs(&store).await;

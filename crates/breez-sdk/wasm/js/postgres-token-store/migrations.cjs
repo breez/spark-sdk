@@ -377,6 +377,12 @@ class TokenStoreMigrationManager {
           `ALTER TABLE brz_token_outputs DROP COLUMN id`,
         ],
       },
+      {
+        // Rows cached before this read as absent until the next refresh
+        // rewrites them.
+        name: "Add token extra metadata",
+        sql: [`ALTER TABLE brz_token_metadata ADD COLUMN extra_metadata BYTEA`],
+      },
     ];
   }
 }

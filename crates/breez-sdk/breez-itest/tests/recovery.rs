@@ -177,6 +177,7 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
             decimals: 2,
             is_freezable: false,
             max_supply: 100_000_000,
+            extra_metadata: None,
         })
         .await?;
 

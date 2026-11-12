@@ -416,7 +416,7 @@ pub enum PaymentDetails {
         conversion_info: Option<ConversionInfo>,
     },
     Token {
-        metadata: TokenMetadata,
+        metadata: PaymentTokenMetadata,
         tx_hash: String,
         tx_type: TokenTransactionType,
         /// The invoice details if the payment fulfilled a spark invoice
@@ -2040,6 +2040,39 @@ pub struct TokenMetadata {
     pub decimals: u32,
     pub max_supply: u128,
     pub is_freezable: bool,
+    /// Arbitrary data the issuer attached when creating the token, such as an icon or a JSON
+    /// description. Unset when the issuer attached none.
+    pub extra_metadata: Option<Vec<u8>>,
+}
+
+/// Metadata of the token a payment moved. The token's extra metadata is available from
+/// `get_tokens_metadata`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PaymentTokenMetadata {
+    pub identifier: String,
+    /// Hex representation of the issuer public key
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    /// Number of decimals the token uses
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
+}
+
+impl From<TokenMetadata> for PaymentTokenMetadata {
+    fn from(value: TokenMetadata) -> Self {
+        Self {
+            identifier: value.identifier,
+            issuer_public_key: value.issuer_public_key,
+            name: value.name,
+            ticker: value.ticker,
+            decimals: value.decimals,
+            max_supply: value.max_supply,
+            is_freezable: value.is_freezable,
+        }
+    }
 }
 
 /// Request to sync the wallet with the Spark network

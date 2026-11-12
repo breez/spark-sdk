@@ -1090,6 +1090,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenMetadata, Network)> for TokenMetad
             max_supply,
             is_freezable,
             creation_entity_public_key,
+            extra_metadata: metadata.extra_metadata,
         })
     }
 }

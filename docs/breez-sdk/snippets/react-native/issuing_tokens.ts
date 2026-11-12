@@ -25,7 +25,8 @@ const createToken = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => 
     ticker: 'MTK',
     decimals: 6,
     isFreezable: false,
-    maxSupply: BigInt(1_000_000)
+    maxSupply: BigInt(1_000_000),
+    extraMetadata: undefined
   })
   console.debug(`Token identifier: ${tokenMetadata.identifier}`)
   // ANCHOR_END: create-token

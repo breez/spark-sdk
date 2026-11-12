@@ -25,6 +25,9 @@ pub enum IssuerCommand {
         is_freezable: bool,
         /// Maximum supply of the token
         max_supply: u128,
+        /// Text to attach to the token, such as a JSON description (at most 1024 bytes)
+        #[arg(short = 'e', long)]
+        extra_metadata: Option<String>,
     },
     /// Mints supply of the issuer token
     MintToken {
@@ -69,6 +72,7 @@ pub async fn handle_command(
             decimals,
             is_freezable,
             max_supply,
+            extra_metadata,
         } => {
             let metadata = token_issuer
                 .create_issuer_token(CreateIssuerTokenRequest {
@@ -77,6 +81,7 @@ pub async fn handle_command(
                     decimals,
                     is_freezable,
                     max_supply,
+                    extra_metadata: extra_metadata.map(String::into_bytes),
                 })
                 .await?;
             print_value(&metadata)?;

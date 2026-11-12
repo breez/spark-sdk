@@ -435,7 +435,7 @@ class MysqlTokenStore {
     try {
       const [rows] = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                 CAST(COALESCE(SUM(
                   CASE
                     WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
@@ -450,7 +450,8 @@ class MysqlTokenStore {
            ON o.reservation_id = r.id AND o.user_id = r.user_id
          WHERE m.user_id = ?
          GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                  m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key`,
+                  m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                  m.extra_metadata`,
         [this.identity]
       );
       return rows.map((row) => ({
@@ -463,6 +464,9 @@ class MysqlTokenStore {
           maxSupply: row.max_supply,
           isFreezable: toBool(row.is_freezable) ?? false,
           creationEntityPublicKey: row.creation_entity_public_key || null,
+          extraMetadata: row.extra_metadata
+            ? Array.from(row.extra_metadata)
+            : null,
         },
         balance: row.balance,
       }));
@@ -478,7 +482,7 @@ class MysqlTokenStore {
     try {
       const [rows] = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                 o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
@@ -550,7 +554,7 @@ class MysqlTokenStore {
 
       const [rows] = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                 o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
@@ -1154,8 +1158,8 @@ class MysqlTokenStore {
     await conn.query(
       `INSERT INTO brz_token_metadata
         (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-         is_freezable, creation_entity_public_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         is_freezable, creation_entity_public_key, extra_metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          issuer_public_key = VALUES(issuer_public_key),
          name = VALUES(name),
@@ -1163,7 +1167,8 @@ class MysqlTokenStore {
          decimals = VALUES(decimals),
          max_supply = VALUES(max_supply),
          is_freezable = VALUES(is_freezable),
-         creation_entity_public_key = VALUES(creation_entity_public_key)`,
+         creation_entity_public_key = VALUES(creation_entity_public_key),
+         extra_metadata = VALUES(extra_metadata)`,
       [
         this.identity,
         metadata.identifier,
@@ -1174,6 +1179,7 @@ class MysqlTokenStore {
         metadata.maxSupply,
         metadata.isFreezable ? 1 : 0,
         metadata.creationEntityPublicKey || null,
+        metadata.extraMetadata ? Buffer.from(metadata.extraMetadata) : null,
       ]
     );
   }
@@ -1231,6 +1237,7 @@ class MysqlTokenStore {
       maxSupply: row.max_supply,
       isFreezable: toBool(row.is_freezable) ?? false,
       creationEntityPublicKey: row.creation_entity_public_key || null,
+      extraMetadata: row.extra_metadata ? Array.from(row.extra_metadata) : null,
     };
   }
 
