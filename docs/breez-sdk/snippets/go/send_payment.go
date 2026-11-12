@@ -279,6 +279,31 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	return &payment, nil
 }
 
+func FetchLightningSendStatus(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.FetchLightningSendStatusResponse, error) {
+	// ANCHOR: fetch-lightning-send-status
+	invoice := "<bolt11 invoice>"
+	request := breez_sdk_spark.FetchLightningSendStatusRequest{Invoice: invoice}
+	response, err := sdk.FetchLightningSendStatus(request)
+	if err != nil {
+		return nil, err
+	}
+
+	if response.Status == nil {
+		log.Printf("No Lightning payment found")
+	} else {
+		switch *response.Status {
+		case breez_sdk_spark.PaymentStatusCompleted:
+			log.Printf("Paid")
+		case breez_sdk_spark.PaymentStatusPending:
+			log.Printf("Payment in flight")
+		case breez_sdk_spark.PaymentStatusFailed:
+			log.Printf("Payment failed")
+		}
+	}
+	// ANCHOR_END: fetch-lightning-send-status
+	return &response, nil
+}
+
 func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-fees-included
 	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
