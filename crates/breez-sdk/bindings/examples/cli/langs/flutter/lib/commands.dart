@@ -13,6 +13,7 @@ import 'token_allowances.dart';
 const commandNames = [
   'get-info',
   'get-payment',
+  'fetch-lightning-send-status',
   'sync',
   'list-payments',
   'receive',
@@ -58,6 +59,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
   return {
     'get-info': CommandEntry('Get balance information', _handleGetInfo),
     'get-payment': CommandEntry('Get the payment with the given ID', _handleGetPayment),
+    'fetch-lightning-send-status': CommandEntry(
+      'Fetch the status of a Lightning payment of a Bolt11 invoice from the operators',
+      _handleFetchLightningSendStatus,
+    ),
     'sync': CommandEntry('Sync wallet state', _handleSync),
     'list-payments': CommandEntry('List payments', _handleListPayments),
     'receive': CommandEntry('Receive a payment', _handleReceive),
@@ -167,6 +172,20 @@ Future<void> _handleGetPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   parser.parse(args);
   final paymentId = args.last;
   final result = await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId));
+  printValue(result);
+}
+
+// --- fetch-lightning-send-status ---
+
+Future<void> _handleFetchLightningSendStatus(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: fetch-lightning-send-status <invoice>');
+    return;
+  }
+  final invoice = args.first!;
+  final result = await sdk.fetchLightningSendStatus(
+    request: FetchLightningSendStatusRequest(invoice: invoice),
+  );
   printValue(result);
 }
 

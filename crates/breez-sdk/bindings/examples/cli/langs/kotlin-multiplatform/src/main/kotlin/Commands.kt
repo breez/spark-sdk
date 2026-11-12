@@ -45,6 +45,7 @@ val COMMAND_NAMES = listOf(
     "get-tokens-metadata",
     "fetch-conversion-limits",
     "pull-payment",
+    "fetch-lightning-send-status",
     "get-user-settings",
     "set-user-settings",
     "get-spark-status",
@@ -84,6 +85,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "recommended-fees" to CliCommand("recommended-fees", "Get recommended BTC fees", ::handleRecommendedFees),
         "get-tokens-metadata" to CliCommand("get-tokens-metadata", "Get metadata for token(s)", ::handleGetTokensMetadata),
         "fetch-conversion-limits" to CliCommand("fetch-conversion-limits", "Fetch conversion limits for a token", ::handleFetchConversionLimits),
+        "fetch-lightning-send-status" to CliCommand("fetch-lightning-send-status", "Fetch the status of a Lightning payment of a Bolt11 invoice from the operators", ::handleFetchLightningSendStatus),
         "get-user-settings" to CliCommand("get-user-settings", "Get user settings", ::handleGetUserSettings),
         "set-user-settings" to CliCommand("set-user-settings", "Update user settings", ::handleSetUserSettings),
         "get-spark-status" to CliCommand("get-spark-status", "Get Spark network service status", ::handleGetSparkStatus),
@@ -1256,6 +1258,18 @@ suspend fun handleFetchConversionLimits(sdk: BreezSdk, reader: LineReader, args:
     }
 
     val result = sdk.fetchConversionLimits(req)
+    printValue(result)
+}
+
+// --- fetch-lightning-send-status ---
+
+suspend fun handleFetchLightningSendStatus(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    if (args.isEmpty()) {
+        println("Usage: fetch-lightning-send-status <invoice>")
+        return
+    }
+
+    val result = sdk.fetchLightningSendStatus(FetchLightningSendStatusRequest(invoice = args[0]))
     printValue(result)
 }
 

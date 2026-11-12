@@ -21,6 +21,7 @@ const { registerTokenAllowanceCommands } = require('./token-allowances')
 const COMMAND_NAMES = [
   'get-info',
   'get-payment',
+  'fetch-lightning-send-status',
   'sync',
   'list-payments',
   'receive',
@@ -142,6 +143,17 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .action(async (paymentId) => {
       const sdk = getSdk()
       const value = await sdk.getPayment({ paymentId })
+      printValue(value)
+    })
+
+  // --- fetch-lightning-send-status ---
+  program
+    .command('fetch-lightning-send-status')
+    .description('Fetch the status of this wallet\'s Lightning payment of a Bolt11 invoice from the operators')
+    .argument('<invoice>', 'The Bolt11 invoice to look up')
+    .action(async (invoice) => {
+      const sdk = getSdk()
+      const value = await sdk.fetchLightningSendStatus({ invoice })
       printValue(value)
     })
 

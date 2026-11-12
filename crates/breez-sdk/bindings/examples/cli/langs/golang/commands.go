@@ -27,6 +27,7 @@ type Command struct {
 var CommandNames = []string{
 	"get-info",
 	"get-payment",
+	"fetch-lightning-send-status",
 	"sync",
 	"list-payments",
 	"receive",
@@ -64,6 +65,7 @@ func BuildCommandRegistry() map[string]Command {
 	return map[string]Command{
 		"get-info":                             {Name: "get-info", Description: "Get balance information", Run: handleGetInfo},
 		"get-payment":                          {Name: "get-payment", Description: "Get the payment with the given ID", Run: handleGetPayment},
+		"fetch-lightning-send-status":           {Name: "fetch-lightning-send-status", Description: "Fetch the status of a Lightning payment of a Bolt11 invoice", Run: handleFetchLightningSendStatus},
 		"sync":                                 {Name: "sync", Description: "Sync wallet state", Run: handleSync},
 		"list-payments":                        {Name: "list-payments", Description: "List payments", Run: handleListPayments},
 		"receive":                              {Name: "receive", Description: "Receive a payment", Run: handleReceive},
@@ -158,6 +160,22 @@ func handleGetPayment(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	}
 
 	result, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{PaymentId: args[0]})
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
+	return nil
+}
+
+// --- fetch-lightning-send-status ---
+
+func handleFetchLightningSendStatus(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: fetch-lightning-send-status <invoice>")
+		return nil
+	}
+
+	result, err := sdk.FetchLightningSendStatus(breez_sdk_spark.FetchLightningSendStatusRequest{Invoice: args[0]})
 	if err = liftError(err); err != nil {
 		return err
 	}

@@ -23,6 +23,7 @@ public static class CommandNames
     {
         "get-info",
         "get-payment",
+        "fetch-lightning-send-status",
         "sync",
         "list-payments",
         "receive",
@@ -79,6 +80,12 @@ public static class Commands
                 Name = "get-payment",
                 Description = "Get the payment with the given ID",
                 Run = HandleGetPayment
+            },
+            ["fetch-lightning-send-status"] = new()
+            {
+                Name = "fetch-lightning-send-status",
+                Description = "Fetch the status of this wallet's Lightning payment of a Bolt11 invoice from the operators",
+                Run = HandleFetchLightningSendStatus
             },
             ["sync"] = new()
             {
@@ -402,6 +409,22 @@ public static class Commands
         }
 
         var result = await sdk.GetPayment(request: new GetPaymentRequest(paymentId: args[0]));
+        Serialization.PrintValue(result);
+    }
+
+    // --- fetch-lightning-send-status ---
+
+    private static async Task HandleFetchLightningSendStatus(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        if (args.Length < 1)
+        {
+            Console.WriteLine("Usage: fetch-lightning-send-status <invoice>");
+            return;
+        }
+
+        var result = await sdk.FetchLightningSendStatus(
+            request: new FetchLightningSendStatusRequest(invoice: args[0])
+        );
         Serialization.PrintValue(result);
     }
 
