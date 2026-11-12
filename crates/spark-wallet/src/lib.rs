@@ -35,8 +35,8 @@ pub use spark::{
     session_store::*,
     signer::{
         AggregateFrostRequest, ClaimLeafInput, CommitAndSignFrostRequest, CommittedFrostShare,
-        DefaultSigner, DefaultSignerError, EncryptedSecret, FrostDerivation, FrostJob,
-        FrostShareResult, LeafSigningKey, NewLeafKey, NonceStore, OperatorPackage,
+        DefaultSigner, DefaultSignerError, EncryptedSecret, FrostAdaptor, FrostDerivation,
+        FrostJob, FrostShareResult, LeafSigningKey, NewLeafKey, NonceStore, OperatorPackage,
         OperatorRecipient, PrepareClaimRequest, PrepareLightningReceiveRequest,
         PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest,
         PrepareTokenTransactionRequest, PrepareTransferRequest, PreparedClaim,

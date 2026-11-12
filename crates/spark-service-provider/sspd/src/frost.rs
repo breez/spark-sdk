@@ -95,7 +95,7 @@ pub async fn sign_share(
             private_key: signing_key,
             verifying_key,
             statechain_commitments,
-            adaptor_public_key: None,
+            adaptor: None,
         })
         .await?;
     Ok(SignedShare {
@@ -208,7 +208,7 @@ pub(crate) mod testing {
                 self_commitment: &user_commitment,
                 public_key: user_public_key,
                 self_signature: &user_share,
-                adaptor_public_key: None,
+                adaptor: None,
             })
             .expect("aggregate")
             .serialize()

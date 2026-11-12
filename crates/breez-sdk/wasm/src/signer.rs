@@ -726,6 +726,7 @@ pub struct ExternalFrostJob {
     pub verifying_key: Vec<u8>,
     pub operator_commitments: Vec<IdentifierCommitmentPair>,
     pub adaptor_public_key: Option<Vec<u8>>,
+    pub adaptor_v2: bool,
 }
 
 #[macros::extern_wasm_bindgen(
@@ -1051,6 +1052,17 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
             .unwrap_or(false)
     }
 
+    // A plain-JS signer can still lack `supportsAdaptorV2`, which the TS interface
+    // requires. It then signs version 1.
+    fn supports_adaptor_v2(&self) -> bool {
+        js_sys::Reflect::get(&self.inner, &JsValue::from_str("supportsAdaptorV2"))
+            .ok()
+            .and_then(|method| method.dyn_into::<js_sys::Function>().ok())
+            .and_then(|method| method.call0(&self.inner).ok())
+            .and_then(|supported| supported.as_bool())
+            .unwrap_or(false)
+    }
+
     async fn sign_authentication_challenge(
         &self,
         challenge: Vec<u8>,
@@ -1268,6 +1280,7 @@ const SPARK_SIGNER_INTERFACE: &'static str = r#"export interface ExternalSparkSi
     getPublicKeyForLeaf(leafId: ExternalTreeNodeId): Promise<PublicKeyBytes>;
     getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
     isRemote?(): boolean;
+    supportsAdaptorV2(): boolean;
     signAuthenticationChallenge(challenge: Uint8Array): Promise<EcdsaSignatureBytes>;
     signMessage(message: Uint8Array): Promise<EcdsaSignatureBytes>;
     signLeafRefundSpend(leafId: ExternalTreeNodeId, sighash: Uint8Array): Promise<SchnorrSignatureBytes>;
@@ -1455,6 +1468,11 @@ impl ExternalSparkSignerHandle {
     #[wasm_bindgen(js_name = "isRemote")]
     pub fn is_remote(&self) -> bool {
         self.inner.is_remote()
+    }
+
+    #[wasm_bindgen(js_name = "supportsAdaptorV2")]
+    pub fn supports_adaptor_v2(&self) -> bool {
+        self.inner.supports_adaptor_v2()
     }
 
     #[wasm_bindgen(js_name = "signAuthenticationChallenge")]

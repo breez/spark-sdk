@@ -12,7 +12,7 @@ use spark::operator::OperatorPool;
 use spark::services::{
     LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService, TransferStatus, TransferType,
 };
-use spark::signer::Signer;
+use spark::signer::{FrostAdaptor, Signer};
 use spark::tree::TreeNode;
 use thiserror::Error;
 use tracing::{error, info};
@@ -328,7 +328,11 @@ impl SwapService {
             &leaf_key_tweaks,
             &caller,
             &primary_transfer_id,
-            &adaptor_public_key,
+            // The service signs with the default signer, which supports version 2.
+            FrostAdaptor {
+                public_key: adaptor_public_key,
+                v2: true,
+            },
             expiry_time,
         )
         .await?;

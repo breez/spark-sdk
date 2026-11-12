@@ -128,7 +128,7 @@ pub trait Signer: Send + Sync + 'static {
     /// * `verifying_key` - The group's verifying key (threshold public key)
     /// * `self_nonce_commitment` - The local user's previously generated commitment
     /// * `statechain_commitments` - Map of identifier to commitment values from statechain participants
-    /// * `adaptor_public_key` - Optional adaptor public key for adaptor signatures
+    /// * `adaptor` - Set for an adaptor signature
     ///
     /// # Returns
     /// A signature share that can be combined with other shares to form a complete signature

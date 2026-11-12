@@ -24,7 +24,9 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::signer::{FrostJob, FrostShareResult, LeafSigningKey, SignerError, SparkSigner};
+use crate::signer::{
+    FrostAdaptor, FrostJob, FrostShareResult, LeafSigningKey, SignerError, SparkSigner,
+};
 use crate::ssp::BitcoinNetwork;
 use crate::token::bech32m_encode_token_id;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
@@ -341,7 +343,7 @@ pub(crate) fn build_refund_signing_job(
     refund_tx: Transaction,
     sighash: [u8; 32],
     operator_commitments: BTreeMap<Identifier, SigningCommitments>,
-    adaptor_public_key: Option<&PublicKey>,
+    adaptor: Option<FrostAdaptor>,
     network: Network,
 ) -> RefundJob {
     let job = FrostJob {
@@ -349,7 +351,7 @@ pub(crate) fn build_refund_signing_job(
         sighash,
         verifying_key: *verifying_key,
         operator_commitments: operator_commitments.clone(),
-        adaptor_public_key: adaptor_public_key.copied(),
+        adaptor,
     };
     let pending = PendingRefundSignature {
         node_id: node_id.clone(),

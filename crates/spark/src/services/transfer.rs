@@ -14,7 +14,7 @@ use crate::services::models::{
 };
 use crate::services::{TransferId, TransferObserver, TransferStatus};
 use crate::signer::EncryptedSecret;
-use crate::signer::LeafSigningKey;
+use crate::signer::{FrostAdaptor, LeafSigningKey};
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions, sign_refunds};
 use crate::utils::tagged_hasher::TaggedHasher;
@@ -433,7 +433,7 @@ impl TransferService {
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
         payment_hash: Option<&sha256::Hash>,
-        cpfp_adaptor_public_key: Option<&PublicKey>,
+        cpfp_adaptor: Option<FrostAdaptor>,
         prepared: PreparedTransfer,
     ) -> Result<PreparedTransferPackage, ServiceError> {
         if leaf_key_tweaks.is_empty() {
@@ -480,7 +480,7 @@ impl TransferService {
             receiver_pubkey: receiver_public_key,
             payment_hash,
             network: self.network,
-            cpfp_adaptor_public_key,
+            cpfp_adaptor,
         })
         .await?;
 
@@ -542,7 +542,7 @@ impl TransferService {
         receiver_public_key: &PublicKey,
         payment_hash: Option<&sha256::Hash>,
         expiry_time: Option<SystemTime>,
-        cpfp_adaptor_public_key: Option<&PublicKey>,
+        cpfp_adaptor: Option<FrostAdaptor>,
     ) -> Result<PreparedTransferRequest, ServiceError> {
         let request = self.build_prepare_transfer_request(transfer_id, leaves, receiver_public_key);
         let prepared = self.spark_signer.prepare_transfer(request).await?;
@@ -552,7 +552,7 @@ impl TransferService {
             receiver_public_key,
             payment_hash,
             expiry_time,
-            cpfp_adaptor_public_key,
+            cpfp_adaptor,
             prepared,
         )
         .await
@@ -566,7 +566,7 @@ impl TransferService {
         receiver_public_key: &PublicKey,
         payment_hash: Option<&sha256::Hash>,
         expiry_time: Option<SystemTime>,
-        cpfp_adaptor_public_key: Option<&PublicKey>,
+        cpfp_adaptor: Option<FrostAdaptor>,
         prepared: PreparedTransfer,
     ) -> Result<PreparedTransferRequest, ServiceError> {
         let prepared_package = self
@@ -574,7 +574,7 @@ impl TransferService {
                 leaves,
                 receiver_public_key,
                 payment_hash,
-                cpfp_adaptor_public_key,
+                cpfp_adaptor,
                 prepared,
             )
             .await?;

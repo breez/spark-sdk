@@ -799,7 +799,7 @@ impl DepositService {
                 operator_commitments: map_signing_nonce_commitments(
                     &cpfp_root_commitments.signing_nonce_commitments,
                 )?,
-                adaptor_public_key: None,
+                adaptor: None,
             },
             FrostJob {
                 derivation: derivation.clone(),
@@ -808,7 +808,7 @@ impl DepositService {
                 operator_commitments: map_signing_nonce_commitments(
                     &cpfp_refund_commitments.signing_nonce_commitments,
                 )?,
-                adaptor_public_key: None,
+                adaptor: None,
             },
             FrostJob {
                 derivation,
@@ -817,7 +817,7 @@ impl DepositService {
                 operator_commitments: map_signing_nonce_commitments(
                     &direct_from_cpfp_refund_commitments.signing_nonce_commitments,
                 )?,
-                adaptor_public_key: None,
+                adaptor: None,
             },
         ];
         let [

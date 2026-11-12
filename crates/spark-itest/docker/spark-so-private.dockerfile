@@ -5,7 +5,7 @@
 ARG USER=so
 # A commit on the mirror's breez branch. migrations-private.dockerfile must pin
 # the same commit.
-ARG VERSION=bb5711ef810849fde471923cc35fc618041020db
+ARG VERSION=729d4e711647d47e72f822754be1b0be10314e58
 
 FROM ghcr.io/breez/spark-operator:${VERSION} AS operator
 

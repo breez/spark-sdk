@@ -41,6 +41,8 @@ The default implementations of the two interfaces, [DefaultExternalSigner](https
 
 {{#name is_remote}} says whether your Spark signer is backed by a remote service, where each signature is a network call or is billed. Return true for such a signer: the SDK then skips signer calls it can do without and keeps the [watchtower fee ladder](./config.md#watchtower-fee-ladder) off, which would otherwise add many signatures.
 
+{{#name supports_adaptor_v2}} says whether your Spark signer can make version 2 adaptor signatures, used in swaps. Spark operators will eventually require version 2. Return true once {{#name sign_frost}} honors {{#name adaptor_v2}} on a job: when it is set, the FROST binding factors must also cover the adaptor public key, as defined in [Lightspark's FROST library](https://github.com/lightsparkdev/frost/pull/10). With that library, build the signing package with `SigningPackage::new_with_adaptor_v2` instead of `new_with_adaptor`. The SDK then sets it on every adaptor job for your signer. Return false only while your signing backend cannot make version 2 signatures: the SDK then never sets it, and your swaps keep using version 1.
+
 <div class="warning">
 <h4>Developer note</h4>
 
