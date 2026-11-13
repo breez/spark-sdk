@@ -121,16 +121,34 @@ The {{#name status}} field tracks the lifecycle of the conversion:
 
 ### Conversion steps
 
-The {{#name from}} and {{#name to}} fields are conversion step objects describing each side of the conversion:
+The {{#name conversions}} field lists the steps of the conversion in the order they ran. On a send, a conversion on Spark comes before a cross-chain step. On a receive, the cross-chain step comes first. A payment lists only the steps it took, and the list can be empty while a conversion is still pending, so use the overall {{#name status}} for its state.
+
+Each step has these fields:
 
 | Field | Description |
 |-------|-------------|
-| {{#name payment_id}} | The ID of the internal conversion payment |
-| {{#name amount}} | The amount in the step's denomination (sats or token units) |
-| {{#name fee}} | Fee charged for this step |
-| {{#name method}} | Payment method ({{#enum PaymentMethod::Spark}} for bitcoin, {{#enum PaymentMethod::Token}} for stablecoins) |
-| {{#name token_metadata}} | Token metadata (name, symbol, etc.) — present when method is {{#enum PaymentMethod::Token}} |
-| {{#name amount_adjustment}} | Present if the amount was modified before conversion (see [amount adjustments](#amount-adjustments)) |
+| {{#name provider}} | What performed the step: {{#enum ConversionProvider::Amm}} converts between bitcoin and a token on Spark, while {{#enum ConversionProvider::Orchestra}} and {{#enum ConversionProvider::Boltz}} convert across chains |
+| {{#name status}} | The status of this step, with the same values as the overall status |
+| {{#name from}} | The side the funds were converted from |
+| {{#name to}} | The side the funds were converted to |
+| {{#name amount_adjustment}} | Present if the amount was modified before conversion (see [amount adjustments](#amount-adjustments)). Only {{#enum ConversionProvider::Amm}} steps set it |
+
+The {{#name from}} and {{#name to}} sides each have:
+
+| Field | Description |
+|-------|-------------|
+| {{#name chain}} | Where the funds are: {{#enum ConversionChain::Spark}}, {{#enum ConversionChain::Lightning}}, or {{#enum ConversionChain::External}} for another chain, with its {{#name name}} (for example `base`) and, when the provider supplies one, its {{#name chain_id}} |
+| {{#name asset}} | The asset on this side, described below |
+| {{#name amount}} | The amount in base units: sats, or the token's smallest unit |
+| {{#name fee}} | The fee charged on this side, in the same units as {{#name amount}} |
+
+Each side's {{#name asset}} has:
+
+| Field | Description |
+|-------|-------------|
+| {{#name ticker}} | The ticker, such as `BTC`, `USDB` or `USDC`. A ticker can name different assets on different chains, so compare {{#name identifier}} to tell them apart |
+| {{#name identifier}} | The Spark token identifier, or the contract or mint address of an asset on another chain. Unset for bitcoin |
+| {{#name decimals}} | The decimal places to apply to {{#name amount}} for display: `0` for bitcoin, whose amount is already in sats, and for example `6` for USDC |
 
 ### Amount adjustments
 
