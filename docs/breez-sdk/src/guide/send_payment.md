@@ -113,6 +113,14 @@ In the optional send payment options for BOLT11 invoices, you can set:
 
 {{#tabs send_payment:send-payment-lightning-bolt11}}
 
+#### Proof of payment
+
+When a Lightning payment completes, the recipient has released the payment preimage, and the SDK stores it in the payment's {{#name htlc_details}}. The SHA-256 hash of the preimage equals the invoice's payment hash, which proves the recipient was paid. To read it later, fetch the payment with {{#name get_payment}}:
+
+{{#tabs send_payment:get-payment-preimage}}
+
+A payment settled through a Spark transfer has no preimage. See [Prefer Spark over Lightning](config.md#prefer-spark-over-lightning).
+
 ### Bitcoin
 
 In the optional send payment options for Bitcoin addresses, you can set:

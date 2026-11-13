@@ -236,6 +236,21 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-payment-lightning-bolt11
         }
 
+        async Task GetPaymentPreimage(BreezSdk sdk)
+        {
+            // ANCHOR: get-payment-preimage
+            var paymentId = "<payment id>";
+            var response = await sdk.GetPayment(
+                request: new GetPaymentRequest(paymentId: paymentId)
+            );
+            if (response.payment.details is PaymentDetails.Lightning lightningDetails)
+            {
+                Console.WriteLine($"Payment hash: {lightningDetails.htlcDetails.paymentHash}");
+                Console.WriteLine($"Preimage: {lightningDetails.htlcDetails.preimage}");
+            }
+            // ANCHOR_END: get-payment-preimage
+        }
+
         async Task SendPaymentOnchain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-onchain

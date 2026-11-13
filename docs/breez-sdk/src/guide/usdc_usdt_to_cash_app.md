@@ -23,7 +23,7 @@ The {{#name refund_address}} is the payer's own address on the source chain. If 
 
 ## Response fields
 
-{{#name bridge_to_cash_app}} returns a {{#name CreateBridgeResponse}}, described in [Bridging USDC/USDT](./bridging.md#response-fields). Its {{#name payment_request}} is what the payer pays: an EIP-681 URI on EVM chains, otherwise the bare deposit address.
+{{#name bridge_to_cash_app}} returns a {{#name CreateBridgeResponse}}, described in [Bridging USDC/USDT](./bridging.md#response-fields). Its {{#name payment_request}} is what the payer pays: an EIP-681 URI on EVM chains, otherwise the bare deposit address. A Solana transfer built in code must also create the deposit address's token account, which wallet apps do on their own (see [Paying from Solana](./cross_chain.md#paying-from-solana)).
 
 ## Tracking the bridge
 

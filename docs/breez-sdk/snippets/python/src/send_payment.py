@@ -5,7 +5,9 @@ from breez_sdk_spark import (
     FeePolicy,
     FetchLightningSendStatusRequest,
     GetInfoRequest,
+    GetPaymentRequest,
     OnchainConfirmationSpeed,
+    PaymentDetails,
     PaymentRequest,
     PaymentStatus,
     PrepareSendPaymentRequest,
@@ -197,6 +199,24 @@ async def send_payment_lightning_bolt11(
         logging.error(error)
         raise
     # ANCHOR_END: send-payment-lightning-bolt11
+
+
+async def get_payment_preimage(sdk: BreezSdk):
+    # ANCHOR: get-payment-preimage
+    payment_id = "<payment id>"
+    try:
+        response = await sdk.get_payment(
+            request=GetPaymentRequest(payment_id=payment_id)
+        )
+        payment = response.payment
+        if isinstance(payment.details, PaymentDetails.LIGHTNING):
+            htlc_details = payment.details.htlc_details
+            logging.debug(f"Payment hash: {htlc_details.payment_hash}")
+            logging.debug(f"Preimage: {htlc_details.preimage}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: get-payment-preimage
 
 
 async def send_payment_onchain(

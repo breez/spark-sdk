@@ -159,6 +159,20 @@ const exampleSendPaymentLightningBolt11 = async (
   console.log(payment)
 }
 
+const exampleGetPaymentPreimage = async (sdk: BreezSdk) => {
+  // ANCHOR: get-payment-preimage
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({
+    paymentId
+  })
+  const payment = response.payment
+  if (payment.details?.type === 'lightning') {
+    console.log(`Payment hash: ${payment.details.htlcDetails.paymentHash}`)
+    console.log(`Preimage: ${payment.details.htlcDetails.preimage ?? ''}`)
+  }
+  // ANCHOR_END: get-payment-preimage
+}
+
 const exampleSendPaymentOnchain = async (
   sdk: BreezSdk,
   prepareResponse: PrepareSendPaymentResponse

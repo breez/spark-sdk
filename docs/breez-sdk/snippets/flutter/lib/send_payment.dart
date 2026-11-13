@@ -161,6 +161,20 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
   return response;
 }
 
+Future<GetPaymentResponse> getPaymentPreimage(BreezSdk sdk) async {
+  // ANCHOR: get-payment-preimage
+  String paymentId = "<payment id>";
+  GetPaymentRequest request = GetPaymentRequest(paymentId: paymentId);
+  GetPaymentResponse response = await sdk.getPayment(request: request);
+  final details = response.payment.details;
+  if (details is PaymentDetails_Lightning) {
+    print("Payment hash: ${details.htlcDetails.paymentHash}");
+    print("Preimage: ${details.htlcDetails.preimage}");
+  }
+  // ANCHOR_END: get-payment-preimage
+  return response;
+}
+
 Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain

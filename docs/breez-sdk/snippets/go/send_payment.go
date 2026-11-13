@@ -228,6 +228,37 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 	return &payment, nil
 }
 
+func GetPaymentPreimage(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: get-payment-preimage
+	paymentId := "<payment id>"
+	request := breez_sdk_spark.GetPaymentRequest{
+		PaymentId: paymentId,
+	}
+	response, err := sdk.GetPayment(request)
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+
+	payment := response.Payment
+	if payment.Details != nil {
+		switch details := (*payment.Details).(type) {
+		case breez_sdk_spark.PaymentDetailsLightning:
+			log.Printf("Payment hash: %v", details.HtlcDetails.PaymentHash)
+			if details.HtlcDetails.Preimage != nil {
+				log.Printf("Preimage: %v", *details.HtlcDetails.Preimage)
+			}
+		}
+	}
+	// ANCHOR_END: get-payment-preimage
+	return nil
+}
+
 func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-onchain
 	// Select the confirmation speed for the on-chain transaction
