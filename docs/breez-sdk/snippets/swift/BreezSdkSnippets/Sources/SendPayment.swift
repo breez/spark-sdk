@@ -147,6 +147,19 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
     print(payment)
 }
 
+func getPaymentPreimage(sdk: BreezSdk) async throws {
+    // ANCHOR: get-payment-preimage
+    let paymentId = "<payment id>"
+    let response = try await sdk.getPayment(
+        request: GetPaymentRequest(paymentId: paymentId)
+    )
+    if case let .lightning(_, _, _, htlcDetails, _, _, _, _) = response.payment.details {
+        print("Payment hash: \(htlcDetails.paymentHash)")
+        print("Preimage: \(String(describing: htlcDetails.preimage))")
+    }
+    // ANCHOR_END: get-payment-preimage
+}
+
 func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-onchain
     // Select the confirmation speed for the on-chain transaction

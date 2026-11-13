@@ -183,6 +183,18 @@ async fn send_payment_lightning_bolt11(
     Ok(())
 }
 
+async fn get_payment_preimage(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: get-payment-preimage
+    let payment_id = "<payment id>".to_string();
+    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    if let Some(PaymentDetails::Lightning { htlc_details, .. }) = response.payment.details {
+        info!("Payment hash: {}", htlc_details.payment_hash);
+        info!("Preimage: {:?}", htlc_details.preimage);
+    }
+    // ANCHOR_END: get-payment-preimage
+    Ok(())
+}
+
 async fn send_payment_onchain(
     sdk: &BreezSdk,
     prepare_response: PrepareSendPaymentResponse,
