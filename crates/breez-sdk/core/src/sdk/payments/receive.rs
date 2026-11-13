@@ -19,8 +19,9 @@ use crate::{
 };
 
 use super::super::{BreezSdk, helpers::get_deposit_address};
-use super::validation::resolve_slippage_bps;
+use super::validation::{resolve_slippage_bps, validate_refund_address};
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn receive_payment(
     sdk: &BreezSdk,
     request: ReceivePaymentRequest,
@@ -110,6 +111,7 @@ pub(super) async fn receive_payment(
             fee_mode,
             max_slippage_bps,
             target_overpay_bps,
+            refund_address,
         } => receive_cross_chain(
             sdk,
             route,
@@ -118,6 +120,7 @@ pub(super) async fn receive_payment(
             fee_mode,
             max_slippage_bps,
             target_overpay_bps,
+            refund_address,
         )
         .await
         .map(Into::into),
@@ -146,6 +149,7 @@ async fn receive_cross_chain(
     fee_mode: Option<CrossChainFeeMode>,
     max_slippage_bps: Option<u32>,
     target_overpay_bps: Option<u32>,
+    refund_address: Option<String>,
 ) -> Result<CrossChainReceivePrepared, SdkError> {
     let params = resolve_cross_chain_receive_params(
         &sdk.cross_chain_context,
@@ -157,6 +161,13 @@ async fn receive_cross_chain(
         max_slippage_bps,
         target_overpay_bps,
     )?;
+    let refund_address = validate_refund_address(
+        &sdk.cross_chain_context,
+        &sdk.input_parser,
+        refund_address.as_deref(),
+        &route,
+    )
+    .await?;
     let destination = resolve_receive_destination(sdk, &route, destination).await?;
     let address = sdk
         .spark_wallet
@@ -172,7 +183,7 @@ async fn receive_cross_chain(
         &destination,
         &params,
         &address,
-        None,
+        refund_address.as_deref(),
     )
     .await
 }

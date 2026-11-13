@@ -377,6 +377,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             fee_mode=fee_mode,
             max_slippage_bps=args.cross_chain_max_slippage_bps,
             target_overpay_bps=args.cross_chain_target_overpay_bps,
+            refund_address=None,
         )
     else:
         print(f"Invalid payment method: {method}")

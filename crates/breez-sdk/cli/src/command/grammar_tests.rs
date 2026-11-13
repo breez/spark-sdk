@@ -234,6 +234,15 @@ fn receive_crosschain_flags() {
     };
     assert!(cross_chain_to_bitcoin);
 
+    let Command::Receive {
+        cross_chain_refund_address,
+        ..
+    } = parse_ok("receive -m crosschain -a 1000000 --cross-chain-refund-address 0xpayer")
+    else {
+        panic!("expected Receive");
+    };
+    assert_eq!(cross_chain_refund_address.as_deref(), Some("0xpayer"));
+
     parse_err("receive -m crosschain -a 1000000 --cross-chain-max-slippage-bps ten");
     parse_err("receive -m crosschain -a 1000000 --cross-chain-to-bitcoin -t btkn1abc");
 }

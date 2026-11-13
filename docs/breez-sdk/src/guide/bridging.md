@@ -48,7 +48,12 @@ When the payer pays from another chain, {{#name refund_address}} is their addres
 
 When the payer pays over Lightning, it's a Lightning address, Cash App `$cashtag` or amountless BOLT11 invoice, refunded if the payment fails before the swap. An invoice must not expire before the bridge's {{#name expires_at}}, and must still be valid when the refund is paid. Anything else is rejected with {{#enum SdkError::InvalidInput}}.
 
-It's required to pay a Lightning address, and recommended otherwise: without one, the provider has no address to refund to.
+It's required to pay a Lightning address, and recommended otherwise. Without one, the provider refunds a deposit from another chain to the address it came from, but only when that is safe, and a payment over Lightning can't be refunded automatically.
+
+<div class="warning">
+<h4>Developer note</h4>
+A refund address is required when the payer sends from an exchange. Exchanges send from shared addresses, which the provider never refunds to, so without one a deposit it can't deliver waits for manual recovery. It is also advised for deposits from BSC and Tron.
+</div>
 
 ### Response fields
 
@@ -101,7 +106,7 @@ Read a bridge's status with {{#name get_bridge_status}}, passing the {{#name bri
 | {{#enum BridgeStatus::Pending}} | The provider is processing the payment, from confirming the deposit to paying the recipient. {{#name provider_status}} gives the stage. |
 | {{#enum BridgeStatus::Refunding}} | The recipient can't be paid, and the payment is being refunded. |
 | {{#enum BridgeStatus::Completed}} | The recipient was paid. {{#name amount_out}} and {{#name delivery_tx_hash}} record the delivery. |
-| {{#enum BridgeStatus::Refunded}} | The payment was refunded to the {{#name refund_address}}. |
+| {{#enum BridgeStatus::Refunded}} | The payment was refunded to the {{#name refund_address}}, or without one to the address it came from. |
 | {{#enum BridgeStatus::Failed}} | The bridge failed. {{#name error_code}} gives the reason. |
 | {{#enum BridgeStatus::Expired}} | The bridge can no longer be paid, and nobody paid it. |
 

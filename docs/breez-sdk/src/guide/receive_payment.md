@@ -66,6 +66,8 @@ Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receiv
 
 Build {{#enum ReceivePaymentMethod::CrossChain}} with the chosen route and an `amount`.
 
+Set {{#name refund_address}} to the payer's address on the route's chain, where a deposit the provider can't deliver is returned. It is required when the payer sends from an exchange. See [Refunds and failures](./cross_chain.md#refunds-and-failures).
+
 The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the source asset's base units, per the route's {{#name CrossChainRoutePair.decimals}}. USD-stable sources sit at USD parity, so `1_000_000` is 1 USDC (6 decimals), about $1.
 
 {{#name fee_mode}} controls what the amount means:

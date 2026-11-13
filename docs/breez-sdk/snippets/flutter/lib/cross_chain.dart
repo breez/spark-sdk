@@ -112,12 +112,13 @@ Future<ReceivePaymentResponse> receivePaymentCrossChain(
   // ANCHOR: cross-chain-receive
   // amount is in the route's source-asset base units (USD-stable parity:
   // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
-  // destination, and the slippage/overpay overrides.
+  // destination, the refund address, and the slippage/overpay overrides.
   final amount = BigInt.from(1000000);
   SparkAsset? optionalDestination;
   int? optionalMaxSlippageBps = 100;
   int? optionalTargetOverpayBps;
   CrossChainFeeMode? optionalFeeMode;
+  String? optionalRefundAddress;
 
   final request = ReceivePaymentRequest(
     paymentMethod: ReceivePaymentMethod.crossChain(
@@ -127,6 +128,7 @@ Future<ReceivePaymentResponse> receivePaymentCrossChain(
       feeMode: optionalFeeMode,
       maxSlippageBps: optionalMaxSlippageBps,
       targetOverpayBps: optionalTargetOverpayBps,
+      refundAddress: optionalRefundAddress,
     ),
   );
   final response = await sdk.receivePayment(request: request);

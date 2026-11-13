@@ -113,12 +113,14 @@ namespace BreezSdkSnippets
             // ANCHOR: cross-chain-receive
             // amount is in the route's source-asset base units (USD-stable
             // parity: 1_000_000 = $1 on 6-decimal routes). See the guide for
-            // feeMode, destination, and the slippage/overpay overrides.
+            // feeMode, destination, the refund address, and the slippage/overpay
+            // overrides.
             var amount = new BigInteger(1_000_000);
             SparkAsset? optionalDestination = null;
             uint? optionalMaxSlippageBps = 100;
             uint? optionalTargetOverpayBps = null;
             CrossChainFeeMode? optionalFeeMode = null;
+            string? optionalRefundAddress = null;
 
             var request = new ReceivePaymentRequest(
                 paymentMethod: new ReceivePaymentMethod.CrossChain(
@@ -127,7 +129,8 @@ namespace BreezSdkSnippets
                     destination: optionalDestination,
                     feeMode: optionalFeeMode,
                     maxSlippageBps: optionalMaxSlippageBps,
-                    targetOverpayBps: optionalTargetOverpayBps
+                    targetOverpayBps: optionalTargetOverpayBps,
+                    refundAddress: optionalRefundAddress
                 )
             );
             var response = await sdk.ReceivePayment(request: request);
