@@ -85,7 +85,7 @@
             '      <div class="ask-ai-examples">',
             '        <button type="button" data-ask-question="How do I get started with the SDK?">How do I get started with the SDK?</button>',
             '        <button type="button" data-ask-question="How do I receive payments?">How do I receive payments?</button>',
-            '        <button type="button" data-ask-question="How do I send payment?">How do I send payment?</button>',
+            '        <button type="button" data-ask-question="How do I send payments?">How do I send payments?</button>',
             '      </div>',
             '    </div>',
             '    <div class="ask-ai-transcript" id="ask-ai-transcript"></div>',
