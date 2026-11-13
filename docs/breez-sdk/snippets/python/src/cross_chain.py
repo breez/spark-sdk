@@ -132,12 +132,13 @@ async def receive_payment_cross_chain(sdk: BreezSdk, route: CrossChainRoutePair)
     # ANCHOR: cross-chain-receive
     # amount is in the route's source-asset base units (USD-stable parity:
     # 1_000_000 = $1 on 6-decimal routes). See the guide for fee_mode,
-    # destination, and the slippage/overpay overrides.
+    # destination, the refund address, and the slippage/overpay overrides.
     amount = 1_000_000
     optional_destination = None
     optional_max_slippage_bps = 100
     optional_target_overpay_bps = None
     optional_fee_mode = None
+    optional_refund_address = None
     try:
         request = ReceivePaymentRequest(
             payment_method=ReceivePaymentMethod.CROSS_CHAIN(
@@ -147,6 +148,7 @@ async def receive_payment_cross_chain(sdk: BreezSdk, route: CrossChainRoutePair)
                 fee_mode=optional_fee_mode,
                 max_slippage_bps=optional_max_slippage_bps,
                 target_overpay_bps=optional_target_overpay_bps,
+                refund_address=optional_refund_address,
             )
         )
         response = await sdk.receive_payment(request=request)

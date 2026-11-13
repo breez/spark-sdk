@@ -178,7 +178,14 @@ The receive prepare response carries an {{#name expires_at}} timestamp. The SDK 
 
 ### Refunds and failures
 
-If the provider can't complete a receive, for example because the deposit is below the route's minimum, it refunds the deposit to the sender or fails the order. Nothing arrives over Spark, so the SDK records a receive {{#name Payment}} with status {{#enum PaymentStatus::Failed}} and emits {{#enum SdkEvent::PaymentFailed}}. Its amount is what the quote expected to deliver. A receive into a token is recorded as a token payment with an empty {{#name tx_hash}}, since no token transaction took place. The payment's {{#name conversion_info}} carries the receive's {{#name quote_id}}, the deposit in {{#name asset_amount_in}} and {{#name external_tx_hash}}, and the status {{#enum ConversionStatus::Refunded}} or {{#enum ConversionStatus::Failed}}. A refund also carries its {{#name refund_tx_hash}}.
+If the provider can't complete a receive, for example because the deposit is below the route's minimum, it fails the order or refunds the deposit. A refund goes to the {{#name refund_address}} on {{#enum ReceivePaymentMethod::CrossChain}}: the payer's address on the route's chain, which can't be a token contract. Without one, the provider refunds to the address the deposit came from, but only when that is safe.
+
+<div class="warning">
+<h4>Developer note</h4>
+A refund address is required when the payer sends from an exchange. Exchanges send from shared addresses, which the provider never refunds to, so without one a deposit it can't deliver waits for manual recovery. It is also advised for deposits from BSC and Tron. Ask the payer for an address they control on the route's chain.
+</div>
+
+Either way nothing arrives over Spark, so the SDK records a receive {{#name Payment}} with status {{#enum PaymentStatus::Failed}} and emits {{#enum SdkEvent::PaymentFailed}}. Its amount is what the quote expected to deliver. A receive into a token is recorded as a token payment with an empty {{#name tx_hash}}, since no token transaction took place. The payment's {{#name conversion_info}} carries the receive's {{#name quote_id}}, the deposit in {{#name asset_amount_in}} and {{#name external_tx_hash}}, and the status {{#enum ConversionStatus::Refunded}} or {{#enum ConversionStatus::Failed}}. A refund also carries its {{#name refund_tx_hash}}.
 
 ## Limitations
 

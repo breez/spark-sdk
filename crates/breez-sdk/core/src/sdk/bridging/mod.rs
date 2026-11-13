@@ -43,7 +43,7 @@ use super::payments::receive::{
 use super::payments::validation::{
     known_token_contracts, resolve_direct_overpay_amount, resolve_slippage_bps,
     validate_address_family_against_route, validate_amount,
-    validate_recipient_not_contract_address,
+    validate_recipient_not_contract_address, validate_refund_address,
 };
 
 /// Creates bridges: orders that pay a recipient from another chain or over
@@ -580,32 +580,13 @@ impl BridgingClient {
         refund_address: Option<&str>,
         route: &CrossChainRoutePair,
     ) -> Result<Option<String>, SdkError> {
-        let Some(refund_address) = refund_address else {
-            return Ok(None);
-        };
-        let InputType::CrossChainAddress(refund) = self.parse(refund_address).await? else {
-            return Err(SdkError::InvalidInput(
-                "Refund address must be a cross-chain (EVM/Solana/Tron) address".to_string(),
-            ));
-        };
-        let refund_family: CrossChainAddressFamily = refund.address_family.into();
-        validate_address_family_against_route(refund_family, route)?;
-        let known_contracts = known_token_contracts(
+        validate_refund_address(
             &self.cross_chain_context,
-            &refund.address,
-            refund_family,
+            &self.input_parser,
+            refund_address,
             route,
         )
-        .await;
-        validate_recipient_not_contract_address(&refund.address, refund_family, &known_contracts)
-            .map_err(|_| {
-            SdkError::InvalidInput(
-                "Refund address is a token contract. Funds refunded to it cannot be \
-                     recovered. Use the payer's wallet address instead."
-                    .to_string(),
-            )
-        })?;
-        Ok(Some(refund.address))
+        .await
     }
 
     /// Quotes an order the payer funds over Lightning, delivering `amount` of

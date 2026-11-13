@@ -471,7 +471,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             destination: destination,
             feeMode: feeMode,
             maxSlippageBps: crossChainMaxSlippageBps,
-            targetOverpayBps: crossChainTargetOverpayBps
+            targetOverpayBps: crossChainTargetOverpayBps,
+            refundAddress: nil
         )
 
     default:

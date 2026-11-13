@@ -615,6 +615,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         feeMode,
         maxSlippageBps: crossChainMaxSlippageBps,
         targetOverpayBps: crossChainTargetOverpayBps,
+        refundAddress: undefined,
       })
       break
     }

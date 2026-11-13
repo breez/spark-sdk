@@ -142,6 +142,7 @@ fn tagged_enums_read_bigints_beyond_u64() {
         fee_mode: None,
         max_slippage_bps: None,
         target_overpay_bps: None,
+        refund_address: None,
     };
     let js = method.into_js().unwrap();
     let ReceivePaymentMethod::CrossChain {
