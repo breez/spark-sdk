@@ -175,6 +175,14 @@ To force a specific destination, build a {{#name SparkAsset}} variant: {{#enum S
 
 The receive prepare response carries an {{#name expires_at}} timestamp. The SDK does not gate on it: Orchestra reprices late deposits at the live rate. The receive monitor keeps probing for the deposit for 24 hours past {{#name expires_at}} before locally closing the row as unfunded; late deposits inside that window still link correctly.
 
+### Paying from Solana
+
+On Solana, the deposit address is a wallet address, not a token account. Each quote has its own, so it holds no USDC or USDT token account yet.
+
+Most wallet apps, such as Phantom, create the token account when sending, so a payer using one needs no extra step. A transaction built in code must create the deposit address's associated token account for the route's mint (e.g. with `createAssociatedTokenAccountIdempotentInstruction` from `@solana/spl-token`), then transfer to that account. A transfer to the deposit address itself fails, and no funds move. Creating the account costs the payer a small rent deposit (at most about 0.002 SOL).
+
+EVM and Tron deposits need no extra step, since token balances live in the token contract.
+
 ## Limitations
 
 - **Mainnet only.** Cross-chain providers operate against live external networks; there is no testnet equivalent in the SDK today.

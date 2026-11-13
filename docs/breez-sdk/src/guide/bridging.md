@@ -69,6 +69,8 @@ It's required to pay a Lightning address, and recommended otherwise: without one
 | {{#name info.service_fee_asset_decimals}} | Decimals of {{#name info.service_fee_asset}}, for formatting the fee. Absent when the fee is in sats or the provider did not report them. |
 | {{#name info.expires_at}} | Quote expiry, in seconds since the Unix epoch. Create the bridge again for a fresh quote if it lapses before the payer pays. |
 
+A Solana transfer built in code must also create the deposit address's token account, which wallet apps do on their own. See [Paying from Solana](./cross_chain.md#paying-from-solana).
+
 ## Cash App
 
 Two functions create a bridge with a Cash App user on one side. They take the same {{#name CreateBridgeRequest}} as {{#name create_bridge}}, return a {{#name CreateBridgeResponse}}, and are [tracked](#tracking-a-bridge) the same way.
