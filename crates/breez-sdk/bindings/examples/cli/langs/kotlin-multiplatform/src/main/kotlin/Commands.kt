@@ -425,6 +425,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 feeMode = feeMode,
                 maxSlippageBps = crossChainMaxSlippageBps,
                 targetOverpayBps = crossChainTargetOverpayBps,
+                refundAddress = null,
             )
         }
 

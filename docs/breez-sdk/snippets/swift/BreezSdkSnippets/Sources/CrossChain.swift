@@ -95,12 +95,13 @@ func receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) async t
     // ANCHOR: cross-chain-receive
     // amount is in the route's source-asset base units (USD-stable parity:
     // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
-    // destination, and the slippage/overpay overrides.
+    // destination, the refund address, and the slippage/overpay overrides.
     let amount = BInt(1_000_000)
     let optionalDestination: SparkAsset? = nil
     let optionalMaxSlippageBps: UInt32? = 100
     let optionalTargetOverpayBps: UInt32? = nil
     let optionalFeeMode: CrossChainFeeMode? = nil
+    let optionalRefundAddress: String? = nil
 
     let response = try await sdk.receivePayment(
         request: ReceivePaymentRequest(
@@ -110,7 +111,8 @@ func receivePaymentCrossChain(sdk: BreezSdk, route: CrossChainRoutePair) async t
                 destination: optionalDestination,
                 feeMode: optionalFeeMode,
                 maxSlippageBps: optionalMaxSlippageBps,
-                targetOverpayBps: optionalTargetOverpayBps
+                targetOverpayBps: optionalTargetOverpayBps,
+                refundAddress: optionalRefundAddress
             )
         ))
 

@@ -1310,6 +1310,7 @@ pub enum ReceivePaymentMethod {
         fee_mode: Option<CrossChainFeeMode>,
         max_slippage_bps: Option<u32>,
         target_overpay_bps: Option<u32>,
+        refund_address: Option<String>,
     },
 }
 

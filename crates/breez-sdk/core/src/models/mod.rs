@@ -2166,6 +2166,12 @@ pub enum ReceivePaymentMethod {
         /// then the built-in default (15 bps). Ignored when `fee_mode`
         /// is `FeesIncluded`.
         target_overpay_bps: Option<u32>,
+        /// The payer's address on the route's chain, where the provider returns
+        /// a deposit it can't deliver. Required when the payer sends from an
+        /// exchange, and advised for BSC and Tron: unset, the provider refunds
+        /// the sending address only when that is safe, and otherwise holds the
+        /// deposit for manual recovery. Must not be a token contract.
+        refund_address: Option<String>,
     },
 }
 
@@ -2214,6 +2220,7 @@ impl fmt::Debug for ReceivePaymentMethod {
                 fee_mode,
                 max_slippage_bps,
                 target_overpay_bps,
+                refund_address,
             } => f
                 .debug_struct("CrossChain")
                 .field("route", route)
@@ -2222,6 +2229,7 @@ impl fmt::Debug for ReceivePaymentMethod {
                 .field("fee_mode", fee_mode)
                 .field("max_slippage_bps", max_slippage_bps)
                 .field("target_overpay_bps", target_overpay_bps)
+                .field("refund_address", refund_address)
                 .finish(),
         }
     }

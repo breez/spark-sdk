@@ -124,12 +124,13 @@ class CrossChain {
         // ANCHOR: cross-chain-receive
         // amount is in the route's source-asset base units (USD-stable parity:
         // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
-        // destination, and the slippage/overpay overrides.
+        // destination, the refund address, and the slippage/overpay overrides.
         val amount = BigInteger.fromLong(1_000_000L)
         val optionalDestination: SparkAsset? = null
         val optionalMaxSlippageBps: UInt? = 100u
         val optionalTargetOverpayBps: UInt? = null
         val optionalFeeMode: CrossChainFeeMode? = null
+        val optionalRefundAddress: String? = null
         try {
             val req = ReceivePaymentRequest(
                 paymentMethod = ReceivePaymentMethod.CrossChain(
@@ -139,6 +140,7 @@ class CrossChain {
                     feeMode = optionalFeeMode,
                     maxSlippageBps = optionalMaxSlippageBps,
                     targetOverpayBps = optionalTargetOverpayBps,
+                    refundAddress = optionalRefundAddress,
                 ),
             )
             val response = sdk.receivePayment(req)

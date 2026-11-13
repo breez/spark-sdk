@@ -107,12 +107,13 @@ const exampleReceivePaymentCrossChain = async (
   // ANCHOR: cross-chain-receive
   // amount is in the route's source-asset base units (USD-stable parity:
   // 1_000_000 = $1 on 6-decimal routes). See the guide for feeMode,
-  // destination, and the slippage/overpay overrides.
+  // destination, the refund address, and the slippage/overpay overrides.
   const amount = BigInt(1_000_000)
   const optionalDestination = undefined
   const optionalMaxSlippageBps = 100
   const optionalTargetOverpayBps = undefined
   const optionalFeeMode = undefined
+  const optionalRefundAddress = undefined
 
   const response = await sdk.receivePayment({
     paymentMethod: {
@@ -122,7 +123,8 @@ const exampleReceivePaymentCrossChain = async (
       destination: optionalDestination,
       feeMode: optionalFeeMode,
       maxSlippageBps: optionalMaxSlippageBps,
-      targetOverpayBps: optionalTargetOverpayBps
+      targetOverpayBps: optionalTargetOverpayBps,
+      refundAddress: optionalRefundAddress
     }
   })
 
