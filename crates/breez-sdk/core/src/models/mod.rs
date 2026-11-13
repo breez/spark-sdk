@@ -4104,6 +4104,7 @@ mod tests {
             estimated_out: 990_000,
             delivered_amount: Some(990_000),
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: ConversionStatus::Completed,
             fee_amount: Some(10_000),
             service_fee_amount: None,

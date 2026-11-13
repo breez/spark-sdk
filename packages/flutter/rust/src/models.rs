@@ -2114,6 +2114,7 @@ pub enum _ConversionInfo {
         estimated_out: u128,
         delivered_amount: Option<u128>,
         external_tx_hash: Option<String>,
+        refund_tx_hash: Option<String>,
         status: ConversionStatus,
         fee_amount: Option<u128>,
         service_fee_amount: Option<u128>,

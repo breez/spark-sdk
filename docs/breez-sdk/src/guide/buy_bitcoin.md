@@ -59,6 +59,8 @@ The returned URL is a CashApp universal link (`https://cash.app/launch/lightning
 
 The purchase arrives as an incoming Spark payment, not as a payment of the returned invoice. Its {{#name conversion_info}} is an {{#enum ConversionInfo::Orchestra}} whose {{#name quote_id}} is the {{#name quote_id}} of the response's {{#name cross_chain_info}}. The {{#enum SdkEvent::PaymentSucceeded}} event carrying that payment means the purchase was received. A later {{#enum SdkEvent::PaymentMetadataUpdated}} adds the delivered amount once the provider confirms the order. See [Status lifecycle](./cross_chain.md#status-lifecycle).
 
+If the provider can't deliver, a {{#enum SdkEvent::PaymentFailed}} event reports a failed payment whose {{#name conversion_info}} carries the same {{#name quote_id}}. A refund to the Lightning address arrives separately, as its own incoming payment. See [Refunds and failures](./cross_chain.md#refunds-and-failures).
+
 ### Popup blockers on the web
 
 On web, `window.open()` called after `await sdk.buyBitcoin(...)` is typically blocked by mobile browsers and PWAs because it falls outside the original user gesture. Pre-open a blank tab synchronously inside the click handler, then navigate it once the URL is ready:

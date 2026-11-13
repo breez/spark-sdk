@@ -433,7 +433,14 @@ impl SyncedRecordHandler {
                 .map_err(|e| StorageError::Serialization(e.to_string()))?,
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        self.storage.set_cross_chain_swap(swap).await?;
+        self.storage.set_cross_chain_swap(swap.clone()).await?;
+        crate::cross_chain::apply_synced_swap(
+            &self.storage,
+            &self.event_emitter,
+            &swap,
+            self.initial_pull_done.load(Ordering::Relaxed),
+        )
+        .await?;
         Ok(())
     }
 
@@ -1244,12 +1251,6 @@ mod tests {
     }
 
     async fn run_cross_chain_swap_round_trip(provider: &str, id: &str) {
-        // Instance A: set_cross_chain_swap emits an outgoing record and writes
-        // locally.
-        let writer_dir = create_temp_dir(&format!("cross_chain_sync_writer_{provider}"));
-        let writer_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&writer_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&writer_inner));
-
         let stored = StoredCrossChainSwap {
             provider: provider.to_string(),
             id: id.to_string(),
@@ -1258,9 +1259,77 @@ mod tests {
             data: format!(r#"{{"id":"{id}","status":"Created"}}"#),
             secrets: "c2VjcmV0".to_string(),
         };
+        let reader_inner = sync_cross_chain_swap(&stored).await;
+
+        // Instance B's local store now holds an identical row.
+        let fetched = reader_inner
+            .get_cross_chain_swap(provider.to_string(), id.to_string())
+            .await
+            .unwrap()
+            .expect("swap applied to reader store");
+        assert_eq!(fetched.provider, stored.provider);
+        assert_eq!(fetched.id, stored.id);
+        assert_eq!(fetched.is_terminal, stored.is_terminal);
+        assert_eq!(fetched.updated_at, stored.updated_at);
+        assert_eq!(fetched.data, stored.data);
+        assert_eq!(fetched.secrets, stored.secrets);
+    }
+
+    /// A receive that closed refunded on one device is recorded as a failed
+    /// payment on the device it syncs to.
+    #[tokio::test]
+    async fn test_closed_refunded_receive_syncs_as_a_failed_payment() {
+        let data = serde_json::json!({
+            "quoteId": "q_refunded",
+            "orderId": "ord_refunded",
+            "recipientAddress": "sp1rcv",
+            "sourceChain": "base",
+            "sourceAsset": "USDC",
+            "sourceDecimals": 6,
+            "destinationChain": "spark",
+            "destinationAsset": "BTC",
+            "amountIn": "100",
+            "expectedAmountOut": "50000",
+            "expiresAt": 1_700_000_120,
+            "failure": {
+                "status": "Refunded",
+                "refundTxHash": "0xrefund",
+                "createdAt": 1_700_000_000,
+            },
+        });
+        let stored = StoredCrossChainSwap {
+            provider: "orchestra".to_string(),
+            id: "q_refunded".to_string(),
+            is_terminal: true,
+            updated_at: 1700,
+            data: data.to_string(),
+            secrets: String::new(),
+        };
+
+        let reader_inner = sync_cross_chain_swap(&stored).await;
+
+        let payment = reader_inner
+            .get_payment_by_id("q_refunded".to_string())
+            .await
+            .unwrap();
+        assert_eq!(payment.payment_type, crate::PaymentType::Receive);
+        assert_eq!(payment.status, crate::PaymentStatus::Failed);
+        assert_eq!(payment.timestamp, 1_700_000_000);
+    }
+
+    /// Writes `stored` through one instance's synced storage, applies the
+    /// record it emitted on a second instance, and returns that instance's
+    /// local store.
+    async fn sync_cross_chain_swap(stored: &StoredCrossChainSwap) -> Arc<dyn Storage> {
+        let provider = &stored.provider;
+        // Instance A: set_cross_chain_swap emits an outgoing record and writes
+        // locally.
+        let writer_dir = create_temp_dir(&format!("cross_chain_sync_writer_{provider}"));
+        let writer_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&writer_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&writer_inner));
         synced.set_cross_chain_swap(stored.clone()).await.unwrap();
 
-        let expected_data_id = format!("{provider}:{id}");
+        let expected_data_id = format!("{provider}:{}", stored.id);
 
         // Exactly the fields the writer emitted are replayed (not re-serialized
         // here), so the test catches any emit/apply field mismatch.
@@ -1294,19 +1363,7 @@ mod tests {
         );
         let outcome = handler.handle_incoming_change(change).await.unwrap();
         assert_eq!(outcome, RecordOutcome::Completed);
-
-        // Instance B's local store now holds an identical row.
-        let fetched = reader_inner
-            .get_cross_chain_swap(provider.to_string(), id.to_string())
-            .await
-            .unwrap()
-            .expect("swap applied to reader store");
-        assert_eq!(fetched.provider, stored.provider);
-        assert_eq!(fetched.id, stored.id);
-        assert_eq!(fetched.is_terminal, stored.is_terminal);
-        assert_eq!(fetched.updated_at, stored.updated_at);
-        assert_eq!(fetched.data, stored.data);
-        assert_eq!(fetched.secrets, stored.secrets);
+        reader_inner
     }
 
     /// Helper: returns the number of pending outgoing sync changes with record type
