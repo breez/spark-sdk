@@ -271,6 +271,23 @@ class SendPayment {
         // ANCHOR_END: send-payment-lightning-bolt11
     }
 
+    suspend fun getPaymentPreimage(sdk: BreezSdk) {
+        // ANCHOR: get-payment-preimage
+        try {
+            val paymentId = "<payment id>"
+            val response = sdk.getPayment(GetPaymentRequest(paymentId))
+            val details = response.payment.details
+            if (details is PaymentDetails.Lightning) {
+                val htlc = details.htlcDetails
+                // Log.v("Breez", "Payment hash: ${htlc.paymentHash}")
+                // Log.v("Breez", "Preimage: ${htlc.preimage}")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: get-payment-preimage
+    }
+
     suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {

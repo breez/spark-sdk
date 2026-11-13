@@ -2,6 +2,7 @@ import {
   OnchainConfirmationSpeed,
   FeePolicy,
   PaymentRequest,
+  PaymentDetails_Tags,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
@@ -158,6 +159,21 @@ const exampleSendPaymentLightningBolt11 = async (
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-lightning-bolt11
   console.log(payment)
+}
+
+const exampleGetPaymentPreimage = async (sdk: BreezSdk) => {
+  // ANCHOR: get-payment-preimage
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({
+    paymentId
+  })
+  const payment = response.payment
+  if (payment.details?.tag === PaymentDetails_Tags.Lightning) {
+    const htlc = payment.details.inner.htlcDetails
+    console.log(`Payment hash: ${htlc.paymentHash}`)
+    console.log(`Preimage: ${htlc.preimage ?? ''}`)
+  }
+  // ANCHOR_END: get-payment-preimage
 }
 
 const exampleSendPaymentOnchain = async (
