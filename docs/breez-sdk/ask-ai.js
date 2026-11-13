@@ -28,7 +28,7 @@
 
     // Soft-launch switch. Keep true while the team reviews the widget; set to
     // false when it should be visible to everyone.
-    var PREVIEW_ONLY = true;
+    var PREVIEW_ONLY = false;
 
     function isEnabled() {
         if (!PREVIEW_ONLY) {
