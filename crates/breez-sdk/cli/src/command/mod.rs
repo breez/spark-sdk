@@ -279,6 +279,12 @@ pub enum Command {
             conflicts_with = "token_identifier"
         )]
         cross_chain_to_bitcoin: bool,
+
+        /// The payer's address on the route's chain, where a cross-chain deposit
+        /// that can't be delivered is refunded. Required when the payer sends
+        /// from an exchange.
+        #[arg(long = "cross-chain-refund-address")]
+        cross_chain_refund_address: Option<String>,
     },
 
     /// Pay the given payment request
@@ -855,6 +861,7 @@ pub(crate) async fn execute_command(
             cross_chain_fees_included,
             cross_chain_target_overpay_bps,
             cross_chain_to_bitcoin,
+            cross_chain_refund_address,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -929,6 +936,7 @@ pub(crate) async fn execute_command(
                         fee_mode,
                         max_slippage_bps: cross_chain_max_slippage_bps,
                         target_overpay_bps: cross_chain_target_overpay_bps,
+                        refund_address: cross_chain_refund_address,
                     }
                 }
             };

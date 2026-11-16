@@ -66,6 +66,8 @@ Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receiv
 
 Build {{#enum ReceivePaymentMethod::CrossChain}} with the chosen route and an `amount`.
 
+Set {{#name refund_address}} to the payer's address on the route's chain, where a deposit the provider can't deliver is returned. It is required when the payer sends from an exchange. See [Refunds and failures](./cross_chain.md#refunds-and-failures).
+
 The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the source asset's base units, per the route's {{#name CrossChainRoutePair.decimals}}. USD-stable sources sit at USD parity, so `1_000_000` is 1 USDC (6 decimals), about $1.
 
 {{#name fee_mode}} controls what the amount means:
@@ -124,3 +126,4 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 | **PaymentPending**   | The sender's deposit was detected and the inbound Spark transfer claim is in progress.               | Show payment as pending.                         |
 | **PaymentSucceeded** | The inbound Spark transfer is claimed and the payment is complete.                                   | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
 | **PaymentMetadataUpdated** | The provider confirmed the order: the payment's {{#name conversion_info}} now carries the delivered amount and the deposit transaction. The payment is reported with its {{#name conversion_info}} from its first event on, so this only completes it. | Refresh the payment in the UI with the details carried by the event. |
+| **PaymentFailed** | The provider refunded the deposit to the sender or failed the order, so nothing was received. See [refunds and failures](./cross_chain.md#refunds-and-failures). | Show the payment as failed. When its {{#name conversion_info}} status is {{#enum ConversionStatus::Refunded}}, tell the user the deposit was sent back. |

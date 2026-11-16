@@ -693,6 +693,7 @@ mod tests {
             estimated_out: 99_500_000,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: ConversionStatus::Pending,
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),

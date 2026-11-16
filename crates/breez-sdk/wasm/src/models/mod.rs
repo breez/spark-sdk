@@ -1310,6 +1310,7 @@ pub enum ReceivePaymentMethod {
         fee_mode: Option<CrossChainFeeMode>,
         max_slippage_bps: Option<u32>,
         target_overpay_bps: Option<u32>,
+        refund_address: Option<String>,
     },
 }
 
@@ -2350,6 +2351,8 @@ pub enum ConversionInfo {
         delivered_amount: Option<u128>,
         #[serde(default)]
         external_tx_hash: Option<String>,
+        #[serde(default)]
+        refund_tx_hash: Option<String>,
         status: ConversionStatus,
         fee_amount: Option<u128>,
         service_fee_amount: Option<u128>,

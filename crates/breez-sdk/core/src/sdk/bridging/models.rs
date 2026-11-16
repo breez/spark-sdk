@@ -80,9 +80,10 @@ pub struct CreateBridgeRequest {
     /// USDC at 6 decimals.
     pub amount: u128,
     /// The payer's address on the source chain, where the deposit is refunded
-    /// if the recipient can't be paid. Required to pay a Lightning address,
-    /// and recommended otherwise: without one the provider has no address to
-    /// refund to. When the payer pays over Lightning, it is a Lightning
+    /// if the recipient can't be paid. Required to pay a Lightning address or
+    /// when the payer sends from an exchange, and advised for BSC and Tron:
+    /// unset, the provider refunds the sending address only when that is
+    /// safe. When the payer pays over Lightning, it is a Lightning
     /// address, a Cash App `$cashtag` or an amountless BOLT11 invoice that
     /// doesn't expire before the bridge, refunded if the payment fails before
     /// the swap. Anything else is rejected.
@@ -139,7 +140,8 @@ pub enum BridgeStatus {
     Refunding,
     /// The recipient was paid.
     Completed,
-    /// The payment was refunded to the payer's refund address.
+    /// The payment was refunded to the payer's refund address, or without one
+    /// to the address it came from.
     Refunded,
     /// The bridge failed. `error_code` gives the reason.
     Failed,

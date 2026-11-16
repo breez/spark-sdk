@@ -194,6 +194,7 @@ impl BreezSdk {
                     fee_mode: Some(fee_mode),
                     max_slippage_bps: None,
                     target_overpay_bps: None,
+                    refund_address: None,
                 },
             })
             .await?;

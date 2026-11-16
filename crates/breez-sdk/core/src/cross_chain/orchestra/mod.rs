@@ -37,7 +37,8 @@ use crate::persist::{
     StoragePaymentDetailsFilter,
 };
 use crate::{
-    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentStatus, PaymentType, Storage,
+    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentMethod, PaymentStatus,
+    PaymentTokenMetadata, PaymentType, Storage, TokenTransactionType,
 };
 
 use super::{
@@ -47,15 +48,16 @@ use super::{
     derive_btc_leg_transfer_id, payment_with_conversion_info,
 };
 use attribution::Attribution;
-use storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData};
+use storage_adapter::{OrchestraStorageAdapter, OrchestraSwapData, ReceiveFailure};
 
 use crate::utils::{
     payments::{
-        emit_payment_metadata_updated, fetch_and_process_payment, insert_payment_metadata_and_emit,
-        resolve_payment_id,
+        emit_payment_metadata_updated, fetch_and_process_payment, get_payment_and_emit_event,
+        insert_payment_metadata_and_emit, resolve_payment_id,
     },
     polling::{PollSchedule, poll_until},
     time::{now_secs, try_now_secs},
+    token::get_tokens_metadata_cached_or_query,
 };
 
 // Orchestra wire values for the local rails, used as `source_chain` on send
@@ -101,9 +103,15 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
 /// Grace period to keep probing a receive quote before giving up.
 const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
+/// How long past expiry an unpaid Lightning-funded row stays open. A payment
+/// made before expiry can settle up to six hours after it
+/// (docs.flashnet.xyz/orchestra/onramp), and the extra ten minutes cover the
+/// order's status catching up and clock skew.
+const LIGHTNING_RECHECK_SECS: u64 = (6 * 60 + 10) * 60;
 /// How often a receive row is checked once it is off the every-tick cadence:
-/// an expired quote looking for a late deposit (Orchestra reprices those), and
-/// a funded row re-acquiring a rejected read token through `/submit`.
+/// an expired quote looking for a late deposit (Orchestra reprices those), a
+/// funded row re-acquiring a rejected read token through `/submit`, and an
+/// unpaid Lightning order.
 const RECEIVE_EXPIRED_PROBE_SECS: u64 = 10 * 60;
 
 /// One-cent margin (in 6-decimal USDB base units) covering Orchestra's
@@ -331,10 +339,10 @@ impl OrchestraService {
         let mut trigger_receiver = monitor_trigger.subscribe();
 
         platform_utils::spawn(async move {
-            // Probe clock for expired receive quotes, keyed by quote id.
-            // In-memory on purpose: a persisted one writes through
-            // `SyncedStorage` and replicates a bump to every device. A
-            // restart costs one extra probe per expired row.
+            // Probe clock for expired receive quotes and unpaid Lightning
+            // orders, keyed by quote id. In-memory on purpose: a persisted
+            // one writes through `SyncedStorage` and replicates a bump to
+            // every device. A restart costs one extra probe per such row.
             let mut probe_clock: HashMap<String, u64> = HashMap::new();
             // Last order status seen per send payment, so a status is logged
             // once when it changes rather than on every pass.
@@ -705,46 +713,51 @@ impl OrchestraService {
         let mut submits_throttled = false;
         for (row, data) in active {
             let quote_id = data.quote_id.clone();
-            let (row, data, order_id, status) =
-                if is_unfunded(&data) && is_past_receive_grace(&data) {
-                    // Long-stop for unfunded quotes
-                    match Self::recheck_unfunded_row(quoter, swap_storage, data).await {
-                        UnfundedRow::Paid(paid) => {
-                            let (data, status) = *paid;
-                            let order_id = status.order.id.clone();
-                            (row, data, order_id, Some(status))
-                        }
-                        UnfundedRow::Retry => continue,
-                        UnfundedRow::Close => {
-                            info!(
-                                "Orchestra receive {quote_id}: unfunded {RECEIVE_GRACE_SECS}s past \
-                             expiry, closing row"
-                            );
-                            if let Err(e) = swap_storage.mark_terminal(row).await {
-                                error!(
-                                    "Orchestra receive {quote_id}: failed to mark unfunded row \
-                                 terminal: {e:?}"
-                                );
-                            }
-                            continue;
-                        }
+            let lightning_check_due = is_awaiting_lightning_payment(&data, invoice_paid)
+                && is_probe_due(probe_clock, &quote_id);
+            let (row, data, order_id, status) = if is_unfunded(&data)
+                && (lightning_check_due || is_unfunded_recheck_due(&data, now))
+            {
+                if lightning_check_due {
+                    record_probe(probe_clock, &quote_id);
+                }
+                match Self::recheck_unfunded_row(quoter, swap_storage, data, now).await {
+                    UnfundedRow::Paid(paid) => {
+                        let (data, status) = *paid;
+                        let order_id = status.order.id.clone();
+                        (row, data, order_id, Some(status))
                     }
-                } else {
-                    let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
-                        swap_storage,
-                        client,
-                        row,
-                        data,
-                        probe_clock,
-                        invoice_paid,
-                        &mut submits_throttled,
-                    )
-                    .await
-                    else {
+                    UnfundedRow::Keep => continue,
+                    UnfundedRow::Close => {
+                        info!(
+                            "Orchestra receive {quote_id}: still unfunded past expiry, closing \
+                             row"
+                        );
+                        if let Err(e) = swap_storage.mark_terminal(row).await {
+                            error!(
+                                "Orchestra receive {quote_id}: failed to mark unfunded row \
+                                 terminal: {e:?}"
+                            );
+                        }
                         continue;
-                    };
-                    (row, data, order_id, status)
+                    }
+                }
+            } else {
+                let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
+                    swap_storage,
+                    client,
+                    row,
+                    data,
+                    probe_clock,
+                    invoice_paid,
+                    &mut submits_throttled,
+                )
+                .await
+                else {
+                    continue;
                 };
+                (row, data, order_id, status)
+            };
             if let Err(e) = Self::poll_receive_order_status(
                 storage,
                 swap_storage,
@@ -769,14 +782,17 @@ impl OrchestraService {
         Ok(())
     }
 
-    /// What to do with a row still unfunded a grace window past expiry. A
-    /// Lightning order can be paid while the wallet is offline, its payment
-    /// not synced yet. Its read token has expired by then, so it is looked up
-    /// in the explorer, and an order that took the payment is recorded paid.
+    /// What to do with an unfunded row due a check. A Lightning order is only
+    /// linked to its row on delivery, so one that took the payment and then
+    /// failed or was refunded, or whose delivery has not synced yet, still
+    /// looks unpaid. It is looked up in the explorer, which needs no read
+    /// token. An order that took the payment is recorded paid, and one that
+    /// hasn't is kept until a late payment can no longer settle.
     async fn recheck_unfunded_row(
         quoter: &OrchestraQuoter,
         swap_storage: &OrchestraStorageAdapter,
         mut data: OrchestraSwapData,
+        now: u64,
     ) -> UnfundedRow {
         let quote_id = data.quote_id.clone();
         if !is_lightning_funded(&data) {
@@ -784,24 +800,22 @@ impl OrchestraService {
         }
         let order = match quoter.find_order(&quote_id, None).await {
             Ok(Some(order)) if took_lightning_payment(order.status) => order,
-            Ok(_) => return UnfundedRow::Close,
+            Ok(_) if is_unfunded_recheck_due(&data, now) => return UnfundedRow::Close,
+            Ok(_) => return UnfundedRow::Keep,
             Err(e) => {
-                warn!(
-                    "Orchestra receive {quote_id}: order lookup failed, keeping the row for the \
-                     next pass: {e:?}"
-                );
-                return UnfundedRow::Retry;
+                warn!("Orchestra receive {quote_id}: order lookup failed, keeping the row: {e:?}");
+                return UnfundedRow::Keep;
             }
         };
         info!(
-            "Orchestra receive {quote_id}: Lightning order {:?} past the grace window, \
-             recording it paid",
+            "Orchestra receive {quote_id}: Lightning order {:?} took the payment, recording it \
+             paid",
             order.status
         );
         data.paid = true;
         if let Err(e) = swap_storage.upsert(&data).await {
             error!("Orchestra receive {quote_id}: failed to record payment: {e:?}");
-            return UnfundedRow::Retry;
+            return UnfundedRow::Keep;
         }
         UnfundedRow::Paid(Box::new((
             data,
@@ -1018,9 +1032,9 @@ impl OrchestraService {
     /// Polls `/status` for an in-flight order, or reads `prefetched` when the
     /// lookup that found the order already fetched it. On `Completed`
     /// attaches metadata to the inbound Spark Payment (caching it if the row
-    /// is not visible yet). On `Failed` / `Refunded` closes the row with no
-    /// metadata.
-    #[allow(clippy::too_many_arguments)]
+    /// is not visible yet). On `Failed` / `Refunded` records a failed payment
+    /// and closes the row with the outcome.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn poll_receive_order_status(
         storage: &Arc<dyn Storage>,
         swap_storage: &OrchestraStorageAdapter,
@@ -1121,11 +1135,16 @@ impl OrchestraService {
                 }
             }
             OrderStatus::Failed | OrderStatus::Refunded => {
-                info!(
-                    "Orchestra receive {quote_id} → {:?}, closing row without metadata",
-                    order.status
-                );
-                swap_storage.mark_terminal(row).await?;
+                Box::pin(Self::close_failed_receive(
+                    storage,
+                    swap_storage,
+                    spark_wallet,
+                    event_emitter,
+                    row,
+                    data,
+                    &order,
+                ))
+                .await?;
             }
             status if is_abandoned_lightning_order(&data, status, now_secs()) => {
                 info!(
@@ -1133,12 +1152,69 @@ impl OrchestraService {
                      past expiry, closing row",
                     order.status
                 );
-                swap_storage.mark_terminal(row).await?;
+                close_unpaid_lightning_row(swap_storage, row, data).await?;
             }
             // Non-terminal status.
             _ => {}
         }
         Ok(())
+    }
+
+    /// Records a receive whose order failed or was refunded as a failed
+    /// payment, and closes its row with the outcome so synced devices record
+    /// it too. A receive into a token whose metadata can't be read stays open
+    /// for the next tick, until a token still unknown past the grace window
+    /// closes it without a payment.
+    async fn close_failed_receive(
+        storage: &Arc<dyn Storage>,
+        swap_storage: &OrchestraStorageAdapter,
+        spark_wallet: &SparkWallet,
+        event_emitter: &EventEmitter,
+        row: crate::StoredCrossChainSwap,
+        data: OrchestraSwapData,
+        order: &Order,
+    ) -> Result<(), SdkError> {
+        let quote_id = data.quote_id.clone();
+        info!(
+            "Orchestra receive {quote_id} → {:?}{}, recording a failed payment",
+            order.status,
+            order_error(order)
+        );
+        let token_metadata = match data.token_identifier.as_deref() {
+            None => None,
+            Some(token_identifier) => {
+                let metadata = get_tokens_metadata_cached_or_query(
+                    spark_wallet,
+                    &ObjectCacheRepository::new(Arc::clone(storage)),
+                    &[token_identifier],
+                )
+                .await
+                .map(|metadata| metadata.into_iter().next());
+                match metadata {
+                    Ok(Some(metadata)) => Some(metadata.into()),
+                    Ok(None) => {
+                        return close_receive_into_unknown_token(
+                            swap_storage,
+                            row,
+                            &data,
+                            token_identifier,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        warn!("Orchestra receive {quote_id}: token metadata lookup failed: {e}");
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        let failure = receive_failure(order, token_metadata);
+        let data = OrchestraSwapData {
+            order_id: Some(order.id.clone()),
+            ..data
+        };
+        record_and_close_failed_receive(storage, swap_storage, event_emitter, row, data, failure)
+            .await
     }
 
     /// Creates an onramp order for a Lightning payment of `amount_sats` that
@@ -1874,9 +1950,8 @@ fn lightning_receive_request(
 }
 
 /// The receive row to persist and the details to report for an onramp order.
-/// The row holds the order id and read token from the start, so the monitor
-/// polls the order directly. Rejects an order whose `amountIn` is not the
-/// requested `amount_sats`, a provider fault.
+/// The row holds the order id and read token from the start. Rejects an order
+/// whose `amountIn` is not the requested `amount_sats`, a provider fault.
 fn lightning_receive_from_order(
     order: OnrampResponse,
     amount_sats: u64,
@@ -1919,6 +1994,7 @@ fn lightning_receive_from_order(
         fee_asset: Some(quote.fee_asset),
         fee_asset_decimals: service_fee_asset_decimals,
         expires_at,
+        failure: None,
     };
     let info = CrossChainReceiveInfo {
         quote_id: data.quote_id.clone(),
@@ -1942,10 +2018,10 @@ fn is_lightning_funded(data: &OrchestraSwapData) -> bool {
         .eq_ignore_ascii_case(SOURCE_CHAIN_LIGHTNING)
 }
 
-/// Whether a row is a Lightning-funded order nobody has paid. Its order has
-/// nothing to report until the payment comes in, which links the payment to
-/// the row and marks it paid, so it is not polled. `invoice_paid` says the
-/// payment just came in.
+/// Whether a row is a Lightning-funded order nobody has paid. Until the
+/// payment comes in, which links it to the row and marks it paid, the order
+/// is only looked up on the probe clock. `invoice_paid` says the payment just
+/// came in.
 fn is_awaiting_lightning_payment(data: &OrchestraSwapData, invoice_paid: bool) -> bool {
     is_lightning_funded(data) && !data.paid && !invoice_paid
 }
@@ -1956,28 +2032,60 @@ fn is_unfunded(data: &OrchestraSwapData) -> bool {
     data.order_id.is_none() || (is_lightning_funded(data) && !data.paid)
 }
 
-/// What the monitor does with a row still unfunded past its grace window.
+/// Whether an unfunded row is due its last check. A quote with no order waits
+/// a grace window past expiry for a late deposit. A Lightning order can't be
+/// paid after its expiry, so it waits only as long as a payment made before
+/// then can take to settle.
+fn is_unfunded_recheck_due(data: &OrchestraSwapData, now: u64) -> bool {
+    let wait = if is_lightning_funded(data) {
+        LIGHTNING_RECHECK_SECS
+    } else {
+        RECEIVE_GRACE_SECS
+    };
+    now >= data.expires_at.saturating_add(wait)
+}
+
+/// What the monitor does with a row still unfunded once its recheck is due.
 enum UnfundedRow {
     Close,
-    /// Keep it, and look again on the next pass.
-    Retry,
+    /// Keep it open, and look again on a later pass.
+    Keep,
     /// A Lightning order that took the payment, recorded paid, and its status.
     Paid(Box<(OrchestraSwapData, StatusResponse)>),
 }
 
 /// Whether a Lightning-funded order's status shows it took the payment.
-/// Before that it is processing, and it expires if never paid.
+/// Before that it is processing, and an order never paid expires or closes
+/// unfulfilled.
 fn took_lightning_payment(status: OrderStatus) -> bool {
-    !matches!(status, OrderStatus::Processing | OrderStatus::Expired)
+    !matches!(
+        status,
+        OrderStatus::Processing | OrderStatus::Expired | OrderStatus::Unfulfilled
+    )
 }
 
-/// Whether a paid Lightning-funded order is still processing, or has expired,
-/// a grace window after its expiry. A payment made before expiry settles well
-/// within the window, so such an order will not complete.
+/// Whether a paid Lightning-funded order is still processing, has expired or
+/// closed unfulfilled, a grace window after its expiry. A payment made before
+/// expiry settles well within the window, so such an order will not complete.
 fn is_abandoned_lightning_order(data: &OrchestraSwapData, status: OrderStatus, now: u64) -> bool {
     is_lightning_funded(data)
         && !took_lightning_payment(status)
         && now >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+}
+
+/// Closes an abandoned Lightning row. Its order never took the payment, so a
+/// row recorded paid in error is put back to unpaid. The closed row stays in
+/// storage and syncs, so it must not record a payment that never happened.
+async fn close_unpaid_lightning_row(
+    swap_storage: &OrchestraStorageAdapter,
+    row: crate::StoredCrossChainSwap,
+    data: OrchestraSwapData,
+) -> Result<(), SdkError> {
+    let data = OrchestraSwapData {
+        paid: false,
+        ..data
+    };
+    swap_storage.close_with(row, &data).await
 }
 
 /// Errors if `quoted_amount_in` differs from `requested_source_amount` by
@@ -3104,6 +3212,7 @@ impl CrossChainService for OrchestraService {
                 fee_asset: Some(quote.fee_asset),
                 fee_asset_decimals: prepared.info.service_fee_asset_decimals,
                 expires_at: prepared.info.expires_at,
+                failure: None,
             };
             let adapter = OrchestraStorageAdapter::new(Arc::clone(&self.storage));
             adapter.upsert(&data).await?;
@@ -3207,6 +3316,7 @@ impl CrossChainService for OrchestraService {
             estimated_out: prepared.estimated_out,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status,
             fee_amount: Some(prepared.fee_amount),
             service_fee_amount: Some(prepared.service_fee_amount),
@@ -3499,6 +3609,19 @@ fn retain_pending_orders<'a>(
     seen.retain(|id, _| pending.contains(id.as_str()));
 }
 
+/// The order's error code and message as a log suffix, empty when it has
+/// neither.
+fn order_error(order: &Order) -> String {
+    match (&order.error_code, &order.error_message) {
+        (None, None) => String::new(),
+        (code, message) => format!(
+            ", error {}: {}",
+            code.as_deref().unwrap_or("-"),
+            message.as_deref().unwrap_or("-")
+        ),
+    }
+}
+
 /// Logs the order's status when it changed since the last pass: WARN for a
 /// blocking status, INFO otherwise.
 fn log_order_status_change(
@@ -3509,14 +3632,7 @@ fn log_order_status_change(
     if !record_order_status(seen, payment_id, order.status) {
         return;
     }
-    let error = match (&order.error_code, &order.error_message) {
-        (None, None) => String::new(),
-        (code, message) => format!(
-            ", error {}: {}",
-            code.as_deref().unwrap_or("-"),
-            message.as_deref().unwrap_or("-")
-        ),
-    };
+    let error = order_error(order);
     if is_blocking_order_status(order.status) {
         warn!(
             "Orchestra: order {} for payment {payment_id} is {:?}{error}",
@@ -3595,6 +3711,7 @@ fn apply_terminal_status(
             estimated_out: *estimated_out,
             delivered_amount,
             external_tx_hash: status_response.order.destination_tx_hash.clone(),
+            refund_tx_hash: status_response.order.refund_tx_hash.clone(),
             status: new_status,
             fee_amount: updated_fee_amount,
             service_fee_amount: *service_fee_amount,
@@ -3778,6 +3895,7 @@ fn quote_time_receive_conversion_info(data: &OrchestraSwapData) -> ConversionInf
         estimated_out: data.expected_amount_out.parse::<u128>().unwrap_or(0),
         delivered_amount: None,
         external_tx_hash: None,
+        refund_tx_hash: None,
         status: ConversionStatus::Pending,
         fee_amount: fee.in_source_units,
         service_fee_amount: fee.amount,
@@ -3834,6 +3952,7 @@ async fn build_orchestra_receive_conversion_info(
         estimated_out,
         delivered_amount,
         external_tx_hash: order.source_tx_hash.clone(),
+        refund_tx_hash: None,
         status: ConversionStatus::Completed,
         // Realized total fee in source-asset units.
         fee_amount,
@@ -3845,8 +3964,195 @@ async fn build_orchestra_receive_conversion_info(
     }
 }
 
-/// Whether a pre-order receive row is past the grace window past
-/// `expires_at`, at which point the poller stops checking it for a deposit.
+/// The outcome a `Failed` or `Refunded` receive order records on its row.
+fn receive_failure(order: &Order, token_metadata: Option<PaymentTokenMetadata>) -> ReceiveFailure {
+    let status = if order.status == OrderStatus::Refunded {
+        ConversionStatus::Refunded
+    } else {
+        ConversionStatus::Failed
+    };
+    ReceiveFailure {
+        status,
+        deposit_amount: order.amount_in.clone(),
+        deposit_tx_hash: order.source_tx_hash.clone(),
+        refund_tx_hash: order.refund_tx_hash.clone(),
+        created_at: parse_rfc3339_to_unix_seconds(&order.created_at).unwrap_or_else(|_| now_secs()),
+        token_metadata,
+    }
+}
+
+/// The conversion of a receive whose order failed or was refunded: the
+/// quote-time view with the deposit and refund the order reported. The fee
+/// stays the quote estimate, since the order converted nothing.
+fn failed_receive_conversion_info(
+    data: &OrchestraSwapData,
+    failure: &ReceiveFailure,
+) -> ConversionInfo {
+    let mut info = quote_time_receive_conversion_info(data);
+    if let ConversionInfo::Orchestra {
+        status,
+        asset_amount_in,
+        external_tx_hash,
+        refund_tx_hash,
+        ..
+    } = &mut info
+    {
+        status.clone_from(&failure.status);
+        if let Some(deposit) = failure
+            .deposit_amount
+            .as_deref()
+            .and_then(|s| s.parse::<u128>().ok())
+        {
+            *asset_amount_in = Some(deposit);
+        }
+        external_tx_hash.clone_from(&failure.deposit_tx_hash);
+        refund_tx_hash.clone_from(&failure.refund_tx_hash);
+    }
+    info
+}
+
+/// The payment recording a receive whose order failed or was refunded. Its
+/// id is the quote id: nothing arrived over Spark, so there is no transfer to
+/// name it after. The amount is what the quote said would be received.
+fn failed_receive_payment(
+    data: &OrchestraSwapData,
+    failure: &ReceiveFailure,
+    conversion_info: ConversionInfo,
+) -> Payment {
+    let (method, details) = match &failure.token_metadata {
+        Some(metadata) => (
+            PaymentMethod::Token,
+            PaymentDetails::Token {
+                metadata: metadata.clone(),
+                tx_hash: String::new(),
+                tx_type: TokenTransactionType::Transfer,
+                invoice_details: None,
+                conversion_info: Some(conversion_info),
+            },
+        ),
+        None => (
+            PaymentMethod::Spark,
+            PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: Some(conversion_info),
+            },
+        ),
+    };
+    Payment {
+        id: data.quote_id.clone(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Failed,
+        amount: data.expected_amount_out.parse::<u128>().unwrap_or(0),
+        fees: 0,
+        timestamp: failure.created_at,
+        method,
+        details: Some(details),
+        conversion_details: None,
+    }
+}
+
+/// Records `failure` as a failed payment, closes the row with it, and
+/// announces the payment when it is newly stored.
+async fn record_and_close_failed_receive(
+    storage: &Arc<dyn Storage>,
+    swap_storage: &OrchestraStorageAdapter,
+    event_emitter: &EventEmitter,
+    row: crate::StoredCrossChainSwap,
+    mut data: OrchestraSwapData,
+    failure: ReceiveFailure,
+) -> Result<(), SdkError> {
+    let (recorded, closed) = {
+        let _serialized = super::RECEIVE_CONVERSION_WRITES.lock().await;
+        let recorded = record_failed_receive(storage, &data, &failure).await?;
+        data.failure = Some(failure);
+        (recorded, swap_storage.close_with(row, &data).await)
+    };
+    // Announced even when the close failed: the retry finds the payment
+    // already stored and has nothing to announce.
+    if let Some(payment) = recorded {
+        get_payment_and_emit_event(storage, event_emitter, payment).await;
+    }
+    closed
+}
+
+/// Stores the failed payment for a receive row carrying `failure`, returning
+/// it when it was not stored yet. A failed or refunded order delivered
+/// nothing over Spark, so no other payment represents the receive.
+async fn record_failed_receive(
+    storage: &Arc<dyn Storage>,
+    data: &OrchestraSwapData,
+    failure: &ReceiveFailure,
+) -> Result<Option<Payment>, SdkError> {
+    let conversion_info = failed_receive_conversion_info(data, failure);
+    let payment = failed_receive_payment(data, failure, conversion_info.clone());
+    // Storage keeps conversion info apart from the payment row.
+    storage
+        .insert_payment_metadata(
+            payment.id.clone(),
+            crate::PaymentMetadata {
+                conversion_info: Some(conversion_info),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let stored = storage.apply_payment_update(payment.clone()).await?;
+    Ok(stored.then_some(payment))
+}
+
+/// Leaves a failed receive into a token with no known metadata for the next
+/// tick, and closes its row without a payment once the grace window is over.
+/// A token payment can't be recorded without the token's details.
+async fn close_receive_into_unknown_token(
+    swap_storage: &OrchestraStorageAdapter,
+    row: crate::StoredCrossChainSwap,
+    data: &OrchestraSwapData,
+    token_identifier: &str,
+) -> Result<(), SdkError> {
+    let quote_id = &data.quote_id;
+    if !is_past_receive_grace(data) {
+        warn!("Orchestra receive {quote_id}: no metadata for {token_identifier}");
+        return Ok(());
+    }
+    warn!(
+        "Orchestra receive {quote_id}: no metadata for {token_identifier} within the grace \
+         window, closing row without a payment"
+    );
+    swap_storage.mark_terminal(row).await
+}
+
+/// Records the failed payment a closed receive row carries in its `failure`.
+/// `emit` announces it when it is newly stored.
+pub(crate) async fn record_synced_failed_receive(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    row: &crate::StoredCrossChainSwap,
+    emit: bool,
+) -> Result<(), SdkError> {
+    if !row.is_terminal {
+        return Ok(());
+    }
+    let data = match serde_json::from_str::<OrchestraSwapData>(&row.data) {
+        Ok(data) => data,
+        Err(e) => {
+            warn!(
+                "Skipping synced Orchestra row '{}': failed to parse data: {e}",
+                row.id
+            );
+            return Ok(());
+        }
+    };
+    let Some(failure) = &data.failure else {
+        return Ok(());
+    };
+    let recorded = record_failed_receive(storage, &data, failure).await?;
+    if emit && let Some(payment) = recorded {
+        get_payment_and_emit_event(storage, event_emitter, payment).await;
+    }
+    Ok(())
+}
+
+/// Whether a receive row is a grace window past `expires_at`.
 fn is_past_receive_grace(data: &OrchestraSwapData) -> bool {
     now_secs() >= data.expires_at.saturating_add(RECEIVE_GRACE_SECS)
 }
@@ -4108,6 +4414,7 @@ mod tests {
             fee_asset: Some("USDC".to_string()),
             fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
+            failure: None,
         };
         let order = Order {
             id: "ord_xyz".to_string(),
@@ -4218,6 +4525,7 @@ mod tests {
             fee_asset: Some("USDC".to_string()),
             fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
+            failure: None,
         };
         let mut order = Order {
             id: "ord_usdb".to_string(),
@@ -5357,6 +5665,7 @@ mod tests {
             fee_asset: Some("USDC".to_string()),
             fee_asset_decimals: Some(6),
             expires_at: 1_700_000_120,
+            failure: None,
         }
     }
 
@@ -5590,6 +5899,7 @@ mod tests {
             estimated_out: 1_000_000,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: ConversionStatus::Pending,
             fee_amount: Some(10_000),
             service_fee_amount: Some(50),
@@ -5850,6 +6160,7 @@ mod tests {
                 estimated_out,
                 delivered_amount,
                 external_tx_hash,
+                refund_tx_hash: None,
                 status,
                 fee_amount: Some(10_000),
                 service_fee_amount,
@@ -6520,6 +6831,394 @@ mod tests {
             .await
             .unwrap();
         assert!(matched.is_none());
+    }
+
+    // ---- failed and refunded receives ----
+
+    fn refunded_receive_order() -> Order {
+        let mut order = status_response_with_destination(OrderStatus::Refunded, None, None).order;
+        order.amount_in = Some("98".to_string());
+        order.source_tx_hash = Some("0xdeposit".to_string());
+        order.refund_tx_hash = Some("0xrefund".to_string());
+        order.created_at = "2023-11-14T22:13:20Z".to_string();
+        order
+    }
+
+    fn ordered_receive_swap_data() -> OrchestraSwapData {
+        OrchestraSwapData {
+            order_id: Some("ord1".to_string()),
+            ..receive_swap_data()
+        }
+    }
+
+    fn usdb_metadata() -> PaymentTokenMetadata {
+        PaymentTokenMetadata {
+            identifier: "btkn1usdb".to_string(),
+            issuer_public_key: "02issuer".to_string(),
+            name: "USDB".to_string(),
+            ticker: "USDB".to_string(),
+            decimals: 6,
+            max_supply: u128::MAX,
+            is_freezable: false,
+        }
+    }
+
+    #[test_all]
+    fn a_refunded_receive_order_records_its_refund() {
+        let failure = receive_failure(&refunded_receive_order(), None);
+        assert_eq!(failure.status, ConversionStatus::Refunded);
+        assert_eq!(failure.deposit_amount.as_deref(), Some("98"));
+        assert_eq!(failure.deposit_tx_hash.as_deref(), Some("0xdeposit"));
+        assert_eq!(failure.refund_tx_hash.as_deref(), Some("0xrefund"));
+        assert_eq!(failure.created_at, 1_700_000_000);
+
+        let mut order = refunded_receive_order();
+        order.status = OrderStatus::Failed;
+        assert_eq!(
+            receive_failure(&order, None).status,
+            ConversionStatus::Failed
+        );
+    }
+
+    #[test_all]
+    fn a_failed_receive_conversion_reports_the_deposit_and_refund() {
+        let data = ordered_receive_swap_data();
+        let failure = receive_failure(&refunded_receive_order(), None);
+        let ConversionInfo::Orchestra {
+            order_id,
+            quote_id,
+            asset_amount_in,
+            delivered_amount,
+            external_tx_hash,
+            refund_tx_hash,
+            status,
+            fee_amount,
+            ..
+        } = failed_receive_conversion_info(&data, &failure)
+        else {
+            panic!("expected Orchestra conversion info");
+        };
+        assert_eq!(order_id, "ord1");
+        assert_eq!(quote_id, "q_xyz");
+        assert_eq!(status, ConversionStatus::Refunded);
+        assert_eq!(asset_amount_in, Some(98));
+        assert_eq!(delivered_amount, None);
+        assert_eq!(external_tx_hash.as_deref(), Some("0xdeposit"));
+        assert_eq!(refund_tx_hash.as_deref(), Some("0xrefund"));
+        let ConversionInfo::Orchestra {
+            fee_amount: quote_fee,
+            ..
+        } = quote_time_receive_conversion_info(&data)
+        else {
+            unreachable!();
+        };
+        assert_eq!(fee_amount, quote_fee, "the fee stays the quote estimate");
+    }
+
+    #[test_all]
+    fn a_failed_receive_is_a_failed_spark_receive_named_after_its_quote() {
+        let data = ordered_receive_swap_data();
+        let failure = receive_failure(&refunded_receive_order(), None);
+        let info = failed_receive_conversion_info(&data, &failure);
+        let payment = failed_receive_payment(&data, &failure, info);
+        assert_eq!(payment.id, "q_xyz");
+        assert_eq!(payment.payment_type, PaymentType::Receive);
+        assert_eq!(payment.status, PaymentStatus::Failed);
+        assert_eq!(payment.amount, 50_000, "the quoted amount");
+        assert_eq!(payment.fees, 0);
+        assert_eq!(payment.timestamp, 1_700_000_000);
+        assert_eq!(payment.method, PaymentMethod::Spark);
+        assert!(matches!(
+            payment.details,
+            Some(PaymentDetails::Spark {
+                invoice_details: None,
+                htlc_details: None,
+                conversion_info: Some(ConversionInfo::Orchestra { .. }),
+            })
+        ));
+    }
+
+    #[test_all]
+    fn a_failed_receive_to_a_token_is_a_token_receive() {
+        let data = ordered_receive_swap_data();
+        let failure = receive_failure(&refunded_receive_order(), Some(usdb_metadata()));
+        let info = failed_receive_conversion_info(&data, &failure);
+        let payment = failed_receive_payment(&data, &failure, info);
+        assert_eq!(payment.method, PaymentMethod::Token);
+        let Some(PaymentDetails::Token {
+            metadata,
+            tx_type,
+            conversion_info,
+            ..
+        }) = payment.details
+        else {
+            panic!("expected Token details");
+        };
+        assert_eq!(metadata, usdb_metadata());
+        assert_eq!(tx_type, TokenTransactionType::Transfer);
+        assert!(conversion_info.is_some());
+    }
+
+    #[test_all]
+    fn a_refunded_send_carries_its_refund_transaction() {
+        let info = orchestra_info("ord1", "q1");
+        let mut resp = status_response(OrderStatus::Refunded, None);
+        resp.order.refund_tx_hash = Some("refund_tx".to_string());
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        let Some(ConversionInfo::Orchestra { refund_tx_hash, .. }) = updated.conversion_info else {
+            panic!("expected Orchestra conversion info");
+        };
+        assert_eq!(refund_tx_hash.as_deref(), Some("refund_tx"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    struct RecordingListener(Arc<std::sync::Mutex<Vec<SdkEvent>>>);
+
+    #[cfg(feature = "sqlite")]
+    #[macros::async_trait]
+    impl EventListener for RecordingListener {
+        async fn on_event(&self, event: SdkEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn recording_emitter() -> (EventEmitter, Arc<std::sync::Mutex<Vec<SdkEvent>>>) {
+        let emitter = EventEmitter::new(false);
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        emitter
+            .add_external_listener(Box::new(RecordingListener(Arc::clone(&events))))
+            .await;
+        (emitter, events)
+    }
+
+    #[cfg(feature = "sqlite")]
+    fn closed_receive_row(failure: Option<ReceiveFailure>) -> crate::StoredCrossChainSwap {
+        let data = OrchestraSwapData {
+            failure,
+            ..ordered_receive_swap_data()
+        };
+        crate::StoredCrossChainSwap {
+            is_terminal: true,
+            ..stored_receive_row(&data)
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn recording_a_refunded_receive_stores_a_failed_payment_once() {
+        let storage = sqlite_storage();
+        let data = ordered_receive_swap_data();
+        let failure = receive_failure(&refunded_receive_order(), None);
+
+        let recorded = record_failed_receive(&storage, &data, &failure)
+            .await
+            .unwrap();
+        assert!(recorded.is_some());
+
+        let payment = crate::utils::payments::get_payment_with_conversion_details(
+            "q_xyz".to_string(),
+            Arc::clone(&storage),
+        )
+        .await
+        .unwrap();
+        assert_eq!(payment.status, PaymentStatus::Failed);
+        assert_eq!(
+            payment.conversion_details.map(|details| details.status),
+            Some(ConversionStatus::Refunded)
+        );
+        assert!(matches!(
+            payment.details,
+            Some(PaymentDetails::Spark {
+                conversion_info: Some(ConversionInfo::Orchestra { refund_tx_hash: Some(hash), .. }),
+                ..
+            }) if hash == "0xrefund"
+        ));
+
+        let again = record_failed_receive(&storage, &data, &failure)
+            .await
+            .unwrap();
+        assert!(
+            again.is_none(),
+            "an unchanged payment is not announced twice"
+        );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_refunded_receive_is_recorded_closed_and_announced() {
+        let storage = sqlite_storage();
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let (emitter, events) = recording_emitter().await;
+        swap_storage
+            .upsert(&ordered_receive_swap_data())
+            .await
+            .unwrap();
+        let (row, data) = swap_storage.list_active().await.unwrap().remove(0);
+        let failure = receive_failure(&refunded_receive_order(), None);
+
+        record_and_close_failed_receive(
+            &storage,
+            &swap_storage,
+            &emitter,
+            row,
+            data,
+            failure.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert!(swap_storage.list_active().await.unwrap().is_empty());
+        let closed = storage
+            .get_cross_chain_swap(
+                super::storage_adapter::PROVIDER_TAG_ORCHESTRA.to_string(),
+                "q_xyz".to_string(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(closed.is_terminal);
+        let closed: OrchestraSwapData = serde_json::from_str(&closed.data).unwrap();
+        assert_eq!(closed.failure, Some(failure));
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            SdkEvent::PaymentFailed { payment } if payment.id == "q_xyz"
+        ));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_failed_receive_into_an_unknown_token_closes_after_the_grace_window() {
+        let live = now_secs().saturating_add(60);
+        let past_grace = 1_700_000_120;
+        for (expires_at, closed) in [(live, false), (past_grace, true)] {
+            let storage = sqlite_storage();
+            let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+            swap_storage
+                .upsert(&OrchestraSwapData {
+                    expires_at,
+                    token_identifier: Some("btkn1usdb".to_string()),
+                    ..ordered_receive_swap_data()
+                })
+                .await
+                .unwrap();
+            let (row, data) = swap_storage.list_active().await.unwrap().remove(0);
+
+            close_receive_into_unknown_token(&swap_storage, row, &data, "btkn1usdb")
+                .await
+                .unwrap();
+
+            assert_eq!(
+                swap_storage.list_active().await.unwrap().is_empty(),
+                closed,
+                "expires_at {expires_at}"
+            );
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_refunded_token_receive_is_stored_as_a_token_payment() {
+        let storage = sqlite_storage();
+        let data = ordered_receive_swap_data();
+        let failure = receive_failure(&refunded_receive_order(), Some(usdb_metadata()));
+
+        record_failed_receive(&storage, &data, &failure)
+            .await
+            .unwrap();
+
+        let payment = crate::utils::payments::get_payment_with_conversion_details(
+            "q_xyz".to_string(),
+            Arc::clone(&storage),
+        )
+        .await
+        .unwrap();
+        assert_eq!(payment.method, PaymentMethod::Token);
+        assert!(matches!(
+            payment.details,
+            Some(PaymentDetails::Token { metadata, conversion_info: Some(_), .. })
+                if metadata == usdb_metadata()
+        ));
+        assert_eq!(
+            payment.conversion_details.map(|details| details.status),
+            Some(ConversionStatus::Refunded)
+        );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_synced_closed_receive_records_and_announces_the_failed_payment() {
+        let storage = sqlite_storage();
+        let (emitter, events) = recording_emitter().await;
+        let failure = receive_failure(&refunded_receive_order(), None);
+        let row = closed_receive_row(Some(failure));
+
+        crate::cross_chain::apply_synced_swap(&storage, &emitter, &row, true)
+            .await
+            .unwrap();
+        crate::cross_chain::apply_synced_swap(&storage, &emitter, &row, true)
+            .await
+            .unwrap();
+
+        let payment = storage
+            .get_payment_by_id("q_xyz".to_string())
+            .await
+            .unwrap();
+        assert_eq!(payment.status, PaymentStatus::Failed);
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1, "announced once");
+        assert!(matches!(
+            &events[0],
+            SdkEvent::PaymentFailed { payment } if payment.id == "q_xyz"
+        ));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_replayed_closed_receive_records_the_failed_payment_silently() {
+        let storage = sqlite_storage();
+        let (emitter, events) = recording_emitter().await;
+        let failure = receive_failure(&refunded_receive_order(), None);
+
+        crate::cross_chain::apply_synced_swap(
+            &storage,
+            &emitter,
+            &closed_receive_row(Some(failure)),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(storage.get_payment_by_id("q_xyz".to_string()).await.is_ok());
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_synced_receive_without_a_failure_records_nothing() {
+        let storage = sqlite_storage();
+        let (emitter, events) = recording_emitter().await;
+        let failure = receive_failure(&refunded_receive_order(), None);
+        let open = crate::StoredCrossChainSwap {
+            is_terminal: false,
+            ..closed_receive_row(Some(failure))
+        };
+
+        for row in [closed_receive_row(None), open] {
+            crate::cross_chain::apply_synced_swap(&storage, &emitter, &row, true)
+                .await
+                .unwrap();
+        }
+
+        assert!(
+            storage
+                .get_payment_by_id("q_xyz".to_string())
+                .await
+                .is_err()
+        );
+        assert!(events.lock().unwrap().is_empty());
     }
 
     // ---- order lookup ----
@@ -7675,6 +8374,7 @@ mod tests {
         for (status, paid) in [
             ("processing", false),
             ("expired", false),
+            ("unfulfilled", false),
             ("delivering", true),
             ("completed", true),
             ("refunded", true),
@@ -7711,7 +8411,7 @@ mod tests {
     }
 
     #[test_all]
-    fn an_unpaid_lightning_order_is_not_polled_until_its_payment_comes_in() {
+    fn an_unpaid_lightning_order_awaits_its_payment_until_it_comes_in() {
         let data = lightning_receive_row("6500");
         assert!(is_awaiting_lightning_payment(&data, false));
         assert!(is_unfunded(&data));
@@ -7732,10 +8432,32 @@ mod tests {
     }
 
     #[test_all]
+    fn an_unpaid_lightning_order_is_rechecked_once_a_late_payment_could_have_settled() {
+        let lightning = lightning_receive_row("6500");
+        let due = lightning.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
+        assert!(!is_unfunded_recheck_due(&lightning, due.saturating_sub(1)));
+        assert!(is_unfunded_recheck_due(&lightning, due));
+        // A quote with no order waits the grace window for a late deposit.
+        let quote = receive_swap_data();
+        assert!(!is_unfunded_recheck_due(
+            &quote,
+            quote.expires_at.saturating_add(LIGHTNING_RECHECK_SECS)
+        ));
+        assert!(is_unfunded_recheck_due(
+            &quote,
+            quote.expires_at.saturating_add(RECEIVE_GRACE_SECS)
+        ));
+    }
+
+    #[test_all]
     fn a_lightning_order_still_waiting_after_the_grace_window_is_abandoned() {
         let data = lightning_receive_row("6500");
         let closed_at = data.expires_at.saturating_add(RECEIVE_GRACE_SECS);
-        for status in [OrderStatus::Processing, OrderStatus::Expired] {
+        for status in [
+            OrderStatus::Processing,
+            OrderStatus::Expired,
+            OrderStatus::Unfulfilled,
+        ] {
             assert!(!is_abandoned_lightning_order(
                 &data,
                 status,
@@ -7744,7 +8466,7 @@ mod tests {
             assert!(is_abandoned_lightning_order(&data, status, closed_at));
         }
         // An order that took the payment is not abandoned.
-        for status in [OrderStatus::Delivering, OrderStatus::Unfulfilled] {
+        for status in [OrderStatus::Delivering, OrderStatus::Completed] {
             assert!(!is_abandoned_lightning_order(&data, status, closed_at));
         }
         // Nor is a waiting order of another receive.
@@ -7754,6 +8476,108 @@ mod tests {
             OrderStatus::Processing,
             other.expires_at.saturating_add(RECEIVE_GRACE_SECS)
         ));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_late_lightning_order_closed_unfulfilled_is_not_recorded_paid() {
+        for (status, paid) in [("unfulfilled", false), ("delivering", true)] {
+            let storage = sqlite_storage();
+            let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+            // `explorer_body` lists its orders under quote `q_1`, and the
+            // lookup drops orders of other quotes.
+            let data = OrchestraSwapData {
+                quote_id: "q_1".to_string(),
+                ..lightning_receive_row("6500")
+            };
+            swap_storage.upsert(&data).await.unwrap();
+            let http = FakeOrchestra::new(
+                unused(),
+                &[("q_1", (200, explorer_body(&[("ord_1", status, None)])))],
+            );
+
+            let cutoff = data.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
+
+            let outcome =
+                OrchestraService::recheck_unfunded_row(&quoter(http), &swap_storage, data, cutoff)
+                    .await;
+
+            if paid {
+                assert!(matches!(outcome, UnfundedRow::Paid(_)), "{status}");
+            } else {
+                assert!(matches!(outcome, UnfundedRow::Close), "{status}");
+            }
+            let (_, stored) = swap_storage.list_active().await.unwrap().remove(0);
+            assert_eq!(stored.paid, paid, "{status}");
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn an_unpaid_lightning_order_is_kept_open_until_a_late_payment_can_no_longer_settle() {
+        let storage = sqlite_storage();
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let data = OrchestraSwapData {
+            quote_id: "q_1".to_string(),
+            ..lightning_receive_row("6500")
+        };
+        swap_storage.upsert(&data).await.unwrap();
+        let cutoff = data.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
+        let recheck = |status: &str, now: u64| {
+            let http = FakeOrchestra::new(
+                unused(),
+                &[("q_1", (200, explorer_body(&[("ord_1", status, None)])))],
+            );
+            let (swap_storage, data) = (&swap_storage, data.clone());
+            async move {
+                OrchestraService::recheck_unfunded_row(&quoter(http), swap_storage, data, now).await
+            }
+        };
+
+        // A payment made before expiry can still settle.
+        for now in [data.expires_at, cutoff.saturating_sub(1)] {
+            for status in ["processing", "unfulfilled", "expired"] {
+                let outcome = recheck(status, now).await;
+                assert!(matches!(outcome, UnfundedRow::Keep), "{status} at {now}");
+            }
+        }
+        assert!(matches!(
+            recheck("unfulfilled", cutoff).await,
+            UnfundedRow::Close
+        ));
+        // A refund is seen before expiry, without waiting for the cutoff.
+        let outcome = recheck("refunded", data.expires_at.saturating_sub(1)).await;
+        assert!(matches!(outcome, UnfundedRow::Paid(_)));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn closing_an_abandoned_lightning_row_puts_it_back_to_unpaid() {
+        let storage = sqlite_storage();
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let data = OrchestraSwapData {
+            paid: true,
+            ..lightning_receive_row("6500")
+        };
+        swap_storage.upsert(&data).await.unwrap();
+        let (row, data) = swap_storage.list_active().await.unwrap().remove(0);
+
+        close_unpaid_lightning_row(&swap_storage, row, data.clone())
+            .await
+            .unwrap();
+
+        assert!(swap_storage.list_active().await.unwrap().is_empty());
+        let closed = storage
+            .get_cross_chain_swap(
+                super::storage_adapter::PROVIDER_TAG_ORCHESTRA.to_string(),
+                data.quote_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(closed.is_terminal);
+        let closed: OrchestraSwapData = serde_json::from_str(&closed.data).unwrap();
+        assert!(!closed.paid);
     }
 
     #[async_test_all]

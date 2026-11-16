@@ -653,7 +653,8 @@ public static class Commands
                     destination: destination,
                     feeMode: feeMode,
                     maxSlippageBps: ParseOptionalUint(crossChainMaxSlippageStr),
-                    targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr)
+                    targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr),
+                    refundAddress: null
                 );
                 break;
 
