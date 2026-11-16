@@ -351,11 +351,8 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         )
         ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
         ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)')
-        ..addFlag(
-          'cross-chain-to-bitcoin',
-          defaultsTo: false,
-          help: 'Deliver cross-chain receive as Bitcoin',
-        );
+        ..addFlag('cross-chain-to-bitcoin', defaultsTo: false, help: 'Deliver cross-chain receive as Bitcoin')
+        ..addOption('cross-chain-refund-address', help: "Payer's address on the route's chain for refunds");
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -436,6 +433,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
       final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
       final targetOverpayBpsStr = results.option('cross-chain-target-overpay-bps');
       final targetOverpayBps = targetOverpayBpsStr != null ? int.parse(targetOverpayBpsStr) : null;
+      final crossChainRefundAddress = results.option('cross-chain-refund-address');
       SparkAsset? destination;
       if (crossChainToBitcoin) {
         destination = SparkAsset.bitcoin();
@@ -449,6 +447,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         feeMode: feeMode,
         maxSlippageBps: maxSlippageBps,
         targetOverpayBps: targetOverpayBps,
+        refundAddress: crossChainRefundAddress,
       );
     default:
       print('Invalid payment method: $method');

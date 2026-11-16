@@ -251,6 +251,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('--cross-chain-fees-included', 'Deduct fees from the specified amount for cross-chain receives', false)
     .option('--cross-chain-target-overpay-bps <bps>', 'Overpay buffer in basis points for cross-chain receives (0..500)', parseInt)
     .option('--cross-chain-to-bitcoin', 'Deliver a cross-chain receive as Bitcoin (sats) instead of the active stable-balance token', false)
+    .option('--cross-chain-refund-address <address>', 'Payer\'s address on the route\'s chain for refunding undeliverable cross-chain deposits')
     .action(async (options) => {
       const sdk = getSdk()
       let paymentMethod
@@ -334,7 +335,8 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
             destination,
             feeMode,
             maxSlippageBps: options.crossChainMaxSlippageBps,
-            targetOverpayBps: options.crossChainTargetOverpayBps
+            targetOverpayBps: options.crossChainTargetOverpayBps,
+            refundAddress: options.crossChainRefundAddress
           }
           break
         }

@@ -307,6 +307,8 @@ def _build_receive_parser():
                    help="Overpay buffer in basis points for fees-excluded mode (0..500)")
     p.add_argument("--cross-chain-to-bitcoin", action="store_true", default=False,
                    help="Deliver a cross-chain receive as Bitcoin (sats) instead of the active stable-balance token")
+    p.add_argument("--cross-chain-refund-address", default=None,
+                   help="Payer's address on the route's chain for refunds if delivery fails")
     return p
 
 async def _handle_receive(sdk, _token_issuer, session, args):
@@ -377,7 +379,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             fee_mode=fee_mode,
             max_slippage_bps=args.cross_chain_max_slippage_bps,
             target_overpay_bps=args.cross_chain_target_overpay_bps,
-            refund_address=None,
+            refund_address=args.cross_chain_refund_address,
         )
     else:
         print(f"Invalid payment method: {method}")
