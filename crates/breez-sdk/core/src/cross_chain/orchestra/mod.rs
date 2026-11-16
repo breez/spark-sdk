@@ -103,13 +103,15 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
 /// Grace period to keep probing a receive quote before giving up.
 const RECEIVE_GRACE_SECS: u64 = 24 * 60 * 60;
-/// How long past expiry an unpaid Lightning-funded row waits before its order
-/// is looked up. Only a payment made before expiry can settle, and the wait
-/// covers one still settling, the order's status catching up, and clock skew.
-const LIGHTNING_RECHECK_SECS: u64 = 10 * 60;
+/// How long past expiry an unpaid Lightning-funded row stays open. A payment
+/// made before expiry can settle up to six hours after it
+/// (docs.flashnet.xyz/orchestra/onramp), and the extra ten minutes cover the
+/// order's status catching up and clock skew.
+const LIGHTNING_RECHECK_SECS: u64 = (6 * 60 + 10) * 60;
 /// How often a receive row is checked once it is off the every-tick cadence:
-/// an expired quote looking for a late deposit (Orchestra reprices those), and
-/// a funded row re-acquiring a rejected read token through `/submit`.
+/// an expired quote looking for a late deposit (Orchestra reprices those), a
+/// funded row re-acquiring a rejected read token through `/submit`, and an
+/// unpaid Lightning order.
 const RECEIVE_EXPIRED_PROBE_SECS: u64 = 10 * 60;
 
 /// One-cent margin (in 6-decimal USDB base units) covering Orchestra's
@@ -337,10 +339,10 @@ impl OrchestraService {
         let mut trigger_receiver = monitor_trigger.subscribe();
 
         platform_utils::spawn(async move {
-            // Probe clock for expired receive quotes, keyed by quote id.
-            // In-memory on purpose: a persisted one writes through
-            // `SyncedStorage` and replicates a bump to every device. A
-            // restart costs one extra probe per expired row.
+            // Probe clock for expired receive quotes and unpaid Lightning
+            // orders, keyed by quote id. In-memory on purpose: a persisted
+            // one writes through `SyncedStorage` and replicates a bump to
+            // every device. A restart costs one extra probe per such row.
             let mut probe_clock: HashMap<String, u64> = HashMap::new();
             // Last order status seen per send payment, so a status is logged
             // once when it changes rather than on every pass.
@@ -711,46 +713,51 @@ impl OrchestraService {
         let mut submits_throttled = false;
         for (row, data) in active {
             let quote_id = data.quote_id.clone();
-            let (row, data, order_id, status) =
-                if is_unfunded(&data) && is_unfunded_recheck_due(&data, now) {
-                    // Long-stop for unfunded quotes
-                    match Self::recheck_unfunded_row(quoter, swap_storage, data).await {
-                        UnfundedRow::Paid(paid) => {
-                            let (data, status) = *paid;
-                            let order_id = status.order.id.clone();
-                            (row, data, order_id, Some(status))
-                        }
-                        UnfundedRow::Retry => continue,
-                        UnfundedRow::Close => {
-                            info!(
-                                "Orchestra receive {quote_id}: still unfunded past expiry, closing \
-                             row"
-                            );
-                            if let Err(e) = swap_storage.mark_terminal(row).await {
-                                error!(
-                                    "Orchestra receive {quote_id}: failed to mark unfunded row \
-                                 terminal: {e:?}"
-                                );
-                            }
-                            continue;
-                        }
+            let lightning_check_due = is_awaiting_lightning_payment(&data, invoice_paid)
+                && is_probe_due(probe_clock, &quote_id);
+            let (row, data, order_id, status) = if is_unfunded(&data)
+                && (lightning_check_due || is_unfunded_recheck_due(&data, now))
+            {
+                if lightning_check_due {
+                    record_probe(probe_clock, &quote_id);
+                }
+                match Self::recheck_unfunded_row(quoter, swap_storage, data, now).await {
+                    UnfundedRow::Paid(paid) => {
+                        let (data, status) = *paid;
+                        let order_id = status.order.id.clone();
+                        (row, data, order_id, Some(status))
                     }
-                } else {
-                    let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
-                        swap_storage,
-                        client,
-                        row,
-                        data,
-                        probe_clock,
-                        invoice_paid,
-                        &mut submits_throttled,
-                    )
-                    .await
-                    else {
+                    UnfundedRow::Keep => continue,
+                    UnfundedRow::Close => {
+                        info!(
+                            "Orchestra receive {quote_id}: still unfunded past expiry, closing \
+                             row"
+                        );
+                        if let Err(e) = swap_storage.mark_terminal(row).await {
+                            error!(
+                                "Orchestra receive {quote_id}: failed to mark unfunded row \
+                                 terminal: {e:?}"
+                            );
+                        }
                         continue;
-                    };
-                    (row, data, order_id, status)
+                    }
+                }
+            } else {
+                let Some(((row, data, order_id), status)) = Self::ensure_receive_order_handle(
+                    swap_storage,
+                    client,
+                    row,
+                    data,
+                    probe_clock,
+                    invoice_paid,
+                    &mut submits_throttled,
+                )
+                .await
+                else {
+                    continue;
                 };
+                (row, data, order_id, status)
+            };
             if let Err(e) = Self::poll_receive_order_status(
                 storage,
                 swap_storage,
@@ -775,15 +782,17 @@ impl OrchestraService {
         Ok(())
     }
 
-    /// What to do with a row still unfunded once its recheck is due. A
-    /// Lightning order is only linked to its row on delivery, so one that took
-    /// the payment and then failed or was refunded, or whose delivery has not
-    /// synced yet, still looks unpaid. It is looked up in the explorer, which
-    /// needs no read token, and an order that took the payment is recorded paid.
+    /// What to do with an unfunded row due a check. A Lightning order is only
+    /// linked to its row on delivery, so one that took the payment and then
+    /// failed or was refunded, or whose delivery has not synced yet, still
+    /// looks unpaid. It is looked up in the explorer, which needs no read
+    /// token. An order that took the payment is recorded paid, and one that
+    /// hasn't is kept until a late payment can no longer settle.
     async fn recheck_unfunded_row(
         quoter: &OrchestraQuoter,
         swap_storage: &OrchestraStorageAdapter,
         mut data: OrchestraSwapData,
+        now: u64,
     ) -> UnfundedRow {
         let quote_id = data.quote_id.clone();
         if !is_lightning_funded(&data) {
@@ -791,23 +800,22 @@ impl OrchestraService {
         }
         let order = match quoter.find_order(&quote_id, None).await {
             Ok(Some(order)) if took_lightning_payment(order.status) => order,
-            Ok(_) => return UnfundedRow::Close,
+            Ok(_) if is_unfunded_recheck_due(&data, now) => return UnfundedRow::Close,
+            Ok(_) => return UnfundedRow::Keep,
             Err(e) => {
-                warn!(
-                    "Orchestra receive {quote_id}: order lookup failed, keeping the row for the \
-                     next pass: {e:?}"
-                );
-                return UnfundedRow::Retry;
+                warn!("Orchestra receive {quote_id}: order lookup failed, keeping the row: {e:?}");
+                return UnfundedRow::Keep;
             }
         };
         info!(
-            "Orchestra receive {quote_id}: Lightning order {:?} past expiry, recording it paid",
+            "Orchestra receive {quote_id}: Lightning order {:?} took the payment, recording it \
+             paid",
             order.status
         );
         data.paid = true;
         if let Err(e) = swap_storage.upsert(&data).await {
             error!("Orchestra receive {quote_id}: failed to record payment: {e:?}");
-            return UnfundedRow::Retry;
+            return UnfundedRow::Keep;
         }
         UnfundedRow::Paid(Box::new((
             data,
@@ -1942,9 +1950,8 @@ fn lightning_receive_request(
 }
 
 /// The receive row to persist and the details to report for an onramp order.
-/// The row holds the order id and read token from the start, so the monitor
-/// polls the order directly. Rejects an order whose `amountIn` is not the
-/// requested `amount_sats`, a provider fault.
+/// The row holds the order id and read token from the start. Rejects an order
+/// whose `amountIn` is not the requested `amount_sats`, a provider fault.
 fn lightning_receive_from_order(
     order: OnrampResponse,
     amount_sats: u64,
@@ -2011,10 +2018,10 @@ fn is_lightning_funded(data: &OrchestraSwapData) -> bool {
         .eq_ignore_ascii_case(SOURCE_CHAIN_LIGHTNING)
 }
 
-/// Whether a row is a Lightning-funded order nobody has paid. Its order has
-/// nothing to report until the payment comes in, which links the payment to
-/// the row and marks it paid, so it is not polled. `invoice_paid` says the
-/// payment just came in.
+/// Whether a row is a Lightning-funded order nobody has paid. Until the
+/// payment comes in, which links it to the row and marks it paid, the order
+/// is only looked up on the probe clock. `invoice_paid` says the payment just
+/// came in.
 fn is_awaiting_lightning_payment(data: &OrchestraSwapData, invoice_paid: bool) -> bool {
     is_lightning_funded(data) && !data.paid && !invoice_paid
 }
@@ -2027,7 +2034,8 @@ fn is_unfunded(data: &OrchestraSwapData) -> bool {
 
 /// Whether an unfunded row is due its last check. A quote with no order waits
 /// a grace window past expiry for a late deposit. A Lightning order can't be
-/// paid after its expiry, so it waits less.
+/// paid after its expiry, so it waits only as long as a payment made before
+/// then can take to settle.
 fn is_unfunded_recheck_due(data: &OrchestraSwapData, now: u64) -> bool {
     let wait = if is_lightning_funded(data) {
         LIGHTNING_RECHECK_SECS
@@ -2040,8 +2048,8 @@ fn is_unfunded_recheck_due(data: &OrchestraSwapData, now: u64) -> bool {
 /// What the monitor does with a row still unfunded once its recheck is due.
 enum UnfundedRow {
     Close,
-    /// Keep it, and look again on the next pass.
-    Retry,
+    /// Keep it open, and look again on a later pass.
+    Keep,
     /// A Lightning order that took the payment, recorded paid, and its status.
     Paid(Box<(OrchestraSwapData, StatusResponse)>),
 }
@@ -8403,7 +8411,7 @@ mod tests {
     }
 
     #[test_all]
-    fn an_unpaid_lightning_order_is_not_polled_until_its_payment_comes_in() {
+    fn an_unpaid_lightning_order_awaits_its_payment_until_it_comes_in() {
         let data = lightning_receive_row("6500");
         assert!(is_awaiting_lightning_payment(&data, false));
         assert!(is_unfunded(&data));
@@ -8424,7 +8432,7 @@ mod tests {
     }
 
     #[test_all]
-    fn an_unpaid_lightning_order_is_rechecked_soon_after_expiry() {
+    fn an_unpaid_lightning_order_is_rechecked_once_a_late_payment_could_have_settled() {
         let lightning = lightning_receive_row("6500");
         let due = lightning.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
         assert!(!is_unfunded_recheck_due(&lightning, due.saturating_sub(1)));
@@ -8488,8 +8496,11 @@ mod tests {
                 &[("q_1", (200, explorer_body(&[("ord_1", status, None)])))],
             );
 
+            let cutoff = data.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
+
             let outcome =
-                OrchestraService::recheck_unfunded_row(&quoter(http), &swap_storage, data).await;
+                OrchestraService::recheck_unfunded_row(&quoter(http), &swap_storage, data, cutoff)
+                    .await;
 
             if paid {
                 assert!(matches!(outcome, UnfundedRow::Paid(_)), "{status}");
@@ -8499,6 +8510,44 @@ mod tests {
             let (_, stored) = swap_storage.list_active().await.unwrap().remove(0);
             assert_eq!(stored.paid, paid, "{status}");
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn an_unpaid_lightning_order_is_kept_open_until_a_late_payment_can_no_longer_settle() {
+        let storage = sqlite_storage();
+        let swap_storage = OrchestraStorageAdapter::new(Arc::clone(&storage));
+        let data = OrchestraSwapData {
+            quote_id: "q_1".to_string(),
+            ..lightning_receive_row("6500")
+        };
+        swap_storage.upsert(&data).await.unwrap();
+        let cutoff = data.expires_at.saturating_add(LIGHTNING_RECHECK_SECS);
+        let recheck = |status: &str, now: u64| {
+            let http = FakeOrchestra::new(
+                unused(),
+                &[("q_1", (200, explorer_body(&[("ord_1", status, None)])))],
+            );
+            let (swap_storage, data) = (&swap_storage, data.clone());
+            async move {
+                OrchestraService::recheck_unfunded_row(&quoter(http), swap_storage, data, now).await
+            }
+        };
+
+        // A payment made before expiry can still settle.
+        for now in [data.expires_at, cutoff.saturating_sub(1)] {
+            for status in ["processing", "unfulfilled", "expired"] {
+                let outcome = recheck(status, now).await;
+                assert!(matches!(outcome, UnfundedRow::Keep), "{status} at {now}");
+            }
+        }
+        assert!(matches!(
+            recheck("unfulfilled", cutoff).await,
+            UnfundedRow::Close
+        ));
+        // A refund is seen before expiry, without waiting for the cutoff.
+        let outcome = recheck("refunded", data.expires_at.saturating_sub(1)).await;
+        assert!(matches!(outcome, UnfundedRow::Paid(_)));
     }
 
     #[cfg(feature = "sqlite")]
