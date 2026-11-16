@@ -556,6 +556,7 @@ public static class Commands
         var crossChainFeesIncluded = HasFlag(args, "--cross-chain-fees-included");
         var crossChainTargetOverpayStr = GetFlag(args, "--cross-chain-target-overpay-bps");
         var crossChainToBitcoin = HasFlag(args, "--cross-chain-to-bitcoin");
+        var crossChainRefundAddress = GetFlag(args, "--cross-chain-refund-address");
 
         if (method == null)
         {
@@ -654,7 +655,7 @@ public static class Commands
                     feeMode: feeMode,
                     maxSlippageBps: ParseOptionalUint(crossChainMaxSlippageStr),
                     targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr),
-                    refundAddress: null
+                    refundAddress: crossChainRefundAddress
                 );
                 break;
 

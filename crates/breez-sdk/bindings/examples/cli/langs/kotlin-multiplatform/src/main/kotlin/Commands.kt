@@ -316,6 +316,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val crossChainFeesIncluded = fp.hasFlag("cross-chain-fees-included")
     val crossChainTargetOverpayBps = fp.getUInt("cross-chain-target-overpay-bps")
     val crossChainToBitcoin = fp.hasFlag("cross-chain-to-bitcoin")
+    val crossChainRefundAddress = fp.getString("cross-chain-refund-address")
 
     if (method == null) {
         println("Usage: receive -m <method> [options]")
@@ -333,6 +334,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         println("  --cross-chain-fees-included                Deduct fees from amount (cross-chain only)")
         println("  --cross-chain-target-overpay-bps <bps>     Overpay buffer in basis points (0..500, cross-chain only)")
         println("  --cross-chain-to-bitcoin                   Deliver cross-chain receive as Bitcoin (cross-chain only)")
+        println("  --cross-chain-refund-address <addr>        Payer's address for cross-chain refunds (cross-chain only)")
         return
     }
 
@@ -425,7 +427,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 feeMode = feeMode,
                 maxSlippageBps = crossChainMaxSlippageBps,
                 targetOverpayBps = crossChainTargetOverpayBps,
-                refundAddress = null,
+                refundAddress = crossChainRefundAddress,
             )
         }
 

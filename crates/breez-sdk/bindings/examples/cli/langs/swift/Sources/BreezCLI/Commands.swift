@@ -402,6 +402,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let crossChainFeesIncluded = fp.has("cross-chain-fees-included")
     let crossChainTargetOverpayBps = fp.get("cross-chain-target-overpay-bps").flatMap { UInt32($0) }
     let crossChainToBitcoin = fp.has("cross-chain-to-bitcoin")
+    let crossChainRefundAddress = fp.get("cross-chain-refund-address")
 
     let paymentMethod: ReceivePaymentMethod
 
@@ -472,7 +473,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             feeMode: feeMode,
             maxSlippageBps: crossChainMaxSlippageBps,
             targetOverpayBps: crossChainTargetOverpayBps,
-            refundAddress: nil
+            refundAddress: crossChainRefundAddress
         )
 
     default:

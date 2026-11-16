@@ -312,6 +312,7 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 	crossChainFeesIncluded := fs.Bool("cross-chain-fees-included", false, "Deduct fees from amount instead of padding onto deposit")
 	crossChainTargetOverpayStr := fs.String("cross-chain-target-overpay-bps", "", "Override for the overpay buffer in basis points (0..500)")
 	crossChainToBitcoin := fs.Bool("cross-chain-to-bitcoin", false, "Deliver cross-chain receive as Bitcoin (sats)")
+	crossChainRefundAddress := fs.String("cross-chain-refund-address", "", "Payer's address on the route's chain for refunds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -441,6 +442,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 			}
 			val32 := uint32(val)
 			pm.TargetOverpayBps = &val32
+		}
+		if *crossChainRefundAddress != "" {
+			pm.RefundAddress = crossChainRefundAddress
 		}
 		paymentMethod = pm
 
