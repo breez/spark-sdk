@@ -181,7 +181,7 @@ impl MoonpayProvider {
         if ipv4.is_none() && ipv6.is_none() {
             warn!("Signing MoonPay URL without a client IP address");
         }
-        let mut signer = self.breez_server.get_signer_client().await;
+        let mut signer = self.breez_server.get_signer_client().await?;
         let signed_url = signer
             .sign_url(SignUrlRequest {
                 base_url: config.base_url.clone(),
