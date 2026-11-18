@@ -76,6 +76,7 @@ fn create_moonpay_url(
 pub struct MoonpayProvider {
     breez_server: Arc<BreezServer>,
     http_client: Arc<dyn HttpClient>,
+    identity_pubkey: String,
 }
 
 async fn lookup_ip<T: FromStr>(http_client: &dyn HttpClient, url: &str) -> Option<T> {
@@ -123,10 +124,15 @@ fn format_decimal_amount(amount: u128, decimals: u32, precision: u32) -> String 
 }
 
 impl MoonpayProvider {
-    pub fn new(breez_server: Arc<BreezServer>, http_client: Arc<dyn HttpClient>) -> Self {
+    pub fn new(
+        breez_server: Arc<BreezServer>,
+        http_client: Arc<dyn HttpClient>,
+        identity_pubkey: String,
+    ) -> Self {
         Self {
             breez_server,
             http_client,
+            identity_pubkey,
         }
     }
 
@@ -188,6 +194,7 @@ impl MoonpayProvider {
                 query_string: format!("?{}", url.query().unwrap()),
                 ipv4: ipv4.map(|ip| ip.to_string()).unwrap_or_default(),
                 ipv6: ipv6.map(|ip| ip.to_string()).unwrap_or_default(),
+                pubkey: self.identity_pubkey.clone(),
             })
             .await?
             .into_inner()

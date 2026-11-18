@@ -163,6 +163,7 @@ message SignUrlRequest {
   string queryString = 2 [ json_name = "query_string" ];
   string ipv4 = 3 [ json_name = "ipv4" ];
   string ipv6 = 4 [ json_name = "ipv6" ];
+  string pubkey = 5 [ json_name = "pubkey" ];
 }
 
 message SignUrlResponse { string fullUrl = 1 [ json_name = "full_url" ]; }
