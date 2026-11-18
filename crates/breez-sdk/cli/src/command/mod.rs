@@ -1,4 +1,5 @@
 mod advanced;
+mod bridging;
 mod contacts;
 #[cfg(test)]
 mod grammar_tests;
@@ -9,20 +10,21 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BridgeFromCashAppRequest,
-    BridgeToCashAppRequest, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ClaimTransferRequest, ConversionOptions, ConversionType,
-    CrossChainRouteFilter, CrossChainRoutePair, DeliveryMethod, Fee, FeePolicy,
-    FetchClaimDepositQuoteRequest, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
-    GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee, MaxOnchainFee,
-    MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest, PrepareSendBatchRequest,
-    PrepareSendPaymentRequest, PullReceiver, ReceiveFee, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    AssetFilter, AuthorizeTransferRequest, BatchRecipient, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
+    ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
+    CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
+    FetchConversionLimitsRequest, FetchLightningSendStatusRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, MaxOnchainFee, MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest,
+    PrepareSendBatchRequest, PrepareSendPaymentRequest, PullReceiver, ReceiveFee,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -36,6 +38,7 @@ use std::{
 };
 
 use crate::command::advanced::AdvancedCommand;
+use crate::command::bridging::BridgingCommand;
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
@@ -156,6 +159,12 @@ pub enum Command {
         /// The ID of the payment to retrieve
         payment_id: String,
     },
+
+    /// Fetch the status of this wallet's Lightning payment of a Bolt11 invoice from the operators
+    FetchLightningSendStatus {
+        /// The Bolt11 invoice to look up
+        invoice: String,
+    },
     Sync,
     /// Lists payments
     ListPayments {
@@ -238,6 +247,10 @@ pub enum Command {
         #[arg(long)]
         hodl: bool,
 
+        /// Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates.
+        #[arg(long, conflicts_with = "hodl")]
+        preimage: Option<String>,
+
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
@@ -272,6 +285,12 @@ pub enum Command {
             conflicts_with = "token_identifier"
         )]
         cross_chain_to_bitcoin: bool,
+
+        /// The payer's address on the route's chain, where a cross-chain deposit
+        /// that can't be delivered is refunded. Required when the payer sends
+        /// from an exchange.
+        #[arg(long = "cross-chain-refund-address")]
+        cross_chain_refund_address: Option<String>,
     },
 
     /// Pay the given payment request
@@ -473,48 +492,6 @@ pub enum Command {
         #[arg(long)]
         redirect_url: Option<String>,
     },
-    /// Bridge from Cash App to USDC/USDT on an external chain. Returns a
-    /// `cash.app` link for the payer to open.
-    BridgeFromCashApp {
-        /// Recipient address on the destination chain (EVM/Solana/Tron)
-        recipient: String,
-
-        /// Amount in the destination stablecoin's base units (6 decimals for
-        /// USDC/USDT), so `1000000` = 1 USDC, about $1
-        #[arg(long)]
-        amount: u128,
-
-        /// Deduct fees from the amount instead of adding them on top
-        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
-        fees_included: bool,
-
-        /// Maximum slippage in basis points
-        #[arg(long)]
-        max_slippage_bps: Option<u32>,
-    },
-    /// Bridge USDC/USDT from an external chain to a Cash App user. Returns the
-    /// deposit for the payer to make.
-    BridgeToCashApp {
-        /// Cash App username (`alice` or `$alice`) or Cash App Lightning address
-        recipient: String,
-
-        /// Amount in the source stablecoin's base units (6 decimals for
-        /// USDC/USDT), so `1000000` = 1 USDC, about $1
-        #[arg(long)]
-        amount: u128,
-
-        /// The payer's address on the source chain, refunded if delivery fails
-        #[arg(long)]
-        refund_address: String,
-
-        /// Deduct fees from the amount instead of adding them on top
-        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
-        fees_included: bool,
-
-        /// Maximum slippage in basis points
-        #[arg(long)]
-        max_slippage_bps: Option<u32>,
-    },
     CheckLightningAddressAvailable {
         /// The username to check
         username: String,
@@ -609,6 +586,11 @@ pub enum Command {
     #[command(subcommand)]
     Advanced(AdvancedCommand),
 
+    /// Bridging commands: orders in which a payer on another chain or on
+    /// Lightning pays a recipient, with no funds moving through the SDK
+    #[command(subcommand)]
+    Bridging(BridgingCommand),
+
     /// Issuer related commands
     #[command(subcommand)]
     Issuer(IssuerCommand),
@@ -661,6 +643,13 @@ pub(crate) async fn execute_command(
         }
         Command::GetPayment { payment_id } => {
             let value = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::FetchLightningSendStatus { invoice } => {
+            let value = sdk
+                .fetch_lightning_send_status(FetchLightningSendStatusRequest { invoice })
+                .await?;
             print_value(&value)?;
             Ok(true)
         }
@@ -859,111 +848,9 @@ pub(crate) async fn execute_command(
             println!("Open this URL in a browser to complete the purchase:");
             println!("{}", value.url);
             if let Some(info) = &value.cross_chain_info {
-                println!("Delivered as USDC on Solana. Quote:");
+                println!("Conversion quote:");
                 print_value(info)?;
             }
-            Ok(true)
-        }
-        Command::BridgeFromCashApp {
-            recipient,
-            amount,
-            fees_included,
-            max_slippage_bps,
-        } => {
-            let InputType::CrossChainAddress(address_details) = sdk.parse(&recipient).await? else {
-                return Err(anyhow::anyhow!(
-                    "Recipient must be a cross-chain (EVM/Solana/Tron) address"
-                ));
-            };
-            let address = address_details.address.clone();
-            let route = select_cross_chain_route(
-                sdk,
-                rl,
-                CrossChainRouteFilter::Send {
-                    address_details,
-                    delivery_method: Some(DeliveryMethod::Lightning),
-                },
-            )
-            .await?;
-            let fee_policy = if fees_included {
-                Some(FeePolicy::FeesIncluded)
-            } else {
-                None
-            };
-            let response = sdk
-                .bridge_from_cash_app(BridgeFromCashAppRequest {
-                    address,
-                    route,
-                    amount,
-                    fee_policy,
-                    max_slippage_bps,
-                })
-                .await?;
-            println!("Open this URL in a browser to complete the purchase:");
-            println!("{}", response.url);
-            println!(
-                "Deposit ~{} sats; recipient receives ~{} {}, service fee {} {}, expires {}",
-                response.amount_sats,
-                response.estimated_out,
-                response.asset,
-                response.service_fee_amount,
-                service_fee_denomination(
-                    response.service_fee_asset.as_deref(),
-                    response.service_fee_asset_decimals,
-                ),
-                response.expires_at,
-            );
-            Ok(true)
-        }
-        Command::BridgeToCashApp {
-            recipient,
-            amount,
-            refund_address,
-            fees_included,
-            max_slippage_bps,
-        } => {
-            let route = select_cross_chain_route(
-                sdk,
-                rl,
-                CrossChainRouteFilter::Receive {
-                    contract_address: None,
-                    delivery_method: Some(DeliveryMethod::Lightning),
-                },
-            )
-            .await?;
-            let fee_policy = if fees_included {
-                Some(FeePolicy::FeesIncluded)
-            } else {
-                None
-            };
-            let response = sdk
-                .bridge_to_cash_app(BridgeToCashAppRequest {
-                    recipient,
-                    route: route.clone(),
-                    amount,
-                    fee_policy,
-                    refund_address,
-                    max_slippage_bps,
-                })
-                .await?;
-            let info = response.info;
-            println!("Ask the payer to pay:");
-            println!("{}", response.payment_request);
-            println!(
-                "Deposit {} {} on {} to {}. Recipient receives ~{} sats, service fee {} {}, \
-                 expires at {}",
-                info.deposit_amount,
-                route.asset,
-                route.chain,
-                info.deposit_address,
-                info.expected_received_amount,
-                info.service_fee_amount,
-                service_fee_denomination(
-                    info.service_fee_asset.as_deref(),
-                    info.service_fee_asset_decimals,
-                ),
-                info.expires_at,
-            );
             Ok(true)
         }
         Command::Receive {
@@ -974,12 +861,14 @@ pub(crate) async fn execute_command(
             expiry_secs,
             sender_public_key,
             hodl,
+            preimage,
             new_address,
             fees_included,
             cross_chain_max_slippage_bps,
             cross_chain_fees_included,
             cross_chain_target_overpay_bps,
             cross_chain_to_bitcoin,
+            cross_chain_refund_address,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -1023,6 +912,7 @@ pub(crate) async fn execute_command(
                         expiry_secs,
                         payment_hash,
                         receiver_identity_public_key: None,
+                        preimage,
                         fee_policy: fees_included.then_some(FeePolicy::FeesIncluded),
                     }
                 }
@@ -1054,6 +944,7 @@ pub(crate) async fn execute_command(
                         fee_mode,
                         max_slippage_bps: cross_chain_max_slippage_bps,
                         target_overpay_bps: cross_chain_target_overpay_bps,
+                        refund_address: cross_chain_refund_address,
                     }
                 }
             };
@@ -1577,6 +1468,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::Advanced(cmd) => advanced::handle_command(rl, sdk, cmd).await,
+        Command::Bridging(cmd) => bridging::handle_command(rl, sdk, cmd).await,
         Command::Issuer(issuer_command) => {
             issuer::handle_command(token_issuer, issuer_command).await
         }
@@ -1753,7 +1645,7 @@ fn serialize<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error
 }
 
 /// Unit label for a cross-chain service fee: sats when no asset is set.
-fn service_fee_denomination(asset: Option<&str>, decimals: Option<u32>) -> String {
+pub(crate) fn service_fee_denomination(asset: Option<&str>, decimals: Option<u32>) -> String {
     match (asset, decimals) {
         (None, _) => "sats".to_string(),
         (Some(asset), Some(decimals)) => format!("{asset} ({decimals} decimals)"),

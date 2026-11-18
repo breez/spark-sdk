@@ -6,7 +6,9 @@ use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
 use frost_secp256k1_tr::round1::SigningCommitments;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 
-use crate::signer::{AggregateFrostRequest, FrostJob, FrostShareResult, SignerError, SparkSigner};
+use crate::signer::{
+    AggregateFrostRequest, FrostAdaptor, FrostJob, FrostShareResult, SignerError, SparkSigner,
+};
 use crate::tree::TreeNode;
 
 /// The user's own signing public key for an OWNED leaf, recovered from persisted
@@ -63,13 +65,13 @@ pub(crate) async fn sign_frost_batch<T>(
 ///
 /// Adds the user's commitment to the statechain commitments and splits the
 /// participants into two groups (statechain, user), optionally binding an
-/// adaptor public key for adaptor-signature flows (atomic swaps).
+/// adaptor for adaptor-signature flows (atomic swaps).
 pub(crate) fn frost_signing_package(
     user_identifier: Identifier,
     message: &[u8],
     statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
     self_commitment: &SigningCommitments,
-    adaptor_public_key: Option<&PublicKey>,
+    adaptor: Option<FrostAdaptor>,
 ) -> Result<SigningPackage, SignerError> {
     // Clone statechain commitments to add our own commitment
     let mut signing_commitments = statechain_commitments.clone();
@@ -89,25 +91,30 @@ pub(crate) fn frost_signing_package(
     // Add a second participant group containing only the user
     signing_participants_groups.push(BTreeSet::from([user_identifier]));
 
-    // Convert the adaptor public key format if provided
-    let adaptor = match adaptor_public_key {
-        Some(pk) => {
-            let adaptor = VerifyingKey::deserialize(pk.serialize().as_slice()).map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize adaptor public key: {e}"
-                ))
-            })?;
-            Some(adaptor)
-        }
-        None => None,
+    let Some(adaptor) = adaptor else {
+        return Ok(SigningPackage::new_with_adaptor(
+            signing_commitments,
+            Some(signing_participants_groups),
+            message,
+            None,
+        ));
     };
-
-    // Create a signing package containing commitments, participant groups, message and adaptor
-    Ok(SigningPackage::new_with_adaptor(
+    let adaptor_key = VerifyingKey::deserialize(adaptor.public_key.serialize().as_slice())
+        .map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize adaptor public key: {e}"
+            ))
+        })?;
+    let new_signing_package = if adaptor.v2 {
+        SigningPackage::new_with_adaptor_v2
+    } else {
+        SigningPackage::new_with_adaptor
+    };
+    Ok(new_signing_package(
         signing_commitments,
         Some(signing_participants_groups),
         message,
-        adaptor,
+        Some(adaptor_key),
     ))
 }
 
@@ -131,7 +138,7 @@ pub fn aggregate_frost(
         request.message,
         request.statechain_commitments,
         request.self_commitment,
-        request.adaptor_public_key,
+        request.adaptor,
     )?;
 
     // Combine all signature shares (statechain + user)
@@ -145,8 +152,8 @@ pub fn aggregate_frost(
         let verifying_key =
             VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})",
-                    e.culprit()
+                    "Failed to deserialize public key for participant {id:?}: {e} (culprits: {:?})",
+                    e.culprits()
                 ))
             })?;
         verifying_shares.insert(*id, verifying_key);
@@ -157,8 +164,8 @@ pub fn aggregate_frost(
         user_identifier,
         VerifyingShare::deserialize(request.public_key.serialize().as_slice()).map_err(|e| {
             SignerError::SerializationError(format!(
-                "Failed to deserialize user public key: {e} (culprit: {:?})",
-                e.culprit()
+                "Failed to deserialize user public key: {e} (culprits: {:?})",
+                e.culprits()
             ))
         })?,
     );
@@ -166,13 +173,13 @@ pub fn aggregate_frost(
     let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
         .map_err(|e| {
             SignerError::SerializationError(format!(
-                "Failed to deserialize group verifying key: {e} (culprit: {:?})",
-                e.culprit()
+                "Failed to deserialize group verifying key: {e} (culprits: {:?})",
+                e.culprits()
             ))
         })?;
 
     // Create a public key package with all verifying shares and the group's verifying key
-    let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key);
+    let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key, None);
 
     // For taproot signatures, we provide an empty merkle root
     let merkle_root = Vec::new();
@@ -186,18 +193,139 @@ pub fn aggregate_frost(
     )
     .map_err(|e| {
         SignerError::FrostError(format!(
-            "Failed to aggregate signatures: {e} (culprit: {:?})",
-            e.culprit()
+            "Failed to aggregate signatures: {e} (culprits: {:?})",
+            e.culprits()
         ))
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::secp256k1::SecretKey;
+    use bitcoin::key::TapTweak as _;
+    use bitcoin::secp256k1::rand::thread_rng;
+    use bitcoin::secp256k1::{Message, SecretKey, schnorr};
+    use frost_core::round1::Nonce;
+    use frost_secp256k1_tr::keys::{KeyPackage, SigningShare};
+    use frost_secp256k1_tr::round1::SigningNonces;
+    use k256::Scalar;
+    use k256::elliptic_curve::PrimeField as _;
 
     use super::*;
+    use crate::signer::{FrostDerivation, SparkSignerAdapter, create_test_signer};
+    use crate::tree::TreeNodeId;
     use crate::tree::tests::create_test_tree_node;
+
+    /// Signs an adaptor signature with the user's share from the default signer
+    /// and one operator's share, and aggregates them as the client does. The
+    /// user signs with `user_v2`, the operator and the aggregation with
+    /// `operator_v2`. Returns how many completions with the adaptor secret, by
+    /// adding or subtracting it, verify.
+    async fn adaptor_completions_that_verify(user_v2: bool, operator_v2: bool) -> usize {
+        let secp = Secp256k1::new();
+        let signer = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let leaf_id = TreeNodeId::generate();
+        let user_public_key = signer.get_public_key_for_leaf(&leaf_id).await.unwrap();
+        let user = Identifier::derive(b"user").unwrap();
+
+        let operator = Identifier::derive(b"operator").unwrap();
+        let operator_secret = SecretKey::new(&mut thread_rng());
+        let operator_public_key = operator_secret.public_key(&secp);
+        let nonce = || Nonce::deserialize(&SecretKey::new(&mut thread_rng()).secret_bytes());
+        let operator_nonces = SigningNonces::from_nonces(nonce().unwrap(), nonce().unwrap());
+        let operator_commitments = BTreeMap::from([(operator, *operator_nonces.commitments())]);
+        let verifying_key = user_public_key.combine(&operator_public_key).unwrap();
+
+        let adaptor_secret = SecretKey::new(&mut thread_rng());
+        let adaptor = |v2| FrostAdaptor {
+            public_key: adaptor_secret.public_key(&secp),
+            v2,
+        };
+        let sighash = [7u8; 32];
+
+        let user_share = signer
+            .sign_frost(vec![FrostJob {
+                derivation: FrostDerivation::SigningLeaf { leaf_id },
+                sighash,
+                verifying_key,
+                operator_commitments: operator_commitments.clone(),
+                adaptor: Some(adaptor(user_v2)),
+            }])
+            .await
+            .unwrap()
+            .remove(0);
+
+        let operator_package = frost_signing_package(
+            user,
+            &sighash,
+            operator_commitments.clone(),
+            &user_share.commitment,
+            Some(adaptor(operator_v2)),
+        )
+        .unwrap();
+        let operator_key_package = KeyPackage::new(
+            operator,
+            SigningShare::deserialize(&operator_secret.secret_bytes()).unwrap(),
+            VerifyingShare::deserialize(&operator_public_key.serialize()).unwrap(),
+            VerifyingKey::deserialize(&verifying_key.serialize()).unwrap(),
+            1,
+        );
+        let operator_share = frost_secp256k1_tr::round2::sign_with_tweak(
+            &operator_package,
+            &operator_nonces,
+            &operator_key_package,
+            Some(&[]),
+        )
+        .unwrap();
+
+        let pre_signature = aggregate_frost(AggregateFrostRequest {
+            message: &sighash,
+            statechain_signatures: BTreeMap::from([(operator, operator_share)]),
+            statechain_public_keys: BTreeMap::from([(operator, operator_public_key)]),
+            verifying_key: &verifying_key,
+            statechain_commitments: operator_commitments,
+            self_commitment: &user_share.commitment,
+            public_key: &user_public_key,
+            self_signature: &user_share.signature_share,
+            adaptor: Some(adaptor(operator_v2)),
+        })
+        .unwrap()
+        .serialize()
+        .unwrap();
+
+        let scalar = |bytes: [u8; 32]| Scalar::from_repr(bytes.into()).unwrap();
+        let z = scalar(pre_signature[32..].try_into().unwrap());
+        let t = scalar(adaptor_secret.secret_bytes());
+        let (output_key, _) = verifying_key.x_only_public_key().0.tap_tweak(&secp, None);
+        [z + t, z - t]
+            .into_iter()
+            .filter(|completed| {
+                let mut signature = pre_signature.clone();
+                signature[32..].copy_from_slice(&completed.to_bytes());
+                secp.verify_schnorr(
+                    &schnorr::Signature::from_slice(&signature).unwrap(),
+                    &Message::from_digest(sighash),
+                    &output_key.to_x_only_public_key(),
+                )
+                .is_ok()
+            })
+            .count()
+    }
+
+    #[macros::async_test_all]
+    async fn adaptor_signatures_complete_under_either_version() {
+        // Enough runs that both nonce parities occur.
+        for _ in 0..8 {
+            for v2 in [false, true] {
+                assert_eq!(adaptor_completions_that_verify(v2, v2).await, 1);
+            }
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn adaptor_shares_of_different_versions_do_not_complete() {
+        assert_eq!(adaptor_completions_that_verify(true, false).await, 0);
+        assert_eq!(adaptor_completions_that_verify(false, true).await, 0);
+    }
 
     /// `derive_leaf_signing_public_key` must recover the user's signing key from
     /// the FROST relation `verifying_public_key = user_share + se_share`, i.e.

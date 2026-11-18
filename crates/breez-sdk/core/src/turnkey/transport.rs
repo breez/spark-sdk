@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn refuses_retries_past_the_request_timeout() {
-        let timeout = Duration::from_mins(1);
+        let timeout = Duration::from_secs(60);
         // Fresh request, short wait: retry.
         assert!(retry_within_budget(
             Duration::ZERO,
@@ -576,7 +576,7 @@ mod tests {
         // A Retry-After longer than the whole budget: never retry.
         assert!(!retry_within_budget(
             Duration::ZERO,
-            Duration::from_mins(10),
+            Duration::from_secs(10 * 60),
             timeout
         ));
         // Late attempt: a wait that fit earlier no longer does.
@@ -587,7 +587,7 @@ mod tests {
         ));
         // Budget already exhausted.
         assert!(!retry_within_budget(
-            Duration::from_mins(1),
+            Duration::from_secs(60),
             Duration::ZERO,
             timeout
         ));

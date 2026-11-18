@@ -100,6 +100,8 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const singleKeyCpfpSigner: any;
   export const CpfpFundingKind: any;
   export type CpfpFundingKind = any;
+  export const CpfpFundingStrategy: any;
+  export type CpfpFundingStrategy = any;
   export const CpfpInput: any;
   export type CpfpInput = any;
   export const ExitLeafSelection: any;
@@ -134,6 +136,18 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const SkippedLeafReason_Tags: any;
   export type SkippedLeafReason = any;
 
+  // --- bridging ---
+  export type BridgingClientInterface = any;
+  export type BridgeRoutePair = any;
+  export type BridgeRoutePairSide = any;
+  export type CreateBridgeResponse = any;
+
+  export const BridgeStatus: any;
+  export type BridgeStatus = any;
+
+  export const defaultBridgingConfig: any;
+  export const newBridgingClient: any;
+
   // --- proxy ---
   export type ProxyConfig = any;
 
@@ -157,8 +171,15 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const DomainAssociation: any;
   export type DomainAssociation = any;
 
+  // --- token allowances ---
+  export const TokenAllowanceLimit: any;
+  export type TokenAllowanceLimit = any;
+  export const TokenAllowanceRole: any;
+  export type TokenAllowanceRole = any;
+
   // --- types only ---
   export type BatchRecipient = any;
+  export type PullReceiver = any;
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
   export type SdkEvent = any;

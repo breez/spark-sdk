@@ -66,7 +66,7 @@ impl TurnkeyRetryConfig {
 /// The Turnkey API base URL used when [`TurnkeyConfig::base_url`] is unset.
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.turnkey.com";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TurnkeyConfig {
     /// Turnkey API base URL. Unset uses `https://api.turnkey.com`.
@@ -116,4 +116,22 @@ pub struct TurnkeyConfig {
     /// SDK, so it cannot pick the setting up on its own.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub proxy: Option<crate::ProxyConfig>,
+}
+
+impl std::fmt::Debug for TurnkeyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnkeyConfig")
+            .field("base_url", &self.base_url)
+            .field("organization_id", &self.organization_id)
+            .field("api_public_key", &self.api_public_key)
+            .field("api_private_key", &"<redacted>")
+            .field("wallet_id", &self.wallet_id)
+            .field("network", &self.network)
+            .field("account_number", &self.account_number)
+            .field("identity_public_key", &self.identity_public_key)
+            .field("retry", &self.retry)
+            .field("max_rps", &self.max_rps)
+            .field("proxy", &self.proxy)
+            .finish()
+    }
 }

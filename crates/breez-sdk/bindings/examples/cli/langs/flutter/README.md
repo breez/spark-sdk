@@ -61,6 +61,7 @@ make run-mainnet
     --rpid                              Relying party ID for FIDO2 provider (requires --passkey)
     --server-mode                       Run in server mode (background_tasks_enabled=false)
     --lnurl-domain                      LNURL server domain for lightning address registration
+    --real-time-sync-server-url         Real-time sync server URL. Overrides the network default.
     --proxy                             Route every connection through a SOCKS5 proxy (HOST:PORT)
     --proxy-user                        Username for SOCKS5 authentication (requires --proxy-password)
     --proxy-password                    Password for SOCKS5 authentication (requires --proxy-user)
@@ -77,6 +78,8 @@ Once the CLI is running, type `help` to see all available commands:
 - `list-payments` — List payments (with filters)
 - `receive` — Receive a payment (spark address, spark invoice, bitcoin, bolt11)
 - `pay` — Send a payment
+- `pay-batch` — Pay several recipients with one token transaction
+- `pull-payment` — Pull a payment from a wallet that granted an allowance
 - `lnurl-pay` — Pay via LNURL or Lightning address
 - `lnurl-withdraw` — Withdraw via LNURL
 - `lnurl-auth` — Authenticate via LNURL
@@ -85,8 +88,9 @@ Once the CLI is running, type `help` to see all available commands:
 - `parse` — Parse any input (invoice, address, LNURL)
 - `refund-deposit` — Refund an on-chain deposit
 - `list-unclaimed-deposits` — List unclaimed deposits
-- `buy-bitcoin` — Get MoonPay URL to buy Bitcoin
-- `prepare-payment-link` — Prepare a payment link (USDC/USDT to EVM/Solana/Tron)
+- `buy-bitcoin` — Buy Bitcoin using an external provider
+- `bridge-from-cash-app` — Bridge from Cash App to USDC/USDT on an external chain
+- `bridge-to-cash-app` — Bridge USDC/USDT from an external chain to a Cash App user
 - `check-lightning-address-available` — Check username availability
 - `get-lightning-address` — Get registered lightning address
 - `register-lightning-address` — Register a lightning address
@@ -104,6 +108,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `advanced <subcommand>` — Expert-only commands (recover funds, check recovery, exit state export/import)
 - `issuer <subcommand>` — Token issuer commands
 - `contacts <subcommand>` — Contacts commands (add, update, delete, list)
+- `token-allowances <subcommand>` — Token allowance commands (create, revoke, list)
 - `webhooks <subcommand>` — Webhook commands (register, unregister, list)
 - `stable-balance <subcommand>` — Stable balance commands (get, set, unset)
 

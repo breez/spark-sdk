@@ -326,11 +326,11 @@ mod tests {
     use super::*;
     use crate::{
         AmountAdjustmentReason, PaymentType, SparkHtlcDetails, SparkHtlcStatus,
-        models::{PaymentMethod, PaymentStatus, TokenMetadata, TokenTransactionType},
+        models::{PaymentMethod, PaymentStatus, PaymentTokenMetadata, TokenTransactionType},
     };
 
-    fn test_token_metadata() -> TokenMetadata {
-        TokenMetadata {
+    fn test_token_metadata() -> PaymentTokenMetadata {
+        PaymentTokenMetadata {
             identifier: "token123".to_string(),
             issuer_public_key: "02abcdef".to_string(),
             name: "USD Balance".to_string(),
@@ -464,6 +464,7 @@ mod tests {
             estimated_out: 99_500_000,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status,
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),
@@ -674,6 +675,7 @@ mod tests {
                 estimated_out: 1_572,
                 delivered_amount: Some(1_542),
                 external_tx_hash: None,
+                refund_tx_hash: None,
                 status: ConversionStatus::Completed,
                 fee_amount: Some(20_980),
                 service_fee_amount: Some(20_980),

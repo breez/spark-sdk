@@ -7,16 +7,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bitcoin::Transaction;
 use bitcoin::secp256k1::PublicKey;
-use sqlx::PgPool;
+use deadpool_postgres::Pool;
+use tokio_postgres::Row;
 use uuid::Uuid;
 
 use spark::services::TransferId;
 
+use super::{execute, query, query_opt, transfer_uuid};
 use crate::static_deposit::repository::{
     PendingCredit, StaticDepositClaimRecord, StaticDepositClaimStore,
 };
 
-#[derive(sqlx::FromRow)]
 struct StaticDepositClaimRow {
     id: String,
     user_identity_public_key: Vec<u8>,
@@ -40,6 +41,37 @@ struct StaticDepositClaimRow {
     deposit_lost: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&Row> for StaticDepositClaimRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_identity_public_key: row.try_get("user_identity_public_key")?,
+            txid: row.try_get("txid")?,
+            vout: row.try_get("vout")?,
+            network: row.try_get("network")?,
+            deposit_address: row.try_get("deposit_address")?,
+            credit_amount_sats: row.try_get("credit_amount_sats")?,
+            is_instant: row.try_get("is_instant")?,
+            deposit_amount_sats: row.try_get("deposit_amount_sats")?,
+            encrypted_deposit_secret_key: row.try_get("encrypted_deposit_secret_key")?,
+            quote_signature: row.try_get("quote_signature")?,
+            user_signature: row.try_get("user_signature")?,
+            transfer_id: row.try_get("transfer_id")?,
+            pending_transfer_id: row.try_get("pending_transfer_id")?,
+            utxo_swap_id: row.try_get("utxo_swap_id")?,
+            prep_spend_tx: row.try_get("prep_spend_tx")?,
+            signed_spend_transaction: row.try_get("signed_spend_transaction")?,
+            spend_broadcast_txid: row.try_get("spend_broadcast_txid")?,
+            spend_confirmed: row.try_get("spend_confirmed")?,
+            deposit_lost: row.try_get("deposit_lost")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 impl TryFrom<StaticDepositClaimRow> for StaticDepositClaimRecord {
@@ -97,12 +129,25 @@ fn sats_to_i64(sats: u64) -> Result<i64, String> {
     i64::try_from(sats).map_err(|e| format!("amount exceeds i64: {e}"))
 }
 
+fn claim(row: &Row) -> Result<StaticDepositClaimRecord, String> {
+    StaticDepositClaimRow::try_from(row)
+        .map_err(|e| e.to_string())?
+        .try_into()
+}
+
+fn transfer_uuids(transfer_ids: &[String]) -> Result<Vec<Uuid>, String> {
+    transfer_ids
+        .iter()
+        .map(|id| Uuid::parse_str(id).map_err(|e| e.to_string()))
+        .collect()
+}
+
 pub struct PostgresStaticDepositClaimStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresStaticDepositClaimStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
@@ -111,43 +156,46 @@ impl PostgresStaticDepositClaimStore {
 impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
     async fn insert(&self, record: &StaticDepositClaimRecord) -> Result<(), String> {
         let credit = record.pending_credit.as_ref();
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"INSERT INTO brz_ssp_static_deposit_claims
                (id, user_identity_public_key, txid, vout, network, deposit_address,
                 credit_amount_sats, is_instant, deposit_amount_sats,
                 encrypted_deposit_secret_key, quote_signature, user_signature,
                 pending_transfer_id, prep_spend_tx)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
+            &[
+                &record.id,
+                &record.user_identity_public_key.serialize().to_vec(),
+                &record.txid,
+                &record.vout.cast_signed(),
+                &record.network.to_string(),
+                &record.deposit_address,
+                &sats_to_i64(record.credit_amount_sats)?,
+                &record.is_instant,
+                &sats_to_i64(record.deposit_amount_sats)?,
+                &record.encrypted_deposit_secret_key,
+                &record.quote_signature,
+                &record.user_signature,
+                &credit.map(|credit| transfer_uuid(&credit.transfer_id)),
+                &bitcoin::consensus::serialize(&record.spend_tx),
+            ],
         )
-        .bind(&record.id)
-        .bind(record.user_identity_public_key.serialize().to_vec())
-        .bind(&record.txid)
-        .bind(record.vout.cast_signed())
-        .bind(record.network.to_string())
-        .bind(&record.deposit_address)
-        .bind(sats_to_i64(record.credit_amount_sats)?)
-        .bind(record.is_instant)
-        .bind(sats_to_i64(record.deposit_amount_sats)?)
-        .bind(&record.encrypted_deposit_secret_key)
-        .bind(&record.quote_signature)
-        .bind(&record.user_signature)
-        .bind(credit.map(|credit| credit.transfer_id.to_string()))
-        .bind(bitcoin::consensus::serialize(&record.spend_tx))
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn get(&self, id: &str) -> Result<Option<StaticDepositClaimRecord>, String> {
-        sqlx::query_as::<_, StaticDepositClaimRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(StaticDepositClaimRecord::try_from)
+        .as_ref()
+        .map(claim)
         .transpose()
     }
 
@@ -156,15 +204,15 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         txid: &str,
         vout: u32,
     ) -> Result<Option<StaticDepositClaimRecord>, String> {
-        sqlx::query_as::<_, StaticDepositClaimRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_static_deposit_claims WHERE txid = $1 AND vout = $2"#,
+            &[&txid, &vout.cast_signed()],
         )
-        .bind(txid)
-        .bind(vout.cast_signed())
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(StaticDepositClaimRecord::try_from)
+        .as_ref()
+        .map(claim)
         .transpose()
     }
 
@@ -172,56 +220,63 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         &self,
         transfer_ids: &[String],
     ) -> Result<Vec<StaticDepositClaimRecord>, String> {
-        sqlx::query_as::<_, StaticDepositClaimRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_static_deposit_claims
-               WHERE transfer_id = ANY($1::uuid[])"#,
+               WHERE transfer_id = ANY($1)"#,
+            &[&transfer_uuids(transfer_ids)?],
         )
-        .bind(transfer_ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(StaticDepositClaimRecord::try_from)
+        .iter()
+        .map(claim)
         .collect()
     }
 
     async fn transfers_among(&self, transfer_ids: &[String]) -> Result<HashSet<String>, String> {
-        let ids: Vec<(String,)> = sqlx::query_as(
+        let ids = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT transfer_id::text FROM brz_ssp_static_deposit_claims
-               WHERE transfer_id = ANY($1::uuid[])
+               WHERE transfer_id = ANY($1)
              UNION
                SELECT pending_transfer_id::text FROM brz_ssp_static_deposit_claims
-               WHERE pending_transfer_id = ANY($1::uuid[])"#,
+               WHERE pending_transfer_id = ANY($1)"#,
+            &[&transfer_uuids(transfer_ids)?],
         )
-        .bind(transfer_ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
-        Ok(ids.into_iter().map(|(id,)| id).collect())
+        ids.iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
     }
 
     async fn set_transfer_id(&self, id: &str, transfer_id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2::uuid,
+               SET transfer_id = $2,
                    pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
+            &[
+                &id,
+                &Uuid::parse_str(transfer_id).map_err(|e| e.to_string())?,
+            ],
         )
-        .bind(id)
-        .bind(transfer_id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn delete(&self, id: &str) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM brz_ssp_static_deposit_claims WHERE id = $1"#)
-            .bind(id)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"DELETE FROM brz_ssp_static_deposit_claims WHERE id = $1"#,
+            &[&id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -231,17 +286,19 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         transfer_id: &str,
         utxo_swap_id: &str,
     ) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2::uuid, utxo_swap_id = $3,
+               SET transfer_id = $2, utxo_swap_id = $3,
                    pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
+            &[
+                &id,
+                &Uuid::parse_str(transfer_id).map_err(|e| e.to_string())?,
+                &utxo_swap_id,
+            ],
         )
-        .bind(id)
-        .bind(transfer_id)
-        .bind(utxo_swap_id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -253,52 +310,53 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
         transfer_id: &str,
         transaction: &Transaction,
     ) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims
-               SET transfer_id = $2::uuid,
+               SET transfer_id = $2,
                    signed_spend_transaction = $3,
                    pending_transfer_id = NULL,
                    updated_at = NOW()
                WHERE id = $1"#,
+            &[
+                &id,
+                &Uuid::parse_str(transfer_id).map_err(|e| e.to_string())?,
+                &bitcoin::consensus::serialize(transaction),
+            ],
         )
-        .bind(id)
-        .bind(transfer_id)
-        .bind(bitcoin::consensus::serialize(transaction))
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_spend_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims SET spend_broadcast_txid = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &txid],
         )
-        .bind(id)
-        .bind(txid)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_spend_confirmed(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims SET spend_confirmed = TRUE, updated_at = NOW() WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_deposit_lost(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_static_deposit_claims SET deposit_lost = TRUE, updated_at = NOW() WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -306,17 +364,18 @@ impl StaticDepositClaimStore for PostgresStaticDepositClaimStore {
 
     async fn pending(&self) -> Result<Vec<StaticDepositClaimRecord>, String> {
         // Must match `StaticDepositClaimRecord::is_pending`.
-        sqlx::query_as::<_, StaticDepositClaimRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_static_deposit_claims
                WHERE pending_transfer_id IS NOT NULL
                   OR (transfer_id IS NOT NULL AND NOT spend_confirmed AND NOT deposit_lost)
                ORDER BY created_at"#,
+            &[],
         )
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(StaticDepositClaimRecord::try_from)
+        .iter()
+        .map(claim)
         .collect()
     }
 }

@@ -21,12 +21,12 @@ class MigrationManager {
     targetVersion = targetVersion ?? this.migrations.length;
 
     if (currentVersion >= targetVersion) {
-      this._log("info", `Database is up to date (version ${currentVersion})`);
+      this._log("INFO", `Database is up to date (version ${currentVersion})`);
       return;
     }
 
     this._log(
-      "info",
+      "INFO",
       `Migrating database from version ${currentVersion} to ${targetVersion}`
     );
 
@@ -34,7 +34,7 @@ class MigrationManager {
       const transaction = this.db.transaction(() => {
         for (let i = currentVersion; i < targetVersion; i++) {
           const migration = this.migrations[i];
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
 
           if (Array.isArray(migration.sql)) {
             migration.sql.forEach((sql) => this.db.exec(sql));
@@ -46,7 +46,7 @@ class MigrationManager {
       });
 
       transaction();
-      this._log("info", `Database migration completed successfully`);
+      this._log("INFO", `Database migration completed successfully`);
     } catch (error) {
       throw new this.StorageError(
         `Migration failed at version ${currentVersion}: ${error.message}`,
@@ -64,7 +64,7 @@ class MigrationManager {
       return row.user_version || 0;
     } catch (error) {
       this._log(
-        "warn",
+        "WARN",
         `Failed to get database version, assuming 0: ${error.message}`
       );
       return 0;
@@ -79,16 +79,7 @@ class MigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({
-        line: message,
-        level: level,
-      });
-    } else if (level === "error") {
-      // Fallback to console.error for errors only
-      console.error(`[MigrationManager] ${message}`);
-    }
-    // For info/debug/warn levels, only log if logger is provided
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -557,6 +548,25 @@ class MigrationManager {
               leaf_id TEXT NOT NULL PRIMARY KEY,
               txid TEXT NOT NULL
           )`,
+        ],
+      },
+      {
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and fills in both columns for past withdrawals.
+        name: "Add withdrawal destination address and output index",
+        sql: [
+          `ALTER TABLE payments ADD COLUMN withdraw_vout INTEGER`,
+          `ALTER TABLE payments ADD COLUMN withdraw_destination_address TEXT`,
+          `UPDATE settings
+           SET value = json_set(value, '$.offset', 0)
+           WHERE key = 'sync_offset' AND json_valid(value)`,
+        ],
+      },
+      {
+        name: "Add lightning address to lnurl_receive_metadata and force its re-sync",
+        sql: [
+          `ALTER TABLE lnurl_receive_metadata ADD COLUMN lightning_address TEXT`,
+          `DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'`,
         ],
       },
     ];

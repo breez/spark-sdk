@@ -421,6 +421,7 @@ async fn test_client_signing_token_send() -> Result<()> {
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
     issuer
@@ -535,6 +536,7 @@ async fn test_client_signing_token_publish_twice_is_idempotent() -> Result<()> {
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
     issuer
@@ -656,6 +658,7 @@ async fn test_client_signing_token_send_with_consolidation() -> Result<()> {
             decimals: 0,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
     // Three separate mints leave Alice with three separate token outputs.
@@ -798,6 +801,7 @@ async fn test_client_signing_token_send_to_spark_invoice() -> Result<()> {
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
     issuer
@@ -1067,6 +1071,7 @@ async fn test_client_signing_lightning_send() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
                 fee_policy: None,
             },
         })
@@ -1194,6 +1199,7 @@ async fn test_client_signing_lightning_send_fees_included() -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
                 fee_policy: None,
             },
         })
@@ -1317,6 +1323,7 @@ async fn test_client_signing_token_batch() -> Result<()> {
             decimals: 0,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
     issuer

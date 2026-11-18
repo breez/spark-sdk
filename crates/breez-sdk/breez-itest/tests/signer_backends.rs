@@ -164,6 +164,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
                 fee_policy: None,
             },
         })
@@ -268,6 +269,7 @@ async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000_000,
+            extra_metadata: None,
         })
         .await
     {

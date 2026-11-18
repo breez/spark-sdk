@@ -429,7 +429,7 @@ pub struct CoopExitFeeQuote {
 }
 
 #[derive(SimpleObject, Debug, Clone)]
-#[graphql(name = "CoopExitRequest", rename_fields = "snake_case")]
+#[graphql(name = "CoopExitRequest", rename_fields = "snake_case", complex)]
 pub struct CoopExitRequestType {
     pub id: ID,
     pub created_at: DateTime<Utc>,
@@ -437,7 +437,7 @@ pub struct CoopExitRequestType {
     pub network: BitcoinNetwork,
     pub request_status: Option<SparkUserRequestStatus>,
     pub fee: CurrencyAmount,
-    pub withdrawal_address: Option<String>,
+    pub withdrawal_address: String,
     #[graphql(name = "l1_broadcast_fee")]
     pub l1_broadcast_fee: CurrencyAmount,
     pub fee_quote: Option<CoopExitFeeQuote>,
@@ -449,6 +449,27 @@ pub struct CoopExitRequestType {
     pub coop_exit_txid: String,
     pub transfer_spark_id: Option<Uuid>,
     pub transfer: Option<Transfer>,
+}
+
+#[ComplexObject]
+impl CoopExitRequestType {
+    // Always null: sspd makes no withdrawals to silent payment addresses.
+    #[graphql(name = "silent_payment_proof")]
+    async fn silent_payment_proof(&self) -> Option<SilentPaymentProof> {
+        None
+    }
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+#[graphql(rename_fields = "snake_case")]
+pub struct SilentPaymentProof {
+    pub output_index: i32,
+    pub input_public_keys: Vec<String>,
+    pub input_outpoints: Vec<String>,
+    pub input_prevout_scripts: Vec<String>,
+    pub input_prevout_transactions: Vec<String>,
+    pub ecdh_share: String,
+    pub dleq_proof: String,
 }
 
 #[derive(SimpleObject, Debug, Clone)]

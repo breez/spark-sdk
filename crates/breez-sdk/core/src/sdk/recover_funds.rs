@@ -10,9 +10,9 @@ use bitcoin::{
     hashes::Hash,
 };
 use spark_wallet::{
-    ChainQuery, ChainResult, EXITING_STATUSES, Fee, SparkWalletError, TreeNode, TreeNodeStatus,
-    WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup, refund_sweep_input_fee,
-    watchtower_exit_recovery_payout,
+    ChainQuery, ChainResult, EXITING_STATUSES, Fee, SilentPaymentAddress, SparkWalletError,
+    TreeNode, TreeNodeStatus, WATCHTOWER_EXITED_STATUSES, WatchtowerExitLookup,
+    refund_sweep_input_fee, watchtower_exit_recovery_payout,
 };
 use tracing::{debug, error, info};
 
@@ -89,6 +89,7 @@ impl BreezSdk {
                     &destination,
                     fee_rate,
                     request.funding_kind.as_ref(),
+                    request.funding_strategy.unwrap_or_default(),
                     unilateral,
                     &selection.not_unilateral,
                     &stored,
@@ -169,6 +170,11 @@ impl BreezSdk {
                     .funding
                     .as_ref()
                     .map_or(0, |funding| funding.single_utxo_sats),
+                prepared
+                    .funding
+                    .as_ref()
+                    .map(|funding| funding.strategy)
+                    .unwrap_or_default(),
                 &prepared.exit_chain_state,
                 signer.as_deref(),
                 &mut queries,
@@ -231,15 +237,11 @@ impl BreezSdk {
         self.record_finished(&recovery.transactions, recovered)
             .await;
 
-        let all_confirmed = recovery
-            .transactions
-            .iter()
-            .all(|tx| matches!(tx.status, ExitTransactionStatus::Confirmed { .. }));
         let verdict = if diverged {
             RecoveryVerdict::Redo {
                 reason: RecoveryRedoReason::OnChainStateDiverged,
             }
-        } else if all_confirmed && !recovery.transactions.is_empty() {
+        } else if recovery_done(&recovery.transactions, &mut queries).await {
             RecoveryVerdict::Done
         } else {
             RecoveryVerdict::Valid
@@ -928,6 +930,30 @@ fn finished_and_open(
         .partition(|leaf| stored.get(&leaf.id.to_string()).is_some_and(is_finished))
 }
 
+/// Whether every transaction of a recovery is in a block. After the chain
+/// service failed a request, the SDK may have used a recorded confirmation
+/// that it could not check again, so then it also requires the latest
+/// confirmation to be settled.
+async fn recovery_done(transactions: &[RecoveryTransaction], queries: &mut ChainQueries) -> bool {
+    let mut latest: Option<u32> = None;
+    for tx in transactions {
+        let ExitTransactionStatus::Confirmed { block_height } = tx.status else {
+            return false;
+        };
+        latest = latest.max(block_height);
+    }
+    if transactions.is_empty() {
+        return false;
+    }
+    if !queries.failed() {
+        return true;
+    }
+    match latest {
+        Some(block_height) => queries.settled(block_height).await,
+        None => false,
+    }
+}
+
 /// Whether the SDK found the leaf's output and has yet to learn whether that
 /// output is spent.
 fn check_incomplete(stored: &LeafRecovery) -> bool {
@@ -1206,7 +1232,15 @@ fn cooperative_recovery_status(
 fn parse_destination(destination: &str, network: Network) -> Result<Address, SdkError> {
     destination
         .parse::<Address<NetworkUnchecked>>()
-        .map_err(|e| SdkError::InvalidInput(format!("Invalid destination address: {e}")))?
+        .map_err(|e| {
+            if destination.parse::<SilentPaymentAddress>().is_ok() {
+                SdkError::InvalidInput(
+                    "Silent payment addresses are not supported for fund recovery".to_string(),
+                )
+            } else {
+                SdkError::InvalidInput(format!("Invalid destination address: {e}"))
+            }
+        })?
         .require_network(network.into())
         .map_err(|e| SdkError::InvalidInput(format!("Address network mismatch: {e}")))
 }
@@ -1216,9 +1250,25 @@ mod tests {
     use bitcoin::{Txid, hashes::Hash};
     use spark_wallet::tree_store_tests::create_test_node_with_parent;
 
-    use crate::{StoredWatchtowerExitOutput, chain::stub::tx_paying};
+    use crate::{
+        StoredWatchtowerExitOutput,
+        chain::stub::{ChainStub, tx_paying},
+    };
 
     use super::*;
+
+    #[test]
+    fn a_silent_payment_address_is_no_recovery_destination() {
+        let result = parse_destination(
+            "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+            Network::Mainnet,
+        );
+        assert!(matches!(
+            result,
+            Err(SdkError::InvalidInput(message))
+                if message == "Silent payment addresses are not supported for fund recovery"
+        ));
+    }
 
     const LEAF_ID: &str = "00000000-0000-0000-0000-00000000000a";
     const OTHER_LEAF_ID: &str = "00000000-0000-0000-0000-00000000000b";
@@ -1792,13 +1842,63 @@ mod tests {
         );
     }
 
+    fn confirmed_at(block_height: u32) -> RecoveryTransaction {
+        RecoveryTransaction {
+            kind: RecoveryTxKind::Sweep,
+            node_id: None,
+            txid: Txid::from_byte_array([8; 32]).to_string(),
+            tx_hex: String::new(),
+            cpfp_tx_hex: None,
+            csv_timelock_blocks: None,
+            depends_on: Vec::new(),
+            status: ExitTransactionStatus::Confirmed {
+                block_height: Some(block_height),
+            },
+        }
+    }
+
+    /// The queries of a call in which the chain service failed a request.
+    async fn queries_after_a_failure(tip: u32) -> ChainQueries {
+        let chain = ChainStub {
+            tip: Some(tip),
+            ..Default::default()
+        };
+        let mut queries = ChainQueries::new(Arc::new(chain));
+        let unknown = ChainQuery::TxConfirmed(Txid::from_byte_array([9; 32]));
+        queries
+            .resolve(|observed| {
+                let pending = if observed.is_empty() {
+                    vec![unknown.clone()]
+                } else {
+                    Vec::new()
+                };
+                ((), pending)
+            })
+            .await;
+        assert!(queries.failed());
+        queries
+    }
+
+    #[macros::async_test_all]
+    async fn after_a_failed_request_a_recovery_is_done_once_settled() {
+        let mut queries = queries_after_a_failure(110).await;
+
+        assert!(
+            recovery_done(&[confirmed_at(100)], &mut queries).await,
+            "11 blocks deep"
+        );
+        assert!(
+            !recovery_done(&[confirmed_at(100), confirmed_at(108)], &mut queries).await,
+            "the latest is 3 blocks deep"
+        );
+    }
+
     #[cfg(not(target_family = "wasm"))]
     mod stored_funds {
         use std::sync::atomic::Ordering;
 
         use crate::{
-            chain::stub::ChainStub, persist::sqlite::SqliteStorage,
-            sdk::watchtower_exit::store_watchtower_exit_lookups,
+            persist::sqlite::SqliteStorage, sdk::watchtower_exit::store_watchtower_exit_lookups,
         };
 
         use super::*;

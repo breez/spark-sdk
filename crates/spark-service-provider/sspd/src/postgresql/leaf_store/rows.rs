@@ -4,16 +4,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::{OutPoint, Transaction, Txid};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use frost_secp256k1_tr::Identifier;
-use spark::services::{TransferId, csv_timelock};
+use spark::services::csv_timelock;
 use spark::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
-use sqlx::postgres::PgRow;
-use sqlx::{PgConnection, Row};
+use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::{LeafStoreError, OPERATORS_AGREE, UNRESERVED};
 use crate::chain::WatchedOutput;
-use crate::postgresql::ChainRepository;
+use crate::postgresql::{ChainRepository, execute, query, query_one};
 
 const IDENTIFIER_LEN: usize = 32;
 
@@ -32,10 +32,6 @@ pub(super) fn outpoint(tx_id: &str, output_index: i32) -> Result<OutPoint, LeafS
 
 pub(super) fn node_uuid(id: &TreeNodeId) -> Result<Uuid, LeafStoreError> {
     Uuid::parse_str(&id.to_string()).map_err(|e| invalid(format!("node id {id}: {e}")))
-}
-
-pub(super) fn transfer_uuid(id: &TransferId) -> Result<Uuid, LeafStoreError> {
-    Uuid::parse_str(&id.to_string()).map_err(|e| invalid(format!("transfer id {id}: {e}")))
 }
 
 pub(super) fn node_id(id: Uuid) -> Result<TreeNodeId, LeafStoreError> {
@@ -205,7 +201,7 @@ impl Rows {
 
     pub(super) async fn write(
         self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         chain: &ChainRepository,
     ) -> Result<(), LeafStoreError> {
         insert(db, &self).await?;
@@ -215,29 +211,29 @@ impl Rows {
         Ok(())
     }
 
-    async fn watched(&self, db: &mut PgConnection) -> Result<Vec<WatchedOutput>, LeafStoreError> {
+    async fn watched(&self, db: &impl GenericClient) -> Result<Vec<WatchedOutput>, LeafStoreError> {
         let ids: Vec<&str> = self
             .transactions
             .keys()
             .chain(self.direct.keys())
             .map(String::as_str)
             .collect();
-        let rows: Vec<(String, i32, Option<String>, Option<i32>)> = sqlx::query_as(&format!(
+        let sql = format!(
             r"SELECT t.previous_tx_id, t.previous_output_index,
                       above.previous_tx_id, above.previous_output_index
                FROM {STORED} t
                LEFT JOIN {STORED} above ON above.tx_id = t.previous_tx_id
                WHERE t.tx_id = ANY($1)"
-        ))
-        .bind(&ids)
-        .fetch_all(db)
-        .await?;
+        );
+        let rows = query(db, &sql, &[&ids]).await?;
         let mut watched = Vec::with_capacity(rows.len().saturating_add(self.refunds.len()));
-        for (tx_id, output_index, input_tx_id, input_output_index) in rows {
+        for row in &rows {
+            let input_tx_id: Option<&str> = row.try_get(2)?;
+            let input_output_index: Option<i32> = row.try_get(3)?;
             watched.push(WatchedOutput {
-                outpoint: outpoint(&tx_id, output_index)?,
+                outpoint: outpoint(row.try_get(0)?, row.try_get(1)?)?,
                 input: match (input_tx_id, input_output_index) {
-                    (Some(tx_id), Some(output_index)) => Some(outpoint(&tx_id, output_index)?),
+                    (Some(tx_id), Some(output_index)) => Some(outpoint(tx_id, output_index)?),
                     _ => None,
                 },
             });
@@ -311,7 +307,7 @@ const INSERT_ROWS: &str = r"WITH transactions AS (
 /// It leaves out each node that the store already has as the operators report
 /// it. For ON CONFLICT DO UPDATE, Postgres locks each conflicting row, even
 /// when every column stays the same.
-async fn insert(db: &mut PgConnection, write: &Rows) -> Result<(), LeafStoreError> {
+async fn insert(db: &impl GenericClient, write: &Rows) -> Result<(), LeafStoreError> {
     let transactions = &write.transactions;
     let ids: Vec<&str> = transactions.keys().map(String::as_str).collect();
     let previous_ids: Vec<String> = transactions
@@ -358,32 +354,36 @@ async fn insert(db: &mut PgConnection, write: &Rows) -> Result<(), LeafStoreErro
     let values: Vec<i64> = leaves.values().map(|l| l.value).collect();
     let refund_timelocks: Vec<i32> = leaves.values().map(|l| l.refund_timelock).collect();
 
-    sqlx::query(INSERT_ROWS)
-        .bind(&ids)
-        .bind(&previous_ids)
-        .bind(&previous_indices)
-        .bind(&timelocks)
-        .bind(&raws)
-        .bind(&direct_ids)
-        .bind(&cpfp_ids)
-        .bind(&direct_previous_ids)
-        .bind(&direct_previous_indices)
-        .bind(&direct_timelocks)
-        .bind(&direct_raws)
-        .bind(&node_ids)
-        .bind(&tree_ids)
-        .bind(&parents)
-        .bind(&node_transactions)
-        .bind(&verifying)
-        .bind(&keyshares)
-        .bind(&thresholds)
-        .bind(&owners)
-        .bind(&refunds)
-        .bind(&leaf_ids)
-        .bind(&values)
-        .bind(&refund_timelocks)
-        .execute(db)
-        .await?;
+    execute(
+        db,
+        INSERT_ROWS,
+        &[
+            &ids,
+            &previous_ids,
+            &previous_indices,
+            &timelocks,
+            &raws,
+            &direct_ids,
+            &cpfp_ids,
+            &direct_previous_ids,
+            &direct_previous_indices,
+            &direct_timelocks,
+            &direct_raws,
+            &node_ids,
+            &tree_ids,
+            &parents,
+            &node_transactions,
+            &verifying,
+            &keyshares,
+            &thresholds,
+            &owners,
+            &refunds,
+            &leaf_ids,
+            &values,
+            &refund_timelocks,
+        ],
+    )
+    .await?;
     Ok(())
 }
 
@@ -391,7 +391,7 @@ async fn insert(db: &mut PgConnection, write: &Rows) -> Result<(), LeafStoreErro
 /// wait for any caller that is marking one of the leaves transferred, so that
 /// caller has committed before this function reads the transferred leaves.
 async fn check_leaves(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     leaves: &BTreeMap<Uuid, LeafRow>,
 ) -> Result<(), LeafStoreError> {
     if leaves.is_empty() {
@@ -399,19 +399,20 @@ async fn check_leaves(
     }
     let ids: Vec<Uuid> = leaves.keys().copied().collect();
     let refunds: Vec<&str> = leaves.values().map(|l| l.refund_tx_id.as_str()).collect();
-    let stored: Vec<(Uuid, String, bool)> = sqlx::query_as(
+    let stored = query(
+        db,
         r"SELECT node_id, refund_tx_id, FALSE FROM brz_ssp_spark_leaves WHERE node_id = ANY($1)
          UNION ALL
            SELECT node_id, refund_tx_id, TRUE FROM brz_ssp_spark_transferred_leaves
            WHERE refund_tx_id = ANY($2)
            ORDER BY 3",
+        &[&ids, &refunds],
     )
-    .bind(&ids)
-    .bind(&refunds)
-    .fetch_all(db)
     .await?;
-    for (id, refund, transferred) in stored {
-        if transferred {
+    for row in &stored {
+        let id: Uuid = row.try_get(0)?;
+        let refund: &str = row.try_get(1)?;
+        if row.try_get(2)? {
             return Err(LeafStoreError::Transferred(node_id(id)?));
         }
         if let Some(wanted) = leaves.get(&id)
@@ -424,7 +425,7 @@ async fn check_leaves(
 }
 
 pub(super) async fn remove_leaves(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     leaves: &[TreeNode],
 ) -> Result<(), LeafStoreError> {
     let mut ids = Vec::with_capacity(leaves.len());
@@ -437,21 +438,23 @@ pub(super) async fn remove_leaves(
         ids.push(node_uuid(&leaf.id)?);
         refunds.push(refund.compute_txid().to_string());
     }
-    let removed: Vec<(Uuid,)> = sqlx::query_as(
+    let removed = query(
+        db,
         r"DELETE FROM brz_ssp_spark_leaves l
            USING UNNEST($1::uuid[], $2::text[]) AS owned (node_id, refund_tx_id)
            WHERE l.node_id = owned.node_id
              AND l.refund_tx_id = owned.refund_tx_id
            RETURNING l.node_id",
+        &[&ids, &refunds],
     )
-    .bind(&ids)
-    .bind(&refunds)
-    .fetch_all(db)
-    .await?;
+    .await?
+    .iter()
+    .map(|row| row.try_get(0))
+    .collect::<Result<Vec<Uuid>, _>>()?;
     match leaves
         .iter()
         .zip(&ids)
-        .find(|(_, id)| !removed.contains(&(**id,)))
+        .find(|(_, id)| !removed.contains(id))
     {
         Some((leaf, _)) => Err(LeafStoreError::ChangedDuringRenewal(leaf.id.clone())),
         None => Ok(()),
@@ -461,7 +464,7 @@ pub(super) async fn remove_leaves(
 /// `unreported` lists the nodes that the SSP queried the operators for at
 /// `observed_at` and that they did not return.
 pub(super) async fn observe(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     nodes: &[TreeNode],
     unreported: &[Uuid],
     observed_at: DateTime<Utc>,
@@ -496,7 +499,8 @@ pub(super) async fn observe(
         .values()
         .map(|n| n.signing_keyshare.public_key.serialize().to_vec())
         .collect();
-    let changed: i64 = sqlx::query_scalar(
+    let changed: i64 = query_one(
+        db,
         r"WITH reported AS (
                SELECT reported.*
                FROM UNNEST($1::uuid[], $2::text[], $3::bytea[], $4::text[], $5::text[],
@@ -538,18 +542,20 @@ pub(super) async fn observe(
                RETURNING node_id
            )
            SELECT (SELECT COUNT(*) FROM written) + (SELECT COUNT(*) FROM deleted)",
+        &[
+            &ids,
+            &statuses,
+            &owners,
+            &node_transactions,
+            &refunds,
+            &keyshares,
+            &observed_at,
+            &refresh_observed_at,
+            &unreported,
+        ],
     )
-    .bind(&ids)
-    .bind(&statuses)
-    .bind(&owners)
-    .bind(&node_transactions)
-    .bind(&refunds)
-    .bind(&keyshares)
-    .bind(observed_at)
-    .bind(refresh_observed_at)
-    .bind(unreported)
-    .fetch_one(db)
-    .await?;
+    .await?
+    .try_get(0)?;
     Ok(changed > 0)
 }
 
@@ -563,11 +569,12 @@ pub struct ExitChainStep {
 }
 
 pub(super) async fn stored_chains(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     node_txids: &[Txid],
 ) -> Result<HashMap<Txid, Vec<super::ChainTransaction>>, LeafStoreError> {
     let ids: Vec<String> = node_txids.iter().map(ToString::to_string).collect();
-    let rows: Vec<(String, String, String, i32, bool, bool)> = sqlx::query_as(
+    let rows = query(
+        db,
         r"WITH RECURSIVE exit_chain AS (
                SELECT t.tx_id AS node_tx_id, 0 AS level, t.tx_id, t.previous_tx_id,
                       t.previous_output_index
@@ -590,25 +597,24 @@ pub(super) async fn stored_chains(
                             AND node.parent_node_id IS NULL) AS root
            FROM exit_chain
            ORDER BY exit_chain.node_tx_id, exit_chain.level",
+        &[&ids],
     )
-    .bind(&ids)
-    .fetch_all(db)
     .await?;
     let mut chains: HashMap<Txid, Vec<super::ChainTransaction>> = HashMap::new();
     let mut reaches_root: HashSet<Txid> = HashSet::new();
-    for (node_tx_id, tx_id, previous_tx_id, previous_output_index, direct, root) in rows {
-        let node_txid = txid(&node_tx_id)?;
+    for row in &rows {
+        let node_txid = txid(row.try_get(0)?)?;
         chains
             .entry(node_txid)
             .or_default()
             .push(super::ChainTransaction {
-                txid: txid(&tx_id)?,
+                txid: txid(row.try_get(1)?)?,
                 step: ExitChainStep {
-                    spends: outpoint(&previous_tx_id, previous_output_index)?,
-                    direct,
+                    spends: outpoint(row.try_get(2)?, row.try_get(3)?)?,
+                    direct: row.try_get(4)?,
                 },
             });
-        if root {
+        if row.try_get(5)? {
             reaches_root.insert(node_txid);
         }
     }
@@ -647,8 +653,8 @@ const SELECTED_COLUMNS: &str = r"
 /// Expects the rows of each leaf next to each other, in the order of their exit
 /// chain level.
 fn selected<T>(
-    rows: &[PgRow],
-    extra: impl Fn(&PgRow) -> Result<T, LeafStoreError>,
+    rows: &[Row],
+    extra: impl Fn(&Row) -> Result<T, LeafStoreError>,
 ) -> Result<Vec<(Selected, T)>, LeafStoreError> {
     let mut leaves: Vec<(Selected, T)> = Vec::new();
     for row in rows {
@@ -666,7 +672,7 @@ fn selected<T>(
                 Selected {
                     refund_tx_id,
                     node_id: row.try_get("node_id")?,
-                    value: row.try_get::<i64, _>("value")?.cast_unsigned(),
+                    value: row.try_get::<_, i64>("value")?.cast_unsigned(),
                     refund_timelock: row.try_get("refund_timelock")?,
                     chain: vec![step],
                 },
@@ -685,7 +691,7 @@ pub(super) struct Wanted {
 }
 
 pub(super) async fn select(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     identity: &PublicKey,
     wanted: &[Wanted],
 ) -> Result<Vec<Selected>, LeafStoreError> {
@@ -693,7 +699,7 @@ pub(super) async fn select(
     let counts: Vec<i64> = wanted.iter().map(|w| w.count).collect();
     let timelocks: Vec<i32> = wanted.iter().map(|w| w.after.0).collect();
     let nodes: Vec<Uuid> = wanted.iter().map(|w| w.after.1).collect();
-    let rows = sqlx::query(&format!(
+    let sql = format!(
         r"WITH RECURSIVE selected AS (
                SELECT leaf.*
                FROM UNNEST($2::bigint[], $3::bigint[], $4::int[], $5::uuid[])
@@ -716,13 +722,18 @@ pub(super) async fn select(
            JOIN exit_chain ON exit_chain.refund_tx_id = selected.refund_tx_id
            ORDER BY selected.value, selected.refund_timelock, selected.node_id,
                     exit_chain.level"
-    ))
-    .bind(identity.serialize().as_slice())
-    .bind(&values)
-    .bind(&counts)
-    .bind(&timelocks)
-    .bind(&nodes)
-    .fetch_all(db)
+    );
+    let rows = query(
+        db,
+        &sql,
+        &[
+            &identity.serialize().as_slice(),
+            &values,
+            &counts,
+            &timelocks,
+            &nodes,
+        ],
+    )
     .await?;
     Ok(selected(&rows, |_| Ok(()))?
         .into_iter()
@@ -731,12 +742,12 @@ pub(super) async fn select(
 }
 
 pub(super) async fn select_at_or_below(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     timelock: i32,
     after: (i32, Uuid),
     limit: i64,
 ) -> Result<Vec<Selected>, LeafStoreError> {
-    let rows = sqlx::query(&format!(
+    let sql = format!(
         r"WITH RECURSIVE selected AS (
                SELECT l.refund_tx_id, l.node_id, l.value, l.refund_timelock
                FROM brz_ssp_spark_leaves l
@@ -750,13 +761,8 @@ pub(super) async fn select_at_or_below(
            FROM selected
            JOIN exit_chain ON exit_chain.refund_tx_id = selected.refund_tx_id
            ORDER BY selected.refund_timelock, selected.node_id, exit_chain.level"
-    ))
-    .bind(timelock)
-    .bind(after.0)
-    .bind(after.1)
-    .bind(limit)
-    .fetch_all(db)
-    .await?;
+    );
+    let rows = query(db, &sql, &[&timelock, &after.0, &after.1, &limit]).await?;
     Ok(selected(&rows, |_| Ok(()))?
         .into_iter()
         .map(|(leaf, ())| leaf)
@@ -840,7 +846,7 @@ pub(super) enum Compare<'a> {
 }
 
 pub(super) async fn compare(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     identity: &PublicKey,
     which: Compare<'_>,
 ) -> Result<Vec<(Selected, Compared)>, LeafStoreError> {
@@ -867,12 +873,11 @@ pub(super) async fn compare(
            JOIN exit_chain ON exit_chain.refund_tx_id = selected.refund_tx_id
            ORDER BY selected.node_id, exit_chain.level"
     );
-    let query = sqlx::query(&sql).bind(identity.serialize().to_vec());
-    let query = match which {
-        Compare::Nodes(ids) => query.bind(ids),
-        Compare::After(after, limit) => query.bind(after).bind(limit),
+    let identity = identity.serialize().to_vec();
+    let rows = match which {
+        Compare::Nodes(ids) => query(db, &sql, &[&identity, &ids]).await?,
+        Compare::After(after, limit) => query(db, &sql, &[&identity, &after, &limit]).await?,
     };
-    let rows = query.fetch_all(db).await?;
     selected(&rows, |row| {
         Ok(Compared {
             reserved: row.try_get("reserved")?,
@@ -885,12 +890,12 @@ pub(super) async fn compare(
     })
 }
 
-pub(super) fn transaction(row: &PgRow, column: &str) -> Result<Transaction, LeafStoreError> {
+pub(super) fn transaction(row: &Row, column: &str) -> Result<Transaction, LeafStoreError> {
     let raw: Vec<u8> = row.try_get(column)?;
     bitcoin::consensus::deserialize(&raw).map_err(|e| invalid(format!("{column}: {e}")))
 }
 
-fn optional_transaction(row: &PgRow, column: &str) -> Result<Option<Transaction>, LeafStoreError> {
+fn optional_transaction(row: &Row, column: &str) -> Result<Option<Transaction>, LeafStoreError> {
     let raw: Option<Vec<u8>> = row.try_get(column)?;
     raw.map(|raw| {
         bitcoin::consensus::deserialize(&raw).map_err(|e| invalid(format!("{column}: {e}")))
@@ -898,7 +903,7 @@ fn optional_transaction(row: &PgRow, column: &str) -> Result<Option<Transaction>
     .transpose()
 }
 
-fn key(row: &PgRow, column: &str) -> Result<PublicKey, LeafStoreError> {
+fn key(row: &Row, column: &str) -> Result<PublicKey, LeafStoreError> {
     let bytes: Vec<u8> = row.try_get(column)?;
     PublicKey::from_slice(&bytes).map_err(|e| invalid(format!("{column}: {e}")))
 }
@@ -912,7 +917,7 @@ const NODE_COLUMNS: &str = r"
      WHERE direct.cpfp_tx_id = node_transaction.tx_id
      ORDER BY direct.stored_at DESC LIMIT 1) AS direct_transaction";
 
-fn node(row: &PgRow) -> Result<TreeNode, LeafStoreError> {
+fn node(row: &Row) -> Result<TreeNode, LeafStoreError> {
     let node_tx = transaction(row, "node_transaction")?;
     let owners: Vec<u8> = row.try_get("keyshare_owners")?;
     let owner_identifiers = owners
@@ -933,12 +938,12 @@ fn node(row: &PgRow) -> Result<TreeNode, LeafStoreError> {
         direct_tx: optional_transaction(row, "direct_transaction")?,
         direct_refund_tx: None,
         direct_from_cpfp_refund_tx: None,
-        vout: row.try_get::<i32, _>("output_index")?.cast_unsigned(),
+        vout: row.try_get::<_, i32>("output_index")?.cast_unsigned(),
         verifying_public_key: key(row, "verifying_key")?,
         owner_identity_public_key: None,
         signing_keyshare: SigningKeyshare {
             owner_identifiers,
-            threshold: row.try_get::<i32, _>("keyshare_threshold")?.cast_unsigned(),
+            threshold: row.try_get::<_, i32>("keyshare_threshold")?.cast_unsigned(),
             public_key: key(row, "keyshare_key")?,
         },
         status: TreeNodeStatus::Splitted,
@@ -956,7 +961,7 @@ pub(super) enum Which<'a> {
 }
 
 pub(super) async fn leaves(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     identity: &PublicKey,
     which: Which<'_>,
 ) -> Result<Vec<TreeNode>, LeafStoreError> {
@@ -1011,18 +1016,16 @@ pub(super) async fn leaves(
            {filter}
            ORDER BY l.node_id"
     );
-    let query = sqlx::query(&sql);
-    let query = match which {
-        Which::All => query,
-        Which::Transfer(id) => query.bind(id),
-        Which::Nodes(ids) => query.bind(ids),
-        Which::Reserving { refunds, transfer } => query.bind(refunds).bind(transfer),
+    let rows = match which {
+        Which::All => query(db, &sql, &[]).await?,
+        Which::Transfer(id) => query(db, &sql, &[&id]).await?,
+        Which::Nodes(ids) => query(db, &sql, &[&ids]).await?,
+        Which::Reserving { refunds, transfer } => query(db, &sql, &[&refunds, &transfer]).await?,
     };
-    let rows = query.fetch_all(db).await?;
     rows.iter()
         .map(|row| {
             let mut node = node(row)?;
-            node.value = row.try_get::<i64, _>("value")?.cast_unsigned();
+            node.value = row.try_get::<_, i64>("value")?.cast_unsigned();
             node.refund_tx = Some(transaction(row, "refund_transaction")?);
             node.direct_refund_tx = optional_transaction(row, "direct_refund_transaction")?;
             node.direct_from_cpfp_refund_tx =
@@ -1038,7 +1041,7 @@ pub(super) async fn leaves(
 }
 
 pub(super) async fn ancestors(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     leaf_ids: &[Uuid],
 ) -> Result<HashMap<TreeNodeId, Vec<TreeNode>>, LeafStoreError> {
     let sql = format!(
@@ -1067,7 +1070,7 @@ pub(super) async fn ancestors(
              ON node_transaction.tx_id = node.node_tx_id
            ORDER BY above.leaf_id, above.distance"
     );
-    let rows = sqlx::query(&sql).bind(leaf_ids).fetch_all(db).await?;
+    let rows = query(db, &sql, &[&leaf_ids]).await?;
     let mut ancestors: HashMap<TreeNodeId, Vec<TreeNode>> = HashMap::new();
     for row in &rows {
         ancestors

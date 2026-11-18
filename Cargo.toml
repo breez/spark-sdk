@@ -110,9 +110,10 @@ debug = false
 debug = "line-tables-only"
 
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "crates/breez-sdk/bindings",
+  "crates/breez-sdk/uniffi-bindgen",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
   "crates/breez-sdk/core",
@@ -162,7 +163,7 @@ arithmetic_side_effects = "warn"
 [workspace.dependencies]
 aes = "0.8.4"
 anyhow = "1.0.98"
-async-graphql = { version = "7", features = ["chrono", "uuid"] }
+async-graphql = { version = "7.2", features = ["chrono", "uuid"] }
 async-trait = "0.1.88"
 axum = "0.8"
 base64 = "0.22.1"
@@ -170,10 +171,9 @@ bech32 = "0.11.0"
 bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 bitflags = "2.10.0"
-boltz-client = { git = "https://github.com/breez/boltz-client", rev = "aea35af1628d1fb259ebf85266f96215cfdabcb5" }
+boltz-client = { git = "https://github.com/breez/boltz-client", rev = "4dff8864c35b5d8c2543b725e2ef675efeb756b2" }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
-built = { version = "0.8.0", features = ["git2"] }
 bytes = "1.10.1"
 cargo_metadata = "0.18"
 cbc = "0.1.2"
@@ -186,12 +186,13 @@ hkdf = "0.12"
 sha2 = "0.10"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
-# nested-signing branch
-frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180" }
-frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180" }
+# main branch
+frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
+frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
 futures = { version = "0.3", default-features = false }
 glob = "0.3.1"
 graphql_client = { version = "0.16.0" }
+h2 = "0.4"
 hex = "0.4.3"
 dnssec-prover = { version = "0.6.7", default-features = false }
 http = "1.3.1"
@@ -227,7 +228,8 @@ rstest_reuse = "0.7.0"
 # We want to match the rusqlite version used by ldk-node and the rest of the ecosystem
 rusqlite = { version = "0.32.1", features = ["backup", "bundled"] }
 rusqlite_migration = { version = "1.3.1" }
-rustls = { version = "0.23.37", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
+rustls-webpki = { version = "0.103.16", default-features = false }
 rustyline = "16.0.0"
 serde = "1.0.219"
 serde_bytes = "0.11"
@@ -263,6 +265,7 @@ tonic-build = { version = "0.12.3", features = ["prost"] }
 tonic-types = "0.12.3"
 tonic-web-wasm-client = "0.6"
 tower-service = "0.3.3"
+hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 tokio-socks = "0.5.2"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
@@ -282,5 +285,5 @@ wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
 web-sys = { version = "0.3.77", features = ["console", "DomException"] }
-webpki-roots = "1.0"
+webpki-roots = "1.0.11"
 xshell = "0.2"

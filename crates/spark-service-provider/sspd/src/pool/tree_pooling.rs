@@ -24,7 +24,7 @@ use crate::{
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The loop also wakes on every block, which is what confirms a tree.
-const BACKUP_INTERVAL: Duration = Duration::from_secs(600);
+const BACKUP_INTERVAL: Duration = Duration::from_mins(10);
 
 /// How soon a pass that failed or found a confirmed tree not yet available is tried
 /// again.
@@ -163,7 +163,10 @@ where
     if !confirmed {
         return Ok(Pooling::Unconfirmed);
     }
-    let nodes = pool_repo.tree_nodes(&tree.outpoint).await?;
+    let nodes = pool_repo
+        .tree_nodes(&tree.outpoint)
+        .await?
+        .ok_or("the store has no nodes for the tree")?;
 
     let queried_at = Utc::now();
     let ids: Vec<_> = nodes.leaves.iter().map(|leaf| leaf.id.clone()).collect();

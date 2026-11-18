@@ -2062,6 +2062,9 @@ message AdaptorPublicKeyPackage {
     bytes adaptor_public_key = 1;
     bytes direct_adaptor_public_key = 2;
     bytes direct_from_cpfp_adaptor_public_key = 3;
+    // Version 2 adaptor signing, whose FROST binding factors include the
+    // adaptor point. The caller's own signature shares must use the same version.
+    bool adaptor_v2 = 4;
 }
 
 enum TreeNodeStatus {

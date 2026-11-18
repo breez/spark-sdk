@@ -9,12 +9,13 @@ use bitcoin::{
     key::Secp256k1,
     secp256k1::{self, XOnlyPublicKey},
 };
-use sqlx::{PgConnection, PgPool};
+use deadpool_postgres::{GenericClient, Pool, PoolError};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::chain::{ChainRepository, ChainRepositoryError};
+use crate::postgresql::{execute, query, query_one};
 
 /// Confirmations a conflicting spend needs before the stored transaction it beat
 /// releases its other coins.
@@ -35,13 +36,25 @@ pub enum OnchainWalletError {
     InsufficientFunds { need: u64, have: u64 },
 }
 
+impl From<tokio_postgres::Error> for OnchainWalletError {
+    fn from(e: tokio_postgres::Error) -> Self {
+        Self::Persistence(e.to_string())
+    }
+}
+
+impl From<PoolError> for OnchainWalletError {
+    fn from(e: PoolError) -> Self {
+        Self::Persistence(e.to_string())
+    }
+}
+
 /// Derives every address, change too, as BIP86 P2TR on `m/86'/coin'/0'/0/i` from
 /// the seed.
 pub struct OnchainWallet<R: ChainRepository> {
     xprv: Xpriv,
     network: Network,
     chain_repository: Arc<R>,
-    pgpool: Arc<PgPool>,
+    pgpool: Arc<Pool>,
     secp: Secp256k1<secp256k1::All>,
     selection: Mutex<()>,
     held: Arc<StdMutex<HashSet<OutPoint>>>,
@@ -79,7 +92,7 @@ impl<R: ChainRepository> OnchainWallet<R> {
         seed: &[u8],
         network: Network,
         chain_repository: Arc<R>,
-        pgpool: Arc<PgPool>,
+        pgpool: Arc<Pool>,
     ) -> Result<Self, OnchainWalletError> {
         let xprv = Xpriv::new_master(network, seed)
             .map_err(|e| OnchainWalletError::KeyDerivation(e.to_string()))?;
@@ -113,16 +126,14 @@ impl<R: ChainRepository> OnchainWallet<R> {
         }
         let texts: Vec<String> = addresses.iter().map(|(a, _)| a.to_string()).collect();
         let indexes: Vec<i64> = addresses.iter().map(|(_, i)| i64::from(*i)).collect();
-        sqlx::query(
+        execute(
+            &self.pgpool.get().await?,
             "INSERT INTO brz_ssp_onchain_wallet_addresses (address, derivation_index)
              SELECT * FROM UNNEST($1::text[], $2::bigint[])
              ON CONFLICT (address) DO NOTHING",
+            &[&texts, &indexes],
         )
-        .bind(&texts)
-        .bind(&indexes)
-        .execute(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
+        .await?;
         let watched: Vec<Address> = addresses.iter().map(|(a, _)| a.clone()).collect();
         self.chain_repository.add_watch_addresses(&watched).await?;
         for (address, index) in &addresses {
@@ -142,7 +153,8 @@ impl<R: ChainRepository> OnchainWallet<R> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let rows: Vec<(String, String, i32, i64, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pgpool.get().await?,
             r"SELECT o.address, o.tx_id, o.output_index, o.amount, b.height
                FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
@@ -168,18 +180,16 @@ impl<R: ChainRepository> OnchainWallet<R> {
                        INNER JOIN brz_ssp_chain_blocks cb ON cb.block_hash = ctb.block_hash
                        WHERE lost.spending_txid = s.spending_txid
                        AND (SELECT MAX(height) FROM brz_ssp_chain_blocks) - cb.height + 1 >= $1))",
+            &[&CONFLICT_CONFIRMATIONS],
         )
-        .bind(CONFLICT_CONFIRMATIONS)
-        .fetch_all(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
-        rows.into_iter()
-            .map(|(address, tx_id, output_index, amount, height)| {
+        .await?;
+        rows.iter()
+            .map(|row| {
                 Ok(Utxo {
-                    outpoint: outpoint(&tx_id, output_index)?,
-                    value: amount.cast_unsigned(),
-                    block_height: height.cast_unsigned(),
-                    address: self.parse_address(&address)?,
+                    outpoint: outpoint(row.try_get(1)?, row.try_get(2)?)?,
+                    value: row.try_get::<_, i64>(3)?.cast_unsigned(),
+                    block_height: row.try_get::<_, i64>(4)?.cast_unsigned(),
+                    address: self.parse_address(row.try_get(0)?)?,
                 })
             })
             .filter(|utxo| {
@@ -196,25 +206,23 @@ impl<R: ChainRepository> OnchainWallet<R> {
     ) -> Result<Vec<Utxo>, OnchainWalletError> {
         let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
         let indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
-        let rows: Vec<(String, String, i32, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pgpool.get().await?,
             r"SELECT o.address, o.tx_id, o.output_index, o.amount
                FROM brz_ssp_chain_tx_outputs o
                INNER JOIN brz_ssp_onchain_wallet_addresses a ON a.address = o.address
                INNER JOIN UNNEST($1::text[], $2::int[]) AS p(tx_id, output_index)
                    ON p.tx_id = o.tx_id AND p.output_index = o.output_index",
+            &[&tx_ids, &indices],
         )
-        .bind(&tx_ids)
-        .bind(&indices)
-        .fetch_all(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
-        rows.into_iter()
-            .map(|(address, tx_id, output_index, amount)| {
+        .await?;
+        rows.iter()
+            .map(|row| {
                 Ok(Utxo {
-                    outpoint: outpoint(&tx_id, output_index)?,
-                    value: amount.cast_unsigned(),
+                    outpoint: outpoint(row.try_get(1)?, row.try_get(2)?)?,
+                    value: row.try_get::<_, i64>(3)?.cast_unsigned(),
                     block_height: 0,
-                    address: self.parse_address(&address)?,
+                    address: self.parse_address(row.try_get(0)?)?,
                 })
             })
             .collect()
@@ -298,17 +306,17 @@ impl<R: ChainRepository> OnchainWallet<R> {
 
     /// Takes `count` address indexes in a row, and returns the first.
     async fn take_address_indexes(&self, count: u32) -> Result<u32, OnchainWalletError> {
-        let (next,): (String,) = sqlx::query_as(
+        let next: String = query_one(
+            &self.pgpool.get().await?,
             "INSERT INTO brz_ssp_onchain_wallet_meta (key, value)
              VALUES ('next_address_index', $1::BIGINT::TEXT)
              ON CONFLICT (key) DO UPDATE
              SET value = (brz_ssp_onchain_wallet_meta.value::BIGINT + $1::BIGINT)::TEXT
              RETURNING value",
+            &[&i64::from(count)],
         )
-        .bind(i64::from(count))
-        .fetch_one(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
+        .await?
+        .try_get(0)?;
         next.parse::<u32>()
             .ok()
             .and_then(|next| next.checked_sub(count))
@@ -336,15 +344,17 @@ impl<R: ChainRepository> OnchainWallet<R> {
         addresses: &[Address],
     ) -> Result<HashMap<Address, secp256k1::SecretKey>, OnchainWalletError> {
         let texts: Vec<String> = addresses.iter().map(ToString::to_string).collect();
-        let rows: Vec<(String, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pgpool.get().await?,
             "SELECT address, derivation_index FROM brz_ssp_onchain_wallet_addresses
              WHERE address = ANY($1)",
+            &[&texts],
         )
-        .bind(&texts)
-        .fetch_all(self.pgpool.as_ref())
-        .await
-        .map_err(|e| OnchainWalletError::Persistence(e.to_string()))?;
-        let indexes: HashMap<String, i64> = rows.into_iter().collect();
+        .await?;
+        let indexes: HashMap<String, i64> = rows
+            .iter()
+            .map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+            .collect::<Result<_, tokio_postgres::Error>>()?;
         let mut keys = HashMap::with_capacity(addresses.len());
         for (address, text) in addresses.iter().zip(&texts) {
             let Some(index) = indexes.get(text) else {
@@ -373,36 +383,36 @@ impl<R: ChainRepository> OnchainWallet<R> {
 /// Keeps `outpoints` out of [`OnchainWallet::list_utxos`]. Takes a connection so
 /// the spends can commit with the database transaction that stores `spending_txid`.
 pub async fn record_spends(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     spending_txid: &Txid,
     outpoints: &[OutPoint],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), tokio_postgres::Error> {
     let tx_ids: Vec<String> = outpoints.iter().map(|o| o.txid.to_string()).collect();
     let indices: Vec<i32> = outpoints.iter().map(|o| o.vout.cast_signed()).collect();
-    sqlx::query(
+    execute(
+        db,
         "INSERT INTO brz_ssp_onchain_wallet_spends (tx_id, output_index, spending_txid)
          SELECT p.tx_id, p.output_index, $3
          FROM UNNEST($1::text[], $2::int[]) AS p(tx_id, output_index)
          ON CONFLICT DO NOTHING",
+        &[&tx_ids, &indices, &spending_txid.to_string()],
     )
-    .bind(&tx_ids)
-    .bind(&indices)
-    .bind(spending_txid.to_string())
-    .execute(db)
     .await?;
     Ok(())
 }
 
 /// Undoes [`record_spends`] for each of `spending_txids`.
 pub async fn forget_spends(
-    db: &mut PgConnection,
+    db: &impl GenericClient,
     spending_txids: &[Txid],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), tokio_postgres::Error> {
     let txids: Vec<String> = spending_txids.iter().map(ToString::to_string).collect();
-    sqlx::query("DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)")
-        .bind(&txids)
-        .execute(db)
-        .await?;
+    execute(
+        db,
+        "DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)",
+        &[&txids],
+    )
+    .await?;
     Ok(())
 }
 
@@ -463,7 +473,7 @@ mod tests {
     struct Fixture {
         wallet: Arc<OnchainWallet<ChainRepository>>,
         chain: Arc<ChainRepository>,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -546,15 +556,15 @@ mod tests {
         }
 
         async fn record_spends(&self, spending_txid: Txid, outpoints: &[OutPoint]) {
-            let mut db = self.pool.acquire().await.unwrap();
-            super::record_spends(&mut db, &spending_txid, outpoints)
+            let db = self.pool.get().await.unwrap();
+            super::record_spends(&db, &spending_txid, outpoints)
                 .await
                 .unwrap();
         }
 
         async fn forget_spends(&self, spending_txids: &[Txid]) {
-            let mut db = self.pool.acquire().await.unwrap();
-            super::forget_spends(&mut db, spending_txids).await.unwrap();
+            let db = self.pool.get().await.unwrap();
+            super::forget_spends(&db, spending_txids).await.unwrap();
         }
     }
 
@@ -927,11 +937,15 @@ mod tests {
         fixture.record_spends(txid(8), &[coin, coin]).await;
         fixture.record_spends(txid(8), &[coin]).await;
 
-        let recorded: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM brz_ssp_onchain_wallet_spends")
-                .fetch_one(&*fixture.pool)
-                .await
-                .unwrap();
+        let db = fixture.pool.get().await.unwrap();
+        let recorded: i64 = query_one(
+            &db,
+            "SELECT COUNT(*) FROM brz_ssp_onchain_wallet_spends",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(recorded, 1);
         assert!(fixture.coins().await.is_empty());
     }

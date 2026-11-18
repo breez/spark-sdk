@@ -65,6 +65,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -88,6 +90,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM brz_payments p
@@ -510,13 +513,15 @@ class MysqlStorage {
           await this._runPaymentUpsert(conn, payment);
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           await this._runPaymentUpsert(conn, payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;
@@ -566,13 +571,12 @@ class MysqlStorage {
   }
 
   async _runPaymentUpsert(conn, payment) {
-    const withdrawTxId =
-      payment.details?.type === "withdraw" ? payment.details.txId : null;
+    const withdraw = payment.details?.type === "withdraw" ? payment.details : null;
     const spark = payment.details?.type === "spark" ? 1 : null;
 
     await conn.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          payment_type=VALUES(payment_type),
          status=VALUES(status),
@@ -581,6 +585,8 @@ class MysqlStorage {
          timestamp=VALUES(timestamp),
          method=VALUES(method),
          withdraw_tx_id=VALUES(withdraw_tx_id),
+         withdraw_vout=VALUES(withdraw_vout),
+         withdraw_destination_address=VALUES(withdraw_destination_address),
          spark=VALUES(spark)`,
       [
         this.identity,
@@ -591,7 +597,9 @@ class MysqlStorage {
         payment.fees.toString(),
         payment.timestamp,
         payment.method ? toJson(payment.method) : null,
-        withdrawTxId,
+        withdraw?.txId ?? null,
+        withdraw?.vout ?? null,
+        withdraw?.destinationAddress ?? null,
         spark,
       ]
     );
@@ -690,6 +698,10 @@ class MysqlStorage {
       .update(Buffer.from(paymentId))
       .digest("hex")
       .slice(0, 32);
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
@@ -1170,18 +1182,20 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         for (const item of metadata) {
           await conn.query(
-            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                nostr_zap_request = VALUES(nostr_zap_request),
                nostr_zap_receipt = VALUES(nostr_zap_receipt),
-               sender_comment = VALUES(sender_comment)`,
+               sender_comment = VALUES(sender_comment),
+               lightning_address = VALUES(lightning_address)`,
             [
               this.identity,
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
+              item.lightningAddress || null,
             ]
           );
         }
@@ -1232,6 +1246,7 @@ class MysqlStorage {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          lightningAddress: row.lnurl_lightning_address || null,
         };
       }
 
@@ -1239,10 +1254,16 @@ class MysqlStorage {
         details.conversionInfo = parseJson(row.conversion_info);
       }
     } else if (row.withdraw_tx_id) {
-      details = {
-        type: "withdraw",
-        txId: row.withdraw_tx_id,
-      };
+      // A withdrawal stored before the SDK kept these values has no details
+      // until the next sync rewrites it.
+      if (row.withdraw_vout != null && row.withdraw_destination_address != null) {
+        details = {
+          type: "withdraw",
+          txId: row.withdraw_tx_id,
+          vout: Number(row.withdraw_vout),
+          destinationAddress: row.withdraw_destination_address,
+        };
+      }
     } else if (row.deposit_tx_id) {
       details = {
         type: "deposit",
@@ -1513,11 +1534,7 @@ class MysqlStorage {
 
         if (deleteResult.affectedRows === 0) {
           const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
-          if (this.logger && typeof this.logger.log === "function") {
-            this.logger.log({ line: msg, level: "warn" });
-          } else {
-            console.warn(`[MysqlStorage] ${msg}`);
-          }
+          this._log("WARN", msg);
         }
 
         await conn.query(

@@ -319,7 +319,7 @@ pub enum InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -485,14 +485,6 @@ pub struct LnurlPayRequestDetails {
     pub nostr_pubkey: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SilentPaymentAddressDetails)]
-
-pub struct SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlAuthRequestDetails)]
 pub struct LnurlAuthRequestDetails {
     pub k1: String,
@@ -634,7 +626,7 @@ pub enum PaymentDetails {
         conversion_info: Option<ConversionInfo>,
     },
     Token {
-        metadata: TokenMetadata,
+        metadata: PaymentTokenMetadata,
         tx_hash: String,
         tx_type: TokenTransactionType,
         invoice_details: Option<SparkInvoicePaymentDetails>,
@@ -652,6 +644,8 @@ pub enum PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,
@@ -997,6 +991,14 @@ pub enum CpfpFundingKind {
     },
 }
 
+#[derive(Clone, Copy, Default)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CpfpFundingStrategy)]
+pub enum CpfpFundingStrategy {
+    #[default]
+    PerBranch,
+    PerNode,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ExitLeafSelection)]
 pub enum ExitLeafSelection {
     All,
@@ -1080,6 +1082,7 @@ pub struct ImportUnilateralExitStateResponse {
 pub struct PrepareRecoverFundsRequest {
     pub fee_rate_sat_per_vbyte: u64,
     pub funding_kind: Option<CpfpFundingKind>,
+    pub funding_strategy: Option<CpfpFundingStrategy>,
     pub destination: String,
     pub selection: ExitLeafSelection,
 }
@@ -1105,6 +1108,8 @@ pub struct PrepareRecoverFundsResponse {
 pub struct RecoveryFunding {
     pub single_utxo_sats: u64,
     pub per_branch: Vec<PerBranchFunding>,
+    #[serde(default)]
+    pub strategy: CpfpFundingStrategy,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SkippedLeaf)]
@@ -1254,6 +1259,18 @@ pub struct TokenMetadata {
     pub decimals: u32,
     pub max_supply: u128,
     pub is_freezable: bool,
+    pub extra_metadata: Option<Vec<u8>>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentTokenMetadata)]
+pub struct PaymentTokenMetadata {
+    pub identifier: String,
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletRequest)]
@@ -1284,6 +1301,7 @@ pub enum ReceivePaymentMethod {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
+        preimage: Option<String>,
         fee_policy: Option<FeePolicy>,
     },
     CrossChain {
@@ -1293,6 +1311,7 @@ pub enum ReceivePaymentMethod {
         fee_mode: Option<CrossChainFeeMode>,
         max_slippage_bps: Option<u32>,
         target_overpay_bps: Option<u32>,
+        refund_address: Option<String>,
     },
 }
 
@@ -1485,6 +1504,7 @@ pub enum ReceiveFee {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainReceiveInfo)]
 pub struct CrossChainReceiveInfo {
+    pub quote_id: String,
     pub deposit_address: String,
     pub deposit_amount: u128,
     pub expected_received_amount: u128,
@@ -1886,6 +1906,17 @@ pub struct GetPaymentResponse {
     pub payment: Payment,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchLightningSendStatusRequest)]
+pub struct FetchLightningSendStatusRequest {
+    pub invoice: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchLightningSendStatusResponse)]
+pub struct FetchLightningSendStatusResponse {
+    pub status: Option<PaymentStatus>,
+    pub preimage: Option<String>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LogEntry)]
 pub struct LogEntry {
     pub line: String,
@@ -1909,6 +1940,7 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    pub lightning_address: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
@@ -2249,6 +2281,7 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+    pub lightning_address: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationMode)]
@@ -2338,6 +2371,8 @@ pub enum ConversionInfo {
         delivered_amount: Option<u128>,
         #[serde(default)]
         external_tx_hash: Option<String>,
+        #[serde(default)]
+        refund_tx_hash: Option<String>,
         status: ConversionStatus,
         fee_amount: Option<u128>,
         service_fee_amount: Option<u128>,
@@ -2511,6 +2546,89 @@ pub struct BridgeToCashAppRequest {
 pub struct BridgeToCashAppResponse {
     pub payment_request: String,
     pub info: CrossChainReceiveInfo,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgingConfig)]
+pub struct BridgingConfig {
+    pub api_key: String,
+    /// Not supported on WASM: setting this always fails validation.
+    pub proxy: Option<ProxyConfig>,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeRoutesRequest)]
+pub struct GetBridgeRoutesRequest {
+    pub recipient: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeRoutesResponse)]
+pub struct GetBridgeRoutesResponse {
+    pub routes: Vec<BridgeRoutePair>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeRoutePair)]
+pub struct BridgeRoutePair {
+    pub provider: CrossChainProvider,
+    pub source: BridgeRoutePairSide,
+    pub destination: BridgeRoutePairSide,
+    pub limits: Option<CrossChainRouteLimits>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeRoutePairSide)]
+pub struct BridgeRoutePairSide {
+    pub chain: String,
+    pub chain_id: Option<String>,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateBridgeRequest)]
+pub struct CreateBridgeRequest {
+    pub recipient: String,
+    pub route: BridgeRoutePair,
+    pub amount: u128,
+    pub refund_address: Option<String>,
+    pub fee_policy: Option<FeePolicy>,
+    pub max_slippage_bps: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CreateBridgeResponse)]
+pub struct CreateBridgeResponse {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+    pub payment_request: String,
+    pub info: CrossChainReceiveInfo,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeStatusRequest)]
+pub struct GetBridgeStatusRequest {
+    pub bridge_id: String,
+    pub status_token: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeStatus)]
+pub enum BridgeStatus {
+    Created,
+    Pending,
+    Refunding,
+    Completed,
+    Refunded,
+    Failed,
+    Expired,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::GetBridgeStatusResponse)]
+pub struct GetBridgeStatusResponse {
+    pub status: BridgeStatus,
+    pub provider_status: Option<String>,
+    pub order_id: Option<String>,
+    pub amount_in: Option<u128>,
+    pub amount_out: Option<u128>,
+    pub deposit_tx_hash: Option<String>,
+    pub delivery_tx_hash: Option<String>,
+    pub refund_tx_hash: Option<String>,
+    pub error_code: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]

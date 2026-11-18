@@ -19,7 +19,9 @@ use crate::{
         },
     },
     services::{LeafKeyTweak, ServiceError, SigningResult, Transfer, TransferId, TransferService},
-    signer::{AggregateFrostRequest, PrepareTransferRequest, PreparedTransfer, SparkSigner},
+    signer::{
+        AggregateFrostRequest, FrostAdaptor, PrepareTransferRequest, PreparedTransfer, SparkSigner,
+    },
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
     utils::{frost::aggregate_frost, transactions::first_output},
@@ -136,6 +138,10 @@ impl Swap {
         let secp = Secp256k1::new();
         let cpfp_adaptor_private_key = SecretKey::new(&mut OsRng);
         let cpfp_adaptor_public_key = PublicKey::from_secret_key(&secp, &cpfp_adaptor_private_key);
+        let cpfp_adaptor = FrostAdaptor {
+            public_key: cpfp_adaptor_public_key,
+            v2: self.spark_signer.supports_adaptor_v2(),
+        };
 
         let mut prepared_transfer_request = self
             .transfer_service
@@ -145,7 +151,7 @@ impl Swap {
                 &receiver_public_key,
                 None,
                 Some(expiry_time),
-                Some(&cpfp_adaptor_public_key),
+                Some(cpfp_adaptor),
                 prepared,
             )
             .await?;
@@ -175,6 +181,7 @@ impl Swap {
                     // Direct adaptor keys are not used for swap v3
                     direct_adaptor_public_key: Vec::new(),
                     direct_from_cpfp_adaptor_public_key: Vec::new(),
+                    adaptor_v2: cpfp_adaptor.v2,
                 }),
             })
             .await;
@@ -264,7 +271,7 @@ impl Swap {
                 self_commitment: &signed_tx.self_nonce_commitment,
                 public_key: &signed_tx.signing_public_key,
                 self_signature: &signed_tx.user_signature,
-                adaptor_public_key: Some(&cpfp_adaptor_public_key),
+                adaptor: Some(cpfp_adaptor),
             })
             .map_err(|e| ServiceError::Generic(format!("FROST aggregation failed: {e}")))?;
 

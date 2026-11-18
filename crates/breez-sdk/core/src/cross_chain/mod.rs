@@ -5,7 +5,9 @@
 
 // Boltz is not registered as a provider (see `sdk_builder`): the service is not
 // operational, and it is unclear when or whether it will be again. The modules
-// stay compiled so the wiring can be restored in one place.
+// stay in the tree behind the `boltz` feature so the wiring can be restored in
+// one place.
+#[cfg(feature = "boltz")]
 #[allow(dead_code)]
 pub(crate) mod boltz;
 mod cached_fiat;
@@ -13,7 +15,9 @@ mod orchestra;
 
 pub(crate) use cached_fiat::{CachedFiatService, DEFAULT_FIAT_CACHE_TTL};
 pub(crate) use orchestra::{
-    BreezServerOrchestraConfigResolver, OrchestraService, parse_rfc3339_to_unix_seconds,
+    BreezServerOrchestraConfigResolver, DepositDestination, OrchestraQuoter, OrchestraService,
+    delivery_method_from_wire, delivery_method_to_wire, parse_rfc3339_to_unix_seconds,
+    to_route_limits,
 };
 
 use std::collections::HashMap;
@@ -55,10 +59,11 @@ const USD_STABLE_ASSETS: &[&str] = &["USDB", "USDC", "USDT", "USDT0"];
 pub(crate) const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Serializes the conversion writes onto an inbound cross-chain receive. The
-/// invoice match writes a Pending conversion when the payment is seen; the
-/// provider monitor writes the Completed one and closes the receive row in
-/// the same critical section. A match racing the monitor would otherwise
-/// put Pending back for good.
+/// invoice match writes a Pending conversion when the payment is seen. The
+/// provider monitor closes the receive row in the same critical section as
+/// its own write: the Completed conversion, or the failed payment of an order
+/// that failed or was refunded. A match racing the monitor would otherwise
+/// put Pending back for good, or reopen the closed row.
 static RECEIVE_CONVERSION_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Links an inbound payment to the cross-chain receive whose Spark invoice it
@@ -94,9 +99,7 @@ pub(crate) async fn attach_receive_metadata_for_payment(
     if already_attached {
         return Ok(false);
     }
-    let Some(conversion_info) =
-        orchestra::receive_conversion_info_for_invoice(storage, invoice).await?
-    else {
+    let Some(conversion_info) = orchestra::link_receive_for_invoice(storage, invoice).await? else {
         return Ok(false);
     };
     storage
@@ -109,6 +112,21 @@ pub(crate) async fn attach_receive_metadata_for_payment(
         )
         .await?;
     Ok(true)
+}
+
+/// Records what a synced cross-chain swap row implies locally: a receive that
+/// closed failed or refunded becomes a failed payment, which `emit`
+/// announces.
+pub(crate) async fn apply_synced_swap(
+    storage: &Arc<dyn crate::Storage>,
+    event_emitter: &crate::EventEmitter,
+    swap: &crate::persist::StoredCrossChainSwap,
+    emit: bool,
+) -> Result<(), SdkError> {
+    if swap.provider == orchestra::storage_adapter::PROVIDER_TAG_ORCHESTRA {
+        orchestra::record_synced_failed_receive(storage, event_emitter, swap, emit).await?;
+    }
+    Ok(())
 }
 
 /// Attaches a cross-chain [`ConversionInfo`] to a freshly-converted
@@ -411,6 +429,8 @@ impl CrossChainRoutePair {
 pub(crate) struct CrossChainContext {
     providers: HashMap<CrossChainProvider, Arc<dyn CrossChainService>>,
     fiat_service: Arc<dyn FiatService>,
+    /// The Orchestra quoter, if one was set.
+    orchestra_quoter: Option<Arc<OrchestraQuoter>>,
 }
 
 impl CrossChainContext {
@@ -418,11 +438,21 @@ impl CrossChainContext {
         Self {
             providers: HashMap::new(),
             fiat_service,
+            orchestra_quoter: None,
         }
     }
 
     pub fn insert(&mut self, key: CrossChainProvider, service: Arc<dyn CrossChainService>) {
         self.providers.insert(key, service);
+    }
+
+    pub fn set_orchestra_quoter(&mut self, quoter: Arc<OrchestraQuoter>) {
+        self.orchestra_quoter = Some(quoter);
+    }
+
+    /// The Orchestra quoter, if one was set.
+    pub fn orchestra_quoter(&self) -> Option<&Arc<OrchestraQuoter>> {
+        self.orchestra_quoter.as_ref()
     }
 
     /// Fails with [`SdkError::CrossChainDisabled`] when no provider is
@@ -447,6 +477,34 @@ impl CrossChainContext {
 
     pub fn values(&self) -> impl Iterator<Item = &Arc<dyn CrossChainService>> {
         self.providers.values()
+    }
+
+    /// Every provider's routes for `filter`, limited to USD-pegged assets and
+    /// sorted. A provider whose listing fails is logged and left out.
+    pub async fn list_routes(
+        &self,
+        filter: &CrossChainRouteFilter,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        self.ensure_enabled()?;
+        let filter = &filter.normalized();
+        let mut all_routes = Vec::new();
+        for svc in self.values() {
+            match svc.get_routes(filter).await {
+                Ok(routes) => all_routes.extend(routes),
+                Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
+            }
+        }
+
+        // Filter to USD-pegged destinations only.
+        all_routes.retain(|r| is_usd_stable_asset(&r.asset));
+
+        all_routes.sort_by(|a, b| {
+            a.asset
+                .cmp(&b.asset)
+                .then_with(|| a.chain.cmp(&b.chain))
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
+        Ok(all_routes)
     }
 
     /// Cached fiat service shared with every cross-chain provider. Read
@@ -492,30 +550,38 @@ pub(crate) struct CrossChainReceivePrepared {
     /// Canonical cross-chain URI the sender can paste or scan to pay.
     pub payment_request: String,
     pub info: CrossChainReceiveInfo,
+    /// Provider token for reading the quote's status, when it issued one.
+    pub quote_read_token: Option<String>,
 }
 
-/// Information about the cross-chain receive quote.
+/// Information about the cross-chain receive quote: what the sender deposits
+/// and what the receiver is expected to get.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CrossChainReceiveInfo {
-    /// Bare external deposit address the sender pays to.
+    /// The provider's id for this receive. The incoming payment carries the
+    /// same id in its conversion info, so it can be matched to this receive.
+    pub quote_id: String,
+    /// Bare deposit address the sender pays to on the source chain, or the
+    /// BOLT11 invoice when the sender pays over Lightning.
     pub deposit_address: String,
     /// Amount the sender must deposit, in source-asset base units
-    /// (`route.decimals`). On `FeesExcluded` this may differ from the
-    /// request's `amount` because the SDK inflates the deposit to absorb
-    /// provider fees. Render this value to the sender.
+    /// (`route.decimals`, or sats over Lightning). On `FeesExcluded` this may
+    /// differ from the request's `amount` because the SDK inflates the deposit
+    /// to absorb provider fees. Render this value to the sender.
     pub deposit_amount: u128,
     /// Amount the receiver will see, net of provider fees, in
-    /// destination-asset base units. Sats when receiving BTC into Spark,
-    /// or token base units when receiving a Spark token (e.g. USDB). The
-    /// final delivered amount may move within the slippage tolerance.
+    /// destination-asset base units. Sats when receiving BTC, token base
+    /// units when receiving a Spark token (e.g. USDB), or stablecoin base
+    /// units when the receiver is on another chain. The final delivered
+    /// amount may move within the slippage tolerance.
     pub expected_received_amount: u128,
-    /// Symbol of the Spark-side asset `expected_received_amount` is
-    /// denominated in, as the provider reports it: `"BTC"` for sats, or the
-    /// token symbol (e.g. `"USDB"`).
+    /// Symbol of the asset `expected_received_amount` is denominated in, as
+    /// the provider reports it: `"BTC"` for sats, a Spark token symbol (e.g.
+    /// `"USDB"`), or the stablecoin when the receiver is on another chain.
     pub destination_asset: String,
-    /// Spark token identifier when the destination is a token. Absent when
-    /// the destination is BTC and the receiver will see sats.
+    /// Spark token identifier when the destination is a Spark token. Absent
+    /// otherwise.
     pub token_identifier: Option<String>,
     /// Provider-quoted total fee for this receive, including the partner fee
     /// when one is set, in `service_fee_asset` units.
@@ -574,6 +640,8 @@ pub(crate) struct CrossChainSendPrepared {
     pub token_identifier: Option<String>,
     /// Provider-internal state carried between `prepare` and `send`.
     pub provider_context: CrossChainProviderContext,
+    /// Provider token for reading the quote's status, when it issued one.
+    pub quote_read_token: Option<String>,
 }
 
 /// Abstraction over cross-chain bridge/swap providers.
@@ -625,11 +693,12 @@ pub(crate) trait CrossChainService: Send + Sync {
     ///   source-asset base units. The receiver lands `amount - fees`.
     ///   `target_overpay_bps` is ignored.
     ///
-    /// `delivery_method` is the rail the funds arrive on.
-    /// [`DeliveryMethod::Spark`] delivers to this wallet and tracks the
-    /// receive. [`DeliveryMethod::Lightning`] pays `recipient_address` (a
-    /// Lightning address) directly and is not tracked. `refund_address` is
-    /// where the provider returns the deposit if delivery fails.
+    /// `delivery_method` is the rail the funds arrive on:
+    /// [`DeliveryMethod::Spark`] pays `recipient_address` as a Spark address,
+    /// [`DeliveryMethod::Lightning`] as a Lightning address. A wallet-bound
+    /// implementation receives over Spark into its own wallet and tracks the
+    /// receive. `refund_address` is where the provider returns the deposit if
+    /// delivery fails.
     #[allow(clippy::too_many_arguments)]
     async fn prepare_receive(
         &self,
@@ -1407,6 +1476,8 @@ mod tests {
             method: crate::PaymentMethod::Withdraw,
             details: Some(PaymentDetails::Withdraw {
                 tx_id: "tx1".to_string(),
+                vout: 0,
+                destination_address: "bcrt1p_destination".to_string(),
             }),
             conversion_details: None,
         };
@@ -1415,7 +1486,7 @@ mod tests {
 
         assert!(matches!(
             out.details,
-            Some(PaymentDetails::Withdraw { tx_id }) if tx_id == "tx1"
+            Some(PaymentDetails::Withdraw { tx_id, .. }) if tx_id == "tx1"
         ));
     }
 
@@ -1604,8 +1675,8 @@ mod tests {
     mod receive_matching {
         use super::*;
         use crate::{
-            PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SparkInvoicePaymentDetails,
-            TokenMetadata, TokenTransactionType,
+            PaymentDetails, PaymentMethod, PaymentStatus, PaymentTokenMetadata, PaymentType,
+            SparkInvoicePaymentDetails, TokenTransactionType,
         };
 
         fn sqlite_storage() -> Arc<dyn crate::Storage> {
@@ -1627,6 +1698,7 @@ mod tests {
                 quote_read_token: None,
                 recipient_address: "sp1rcv".to_string(),
                 spark_invoice: Some(invoice.to_string()),
+                paid: false,
                 source_chain: "arbitrum".to_string(),
                 source_asset: "USDC".to_string(),
                 source_chain_id: Some("42161".to_string()),
@@ -1642,6 +1714,7 @@ mod tests {
                 fee_asset: Some("USDC".to_string()),
                 fee_asset_decimals: Some(6),
                 expires_at: 1_700_000_120,
+                failure: None,
             };
             orchestra::storage_adapter::OrchestraStorageAdapter::new(Arc::clone(&storage))
                 .upsert(&data)
@@ -1681,7 +1754,7 @@ mod tests {
 
         fn token_details(invoice: &str) -> PaymentDetails {
             PaymentDetails::Token {
-                metadata: TokenMetadata {
+                metadata: PaymentTokenMetadata {
                     identifier: "btkn1usdb".to_string(),
                     issuer_public_key: "02aa".to_string(),
                     name: "Bitcoin USD".to_string(),
@@ -1805,6 +1878,7 @@ mod tests {
                 estimated_out: 1146,
                 delivered_amount: Some(1146),
                 external_tx_hash: Some("0xdeposit".to_string()),
+                refund_tx_hash: None,
                 status: crate::ConversionStatus::Pending,
                 fee_amount: Some(10_000),
                 service_fee_amount: Some(10_000),

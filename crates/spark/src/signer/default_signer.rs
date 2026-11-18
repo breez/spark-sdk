@@ -16,12 +16,12 @@ use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, VerifyingKey};
 use thiserror::Error;
 
+use crate::signer::SecretSource;
 use crate::signer::nonce_store::NonceStore;
 use crate::signer::{
     CommitAndSignFrostRequest, CommittedFrostShare, EncryptedSecret, SignFrostRequest,
-    secret_sharing,
 };
-use crate::signer::{SecretSource, SecretToSplit};
+use crate::utils::secret_sharing;
 use crate::{
     Network,
     signer::{Signer, SignerError},
@@ -230,7 +230,7 @@ impl DefaultSigner {
             request.message,
             request.statechain_commitments,
             request.self_nonce_commitment,
-            request.adaptor_public_key,
+            request.adaptor,
         )?;
 
         let secret_key = request.private_key.to_secret_key(self)?;
@@ -239,8 +239,8 @@ impl DefaultSigner {
         // This allows it to be used with the FROST API for creating signature shares
         let signing_share = SigningShare::deserialize(&secret_key.secret_bytes()).map_err(|e| {
             SignerError::SerializationError(format!(
-                "Failed to deserialize secret key: {e} (culprit: {:?})",
-                e.culprit()
+                "Failed to deserialize secret key: {e} (culprits: {:?})",
+                e.culprits()
             ))
         })?;
 
@@ -251,8 +251,8 @@ impl DefaultSigner {
         )
         .map_err(|e| {
             SignerError::SerializationError(format!(
-                "Failed to deserialize private as public key: {e} (culprit: {:?})",
-                e.culprit()
+                "Failed to deserialize private as public key: {e} (culprits: {:?})",
+                e.culprits()
             ))
         })?;
 
@@ -261,8 +261,8 @@ impl DefaultSigner {
         let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
             .map_err(|e| {
                 SignerError::SerializationError(format!(
-                    "Failed to deserialize verifying key: {e} (culprit: {:?})",
-                    e.culprit()
+                    "Failed to deserialize verifying key: {e} (culprits: {:?})",
+                    e.culprits()
                 ))
             })?;
 
@@ -301,8 +301,8 @@ impl DefaultSigner {
             frost_secp256k1_tr::round2::sign(&signing_package, signing_nonces, &key_package)
                 .map_err(|e| {
                     SignerError::FrostError(format!(
-                        "Failed to sign: {e} (culprit: {:?})",
-                        e.culprit()
+                        "Failed to sign: {e} (culprits: {:?})",
+                        e.culprits()
                     ))
                 })?;
 
@@ -518,16 +518,11 @@ impl Signer for DefaultSigner {
 
     async fn split_secret_with_proofs(
         &self,
-        secret: &SecretToSplit,
+        secret: &SecretSource,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError> {
-        let secret_bytes = match secret {
-            SecretToSplit::SecretSource(privkey_source) => {
-                privkey_source.to_secret_key(self)?.secret_bytes().to_vec()
-            }
-            SecretToSplit::Preimage(bytes) => bytes.clone(),
-        };
+        let secret_bytes = secret.to_secret_key(self)?.secret_bytes();
         let secret_as_scalar = secret_sharing::from_bytes_to_scalar(&secret_bytes)?;
         let shares = secret_sharing::split_secret_with_proofs(
             &secret_as_scalar,
@@ -554,7 +549,7 @@ impl Signer for DefaultSigner {
                 verifying_key: request.verifying_key,
                 self_nonce_commitment: &commitments,
                 statechain_commitments: request.statechain_commitments,
-                adaptor_public_key: request.adaptor_public_key,
+                adaptor: request.adaptor,
             },
             &signing_nonces,
         )?;
@@ -1006,7 +1001,7 @@ pub(crate) mod tests {
             verifying_key: public_key,
             self_nonce_commitment: commitment,
             statechain_commitments: std::collections::BTreeMap::new(),
-            adaptor_public_key: None,
+            adaptor: None,
         }
     }
 
@@ -1023,7 +1018,7 @@ pub(crate) mod tests {
                 private_key: &private_key,
                 verifying_key: &public_key,
                 statechain_commitments: std::collections::BTreeMap::new(),
-                adaptor_public_key: None,
+                adaptor: None,
             })
             .await
             .expect("commit_and_sign_frost should succeed");

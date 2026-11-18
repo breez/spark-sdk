@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::Transaction;
 use bitcoin::{OutPoint, TxOut};
 use spark::tree::TreeNodeId;
-use sqlx::Row;
+use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::rows::{invalid, node_id, transaction};
 use super::{LeafStoreError, PostgresLeafStore};
 use crate::chain::ConfirmedOutput;
+use crate::postgresql::query;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatureTransaction {
@@ -81,7 +82,7 @@ const MATURE_ON_UNSPENT: &str = r"WITH RECURSIVE unspent (tx_id, output_index, h
                              WHERE transferred.refund_tx_id = t.tx_id)
            ORDER BY unspent.tx_id, unspent.output_index, t.timelock, t.tx_id
        ), candidate AS (
-           SELECT * FROM lowest WHERE height + timelock <= $4 + 1
+           SELECT * FROM lowest WHERE height + timelock <= $4::bigint + 1
        ), above AS (
            SELECT candidate.tx_id AS candidate, candidate.previous_tx_id,
                   candidate.previous_output_index
@@ -123,7 +124,7 @@ const MATURE_ON_UNSPENT: &str = r"WITH RECURSIVE unspent (tx_id, output_index, h
        LEFT JOIN brz_ssp_spark_leaves l ON l.refund_tx_id = below.tx_id
        ORDER BY below.candidate, below.depth, below.tx_id";
 
-fn candidates(rows: &[sqlx::postgres::PgRow]) -> Result<Vec<MatureTransaction>, LeafStoreError> {
+fn candidates(rows: &[Row]) -> Result<Vec<MatureTransaction>, LeafStoreError> {
     let mut candidates = Vec::new();
     let mut start = 0;
     while let Some(first) = rows.get(start) {
@@ -131,7 +132,7 @@ fn candidates(rows: &[sqlx::postgres::PgRow]) -> Result<Vec<MatureTransaction>, 
         let mut below = Vec::new();
         let mut end = start;
         while let Some(row) = rows.get(end) {
-            if row.try_get::<String, _>("candidate")? != candidate {
+            if row.try_get::<_, String>("candidate")? != candidate {
                 break;
             }
             let leaf: Option<Uuid> = row.try_get("node_id")?;
@@ -149,10 +150,10 @@ fn candidates(rows: &[sqlx::postgres::PgRow]) -> Result<Vec<MatureTransaction>, 
             .ok_or_else(|| invalid("a candidate without a transaction"))?;
         let mut transaction = MatureTransaction {
             transaction: top.transaction.clone(),
-            timelock: first.try_get::<i32, _>("timelock")?.cast_unsigned(),
-            input_confirmation_height: first.try_get::<i64, _>("height")?.cast_unsigned(),
+            timelock: first.try_get::<_, i32>("timelock")?.cast_unsigned(),
+            input_confirmation_height: first.try_get::<_, i64>("height")?.cast_unsigned(),
             direct_timelock: first
-                .try_get::<Option<i32>, _>("direct_timelock")?
+                .try_get::<_, Option<i32>>("direct_timelock")?
                 .map(i32::cast_unsigned),
             leaves: Vec::new(),
             value: 0,
@@ -178,13 +179,12 @@ impl PostgresLeafStore {
             return Ok(Vec::new());
         }
         let (tx_ids, indices, heights) = arrays(unspent);
-        let rows = sqlx::query(MATURE_ON_UNSPENT)
-            .bind(&tx_ids)
-            .bind(&indices)
-            .bind(&heights)
-            .bind(tip_height.cast_signed())
-            .fetch_all(&*self.pool)
-            .await?;
+        let rows = query(
+            &self.pool.get().await?,
+            MATURE_ON_UNSPENT,
+            &[&tx_ids, &indices, &heights, &tip_height.cast_signed()],
+        )
+        .await?;
         let (mut mature, without_leaves): (Vec<_>, Vec<_>) = candidates(&rows)?
             .into_iter()
             .partition(|candidate| !candidate.leaves.is_empty());
@@ -221,7 +221,8 @@ impl PostgresLeafStore {
         if tx_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows: Vec<(String, Uuid, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"WITH RECURSIVE conflicting AS (
                    SELECT t.tx_id AS conflicted_for, other.tx_id
                    FROM brz_ssp_spark_txs t
@@ -240,16 +241,16 @@ impl PostgresLeafStore {
                FROM conflicting
                JOIN brz_ssp_spark_leaves l ON l.refund_tx_id = conflicting.tx_id
                ORDER BY conflicting.conflicted_for, l.node_id",
+            &[&tx_ids],
         )
-        .bind(tx_ids)
-        .fetch_all(&*self.pool)
         .await?;
         let mut conflicted: HashMap<String, Vec<(Uuid, u64)>> = HashMap::new();
-        for (tx_id, leaf, value) in rows {
+        for row in &rows {
+            let value: i64 = row.try_get(2)?;
             conflicted
-                .entry(tx_id)
+                .entry(row.try_get(0)?)
                 .or_default()
-                .push((leaf, value.cast_unsigned()));
+                .push((row.try_get(1)?, value.cast_unsigned()));
         }
         Ok(conflicted)
     }
@@ -269,7 +270,8 @@ impl PostgresLeafStore {
         // In the last branch, an old refund is a stored cpfp transaction that
         // is neither the refund of one of the SSP's leaves nor the refund of a
         // leaf it transferred, and that is the parent of no stored transaction.
-        let rows = sqlx::query(
+        let rows = query(
+            &self.pool.get().await?,
             r"WITH unspent (tx_id, height) AS (
                    SELECT tx_id, height
                    FROM UNNEST($1::text[], $2::int[], $3::bigint[])
@@ -295,17 +297,14 @@ impl PostgresLeafStore {
                                  WHERE transferred.refund_tx_id = old_refund.tx_id)
                  AND NOT EXISTS (SELECT 1 FROM brz_ssp_spark_txs child
                                  WHERE child.previous_tx_id = old_refund.tx_id)",
+            &[&tx_ids, &indices, &heights],
         )
-        .bind(&tx_ids)
-        .bind(&indices)
-        .bind(&heights)
-        .fetch_all(&*self.pool)
         .await?;
 
         let old_refunds: Vec<String> = rows
             .iter()
             .filter_map(|row| {
-                row.try_get::<Option<String>, _>("old_refund_tx_id")
+                row.try_get::<_, Option<String>>("old_refund_tx_id")
                     .transpose()
             })
             .collect::<Result<_, _>>()?;
@@ -334,7 +333,7 @@ impl PostgresLeafStore {
                 node_id: node_id(leaf)?,
                 outpoint: OutPoint::new(refund.compute_txid(), 0),
                 output,
-                height: row.try_get::<i64, _>("height")?.cast_unsigned(),
+                height: row.try_get::<_, i64>("height")?.cast_unsigned(),
             });
         }
         outputs.sort_by_key(|output| (output.height, output.outpoint));

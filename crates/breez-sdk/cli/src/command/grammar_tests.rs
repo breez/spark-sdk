@@ -10,7 +10,8 @@ use breez_sdk_spark::{
 };
 use clap::Parser;
 
-use super::advanced::{AdvancedCommand, FundingKindArg};
+use super::advanced::{AdvancedCommand, FundingKindArg, FundingStrategyArg};
+use super::bridging::BridgingCommand;
 use super::contacts::ContactCommand;
 use super::issuer::IssuerCommand;
 use super::stable_balance::StableBalanceCommand;
@@ -64,6 +65,17 @@ fn get_payment() {
     };
     assert_eq!(payment_id, "abc123");
     parse_err("get-payment");
+}
+
+#[test]
+fn fetch_lightning_send_status() {
+    let Command::FetchLightningSendStatus { invoice } =
+        parse_ok("fetch-lightning-send-status lnbcrt1abc")
+    else {
+        panic!("expected FetchLightningSendStatus");
+    };
+    assert_eq!(invoice, "lnbcrt1abc");
+    parse_err("fetch-lightning-send-status");
 }
 
 #[test]
@@ -221,6 +233,15 @@ fn receive_crosschain_flags() {
         panic!("expected Receive");
     };
     assert!(cross_chain_to_bitcoin);
+
+    let Command::Receive {
+        cross_chain_refund_address,
+        ..
+    } = parse_ok("receive -m crosschain -a 1000000 --cross-chain-refund-address 0xpayer")
+    else {
+        panic!("expected Receive");
+    };
+    assert_eq!(cross_chain_refund_address.as_deref(), Some("0xpayer"));
 
     parse_err("receive -m crosschain -a 1000000 --cross-chain-max-slippage-bps ten");
     parse_err("receive -m crosschain -a 1000000 --cross-chain-to-bitcoin -t btkn1abc");
@@ -554,45 +575,50 @@ fn buy_bitcoin() {
 
 #[test]
 fn bridge_from_cash_app() {
-    let Command::BridgeFromCashApp {
+    let Command::Bridging(BridgingCommand::FromCashApp {
         recipient,
         amount,
+        refund_address,
         fees_included,
         max_slippage_bps,
-    } = parse_ok("bridge-from-cash-app 0xabc --amount 1000000")
+    }) = parse_ok("bridging from-cash-app 0xabc --amount 1000000")
     else {
-        panic!("expected BridgeFromCashApp");
+        panic!("expected bridging from-cash-app");
     };
     assert_eq!(recipient, "0xabc");
     assert_eq!(amount, 1_000_000);
+    assert!(refund_address.is_none());
     assert!(!fees_included);
     assert!(max_slippage_bps.is_none());
 
-    let Command::BridgeFromCashApp {
+    let Command::Bridging(BridgingCommand::FromCashApp {
+        refund_address,
         fees_included,
         max_slippage_bps,
         ..
-    } = parse_ok(
-        "bridge-from-cash-app 0xabc --amount 500000 --fees-included --max-slippage-bps 1000",
+    }) = parse_ok(
+        "bridging from-cash-app 0xabc --amount 500000 --refund-address $alice --fees-included \
+         --max-slippage-bps 1000",
     )
     else {
-        panic!("expected BridgeFromCashApp");
+        panic!("expected bridging from-cash-app");
     };
+    assert_eq!(refund_address.as_deref(), Some("$alice"));
     assert!(fees_included);
     assert_eq!(max_slippage_bps, Some(1000));
 }
 
 #[test]
 fn bridge_to_cash_app() {
-    let Command::BridgeToCashApp {
+    let Command::Bridging(BridgingCommand::ToCashApp {
         recipient,
         amount,
         refund_address,
         fees_included,
         max_slippage_bps,
-    } = parse_ok("bridge-to-cash-app $alice --amount 1000000 --refund-address 0xabc")
+    }) = parse_ok("bridging to-cash-app $alice --amount 1000000 --refund-address 0xabc")
     else {
-        panic!("expected BridgeToCashApp");
+        panic!("expected bridging to-cash-app");
     };
     assert_eq!(recipient, "$alice");
     assert_eq!(amount, 1_000_000);
@@ -600,16 +626,16 @@ fn bridge_to_cash_app() {
     assert!(!fees_included);
     assert!(max_slippage_bps.is_none());
 
-    let Command::BridgeToCashApp {
+    let Command::Bridging(BridgingCommand::ToCashApp {
         fees_included,
         max_slippage_bps,
         ..
-    } = parse_ok(
-        "bridge-to-cash-app alice --amount 500000 --refund-address 0xabc --fees-included \
+    }) = parse_ok(
+        "bridging to-cash-app $alice --amount 500000 --refund-address 0xabc --fees-included \
          --max-slippage-bps 1000",
     )
     else {
-        panic!("expected BridgeToCashApp");
+        panic!("expected bridging to-cash-app");
     };
     assert!(fees_included);
     assert_eq!(max_slippage_bps, Some(1000));
@@ -808,6 +834,7 @@ fn issuer_subcommands() {
         decimals,
         is_freezable,
         max_supply,
+        extra_metadata,
     }) = parse_ok("issuer create-token MyToken MTK 6 -f 1000000")
     else {
         panic!("expected CreateToken");
@@ -817,6 +844,14 @@ fn issuer_subcommands() {
     assert_eq!(decimals, 6);
     assert!(is_freezable);
     assert_eq!(max_supply, 1_000_000);
+    assert_eq!(extra_metadata, None);
+
+    let Command::Issuer(IssuerCommand::CreateToken { extra_metadata, .. }) =
+        parse_ok(r#"issuer create-token MyToken MTK 6 1000000 -e '{"icon":"x"}'"#)
+    else {
+        panic!("expected CreateToken");
+    };
+    assert_eq!(extra_metadata.as_deref(), Some(r#"{"icon":"x"}"#));
 
     assert!(matches!(
         parse_ok("issuer mint-token 500"),
@@ -931,6 +966,7 @@ fn advanced_recover_funds() {
     let Command::Advanced(AdvancedCommand::RecoverFunds {
         fee_rate,
         funding_kind,
+        funding_strategy,
         destination,
         all,
         leaf_ids,
@@ -941,6 +977,7 @@ fn advanced_recover_funds() {
     };
     assert_eq!(fee_rate, 5);
     assert!(matches!(funding_kind, FundingKindArg::P2tr));
+    assert!(matches!(funding_strategy, FundingStrategyArg::PerBranch));
     assert_eq!(destination, "bcrt1qdest");
     assert!(!all);
     assert!(leaf_ids.is_empty());
@@ -969,8 +1006,22 @@ fn advanced_recover_funds() {
     assert_eq!(leaf_ids, ["leaf-1", "leaf-2"]);
     assert_eq!(output_file.as_deref(), Some(Path::new("recovery.json")));
 
+    let Command::Advanced(AdvancedCommand::RecoverFunds {
+        funding_strategy, ..
+    }) = parse_ok(
+        "advanced recover-funds --fee-rate 5 --destination bcrt1qdest \
+         --funding-strategy per-node",
+    )
+    else {
+        panic!("expected Advanced RecoverFunds");
+    };
+    assert!(matches!(funding_strategy, FundingStrategyArg::PerNode));
+
     parse_err("advanced recover-funds --destination bcrt1qdest");
     parse_err("advanced recover-funds --fee-rate 5");
+    parse_err(
+        "advanced recover-funds --fee-rate 5 --destination bcrt1qdest --funding-strategy per-leaf",
+    );
     parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --funding-kind p2sh");
     parse_err("advanced recover-funds --fee-rate 5 --destination bcrt1qdest --all --leaf leaf-1");
 }
@@ -1114,4 +1165,52 @@ fn token_allowance_commands() {
     };
     assert_eq!(receivers.len(), 2);
     parse_err("pull-payment 02aa btkn1x");
+}
+
+#[test]
+fn bridging_create() {
+    let Command::Bridging(BridgingCommand::Create {
+        recipient,
+        amount,
+        refund_address,
+        fees_included,
+        max_slippage_bps,
+    }) = parse_ok(
+        "bridging create spark1abc --amount 1000000 --refund-address 0xabc --fees-included \
+         --max-slippage-bps 50",
+    )
+    else {
+        panic!("expected bridging create");
+    };
+    assert_eq!(recipient, "spark1abc");
+    assert_eq!(amount, 1_000_000);
+    assert_eq!(refund_address.as_deref(), Some("0xabc"));
+    assert!(fees_included);
+    assert_eq!(max_slippage_bps, Some(50));
+
+    let Command::Bridging(BridgingCommand::Create {
+        refund_address,
+        fees_included,
+        ..
+    }) = parse_ok("bridging create 0xabc --amount 1")
+    else {
+        panic!("expected bridging create");
+    };
+    assert_eq!(refund_address, None);
+    assert!(!fees_included);
+
+    assert!(parse_err("bridging create spark1abc").contains("--amount"));
+}
+
+#[test]
+fn bridging_status() {
+    let Command::Bridging(BridgingCommand::Status {
+        bridge_id,
+        status_token,
+    }) = parse_ok("bridging status q_1 --status-token rt_1")
+    else {
+        panic!("expected bridging status");
+    };
+    assert_eq!(bridge_id, "q_1");
+    assert_eq!(status_token.as_deref(), Some("rt_1"));
 }

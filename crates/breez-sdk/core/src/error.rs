@@ -240,10 +240,7 @@ mod docs_url {
     /// keep linking to these sections, so their ids must not change.
     macro_rules! errors_page {
         ($section:literal) => {
-            concat!(
-                "https://sdk-doc-spark.breez.technology/guide/errors.html#",
-                $section
-            )
+            concat!("https://docs.breez.technology/guide/errors.html#", $section)
         };
     }
 
@@ -418,6 +415,7 @@ impl From<flashnet::FlashnetError> for SdkError {
     }
 }
 
+#[cfg(feature = "boltz")]
 impl From<boltz_client::BoltzError> for SdkError {
     fn from(e: boltz_client::BoltzError) -> Self {
         use boltz_client::BoltzError;
@@ -530,6 +528,9 @@ impl From<SparkWalletError> for SdkError {
             ) => SdkError::InsufficientFunds { token_identifier },
             SparkWalletError::ServiceError(spark_wallet::ServiceError::InvalidInput(msg)) => {
                 SdkError::InvalidInput(msg)
+            }
+            SparkWalletError::SilentPaymentAddressNotSupported(_) => {
+                SdkError::InvalidInput(e.to_string())
             }
             SparkWalletError::ServiceError(
                 spark_wallet::ServiceError::InsufficientCpfpBudget { required_sat },

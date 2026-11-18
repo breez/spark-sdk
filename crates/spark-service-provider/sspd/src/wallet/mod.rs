@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::tree::deposit::TreeDepositService;
 use bitcoin::Network;
 use bitcoin::secp256k1::PublicKey;
+use deadpool_postgres::Pool;
 use spark::bitcoin::BitcoinService;
 use spark::operator::rpc::{ConnectionManager, DefaultConnectionManager};
 use spark::operator::{OperatorConfig, OperatorPool, OperatorPoolConfig};
@@ -13,7 +14,6 @@ use spark::services::{DepositService, TransferService};
 use spark::session_store::InMemorySessionStore;
 use spark::signer::{DefaultSigner, Signer, SparkSigner, SparkSignerAdapter};
 use spark::ssp::{RetryConfig, ServiceProvider, ServiceProviderConfig};
-use sqlx::PgPool;
 use thiserror::Error;
 use tracing::info;
 
@@ -66,7 +66,7 @@ impl<R: ChainRepository + Send + Sync + 'static> SspWallet<R> {
         network: Network,
         chain_repository: Arc<R>,
         leaf_store_chain_repository: Arc<postgresql::ChainRepository>,
-        pgpool: Arc<PgPool>,
+        pgpool: Arc<Pool>,
         operators: Option<Vec<OperatorSetting>>,
         max_nodes_per_request: usize,
     ) -> Result<Self, WalletError> {

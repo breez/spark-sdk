@@ -20,6 +20,7 @@ async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
         decimals: 6,
         is_freezable: false,
         max_supply: 1_000_000,
+        extra_metadata: None,
     };
     let token_metadata = token_issuer.create_issuer_token(request).await?;
     info!("Token identifier: {}", token_metadata.identifier);

@@ -41,7 +41,7 @@ pub(super) async fn prepare(
         InputType::Bolt11Invoice(details) => {
             bolt11::prepare(sdk, &input, &request, details, fee_policy, token_identifier).await
         }
-        InputType::BitcoinAddress(details) => {
+        InputType::BitcoinAddress(details) | InputType::SilentPaymentAddress(details) => {
             bitcoin_address::prepare(sdk, &request, details, fee_policy, token_identifier).await
         }
         InputType::CrossChainAddress(_) => Err(SdkError::InvalidInput(

@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use bitcoin::{Address, Amount, FeeRate, OutPoint, Transaction, Txid};
 use spark::{
     services::{
-        ConfirmedExitNode, CpfpInput, ExitChainState, ExitNodeConfirmation, ExitRefund,
-        ExitRefundState, UnilateralExitPlan, build_anchorless_refund_child, build_cpfp_child,
-        csv_timelock, p2tr_key_path_input_weight, walk_unilateral_exit_chain,
+        ConfirmedExitNode, CpfpChild, CpfpFunding, CpfpInput, ExitChainState, ExitNodeConfirmation,
+        ExitRefund, ExitRefundState, UnilateralExitPlan, build_anchorless_refund_child,
+        build_cpfp_child, csv_timelock, p2tr_key_path_input_weight, walk_unilateral_exit_chain,
     },
     signer::LeafSigningKey,
     tree::{LeafPedigree, TreeNode, TreeNodeId, TreeNodeStatus},
@@ -165,13 +165,13 @@ pub struct ExitBranch {
 /// via [`SparkWallet::create_refund_sweep_transaction`](crate::SparkWallet::create_refund_sweep_transaction).
 #[derive(Clone, Debug)]
 pub struct UnilateralExitBuild {
-    /// Present only when the funding needed splitting across branches.
+    /// Present only when the funding needed splitting across the chains.
     pub fan_out: Option<ExitTx>,
     pub branches: Vec<ExitBranch>,
     /// Every leaf's refund output to sweep (adopted on-chain or freshly driven).
     pub refund_outputs: Vec<RefundOutput>,
-    /// Terminal CPFP-change outputs to fold into the sweep (only branches whose
-    /// refund child was built fresh).
+    /// The change of the CPFP child of each chain's last parent, where the build
+    /// built one, to fold into the sweep.
     pub cpfp_change_inputs: Vec<CpfpChangeInput>,
     pub recoverable_value_sat: u64,
     /// CPFP-package fees of the txs built fresh, paid by the funding UTXOs.
@@ -455,7 +455,46 @@ pub struct ExitCheck {
     /// either not asked about or its lookup failed, and neither of those says
     /// anything about where the transaction is.
     pub not_confirmed: HashSet<Txid>,
+    /// Transactions in the caller's list that still have to confirm, where the
+    /// chain service failed a query for an outpoint that the transaction or its
+    /// CPFP child spends.
+    pub unverified: HashSet<Txid>,
     pub pending: Vec<ChainQuery>,
+}
+
+/// A transaction in the caller's list, or the CPFP child of one.
+struct ExitTransaction<'a> {
+    txid: Txid,
+    tx: &'a Transaction,
+    /// Set for a CPFP child: its parent in the caller's list.
+    cpfp_parent: Option<Txid>,
+    /// Whether the caller last recorded it in a block. The caller records no
+    /// CPFP child.
+    confirmed: bool,
+}
+
+/// The transactions in the caller's list, in its order, each followed by its
+/// CPFP child.
+fn exit_transactions(txs: &[ExitCheckInput]) -> Vec<ExitTransaction<'_>> {
+    let mut transactions = Vec::with_capacity(txs.len().saturating_mul(2));
+    for input in txs {
+        let txid = input.tx.compute_txid();
+        transactions.push(ExitTransaction {
+            txid,
+            tx: &input.tx,
+            cpfp_parent: None,
+            confirmed: input.confirmed,
+        });
+        if let Some(cpfp) = &input.cpfp {
+            transactions.push(ExitTransaction {
+                txid: cpfp.compute_txid(),
+                tx: cpfp,
+                cpfp_parent: Some(txid),
+                confirmed: false,
+            });
+        }
+    }
+    transactions
 }
 
 /// Reads back an exit a caller kept, saying which of its transactions are in a
@@ -463,32 +502,42 @@ pub struct ExitCheck {
 /// perform `pending`, feed the results back, and repeat until nothing is
 /// pending.
 ///
-/// It asks as little as it can. Transactions are checked deepest first, and one
-/// in a block settles everything it depends on, so a finished exit costs a
-/// lookup or two rather than one per transaction. Only where the answer is no,
-/// and only at the frontier, does it ask what took the outpoint instead: below an
-/// unconfirmed transaction there is no outpoint yet for anything to take.
+/// A CPFP child is a transaction of the exit like the ones in the caller's
+/// list. For each transaction that still has to confirm, the check reads the
+/// spend of every outpoint its inputs refer to.
 #[must_use]
 pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> ExitCheck {
     let index = ObservedIndex::new(observed);
     let mut pending: Vec<ChainQuery> = Vec::new();
     let mut confirmed: HashMap<Txid, Option<u32>> = HashMap::new();
-    let mut settled: HashSet<Txid> = HashSet::new();
     let mut not_confirmed: HashSet<Txid> = HashSet::new();
+    let mut unverified: HashSet<Txid> = HashSet::new();
     let mut diverged = false;
 
-    let by_txid: HashMap<Txid, &ExitCheckInput> =
-        txs.iter().map(|t| (t.tx.compute_txid(), t)).collect();
+    let transactions = exit_transactions(txs);
+    let by_txid: HashMap<Txid, &ExitTransaction> = transactions
+        .iter()
+        .map(|transaction| (transaction.txid, transaction))
+        .collect();
+    let spenders = spenders(&transactions, &by_txid);
+    let mut expected = expected_in_block(&transactions, &by_txid, &spenders);
 
-    // Deepest first, so a transaction in a block spares every lookup above it.
-    for input in txs.iter().rev() {
-        let txid = input.tx.compute_txid();
-        if settled.contains(&txid) {
+    // Deepest first. The check queries a transaction it expects in a block
+    // only when no other one it expects in a block has an output of it as an
+    // input: when that one is in a block, so is this one. It also queries the
+    // parent of a CPFP child, for the parent's block height.
+    for transaction in transactions.iter().rev() {
+        let txid = transaction.txid;
+        if !expected.contains(&txid) || confirmed.contains_key(&txid) {
             continue;
         }
-        // Only what the caller saw in a block is worth asking about: the rest was
-        // never there, and the frontier pass below covers it.
-        if !input.confirmed {
+        let spender_expected = spenders.get(&txid).into_iter().flatten().any(|spender| {
+            expected.contains(spender)
+                && by_txid
+                    .get(spender)
+                    .is_some_and(|spender| spender.cpfp_parent != Some(txid))
+        });
+        if spender_expected {
             continue;
         }
         let query = ChainQuery::TxConfirmed(txid);
@@ -496,22 +545,20 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
             Some(ChainResult::Confirmed {
                 confirmed: true,
                 block_height,
-            }) => {
-                confirmed.insert(txid, *block_height);
-                mark_settled(&by_txid, txid, &mut confirmed, &mut settled);
-            }
-            // Not in a block: whether a reorg undid it or it never landed, the
-            // frontier pass below asks what is there instead.
+            }) => mark_in_block(&by_txid, &index, txid, *block_height, &mut confirmed),
             Some(ChainResult::Confirmed {
                 confirmed: false, ..
             }) => {
+                expected.remove(&txid);
                 not_confirmed.insert(txid);
-                settled.insert(txid);
             }
-            // Unreadable: nothing is known, and asking again next time is all
-            // that can be done.
+            // After a failed lookup, the check still expects a transaction the
+            // caller recorded in a block there. The caller records no CPFP
+            // child, so the check reads the inputs of a CPFP child instead.
             Some(_) => {
-                settled.insert(txid);
+                if !transaction.confirmed {
+                    expected.remove(&txid);
+                }
             }
             None => pending.push(query),
         }
@@ -520,46 +567,42 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     if pending.is_empty() {
         // Forward, so a transaction found in a block here opens the one below it
         // in the same pass: the list is in the order the exit was built.
-        for input in txs {
-            let txid = input.tx.compute_txid();
-            if confirmed.contains_key(&txid) {
+        for transaction in &transactions {
+            let in_block = |txid: &Txid| confirmed.contains_key(txid) || expected.contains(txid);
+            if !has_to_confirm(transaction, &by_txid, &spenders, &in_block) {
                 continue;
             }
-            // Not reachable: an input of its own is not in a block, so the
-            // outpoint it would spend does not exist and nothing can have taken
-            // it.
-            if !spend_parents(input, &by_txid).all(|parent| confirmed.contains_key(&parent)) {
-                continue;
-            }
-            // One input answers for a transaction with several (the sweep): they
-            // are all spent by it or none of them are.
-            let Some(spent_outpoint) = input.tx.input.first().map(|i| i.previous_output) else {
-                continue;
-            };
-            let mut outpoints = vec![spent_outpoint];
-            // The anchor its own child would bump, where it has one.
-            if let Some(cpfp) = &input.cpfp {
-                outpoints.extend(
-                    cpfp.input
-                        .iter()
-                        .map(|i| i.previous_output)
-                        .filter(|o| o.txid == txid),
-                );
-            }
-
-            for outpoint in outpoints {
-                let query = ChainQuery::Outspend(outpoint);
-                match index.get(&query) {
-                    Some(ChainResult::Spend(Some(info))) if info.confirmed => {
-                        if info.spender_txid == txid {
-                            confirmed.insert(txid, info.block_height);
-                        } else if !ours(input, info.spender_txid) {
-                            warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
-                            diverged = true;
-                        }
+            // The check skips an output of a transaction of the exit that it has
+            // not found in a block: until that transaction is in a block, the
+            // output does not exist, so it cannot have been spent.
+            let outpoints: Vec<OutPoint> = transaction
+                .tx
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .filter(|outpoint| {
+                    !by_txid.contains_key(&outpoint.txid) || in_block(&outpoint.txid)
+                })
+                .collect();
+            match outpoint_spends(transaction.txid, &outpoints, &index) {
+                OutpointSpends::InBlock { block_height } => {
+                    mark_in_block(
+                        &by_txid,
+                        &index,
+                        transaction.txid,
+                        block_height,
+                        &mut confirmed,
+                    );
+                }
+                OutpointSpends::Taken => diverged = true,
+                OutpointSpends::NotSpentInBlock {
+                    without_result,
+                    unreadable,
+                } => {
+                    pending.extend(without_result);
+                    if unreadable {
+                        unverified.insert(transaction.cpfp_parent.unwrap_or(transaction.txid));
                     }
-                    None => pending.push(query),
-                    _ => {}
                 }
             }
         }
@@ -569,26 +612,156 @@ pub fn check_exit_chain(txs: &[ExitCheckInput], observed: &[Observation]) -> Exi
     pending.retain(|query| seen.insert(query.clone()));
 
     not_confirmed.retain(|txid| !confirmed.contains_key(txid));
+    unverified.retain(|txid| !confirmed.contains_key(txid) && !expected.contains(txid));
 
     ExitCheck {
         confirmed,
         diverged,
         not_confirmed,
+        unverified,
         pending,
     }
 }
 
-/// The transactions of this exit whose outputs `input` spends.
-///
-/// The check works from these rather than from the broadcast order the caller
-/// holds, which also lists the fan-out: `input`'s CPFP child spends that, not
-/// `input`. A confirmation says nothing about a transaction it does not spend
-/// from.
+/// Whether `transaction` still has to confirm before the exit is finished. A
+/// transaction in the caller's list has to until it is in a block. A CPFP child
+/// has to while its parent is in no block, or while a transaction that still
+/// has to confirm has an output of the child as an input.
+fn has_to_confirm(
+    transaction: &ExitTransaction,
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    spenders: &HashMap<Txid, Vec<Txid>>,
+    in_block: &dyn Fn(&Txid) -> bool,
+) -> bool {
+    if in_block(&transaction.txid) {
+        return false;
+    }
+    let Some(parent) = transaction.cpfp_parent else {
+        return true;
+    };
+    !in_block(&parent)
+        || spenders
+            .get(&transaction.txid)
+            .into_iter()
+            .flatten()
+            .filter_map(|spender| by_txid.get(spender))
+            .any(|spender| has_to_confirm(spender, by_txid, spenders, in_block))
+}
+
+/// What the check read about the outpoints of a transaction's inputs. Once one
+/// of them is spent in a block, the check needs no other: spent by the
+/// transaction itself, the transaction is in a block, and spent by another
+/// transaction, the transaction can no longer confirm.
+enum OutpointSpends {
+    InBlock {
+        block_height: Option<u32>,
+    },
+    Taken,
+    NotSpentInBlock {
+        without_result: Vec<ChainQuery>,
+        /// Whether the chain service failed the query for one of them.
+        unreadable: bool,
+    },
+}
+
+fn outpoint_spends(
+    txid: Txid,
+    outpoints: &[OutPoint],
+    index: &ObservedIndex<'_>,
+) -> OutpointSpends {
+    let mut without_result = Vec::new();
+    let mut unreadable = false;
+    for outpoint in outpoints {
+        let query = ChainQuery::Outspend(*outpoint);
+        let info = match index.get(&query) {
+            Some(ChainResult::Spend(Some(info))) if info.confirmed => info,
+            Some(ChainResult::Spend(_)) => continue,
+            Some(_) => {
+                unreadable = true;
+                continue;
+            }
+            None => {
+                without_result.push(query);
+                continue;
+            }
+        };
+        if info.spender_txid == txid {
+            return OutpointSpends::InBlock {
+                block_height: info.block_height,
+            };
+        }
+        warn!(%outpoint, spender = %info.spender_txid, "check: outpoint taken");
+        return OutpointSpends::Taken;
+    }
+    OutpointSpends::NotSpentInBlock {
+        without_result,
+        unreadable,
+    }
+}
+
+/// For each transaction of the exit, the transactions of the exit with one of
+/// its outputs as an input.
+fn spenders(
+    transactions: &[ExitTransaction],
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+) -> HashMap<Txid, Vec<Txid>> {
+    let mut spenders: HashMap<Txid, Vec<Txid>> = HashMap::new();
+    for transaction in transactions {
+        for parent in spend_parents(transaction, by_txid) {
+            spenders.entry(parent).or_default().push(transaction.txid);
+        }
+    }
+    spenders
+}
+
+/// The transactions the check expects in a block: the ones the caller recorded
+/// there, every transaction of the exit with an output among their inputs,
+/// directly or through others, and the CPFP child of a recorded transaction
+/// that, by that record, still has to confirm. The caller records no CPFP
+/// child.
+fn expected_in_block(
+    transactions: &[ExitTransaction],
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    spenders: &HashMap<Txid, Vec<Txid>>,
+) -> HashSet<Txid> {
+    let recorded: HashSet<Txid> = transactions
+        .iter()
+        .filter(|transaction| transaction.confirmed)
+        .map(|transaction| transaction.txid)
+        .collect();
+    let in_record = |txid: &Txid| recorded.contains(txid);
+    let children: Vec<Txid> = transactions
+        .iter()
+        .filter(|transaction| {
+            transaction
+                .cpfp_parent
+                .is_some_and(|parent| recorded.contains(&parent))
+                && has_to_confirm(transaction, by_txid, spenders, &in_record)
+        })
+        .map(|transaction| transaction.txid)
+        .collect();
+    let mut expected = recorded.clone();
+    let mut stack: Vec<Txid> = recorded.into_iter().collect();
+    while let Some(txid) = stack.pop() {
+        let Some(transaction) = by_txid.get(&txid) else {
+            continue;
+        };
+        for parent in spend_parents(transaction, by_txid) {
+            if expected.insert(parent) {
+                stack.push(parent);
+            }
+        }
+    }
+    expected.extend(children);
+    expected
+}
+
+/// The transactions of this exit with an output among the inputs of `transaction`.
 fn spend_parents<'a>(
-    input: &'a ExitCheckInput,
-    by_txid: &'a HashMap<Txid, &ExitCheckInput>,
+    transaction: &'a ExitTransaction,
+    by_txid: &'a HashMap<Txid, &ExitTransaction>,
 ) -> impl Iterator<Item = Txid> + 'a {
-    input
+    transaction
         .tx
         .input
         .iter()
@@ -596,32 +769,36 @@ fn spend_parents<'a>(
         .filter(|txid| by_txid.contains_key(txid))
 }
 
-/// Whether `spender` is this exit's own transaction for that outpoint.
-fn ours(input: &ExitCheckInput, spender: Txid) -> bool {
-    spender == input.tx.compute_txid()
-        || input
-            .cpfp
-            .as_ref()
-            .is_some_and(|cpfp| cpfp.compute_txid() == spender)
-}
-
-/// Marks `txid` and everything it depends on, transitively, as answered: a
-/// transaction in a block puts every one it spends from in a block too.
-fn mark_settled(
-    by_txid: &HashMap<Txid, &ExitCheckInput>,
+/// Records `txid` in a block at `block_height`, and with it every transaction
+/// of the exit with an output among its inputs, directly or through others.
+/// Each of those gets the height of its own query's result, where the check
+/// has one.
+fn mark_in_block(
+    by_txid: &HashMap<Txid, &ExitTransaction>,
+    index: &ObservedIndex<'_>,
     txid: Txid,
+    block_height: Option<u32>,
     confirmed: &mut HashMap<Txid, Option<u32>>,
-    settled: &mut HashSet<Txid>,
 ) {
-    let mut stack = vec![txid];
+    confirmed.insert(txid, block_height);
+    let mut stack: Vec<Txid> = by_txid
+        .get(&txid)
+        .map(|transaction| spend_parents(transaction, by_txid).collect())
+        .unwrap_or_default();
     while let Some(txid) = stack.pop() {
-        if !settled.insert(txid) {
+        if confirmed.contains_key(&txid) {
             continue;
         }
-        // In a block by the same spend chain, but which one was never asked.
-        confirmed.entry(txid).or_insert(None);
-        if let Some(input) = by_txid.get(&txid) {
-            stack.extend(spend_parents(input, by_txid));
+        let reported = match index.get(&ChainQuery::TxConfirmed(txid)) {
+            Some(ChainResult::Confirmed {
+                confirmed: true,
+                block_height,
+            }) => *block_height,
+            _ => None,
+        };
+        confirmed.insert(txid, reported);
+        if let Some(transaction) = by_txid.get(&txid) {
+            stack.extend(spend_parents(transaction, by_txid));
         }
     }
 }
@@ -890,9 +1067,9 @@ fn interpret_chain(plan: &UnilateralExitPlan, state: &ExitChainState) -> ChainIn
     let node_map = &plan.tree_nodes;
 
     let leaf_ids: Vec<TreeNodeId> = plan
-        .per_branch_funding
+        .selected_leaves
         .iter()
-        .map(|(leaf_id, _)| leaf_id.clone())
+        .map(|leaf| leaf.id.clone())
         .collect();
     let ExitChainWalk {
         nodes,
@@ -944,8 +1121,8 @@ fn flag_unverifiable_confirmation_branches(
     unverifiable_confirmed: &HashSet<TreeNodeId>,
     unverified: &mut HashSet<TreeNodeId>,
 ) {
-    for (leaf_id, _) in &plan.per_branch_funding {
-        let Some(leaf) = node_map.get(leaf_id) else {
+    for selected in &plan.selected_leaves {
+        let Some(leaf) = node_map.get(&selected.id) else {
             continue;
         };
         let Ok(chain) = walk_unilateral_exit_chain(node_map, leaf) else {
@@ -1407,16 +1584,27 @@ pub(crate) fn build_exit(
         status: ExitTxStatus::Unconfirmed,
     });
     let fan_out_txid = fan_out.as_ref().map(|f| f.txid);
-    let per_branch_funding = plan.per_branch_funding.clone();
+    // A CPFP child with a fan-out output as an input depends on the fan-out.
+    let fan_out_dependency = |child: &CpfpChild| {
+        fan_out_txid.filter(|fan_out| {
+            child
+                .psbt
+                .unsigned_tx
+                .input
+                .iter()
+                .any(|input| input.previous_output.txid == *fan_out)
+        })
+    };
+    let mut children = CpfpChildren::new(&plan.funding, fee_rate_sat_per_kw);
 
     // A shared ancestor is bumped once, by the first branch that reaches it.
     let mut emitted: HashSet<Txid> = HashSet::new();
-    let mut branches = Vec::with_capacity(per_branch_funding.len());
+    let mut branches = Vec::with_capacity(plan.selected_leaves.len());
     let mut refund_outputs: Vec<RefundOutput> = Vec::new();
-    let mut cpfp_change_inputs: Vec<CpfpChangeInput> = Vec::new();
     let mut cpfp_fee_sat: u64 = 0;
 
-    for (leaf_id, branch_funding) in &per_branch_funding {
+    for selected in &plan.selected_leaves {
+        let leaf_id = &selected.id;
         let leaf = node_map.get(leaf_id).ok_or_else(|| {
             SparkWalletError::Generic(format!("Leaf {leaf_id} missing from exit plan"))
         })?;
@@ -1438,9 +1626,7 @@ pub(crate) fn build_exit(
                  were spent to, or reclaimed by, another owner)."
             );
         }
-        let mut funding = branch_funding.clone();
         let mut txs: Vec<ExitTx> = Vec::new();
-        let mut fan_out_dep = fan_out_txid;
         // Tracked so dependencies survive skipped shared ancestors.
         let mut prev_txid: Option<Txid> = None;
 
@@ -1467,28 +1653,22 @@ pub(crate) fn build_exit(
                 }
 
                 if emitted.insert(node_txid) {
-                    let to_sign = match node_state {
+                    let child = match node_state {
                         // Confirmed: its child already paid, and what that child
                         // left over came back as funding like any other input, so
-                        // the branch keeps what it was assigned.
+                        // the chain keeps what it was assigned.
                         Some(_) => None,
-                        None => {
-                            let child =
-                                build_cpfp_child(&node.node_tx, &funding, fee_rate_sat_per_kw)?;
-                            cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
-                            funding = vec![child.change_input];
-                            Some(child.psbt)
-                        }
+                        None => Some(children.child_for(&node.node_tx)?),
                     };
                     let mut depends_on = Vec::new();
                     if let Some(p) = parent_txid {
                         depends_on.push(p);
                     }
-                    if to_sign.is_some()
-                        && let Some(fo) = fan_out_dep.take()
-                    {
-                        depends_on.push(fo);
+                    if let Some(child) = &child {
+                        cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
+                        depends_on.extend(fan_out_dependency(child));
                     }
+                    let to_sign = child.map(|child| child.psbt);
                     let status = match node_state {
                         Some(
                             NodeState::ConfirmedCpfp { block_height }
@@ -1595,13 +1775,6 @@ pub(crate) fn build_exit(
                             derived_from: leaf_id.clone(),
                         },
                     });
-                    // Nothing spent what is left of the branch's funding, so the
-                    // sweep takes it back.
-                    cpfp_change_inputs.extend(funding.drain(..).map(|input| CpfpChangeInput {
-                        outpoint: input.outpoint,
-                        witness_utxo: input.witness_utxo,
-                        signed_input_weight: input.signed_input_weight,
-                    }));
                     txs.push(ExitTx {
                         kind: ExitTxKind::Refund,
                         node_id: Some(leaf_id.clone()),
@@ -1614,7 +1787,7 @@ pub(crate) fn build_exit(
                         status: ExitTxStatus::Unconfirmed,
                     });
                 } else {
-                    let child = build_cpfp_child(&refund_tx, &funding, fee_rate_sat_per_kw)?;
+                    let child = children.child_for(&refund_tx)?;
                     cpfp_fee_sat = cpfp_fee_sat.saturating_add(child.fee_sat);
                     refund_outputs.push(RefundOutput {
                         outpoint: OutPoint {
@@ -1627,16 +1800,8 @@ pub(crate) fn build_exit(
                             derived_from: leaf_id.clone(),
                         },
                     });
-                    // The refund child's change is the branch's terminal sweep input.
-                    cpfp_change_inputs.push(CpfpChangeInput {
-                        outpoint: child.change_input.outpoint,
-                        witness_utxo: child.change_input.witness_utxo.clone(),
-                        signed_input_weight: child.change_input.signed_input_weight,
-                    });
                     let mut depends_on: Vec<Txid> = leaf_node_txid.into_iter().collect();
-                    if let Some(fo) = fan_out_dep.take() {
-                        depends_on.push(fo);
-                    }
+                    depends_on.extend(fan_out_dependency(&child));
                     txs.push(ExitTx {
                         kind: ExitTxKind::Refund,
                         node_id: Some(leaf_id.clone()),
@@ -1659,6 +1824,15 @@ pub(crate) fn build_exit(
         });
     }
 
+    let cpfp_change_inputs: Vec<CpfpChangeInput> = children
+        .swept_changes()
+        .into_iter()
+        .map(|change| CpfpChangeInput {
+            outpoint: change.outpoint,
+            witness_utxo: change.witness_utxo,
+            signed_input_weight: change.signed_input_weight,
+        })
+        .collect();
     let recoverable_value_sat = plan
         .selected_leaves
         .iter()
@@ -1694,6 +1868,71 @@ pub(crate) fn build_exit(
         fanout_fee_sat,
         refund_fee_sat,
     })
+}
+
+/// Builds each CPFP child from the inputs its chain has left: the chain's
+/// funding for the first child, and the change output of the previous child for
+/// each later one.
+struct CpfpChildren {
+    /// The index of each CPFP parent's chain, by the parent's txid, and whether
+    /// the sweep spends the change of its CPFP child: the child of the last
+    /// parent of a chain with `sweep_change`.
+    chain_of: HashMap<Txid, (usize, bool)>,
+    /// Per chain, the inputs of its next CPFP child.
+    next: Vec<Vec<CpfpInput>>,
+    /// Per chain, whether `child_for` built the child whose change the sweep
+    /// spends, in which case `next` holds that change.
+    swept: Vec<bool>,
+    fee_rate_sat_per_kw: u64,
+}
+
+impl CpfpChildren {
+    fn new(funding: &[CpfpFunding], fee_rate_sat_per_kw: u64) -> Self {
+        let chain_of = funding
+            .iter()
+            .enumerate()
+            .flat_map(|(index, f)| {
+                let last = f.chain.parents.len().saturating_sub(1);
+                let sweep_change = f.chain.sweep_change;
+                f.chain
+                    .parents
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, p)| (p.txid, (index, sweep_change && i == last)))
+            })
+            .collect();
+        Self {
+            chain_of,
+            next: funding.iter().map(|f| f.inputs.clone()).collect(),
+            swept: vec![false; funding.len()],
+            fee_rate_sat_per_kw,
+        }
+    }
+
+    /// Builds the CPFP child of `parent`. The parents of one chain have to come
+    /// in the chain's order, root to leaf: each child has the change of the
+    /// child before it as its input.
+    fn child_for(&mut self, parent: &Transaction) -> Result<CpfpChild, SparkWalletError> {
+        let txid = parent.compute_txid();
+        let (index, swept) = *self.chain_of.get(&txid).ok_or_else(|| {
+            SparkWalletError::Generic(format!("The exit plan has no funding for {txid}"))
+        })?;
+        let child = build_cpfp_child(parent, &self.next[index], self.fee_rate_sat_per_kw)?;
+        self.next[index] = vec![child.change_input.clone()];
+        self.swept[index] |= swept;
+        Ok(child)
+    }
+
+    /// The changes the sweep spends: that of the last parent's CPFP child, for
+    /// every chain with `sweep_change` whose last parent got one.
+    fn swept_changes(self) -> Vec<CpfpInput> {
+        self.next
+            .into_iter()
+            .zip(self.swept)
+            .filter(|(_, swept)| *swept)
+            .flat_map(|(change, _)| change)
+            .collect()
+    }
 }
 
 /// The fee a freshly-broadcast fan-out pays (its inputs minus its outputs). Zero
@@ -1755,9 +1994,9 @@ mod exit_build_tests {
     use spark::{
         Identifier,
         services::{
-            ServiceError, UnilateralExitLeafFilter, UnilateralExitSelectedLeaf,
-            compute_cpfp_package_fee, compute_sweep_fee, plan_unilateral_exit,
-            quote_unilateral_exit,
+            CpfpChain, CpfpFundingStrategy, CpfpParent, FundingEntry, ServiceError,
+            UnilateralExitLeafFilter, UnilateralExitSelectedLeaf, compute_cpfp_package_fee,
+            compute_sweep_fee, plan_unilateral_exit, quote_unilateral_exit,
         },
         tree::{SigningKeyshare, TreeNodeStatus},
     };
@@ -1870,18 +2109,68 @@ mod exit_build_tests {
     }
 
     fn plan_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
-        UnilateralExitPlan {
-            selected_leaves: vec![UnilateralExitSelectedLeaf {
-                id: leaf.id.clone(),
+        let leaf_id = leaf.id.clone();
+        branch_plan(
+            to_node_map(vec![root, leaf]),
+            vec![(leaf_id, vec![funding(100_000)])],
+            None,
+        )
+    }
+
+    /// A per-branch plan over `tree_nodes`: each leaf in order, its CPFP parents
+    /// in one chain as the planner groups them, funded by its inputs.
+    fn branch_plan(
+        tree_nodes: HashMap<TreeNodeId, TreeNode>,
+        leaves: Vec<(TreeNodeId, Vec<CpfpInput>)>,
+        fan_out_psbt: Option<bitcoin::Psbt>,
+    ) -> UnilateralExitPlan {
+        let mut covered = HashSet::new();
+        let mut selected_leaves = Vec::new();
+        let mut chain_funding = Vec::new();
+        for (leaf_id, inputs) in leaves {
+            let leaf = &tree_nodes[&leaf_id];
+            let mut parents: Vec<CpfpParent> = walk_unilateral_exit_chain(&tree_nodes, leaf)
+                .unwrap()
+                .into_iter()
+                .map(|node| CpfpParent {
+                    txid: node.node_tx.compute_txid(),
+                    weight: node.node_tx.weight(),
+                })
+                .filter(|parent| covered.insert(parent.txid))
+                .collect();
+            if let Some(refund) = leaf.refund_tx.as_ref().filter(|tx| has_anchor(tx)) {
+                parents.push(CpfpParent {
+                    txid: refund.compute_txid(),
+                    weight: refund.weight(),
+                });
+            }
+            let chain = CpfpChain {
+                parents,
+                sweep_change: true,
+            };
+            chain_funding.push(CpfpFunding {
+                chain: chain.clone(),
+                inputs,
+            });
+            selected_leaves.push(UnilateralExitSelectedLeaf {
+                id: leaf_id.clone(),
                 value: 100_000,
                 estimated_cost: 2_000,
                 cpfp_cost: 2_000,
-                needs_funding: true,
                 refund_fee: 0,
-            }],
-            fan_out_psbt: None,
-            per_branch_funding: vec![(leaf.id.clone(), vec![funding(100_000)])],
-            tree_nodes: to_node_map(vec![root, leaf]),
+                funding: vec![FundingEntry {
+                    leaf_id,
+                    chain,
+                    amount_sat: 2_000,
+                    weight: Weight::from_wu(2_000),
+                }],
+            });
+        }
+        UnilateralExitPlan {
+            selected_leaves,
+            fan_out_psbt,
+            funding: chain_funding,
+            tree_nodes,
         }
     }
 
@@ -2149,32 +2438,15 @@ mod exit_build_tests {
         let mid = node("mid", Some("root"), anchor_tx(2), None);
         let leaf_a = node("leafA", Some("mid"), anchor_tx(3), Some(refund_tx(4)));
         let leaf_b = node("leafB", Some("mid"), anchor_tx(5), Some(refund_tx(6)));
-        UnilateralExitPlan {
-            selected_leaves: vec![
-                UnilateralExitSelectedLeaf {
-                    id: leaf_a.id.clone(),
-                    value: 100_000,
-                    estimated_cost: 2_000,
-                    cpfp_cost: 2_000,
-                    needs_funding: true,
-                    refund_fee: 0,
-                },
-                UnilateralExitSelectedLeaf {
-                    id: leaf_b.id.clone(),
-                    value: 100_000,
-                    estimated_cost: 2_000,
-                    cpfp_cost: 2_000,
-                    needs_funding: true,
-                    refund_fee: 0,
-                },
+        let (id_a, id_b) = (leaf_a.id.clone(), leaf_b.id.clone());
+        branch_plan(
+            to_node_map(vec![root, mid, leaf_a, leaf_b]),
+            vec![
+                (id_a, vec![funding(100_000)]),
+                (id_b, vec![funding(100_000)]),
             ],
-            fan_out_psbt: None,
-            per_branch_funding: vec![
-                (leaf_a.id.clone(), vec![funding(100_000)]),
-                (leaf_b.id.clone(), vec![funding(100_000)]),
-            ],
-            tree_nodes: to_node_map(vec![root, mid, leaf_a, leaf_b]),
-        }
+            None,
+        )
     }
 
     #[test]
@@ -2236,34 +2508,17 @@ mod exit_build_tests {
             }],
             output: vec![fund_a.witness_utxo.clone(), fund_b.witness_utxo.clone()],
         };
+        let fan_out_txid = fan_out_tx.compute_txid();
         let fan_out_psbt = bitcoin::Psbt::from_unsigned_tx(fan_out_tx).unwrap();
+        fund_a.outpoint.txid = fan_out_txid;
+        fund_b.outpoint.txid = fan_out_txid;
 
-        UnilateralExitPlan {
-            selected_leaves: vec![
-                UnilateralExitSelectedLeaf {
-                    id: leaf_a.id.clone(),
-                    value: 100_000,
-                    estimated_cost: 2_000,
-                    cpfp_cost: 2_000,
-                    needs_funding: true,
-                    refund_fee: 0,
-                },
-                UnilateralExitSelectedLeaf {
-                    id: leaf_b.id.clone(),
-                    value: 100_000,
-                    estimated_cost: 2_000,
-                    cpfp_cost: 2_000,
-                    needs_funding: true,
-                    refund_fee: 0,
-                },
-            ],
-            fan_out_psbt: Some(fan_out_psbt),
-            per_branch_funding: vec![
-                (leaf_a.id.clone(), vec![fund_a]),
-                (leaf_b.id.clone(), vec![fund_b]),
-            ],
-            tree_nodes: to_node_map(vec![root, mid, leaf_a, leaf_b]),
-        }
+        let (id_a, id_b) = (leaf_a.id.clone(), leaf_b.id.clone());
+        branch_plan(
+            to_node_map(vec![root, mid, leaf_a, leaf_b]),
+            vec![(id_a, vec![fund_a]), (id_b, vec![fund_b])],
+            Some(fan_out_psbt),
+        )
     }
 
     #[test]
@@ -2504,6 +2759,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![a, b],
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 dest_len,
                 &ExitChainState::default(),
@@ -2517,6 +2773,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::ProfitableOnly,
                 vec![only],
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 dest_len,
                 &ExitChainState::default(),
@@ -2539,7 +2796,7 @@ mod exit_build_tests {
         // Exactly the two-UTXO floor both plans AND builds: no plan/build mismatch.
         let plan = two(floor_two).expect("funding at the two-UTXO floor plans");
         assert!(plan.fan_out_psbt.is_none());
-        assert_eq!(plan.per_branch_funding.len(), 1);
+        assert_eq!(plan.funding.len(), 1);
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE)
             .expect("funding at the plan floor also builds");
         assert_eq!(build.cpfp_change_inputs.len(), 1);
@@ -2584,6 +2841,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2603,6 +2861,7 @@ mod exit_build_tests {
             &[a_id, b_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             inputs,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2612,11 +2871,9 @@ mod exit_build_tests {
             plan.fan_out_psbt.is_none(),
             "four inputs partition two-per-branch without a fan-out"
         );
-        assert_eq!(plan.per_branch_funding.len(), 2);
+        assert_eq!(plan.funding.len(), 2);
         assert!(
-            plan.per_branch_funding
-                .iter()
-                .all(|(_, ins)| ins.len() == 2),
+            plan.funding.iter().all(|f| f.inputs.len() == 2),
             "each branch is funded with two inputs"
         );
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
@@ -2654,6 +2911,7 @@ mod exit_build_tests {
             &[a_id, b_id, c_id],
             UnilateralExitLeafFilter::ProfitableOnly,
             two(50_000),
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2663,7 +2921,7 @@ mod exit_build_tests {
             plan.fan_out_psbt.is_some(),
             "two UTXOs for three leaves must fan out"
         );
-        assert_eq!(plan.per_branch_funding.len(), 3);
+        assert_eq!(plan.funding.len(), 3);
 
         let build = build_exit(&plan, &ResolvedExitState::default(), FEE_RATE).unwrap();
         assert!(build.fan_out.is_some());
@@ -2692,6 +2950,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2712,6 +2971,7 @@ mod exit_build_tests {
             &leaf_ids,
             UnilateralExitLeafFilter::All,
             inputs,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &ExitChainState::default(),
@@ -2753,6 +3013,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2763,6 +3024,7 @@ mod exit_build_tests {
             std::slice::from_ref(&leaf_id),
             UnilateralExitLeafFilter::All,
             vec![funding(quote.single_utxo_funding_sat)],
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2829,6 +3091,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2839,6 +3102,7 @@ mod exit_build_tests {
             std::slice::from_ref(&leaf_id),
             UnilateralExitLeafFilter::All,
             Vec::new(),
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2852,7 +3116,7 @@ mod exit_build_tests {
         assert_eq!(quote.cpfp_fee_sat, build.cpfp_fee_sat);
         assert_eq!(quote.sweep_fee_sat, sweep_fee(&build, change_len));
         assert!(quote.per_branch_funding.is_empty());
-        assert!(plan.per_branch_funding[0].1.is_empty());
+        assert!(plan.funding.is_empty());
     }
 
     #[test]
@@ -2899,6 +3163,7 @@ mod exit_build_tests {
             272,
             change_len,
             dust,
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2909,6 +3174,7 @@ mod exit_build_tests {
             &leaf_ids,
             UnilateralExitLeafFilter::All,
             vec![funding(quote.single_utxo_funding_sat)],
+            CpfpFundingStrategy::PerBranch,
             FEE_RATE,
             change_len,
             &on_chain,
@@ -2920,7 +3186,7 @@ mod exit_build_tests {
         assert_eq!(stopped_txs.len(), 1);
         assert_eq!(stopped_txs[0].txid, refund.compute_txid());
         assert!(stopped_txs[0].to_sign.is_none());
-        assert!(plan.per_branch_funding[0].1.is_empty());
+        assert!(plan.selected_leaves[0].funding.is_empty());
 
         let sibling_txs = &build.branches[1].txs;
         assert_eq!(sibling_txs.len(), 3, "root, node, refund");
@@ -2997,6 +3263,7 @@ mod exit_build_tests {
                 272,
                 change_len,
                 dust,
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 change_len,
                 &on_chain,
@@ -3012,6 +3279,7 @@ mod exit_build_tests {
                 std::slice::from_ref(&leaf_id),
                 UnilateralExitLeafFilter::All,
                 funding_inputs,
+                CpfpFundingStrategy::PerBranch,
                 FEE_RATE,
                 change_len,
                 &on_chain,
@@ -3036,6 +3304,7 @@ mod interpret_tests {
     };
     use spark::{
         Identifier,
+        services::UnilateralExitSelectedLeaf,
         tree::{SigningKeyshare, TreeNodeStatus},
     };
     use std::str::FromStr;
@@ -3100,9 +3369,16 @@ mod interpret_tests {
     fn prepared_of(root: TreeNode, leaf: TreeNode) -> UnilateralExitPlan {
         let leaf_id = leaf.id.clone();
         UnilateralExitPlan {
-            selected_leaves: vec![],
+            selected_leaves: vec![UnilateralExitSelectedLeaf {
+                id: leaf_id,
+                value: 0,
+                estimated_cost: 0,
+                cpfp_cost: 0,
+                refund_fee: 0,
+                funding: Vec::new(),
+            }],
             fan_out_psbt: None,
-            per_branch_funding: vec![(leaf_id, vec![])],
+            funding: Vec::new(),
             tree_nodes: to_node_map(vec![root, leaf]),
         }
     }
@@ -3537,34 +3813,811 @@ mod interpret_tests {
         assert!(check.diverged, "a stranger holds the outpoint it needs");
     }
 
-    /// A frontier whose anchor a foreign child already bumped: our own child
-    /// conflicts with what is there.
+    /// The check finds a transaction in a block whose anchor is spent by
+    /// another transaction. The next CPFP child has the change of this
+    /// transaction's own child as an input, so the exit can no longer be
+    /// finished.
     #[test]
     fn check_reports_an_anchor_bumped_by_another_child() {
-        let mut chain = exit_chain_of_three();
-        let first = chain[0].tx.compute_txid();
+        let chain = exit_chain_with_children();
         let frontier = chain[1].tx.compute_txid();
-        let anchor = OutPoint {
-            txid: frontier,
-            vout: 1,
-        };
-        chain[1].cpfp = Some(tx_spending(anchor, 99));
+        let anchor = anchor_of(&chain[1].tx);
         let stranger = Txid::from_byte_array([0xbb; 32]);
 
         let observed = vec![
-            Observation {
-                query: ChainQuery::TxConfirmed(first),
-                result: ChainResult::Confirmed {
-                    confirmed: true,
-                    block_height: None,
-                },
-            },
-            unspent(chain[1].tx.input[0].previous_output),
+            in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+            in_block(chain[0].tx.compute_txid(), true),
+            spent(chain[1].tx.input[0].previous_output, frontier),
             spent(anchor, stranger),
+            unspent(chain[2].tx.input[0].previous_output),
         ];
-        let check = check_exit_chain(&chain[..2], &observed);
+        let check = check_exit_chain(&chain, &observed);
 
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
         assert!(check.diverged, "somebody else bumped the anchor");
+    }
+
+    fn in_block(txid: Txid, confirmed: bool) -> Observation {
+        Observation {
+            query: ChainQuery::TxConfirmed(txid),
+            result: ChainResult::Confirmed {
+                confirmed,
+                block_height: None,
+            },
+        }
+    }
+
+    fn with_inputs(inputs: &[OutPoint], nonce: u32) -> Transaction {
+        let mut tx = tx_spending(inputs[0], nonce);
+        tx.input.extend(inputs[1..].iter().map(|outpoint| TxIn {
+            previous_output: *outpoint,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            ..Default::default()
+        }));
+        tx
+    }
+
+    fn anchor_of(tx: &Transaction) -> OutPoint {
+        OutPoint {
+            txid: tx.compute_txid(),
+            vout: 1,
+        }
+    }
+
+    fn change_of(cpfp: &Transaction) -> OutPoint {
+        OutPoint {
+            txid: cpfp.compute_txid(),
+            vout: 0,
+        }
+    }
+
+    fn funding_outpoint(vout: u32) -> OutPoint {
+        OutPoint {
+            txid: Txid::from_byte_array([0x66; 32]),
+            vout,
+        }
+    }
+
+    /// The chain of [`exit_chain_of_three`], each transaction with a CPFP child.
+    /// The first child has a funding outpoint as an input, each later one the
+    /// change of the child before it.
+    fn exit_chain_with_children() -> Vec<ExitCheckInput> {
+        let mut chain = exit_chain_of_three();
+        let mut funding = funding_outpoint(0);
+        for (nonce, input) in (90..).zip(&mut chain) {
+            let cpfp = with_inputs(&[funding, anchor_of(&input.tx)], nonce);
+            funding = change_of(&cpfp);
+            input.cpfp = Some(cpfp);
+        }
+        chain
+    }
+
+    /// Runs the check until it returns no query, taking the result of each
+    /// query from `results` and failing one that has none there. Returns the
+    /// last check and every query it executed, in order.
+    fn run_check(txs: &[ExitCheckInput], results: &[Observation]) -> (ExitCheck, Vec<ChainQuery>) {
+        let mut observed: Vec<Observation> = Vec::new();
+        loop {
+            let check = check_exit_chain(txs, &observed);
+            if check.pending.is_empty() {
+                let executed = observed.into_iter().map(|o| o.query).collect();
+                return (check, executed);
+            }
+            for query in check.pending {
+                let result = results
+                    .iter()
+                    .find(|o| o.query == query)
+                    .map_or(ChainResult::Unavailable, |o| o.result.clone());
+                observed.push(Observation { query, result });
+            }
+        }
+    }
+
+    /// When a transaction is in a block, so is every one above it, so the check
+    /// queries the deepest one the caller recorded and none above it.
+    #[test]
+    fn check_queries_only_the_deepest_recorded_transaction() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let (check, executed) = run_check(&chain, &[in_block(deepest, true)]);
+
+        assert_eq!(executed, vec![ChainQuery::TxConfirmed(deepest)]);
+        assert_eq!(check.confirmed.len(), 3);
+    }
+
+    /// The deepest recorded transaction is in no block, so the check queries
+    /// the one above it next.
+    #[test]
+    fn check_steps_up_from_a_recorded_transaction_that_is_in_no_block() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let [first, second, third] = [0, 1, 2].map(|i| chain[i].tx.compute_txid());
+        let third_input = chain[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(third, false),
+                in_block(second, true),
+                unspent(third_input),
+            ],
+        );
+
+        assert_eq!(
+            executed,
+            vec![
+                ChainQuery::TxConfirmed(third),
+                ChainQuery::TxConfirmed(second),
+                ChainQuery::Outspend(third_input),
+            ]
+        );
+        assert!(check.not_confirmed.contains(&third));
+        assert!(check.confirmed.contains_key(&first));
+    }
+
+    /// The chain service fails the lookup of the deepest recorded transaction.
+    /// The check then queries nothing above it and reports no transaction in or
+    /// out of a block.
+    #[test]
+    fn check_queries_nothing_above_a_failed_lookup() {
+        let mut chain = exit_chain_of_three();
+        for tx in &mut chain {
+            tx.confirmed = true;
+        }
+        let deepest = chain[2].tx.compute_txid();
+
+        let (check, executed) = run_check(&chain, &[]);
+
+        assert_eq!(executed, vec![ChainQuery::TxConfirmed(deepest)]);
+        assert!(check.confirmed.is_empty());
+        assert!(check.not_confirmed.is_empty());
+        assert!(check.unverified.is_empty());
+    }
+
+    /// Below two transactions in a block, one still has to confirm. The check
+    /// queries the deepest transaction in a block and its CPFP child, then the
+    /// outpoint of the input of the one that still has to confirm and the
+    /// funding of its CPFP child.
+    #[test]
+    fn check_returns_four_queries_for_the_next_transaction() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+        let third_input = chain[2].tx.input[0].previous_output;
+
+        let second = chain[1].tx.compute_txid();
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(second_child.compute_txid(), true),
+                in_block(second, true),
+                unspent(third_input),
+                unspent(change_of(second_child)),
+            ],
+        );
+
+        assert_eq!(executed.len(), 4);
+        assert_eq!(
+            executed.into_iter().collect::<HashSet<_>>(),
+            HashSet::from([
+                ChainQuery::TxConfirmed(second_child.compute_txid()),
+                ChainQuery::TxConfirmed(second),
+                ChainQuery::Outspend(third_input),
+                ChainQuery::Outspend(change_of(second_child)),
+            ])
+        );
+        assert!(!check.diverged);
+    }
+
+    /// The caller stores the statuses the check returns, so on the next call the
+    /// check starts from a transaction the caller recorded in a block. The
+    /// anchor of that transaction is spent by another CPFP child.
+    #[test]
+    fn check_reports_a_bumped_anchor_of_a_transaction_recorded_in_a_block() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let [first, second, third] = [&chain[0], &chain[1], &chain[2]];
+        let first_child = first.cpfp.as_ref().unwrap();
+        let stranger = Txid::from_byte_array([0xbb; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(second.cpfp.as_ref().unwrap().compute_txid(), false),
+                in_block(second.tx.compute_txid(), true),
+                in_block(first_child.compute_txid(), true),
+                unspent(change_of(first_child)),
+                spent(anchor_of(&second.tx), stranger),
+                unspent(third.tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The funding of a CPFP child is spent by another transaction while the
+    /// child's parent is in no block.
+    #[test]
+    fn check_reports_funding_of_a_cpfp_child_spent_by_another_transaction() {
+        let chain = exit_chain_with_children();
+        let first_child = chain[0].cpfp.as_ref().unwrap();
+        let funding = change_of(first_child);
+        let stranger = Txid::from_byte_array([0xcc; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(first_child.compute_txid(), true),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(chain[1].tx.input[0].previous_output),
+                spent(funding, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The change that is an input of a CPFP child does not exist while the
+    /// child before it is in no block, so the check does not query its spend.
+    /// The child before it still has to confirm, so the check queries the spend
+    /// of that child's own funding.
+    #[test]
+    fn check_skips_funding_that_does_not_exist_yet() {
+        let chain = exit_chain_with_children();
+        let first_child = chain[0].cpfp.as_ref().unwrap();
+
+        let (check, executed) = run_check(
+            &chain,
+            &[
+                in_block(first_child.compute_txid(), false),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(funding_outpoint(0)),
+                unspent(anchor_of(&chain[0].tx)),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(
+            !executed.contains(&ChainQuery::Outspend(change_of(first_child))),
+            "{executed:?}"
+        );
+        assert!(executed.contains(&ChainQuery::Outspend(funding_outpoint(0))));
+        assert!(!check.diverged);
+    }
+
+    /// A transaction and its CPFP child confirmed after the caller last checked.
+    /// The check finds both, and reads the funding of the next child.
+    #[test]
+    fn check_finds_a_cpfp_child_that_confirmed_with_its_parent() {
+        let chain = exit_chain_with_children();
+        let second = chain[1].tx.compute_txid();
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+
+        let mut observed = vec![
+            in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+            in_block(chain[0].tx.compute_txid(), true),
+            spent(chain[1].tx.input[0].previous_output, second),
+            spent(anchor_of(&chain[1].tx), second_child.compute_txid()),
+            unspent(chain[2].tx.input[0].previous_output),
+        ];
+        let check = check_exit_chain(&chain, &observed);
+        assert_eq!(
+            check.pending,
+            vec![ChainQuery::Outspend(change_of(second_child))]
+        );
+
+        observed.push(unspent(change_of(second_child)));
+        let check = check_exit_chain(&chain, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(!check.diverged);
+        assert!(check.confirmed.contains_key(&second));
+        assert!(check.confirmed.contains_key(&second_child.compute_txid()));
+    }
+
+    /// A node transaction with a CPFP child, the refund below it already in a
+    /// block when the wallet built the exit, and the sweep. No transaction of
+    /// the exit has the child's change as an input.
+    fn exit_with_a_cpfp_child_whose_change_is_not_an_input() -> Vec<ExitCheckInput> {
+        let node = tx_spending(funding_outpoint(7), 1);
+        let child = with_inputs(&[funding_outpoint(0), anchor_of(&node)], 90);
+        let refund = tx_spending(
+            OutPoint {
+                txid: node.compute_txid(),
+                vout: 0,
+            },
+            2,
+        );
+        let sweep = tx_spending(
+            OutPoint {
+                txid: refund.compute_txid(),
+                vout: 0,
+            },
+            3,
+        );
+        vec![
+            ExitCheckInput {
+                tx: node,
+                cpfp: Some(child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: refund,
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ]
+    }
+
+    /// No transaction of the exit has the change of the node transaction's
+    /// CPFP child as an input. Once the node transaction is in a block, the exit
+    /// can be finished whichever child confirmed it, so the check does not query
+    /// the anchor.
+    #[test]
+    fn check_ignores_a_cpfp_child_whose_change_is_not_an_input() {
+        let txs = exit_with_a_cpfp_child_whose_change_is_not_an_input();
+        let sweep_input = txs[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &txs,
+            &[
+                in_block(txs[1].tx.compute_txid(), true),
+                unspent(sweep_input),
+            ],
+        );
+
+        assert!(!executed.contains(&ChainQuery::Outspend(anchor_of(&txs[0].tx))));
+        assert!(!check.diverged);
+    }
+
+    /// The same once the caller recorded the node transaction in a block.
+    #[test]
+    fn check_ignores_such_a_child_of_a_recorded_transaction() {
+        let mut txs = exit_with_a_cpfp_child_whose_change_is_not_an_input();
+        txs[0].confirmed = true;
+        let sweep_input = txs[2].tx.input[0].previous_output;
+
+        let (check, executed) = run_check(
+            &txs,
+            &[
+                in_block(txs[1].tx.compute_txid(), true),
+                unspent(sweep_input),
+            ],
+        );
+
+        assert!(!executed.contains(&ChainQuery::Outspend(anchor_of(&txs[0].tx))));
+        assert!(!check.diverged);
+    }
+
+    /// The check queries a recorded transaction along with its CPFP child, and
+    /// reports the block height of the transaction's own result.
+    #[test]
+    fn check_reports_the_height_of_a_transaction_whose_child_is_in_a_block() {
+        let mut chain = exit_chain_with_children();
+        chain[1].confirmed = true;
+        let second = chain[1].tx.compute_txid();
+        let second_child = chain[1].cpfp.as_ref().unwrap();
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(second_child.compute_txid(), true),
+                Observation {
+                    query: ChainQuery::TxConfirmed(second),
+                    result: ChainResult::Confirmed {
+                        confirmed: true,
+                        block_height: Some(880_000),
+                    },
+                },
+            ],
+        );
+
+        assert_eq!(check.confirmed.get(&second), Some(&Some(880_000)));
+    }
+
+    /// Two branches below one transaction. The chain service fails the lookup
+    /// for the first branch. The check still finds the transaction of the
+    /// second branch that confirmed after the caller last checked, and with it
+    /// the transaction above both branches.
+    #[test]
+    fn check_reads_a_branch_next_to_one_whose_lookup_failed() {
+        let shared = tx_spending(funding_outpoint(7), 1);
+        let shared_txid = shared.compute_txid();
+        let [first_branch, second_branch] = [0, 1].map(|vout| {
+            tx_spending(
+                OutPoint {
+                    txid: shared_txid,
+                    vout,
+                },
+                2 + vout,
+            )
+        });
+        let second_branch_input = second_branch.input[0].previous_output;
+        let second_branch_txid = second_branch.compute_txid();
+        let txs = vec![
+            ExitCheckInput {
+                tx: shared,
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: first_branch.clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: second_branch,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, executed) = run_check(&txs, &[spent(second_branch_input, second_branch_txid)]);
+
+        assert_eq!(
+            executed,
+            vec![
+                ChainQuery::TxConfirmed(first_branch.compute_txid()),
+                ChainQuery::Outspend(second_branch_input),
+            ]
+        );
+        assert!(check.confirmed.contains_key(&second_branch_txid));
+        assert!(check.confirmed.contains_key(&shared_txid));
+    }
+
+    /// The inputs of the sweep are the refund output and the change of the
+    /// refund's CPFP child. That change is spent by another transaction.
+    #[test]
+    fn check_reads_the_change_among_the_sweep_inputs() {
+        let refund = tx_spending(funding_outpoint(7), 1);
+        let child = with_inputs(&[funding_outpoint(0), anchor_of(&refund)], 90);
+        let refund_output = OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        };
+        let sweep = with_inputs(&[refund_output, change_of(&child)], 3);
+        let stranger = Txid::from_byte_array([0xee; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: Some(child.clone()),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep.clone(),
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(child.compute_txid(), true),
+                in_block(refund.compute_txid(), true),
+                unspent(refund_output),
+                spent(change_of(&child), stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The inputs of the sweep are the refund outputs of two leaves. The second
+    /// one is spent by another transaction.
+    #[test]
+    fn check_reads_every_input_of_a_transaction() {
+        let refunds = [
+            tx_spending(funding_outpoint(0), 1),
+            tx_spending(funding_outpoint(1), 2),
+        ];
+        let refund_outputs = refunds.clone().map(|refund| OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        });
+        let sweep = with_inputs(&refund_outputs, 3);
+        let stranger = Txid::from_byte_array([0xdd; 32]);
+        let mut txs: Vec<ExitCheckInput> = refunds
+            .iter()
+            .map(|refund| ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: None,
+                confirmed: true,
+            })
+            .collect();
+        txs.push(ExitCheckInput {
+            tx: sweep.clone(),
+            cpfp: None,
+            confirmed: false,
+        });
+
+        let observed = vec![
+            in_block(refunds[0].compute_txid(), true),
+            in_block(refunds[1].compute_txid(), true),
+            unspent(refund_outputs[0]),
+            spent(refund_outputs[1], stranger),
+        ];
+        let check = check_exit_chain(&txs, &observed);
+
+        assert!(check.pending.is_empty(), "{:?}", check.pending);
+        assert!(check.diverged);
+    }
+
+    /// The inputs of the sweep are the refund outputs of two leaves. One refund
+    /// is in a block, and its output is spent by another transaction, while the
+    /// other refund is in no block yet.
+    #[test]
+    fn check_reads_an_input_while_another_input_does_not_exist() {
+        let refunds = [
+            tx_spending(funding_outpoint(0), 1),
+            tx_spending(funding_outpoint(1), 2),
+        ];
+        let refund_outputs = refunds.clone().map(|refund| OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        });
+        let sweep = with_inputs(&refund_outputs, 3);
+        let stranger = Txid::from_byte_array([0xdd; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refunds[0].clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: refunds[1].clone(),
+                cpfp: None,
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(refunds[0].compute_txid(), true),
+                unspent(funding_outpoint(1)),
+                spent(refund_outputs[0], stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The first CPFP child of each branch has an output of the fan-out as an
+    /// input. The fan-out output for the CPFP child of the second branch's leaf
+    /// node is spent by another transaction, while the node above both branches
+    /// is in no block.
+    #[test]
+    fn check_reads_the_funding_of_a_child_below_a_shared_ancestor() {
+        let fan_out = tx_spending(funding_outpoint(0), 1);
+        let shared = tx_spending(funding_outpoint(7), 2);
+        let first_leaf = tx_spending(
+            OutPoint {
+                txid: shared.compute_txid(),
+                vout: 0,
+            },
+            3,
+        );
+        let second_leaf = tx_spending(
+            OutPoint {
+                txid: shared.compute_txid(),
+                vout: 2,
+            },
+            4,
+        );
+        let fan_out_output = |vout| OutPoint {
+            txid: fan_out.compute_txid(),
+            vout,
+        };
+        let shared_child = with_inputs(&[fan_out_output(0), anchor_of(&shared)], 90);
+        let first_leaf_child = with_inputs(&[change_of(&shared_child), anchor_of(&first_leaf)], 91);
+        let second_leaf_child = with_inputs(&[fan_out_output(1), anchor_of(&second_leaf)], 92);
+        let stranger = Txid::from_byte_array([0xcc; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: fan_out.clone(),
+                cpfp: None,
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: shared,
+                cpfp: Some(shared_child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: first_leaf,
+                cpfp: Some(first_leaf_child),
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: second_leaf,
+                cpfp: Some(second_leaf_child),
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(fan_out.compute_txid(), true),
+                unspent(funding_outpoint(7)),
+                unspent(fan_out_output(0)),
+                spent(fan_out_output(1), stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The caller recorded the first transaction in a block, and another CPFP
+    /// child of that transaction is in the same block. The chain service fails
+    /// the confirmation query of the exit's own CPFP child, so the check reads
+    /// that child's inputs.
+    #[test]
+    fn check_reads_the_inputs_of_a_cpfp_child_whose_lookup_failed() {
+        let chain = exit_chain_with_children();
+        let stranger = Txid::from_byte_array([0xbb; 32]);
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(chain[0].tx.compute_txid(), true),
+                spent(anchor_of(&chain[0].tx), stranger),
+                unspent(funding_outpoint(0)),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The caller recorded a node transaction in a block, but not the fan-out
+    /// that funds its CPFP child. The chain service fails the confirmation
+    /// query of that child, and the input of the fan-out is spent by another
+    /// transaction.
+    #[test]
+    fn check_reads_a_fan_out_the_caller_did_not_record() {
+        let caller_utxo = funding_outpoint(5);
+        let fan_out = tx_spending(caller_utxo, 50);
+        let node = tx_spending(funding_outpoint(7), 1);
+        let node_output = OutPoint {
+            txid: node.compute_txid(),
+            vout: 0,
+        };
+        let child = with_inputs(
+            &[
+                OutPoint {
+                    txid: fan_out.compute_txid(),
+                    vout: 0,
+                },
+                anchor_of(&node),
+            ],
+            90,
+        );
+        let next = tx_spending(node_output, 2);
+        let next_child = with_inputs(&[change_of(&child), anchor_of(&next)], 91);
+        let stranger = Txid::from_byte_array([0xab; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: fan_out,
+                cpfp: None,
+                confirmed: false,
+            },
+            ExitCheckInput {
+                tx: node.clone(),
+                cpfp: Some(child),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: next,
+                cpfp: Some(next_child),
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(node.compute_txid(), true),
+                unspent(node_output),
+                spent(caller_utxo, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
+    }
+
+    /// The chain service fails the query for the funding of the next CPFP
+    /// child, so the check reports that child's parent as unverified.
+    #[test]
+    fn check_reports_a_transaction_it_could_not_read_as_unverified() {
+        let chain = exit_chain_with_children();
+
+        let (check, _) = run_check(
+            &chain,
+            &[
+                in_block(chain[0].cpfp.as_ref().unwrap().compute_txid(), true),
+                in_block(chain[0].tx.compute_txid(), true),
+                unspent(chain[1].tx.input[0].previous_output),
+            ],
+        );
+
+        assert!(!check.diverged);
+        assert_eq!(
+            check.unverified,
+            HashSet::from([chain[1].tx.compute_txid()])
+        );
+    }
+
+    /// The caller recorded the first transaction in a block, and the change of
+    /// its CPFP child funds the next CPFP child. The chain service fails every
+    /// query, also those for that CPFP child.
+    #[test]
+    fn check_exit_chain_does_not_mark_a_recorded_transaction_unverified() {
+        let mut chain = exit_chain_with_children();
+        chain[0].confirmed = true;
+
+        let (check, _) = run_check(&chain, &[]);
+
+        assert_eq!(
+            check.unverified,
+            HashSet::from([chain[1].tx.compute_txid()])
+        );
+    }
+
+    /// The child of a refund without an anchor has the refund output as its
+    /// input, and the sweep has the child's output. The caller recorded the
+    /// refund in a block, where its output is spent by another transaction.
+    #[test]
+    fn check_reports_another_spend_of_the_output_of_an_anchorless_refund() {
+        let refund = tx_spending(funding_outpoint(7), 1);
+        let refund_output = OutPoint {
+            txid: refund.compute_txid(),
+            vout: 0,
+        };
+        let child = tx_spending(refund_output, 90);
+        let sweep = tx_spending(change_of(&child), 3);
+        let stranger = Txid::from_byte_array([0xee; 32]);
+        let txs = vec![
+            ExitCheckInput {
+                tx: refund.clone(),
+                cpfp: Some(child.clone()),
+                confirmed: true,
+            },
+            ExitCheckInput {
+                tx: sweep,
+                cpfp: None,
+                confirmed: false,
+            },
+        ];
+
+        let (check, _) = run_check(
+            &txs,
+            &[
+                in_block(child.compute_txid(), false),
+                in_block(refund.compute_txid(), true),
+                spent(refund_output, stranger),
+            ],
+        );
+
+        assert!(check.diverged);
     }
 
     /// Below an unconfirmed transaction there is no outpoint yet for anything to
@@ -3829,9 +4882,9 @@ mod interpret_tests {
     /// tests interpret the same way: one pass over the observations they set up.
     fn scan_of(plan: &UnilateralExitPlan, observed: &[Observation]) -> ExitChainScan {
         let leaf_ids: Vec<TreeNodeId> = plan
-            .per_branch_funding
+            .selected_leaves
             .iter()
-            .map(|(leaf_id, _)| leaf_id.clone())
+            .map(|leaf| leaf.id.clone())
             .collect();
         scan_exit_chain(
             &plan.tree_nodes,
@@ -4720,5 +5773,387 @@ mod interpret_tests {
             !interp.unverified.contains(&leaf_id),
             "a chain-verified confirmation does not flag the driven child"
         );
+    }
+}
+
+#[cfg(test)]
+mod per_node_build_tests {
+    use super::*;
+    use bitcoin::{
+        Amount, CompressedPublicKey, ScriptBuf, TxOut, absolute::LockTime, hashes::Hash,
+        key::Secp256k1, secp256k1::PublicKey, secp256k1::SecretKey, transaction::Version,
+    };
+    use spark::{
+        Identifier,
+        services::{CpfpFundingStrategy, UnilateralExitLeafFilter, plan_unilateral_exit},
+        tree::{SigningKeyshare, TreeNodeStatus},
+    };
+    use std::str::FromStr;
+
+    const FEE_RATE: u64 = 250;
+
+    fn id(s: &str) -> TreeNodeId {
+        TreeNodeId::from_str(s).unwrap()
+    }
+
+    fn anchored(nonce: u32) -> Transaction {
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::from_height(nonce).unwrap(),
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+            }],
+        }
+    }
+
+    fn node(name: &str, parent: Option<&str>, nonce: u32, with_refund: bool) -> TreeNode {
+        let pk = PublicKey::from_str(
+            "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
+        )
+        .unwrap();
+        TreeNode {
+            id: id(name),
+            tree_id: "test".to_string(),
+            value: 100_000,
+            parent_node_id: parent.map(id),
+            node_tx: anchored(nonce),
+            refund_tx: with_refund.then(|| anchored(nonce + 1_000)),
+            direct_tx: None,
+            direct_refund_tx: None,
+            direct_from_cpfp_refund_tx: None,
+            vout: 0,
+            verifying_public_key: pk,
+            owner_identity_public_key: Some(pk),
+            signing_keyshare: SigningKeyshare {
+                public_key: pk,
+                owner_identifiers: vec![Identifier::try_from(1u16).unwrap()],
+                threshold: 2,
+            },
+            status: TreeNodeStatus::Available,
+        }
+    }
+
+    fn funding(value: u64, vout: u32) -> CpfpInput {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let pk = PublicKey::from_secret_key(&secp, &sk);
+        CpfpInput {
+            outpoint: OutPoint {
+                txid: Txid::from_byte_array([7u8; 32]),
+                vout,
+            },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: Address::p2wpkh(&CompressedPublicKey(pk), bitcoin::Network::Testnet)
+                    .script_pubkey(),
+            },
+            signed_input_weight: 272,
+        }
+    }
+
+    fn plan(
+        nodes: Vec<TreeNode>,
+        leaves: &[&str],
+        inputs: Vec<CpfpInput>,
+        strategy: CpfpFundingStrategy,
+        state: &ExitChainState,
+    ) -> UnilateralExitPlan {
+        plan_unilateral_exit(
+            to_node_map(nodes),
+            &leaves.iter().map(|leaf| id(leaf)).collect::<Vec<_>>(),
+            UnilateralExitLeafFilter::All,
+            inputs,
+            strategy,
+            FEE_RATE,
+            22,
+            state,
+        )
+        .unwrap()
+    }
+
+    /// The txids the build gives a CPFP child to.
+    fn bumped_by_build(build: &UnilateralExitBuild) -> HashSet<Txid> {
+        build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter(|tx| tx.to_sign.is_some())
+            .map(|tx| tx.txid)
+            .collect()
+    }
+
+    fn confirmed(node: &str, by: ExitNodeConfirmation) -> ConfirmedExitNode {
+        ConfirmedExitNode {
+            node_id: id(node),
+            confirmed_by: by,
+            block_height: Some(100),
+        }
+    }
+
+    /// The plan names a UTXO for exactly the transactions the build bumps, in
+    /// every state the chain can leave an exit in. One named and not built sits
+    /// idle; one built and not named has no input and fails the build.
+    #[test]
+    fn the_plan_funds_exactly_what_the_build_bumps() {
+        let root_and_leaf = || {
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ]
+        };
+        let mut went_direct = node("leaf", Some("root"), 2, true);
+        went_direct.direct_tx = Some(anchored(40));
+        went_direct.direct_refund_tx = Some(anchored(41));
+        let refund_on_chain = ExitRefund {
+            leaf_id: id("leaf"),
+            state: ExitRefundState::OnChain {
+                tx: anchored(1_002),
+                vout: 0,
+                value: 90_000,
+                block_height: Some(120),
+            },
+        };
+        let shared_root = || {
+            vec![
+                node("root", None, 1, false),
+                node("a", Some("root"), 2, true),
+                node("b", Some("root"), 3, true),
+            ]
+        };
+
+        let cases: Vec<(&str, Vec<TreeNode>, Vec<&str>, ExitChainState)> = vec![
+            (
+                "fresh",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState::default(),
+            ),
+            (
+                "root confirmed",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![confirmed("root", ExitNodeConfirmation::Cpfp)],
+                    ..Default::default()
+                },
+            ),
+            (
+                "refund on-chain",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("leaf", ExitNodeConfirmation::Cpfp),
+                    ],
+                    refunds: vec![refund_on_chain],
+                    ..Default::default()
+                },
+            ),
+            (
+                "leaf went direct",
+                vec![node("root", None, 1, false), went_direct],
+                vec!["leaf"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("leaf", ExitNodeConfirmation::Direct),
+                    ],
+                    ..Default::default()
+                },
+            ),
+            (
+                "stopped",
+                root_and_leaf(),
+                vec!["leaf"],
+                ExitChainState {
+                    stopped_leaves: vec![id("leaf")],
+                    ..Default::default()
+                },
+            ),
+            (
+                "shared root",
+                shared_root(),
+                vec!["a", "b"],
+                ExitChainState::default(),
+            ),
+            (
+                "shared root, one branch swept",
+                shared_root(),
+                vec!["a", "b"],
+                ExitChainState {
+                    nodes: vec![
+                        confirmed("root", ExitNodeConfirmation::Cpfp),
+                        confirmed("a", ExitNodeConfirmation::Cpfp),
+                    ],
+                    refunds: vec![ExitRefund {
+                        leaf_id: id("a"),
+                        state: ExitRefundState::Swept,
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (case, nodes, leaves, state) in cases {
+            // One ample UTXO, so every named transaction is funded by a fan-out.
+            let plan = plan(
+                nodes,
+                &leaves,
+                vec![funding(1_000_000, 0)],
+                CpfpFundingStrategy::PerNode,
+                &state,
+            );
+            let named: HashSet<Txid> = plan
+                .funding
+                .iter()
+                .flat_map(|f| &f.chain.parents)
+                .map(|parent| parent.txid)
+                .collect();
+            let build = build_unilateral_exit(&plan, &state, FEE_RATE)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert_eq!(named, bumped_by_build(&build), "{case}");
+        }
+    }
+
+    #[test]
+    fn each_child_spends_its_own_input_and_nothing_else_of_the_exit() {
+        let plan = plan(
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ],
+            &["leaf"],
+            vec![funding(20_000, 0), funding(21_000, 1), funding(22_000, 2)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        assert!(plan.fan_out_psbt.is_none());
+        let build = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE).unwrap();
+        let planned: HashMap<Txid, OutPoint> = plan
+            .funding
+            .iter()
+            .flat_map(|f| f.chain.parents.iter().zip(&f.inputs))
+            .map(|(parent, input)| (parent.txid, input.outpoint))
+            .collect();
+        let children: Vec<(Txid, Transaction)> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter_map(|tx| {
+                tx.to_sign
+                    .as_ref()
+                    .map(|psbt| (tx.txid, psbt.unsigned_tx.clone()))
+            })
+            .collect();
+        let child_txids: HashSet<Txid> = children.iter().map(|(_, c)| c.compute_txid()).collect();
+        assert_eq!(children.len(), 3);
+
+        let mut spent = HashSet::new();
+        for (parent, child) in &children {
+            let funding_inputs: Vec<OutPoint> = child
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .filter(|outpoint| outpoint.txid != *parent)
+                .collect();
+            assert_eq!(
+                funding_inputs,
+                vec![planned[parent]],
+                "one input, the planned one"
+            );
+            assert!(
+                !child_txids.contains(&funding_inputs[0].txid),
+                "no child spends another child's output"
+            );
+            assert!(
+                spent.insert(funding_inputs[0]),
+                "no two children share an input"
+            );
+        }
+    }
+
+    #[test]
+    fn per_node_change_stays_off_the_sweep() {
+        let nodes = || vec![node("leaf", None, 1, true)];
+        let per_node = plan(
+            nodes(),
+            &["leaf"],
+            vec![funding(20_000, 0), funding(20_000, 1)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        let per_branch = plan(
+            nodes(),
+            &["leaf"],
+            vec![funding(40_000, 0)],
+            CpfpFundingStrategy::PerBranch,
+            &ExitChainState::default(),
+        );
+
+        let state = ExitChainState::default();
+        let per_node = build_unilateral_exit(&per_node, &state, FEE_RATE).unwrap();
+        let per_branch = build_unilateral_exit(&per_branch, &state, FEE_RATE).unwrap();
+        assert!(per_node.cpfp_change_inputs.is_empty());
+        assert_eq!(per_branch.cpfp_change_inputs.len(), 1);
+        assert_eq!(
+            per_node.refund_outputs.len(),
+            1,
+            "the refund is still swept"
+        );
+    }
+
+    #[test]
+    fn every_child_waits_on_the_fan_out_it_spends() {
+        let plan = plan(
+            vec![
+                node("root", None, 1, false),
+                node("leaf", Some("root"), 2, true),
+            ],
+            &["leaf"],
+            vec![funding(100_000, 0)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        let build = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE).unwrap();
+        let fan_out_txid = build
+            .fan_out
+            .as_ref()
+            .expect("one UTXO, three transactions")
+            .txid;
+
+        let bumping: Vec<&ExitTx> = build
+            .branches
+            .iter()
+            .flat_map(|branch| &branch.txs)
+            .filter(|tx| tx.to_sign.is_some())
+            .collect();
+        assert_eq!(bumping.len(), 3);
+        for tx in bumping {
+            assert!(
+                tx.depends_on.contains(&fan_out_txid),
+                "{:?} {} spends a fan-out output, so waits for it",
+                tx.kind,
+                tx.txid
+            );
+        }
+    }
+
+    #[test]
+    fn a_transaction_with_no_planned_input_fails_the_build() {
+        let mut plan = plan(
+            vec![node("leaf", None, 1, true)],
+            &["leaf"],
+            vec![funding(20_000, 0), funding(20_000, 1)],
+            CpfpFundingStrategy::PerNode,
+            &ExitChainState::default(),
+        );
+        plan.funding.pop();
+
+        let err = build_unilateral_exit(&plan, &ExitChainState::default(), FEE_RATE)
+            .expect_err("spending another transaction's input would conflict");
+        assert!(err.to_string().contains("has no funding for"), "got {err}");
     }
 }

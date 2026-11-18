@@ -12,8 +12,8 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use spark_wallet::{
-    CpfpInput, ExitChainState, ExitLeafSelection, ExitTxKind, Network, SparkWallet,
-    SparkWalletError, TreeNodeId, is_ephemeral_anchor_output, p2wpkh_input_weight,
+    CpfpFundingStrategy, CpfpInput, ExitChainState, ExitLeafSelection, ExitTxKind, Network,
+    SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output, p2wpkh_input_weight,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -154,6 +154,7 @@ pub async fn handle_command(
                 &context,
                 fee_rate_sat_per_kw,
                 inputs,
+                CpfpFundingStrategy::PerBranch,
                 // Sweep destination is a P2TR address (34-byte scriptPubKey);
                 // only used here to size the fan-out fee.
                 34,

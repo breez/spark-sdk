@@ -2,7 +2,9 @@ use bitcoin::hashes::{Hash, sha256};
 use clap::Subcommand;
 use qrcode_rs::{EcLevel, QrCode, render::unicode};
 use rand::rngs::OsRng;
-use spark_wallet::{InvoiceDescription, Preimage, ReceiveAmountBasis, SparkWallet};
+use spark_wallet::{
+    InvoiceDescription, InvoicePreimage, Preimage, ReceiveAmountBasis, SparkWallet,
+};
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum LightningCommand {
@@ -80,6 +82,7 @@ pub async fn handle_command(
                 .create_lightning_invoice(
                     amount_sat,
                     desc,
+                    InvoicePreimage::FromSigner,
                     None,
                     expiry_secs,
                     true,
@@ -109,7 +112,15 @@ pub async fn handle_command(
 
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_hodl_lightning_invoice(amount_sat, desc, payment_hash, expiry_secs, None)
+                .create_lightning_invoice(
+                    amount_sat,
+                    desc,
+                    InvoicePreimage::Hodl(payment_hash),
+                    None,
+                    expiry_secs,
+                    false,
+                    None,
+                )
                 .await?;
 
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)

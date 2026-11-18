@@ -1,4 +1,5 @@
 mod api;
+mod bridging;
 mod buy;
 mod chain_queries;
 mod contacts;
@@ -19,6 +20,11 @@ mod unilateral_exit;
 mod unilateral_exit_backup;
 mod watchtower_exit;
 
+pub use bridging::{
+    BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient, BridgingConfig,
+    CreateBridgeRequest, CreateBridgeResponse, GetBridgeRoutesRequest, GetBridgeRoutesResponse,
+    GetBridgeStatusRequest, GetBridgeStatusResponse, default_bridging_config, new_bridging_client,
+};
 pub(crate) use helpers::partner_id;
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend, issued_quote};
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
@@ -126,6 +132,9 @@ pub struct BreezSdk {
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub(crate) cross_chain_context: crate::cross_chain::CrossChainContext,
+    /// The wallet-backed Orchestra service, built whether or not cross-chain
+    /// payments are enabled. Set on mainnet with background tasks on.
+    pub(crate) orchestra: Option<Arc<crate::cross_chain::OrchestraService>>,
     /// Shared helper for paying LN invoices and persisting the resulting
     /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
     /// need to pay an LN invoice as part of a larger flow.
@@ -164,6 +173,7 @@ pub(crate) struct BreezSdkParams {
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_context: crate::cross_chain::CrossChainContext,
+    pub orchestra: Option<Arc<crate::cross_chain::OrchestraService>>,
     pub lightning_sender: Arc<LightningSender>,
     pub quote_lightning_payments: bool,
     pub quote_lightning_sends: bool,

@@ -2,7 +2,7 @@ use anyhow::Result;
 use bitcoin::Amount;
 use rstest::*;
 use spark_itest::helpers::{
-    WalletsFixture, deposit_to_wallet, deposit_with_amount, wait_for, wallets,
+    WalletsFixture, deposit_to_wallet, deposit_with_amount, sync_until_available, wait_for, wallets,
 };
 use spark_wallet::TransferId;
 use tracing::info;
@@ -101,6 +101,8 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     // Check that balance increased immediately after claiming
     let balance = alice.get_balance().await?;
     assert_eq!(balance, 100_000, "Balance should be the deposit amount");
+
+    sync_until_available(alice, &leaves).await?;
 
     // Spend the entire balance via a Spark transfer to Bob
     let bob_address = bob.get_spark_address()?;

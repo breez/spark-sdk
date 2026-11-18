@@ -99,7 +99,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
     async fn before_coop_exit(
         &self,
         transfer_id: &TransferId,
-        withdrawal_address: &bitcoin::Address,
+        withdrawal_address: &spark_wallet::WithdrawalAddress,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError> {
         Ok(self

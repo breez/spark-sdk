@@ -50,6 +50,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -73,6 +75,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM brz_payments p
@@ -412,7 +415,8 @@ class PostgresStorage {
         if (stored != null
             && this._isFinalPaymentStatus(stored)
             && stored !== next) {
-          console.warn(
+          this._log(
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           return false;
@@ -420,7 +424,8 @@ class PostgresStorage {
 
         const sameStatus = stored === next;
         if (sameStatus) {
-          console.debug(
+          this._log(
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
         }
@@ -448,13 +453,12 @@ class PostgresStorage {
   }
 
   async _runPaymentUpsert(client, payment) {
-    const withdrawTxId =
-      payment.details?.type === "withdraw" ? payment.details.txId : null;
+    const withdraw = payment.details?.type === "withdraw" ? payment.details : null;
     const spark = payment.details?.type === "spark" ? true : null;
 
     await client.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT(user_id, id) DO UPDATE SET
          payment_type=EXCLUDED.payment_type,
          status=EXCLUDED.status,
@@ -463,6 +467,8 @@ class PostgresStorage {
          timestamp=EXCLUDED.timestamp,
          method=EXCLUDED.method,
          withdraw_tx_id=EXCLUDED.withdraw_tx_id,
+         withdraw_vout=EXCLUDED.withdraw_vout,
+         withdraw_destination_address=EXCLUDED.withdraw_destination_address,
          spark=EXCLUDED.spark`,
       [
         this.identity,
@@ -473,7 +479,9 @@ class PostgresStorage {
         payment.fees.toString(),
         payment.timestamp,
         payment.method ? toJson(payment.method) : null,
-        withdrawTxId,
+        withdraw?.txId ?? null,
+        withdraw?.vout ?? null,
+        withdraw?.destinationAddress ?? null,
         spark,
       ]
     );
@@ -562,6 +570,10 @@ class PostgresStorage {
         ]
       );
     }
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
@@ -1036,18 +1048,20 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                nostr_zap_request = EXCLUDED.nostr_zap_request,
                nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-               sender_comment = EXCLUDED.sender_comment`,
+               sender_comment = EXCLUDED.sender_comment,
+               lightning_address = EXCLUDED.lightning_address`,
             [
               this.identity,
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
+              item.lightningAddress || null,
             ]
           );
         }
@@ -1105,6 +1119,7 @@ class PostgresStorage {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          lightningAddress: row.lnurl_lightning_address || null,
         };
       }
 
@@ -1115,10 +1130,16 @@ class PostgresStorage {
             : row.conversion_info;
       }
     } else if (row.withdraw_tx_id) {
-      details = {
-        type: "withdraw",
-        txId: row.withdraw_tx_id,
-      };
+      // A withdrawal stored before the SDK kept these values has no details
+      // until the next sync rewrites it.
+      if (row.withdraw_vout != null && row.withdraw_destination_address != null) {
+        details = {
+          type: "withdraw",
+          txId: row.withdraw_tx_id,
+          vout: Number(row.withdraw_vout),
+          destinationAddress: row.withdraw_destination_address,
+        };
+      }
     } else if (row.deposit_tx_id) {
       details = {
         type: "deposit",
@@ -1423,11 +1444,7 @@ class PostgresStorage {
 
         if (deleteResult.rowCount === 0) {
           const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
-          if (this.logger && typeof this.logger.log === "function") {
-            this.logger.log({ line: msg, level: "warn" });
-          } else {
-            console.warn(`[PostgresStorage] ${msg}`);
-          }
+          this._log("WARN", msg);
         }
 
         await client.query(

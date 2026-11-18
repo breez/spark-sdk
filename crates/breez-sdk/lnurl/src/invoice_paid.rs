@@ -4,6 +4,7 @@ use tracing::{debug, error};
 
 use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError};
 use crate::time::now_millis;
+use crate::user::User;
 use crate::webhooks::{WebhookRepository, WebhookService};
 
 #[derive(Debug, thiserror::Error)]
@@ -91,10 +92,10 @@ where
 pub async fn create_invoice<DB>(
     db: &DB,
     payment_hash: &str,
-    user_pubkey: &str,
+    user: &User,
     invoice: &str,
     invoice_expiry: i64,
-    domain: &str,
+    actual_domain: &str,
     fee_sat: Option<i64>,
 ) -> Result<(), LnurlRepositoryError>
 where
@@ -103,13 +104,15 @@ where
     let now = now_millis();
     let invoice_record = Invoice {
         payment_hash: payment_hash.to_string(),
-        user_pubkey: user_pubkey.to_string(),
+        user_pubkey: user.pubkey.clone(),
         invoice: invoice.to_string(),
         preimage: None,
         invoice_expiry,
         created_at: now,
         updated_at: now,
-        domain: Some(domain.to_string()),
+        domain: Some(user.domain.clone()),
+        actual_domain: Some(actual_domain.to_string()),
+        username: Some(user.name.clone()),
         amount_received_sat: None,
         fee_sat,
     };
@@ -190,6 +193,8 @@ mod shared_tests {
             created_at: 1000,
             updated_at: 1000,
             domain: None,
+            actual_domain: None,
+            username: None,
             amount_received_sat: None,
             fee_sat: None,
         })
@@ -226,10 +231,16 @@ mod shared_tests {
         let domain = "fee.example.com";
         db.add_domain(domain).await.unwrap();
 
+        let user = crate::user::User {
+            domain: domain.to_string(),
+            pubkey: "fee_user_pubkey".to_string(),
+            name: "fee_user".to_string(),
+            description: None,
+        };
         create_invoice(
             db,
             &payment_hash,
-            "fee_user_pubkey",
+            &user,
             &invoice_str,
             i64::MAX,
             domain,
@@ -261,6 +272,40 @@ mod shared_tests {
         let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
         assert_eq!(payload["data"]["amount_sat"], 980);
         assert_eq!(payload["data"]["fee_sat"], 20);
+    }
+
+    pub async fn create_invoice_records_the_address_it_was_requested_for<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let user = crate::user::User {
+            domain: "tips.example".to_string(),
+            pubkey: "requested_pubkey".to_string(),
+            name: "alice".to_string(),
+            description: None,
+        };
+
+        create_invoice(
+            db,
+            "requested",
+            &user,
+            "lnbc1",
+            i64::MAX,
+            "cash.example",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let invoice = db
+            .get_invoice_by_payment_hash("requested")
+            .await
+            .unwrap()
+            .expect("the invoice is stored");
+        assert_eq!(invoice.user_pubkey, "requested_pubkey");
+        assert_eq!(invoice.domain.as_deref(), Some("tips.example"));
+        assert_eq!(invoice.actual_domain.as_deref(), Some("cash.example"));
+        assert_eq!(invoice.username.as_deref(), Some("alice"));
     }
 
     pub async fn get_or_create_setting_returns_default_on_first_call<DB>(db: &DB)
@@ -309,6 +354,12 @@ mod postgres_tests {
     async fn invoice_paid_keeps_the_fee_out_of_the_amount_received() {
         let (_pg, db) = test_db().await;
         shared_tests::invoice_paid_keeps_the_fee_out_of_the_amount_received(&db).await;
+    }
+
+    #[tokio::test]
+    async fn create_invoice_records_the_address_it_was_requested_for() {
+        let (_pg, db) = test_db().await;
+        shared_tests::create_invoice_records_the_address_it_was_requested_for(&db).await;
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ namespace BreezSdkSnippets
                 expirySecs: optionalExpirySecs,
                 paymentHash: null,
                 receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+                preimage: null,
                 feePolicy: optionalFeePolicy
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);

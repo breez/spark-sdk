@@ -43,14 +43,14 @@ const EVENT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const SUBSCRIPTION_OPEN_DELAY: Duration = Duration::from_secs(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Every call but the event stream, which stays open.
-const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const CALL_TIMEOUT: Duration = Duration::from_mins(1);
 /// Pings find a connection that died without closing, the event stream's included.
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// ldk-server does not replay events a subscriber missed, so held payments are also
 /// read back from its payment list.
-pub const PAID_HOLD_INVOICES_REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
+pub const PAID_HOLD_INVOICES_REFRESH_INTERVAL: Duration = Duration::from_mins(10);
 
 /// How long a payment failed back at its claim deadline stays a hint, for the
 /// receive it paid to be cancelled.

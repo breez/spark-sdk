@@ -19,11 +19,12 @@ use prost::Message as _;
 
 use super::spark_signer::*;
 use super::{
-    AggregateFrostRequest, CommitAndSignFrostRequest, CommittedFrostShare, SecretSource,
-    SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+    AggregateFrostRequest, CommitAndSignFrostRequest, CommittedFrostShare, FrostAdaptor,
+    SecretSource, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
 };
 use crate::operator::rpc::spark as proto;
 use crate::utils::frost::aggregate_frost;
+use crate::utils::secret_sharing;
 use crate::utils::tagged_hasher::TaggedHasher;
 
 struct OperatorShares {
@@ -115,7 +116,7 @@ impl SparkSignerAdapter {
                 verifying_key,
                 self_nonce_commitment: nonce_commitment,
                 statechain_commitments: statechain_commitments.clone(),
-                adaptor_public_key: None,
+                adaptor: None,
             })
             .await?;
 
@@ -128,7 +129,7 @@ impl SparkSignerAdapter {
             self_commitment: nonce_commitment,
             public_key: &aggregating_public_key,
             self_signature: &user_signature,
-            adaptor_public_key: None,
+            adaptor: None,
         })
     }
 
@@ -140,7 +141,7 @@ impl SparkSignerAdapter {
         sighash: &[u8; 32],
         verifying_key: &PublicKey,
         operator_commitments: BTreeMap<Identifier, frost_secp256k1_tr::round1::SigningCommitments>,
-        adaptor_public_key: Option<&PublicKey>,
+        adaptor: Option<FrostAdaptor>,
     ) -> Result<FrostShareResult, SignerError> {
         let private_key = self.secret_source_for(derivation)?;
         let public_key = self.signer.public_key_from_secret(&private_key).await?;
@@ -155,7 +156,7 @@ impl SparkSignerAdapter {
                 private_key: &private_key,
                 verifying_key,
                 statechain_commitments: operator_commitments,
-                adaptor_public_key,
+                adaptor,
             })
             .await?;
         Ok(FrostShareResult {
@@ -273,6 +274,10 @@ impl SparkSigner for SparkSignerAdapter {
         self.signer.derive_public_key(&signing_path(leaf_id)?).await
     }
 
+    fn supports_adaptor_v2(&self) -> bool {
+        true
+    }
+
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         self.signer
             .derive_public_key(&static_deposit_path(index)?)
@@ -317,7 +322,7 @@ impl SparkSigner for SparkSignerAdapter {
                     &job.sighash,
                     &job.verifying_key,
                     job.operator_commitments,
-                    job.adaptor_public_key.as_ref(),
+                    job.adaptor,
                 )
                 .await?,
             );
@@ -360,11 +365,7 @@ impl SparkSigner for SparkSignerAdapter {
                 .await?;
             let shares = self
                 .signer
-                .split_secret_with_proofs(
-                    &SecretToSplit::SecretSource(privkey_tweak),
-                    threshold,
-                    operator_recipients.len(),
-                )
+                .split_secret_with_proofs(&privkey_tweak, threshold, operator_recipients.len())
                 .await?;
             let pubkey_shares_tweak = self.pubkey_shares_tweak(&operator_recipients, &shares)?;
 
@@ -470,11 +471,7 @@ impl SparkSigner for SparkSignerAdapter {
                 .await?;
             let shares = self
                 .signer
-                .split_secret_with_proofs(
-                    &SecretToSplit::SecretSource(privkey_tweak),
-                    threshold,
-                    operator_recipients.len(),
-                )
+                .split_secret_with_proofs(&privkey_tweak, threshold, operator_recipients.len())
                 .await?;
             let pubkey_shares_tweak = self.pubkey_shares_tweak(&operator_recipients, &shares)?;
 
@@ -529,14 +526,11 @@ impl SparkSigner for SparkSignerAdapter {
         };
         let payment_hash = sha256::Hash::hash(&preimage).to_byte_array();
 
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                &SecretToSplit::Preimage(preimage.to_vec()),
-                threshold,
-                operator_recipients.len(),
-            )
-            .await?;
+        let shares = secret_sharing::split_secret_with_proofs(
+            &secret_sharing::from_bytes_to_scalar(&preimage)?,
+            threshold as usize,
+            operator_recipients.len(),
+        )?;
 
         let mut operator_preimage_packages = Vec::with_capacity(operator_recipients.len());
         for recipient in &operator_recipients {

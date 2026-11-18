@@ -32,6 +32,7 @@ fragment CoopExitRequestFragment on CoopExitRequest {
   fee {
     ...CurrencyAmountFragment
   }
+  withdrawal_address
   l1_broadcast_fee {
     ...CurrencyAmountFragment
   }
@@ -237,6 +238,23 @@ mutation RequestCoopExit($input: RequestCoopExitInput!) {
   request_coop_exit(input: $input) {
     request {
       ...CoopExitRequestFragment
+    }
+  }
+}
+
+mutation RequestCoopExitWithSilentPaymentProof($input: RequestCoopExitInput!) {
+  request_coop_exit(input: $input) {
+    request {
+      ...CoopExitRequestFragment
+      silent_payment_proof {
+        output_index
+        input_public_keys
+        input_outpoints
+        input_prevout_scripts
+        input_prevout_transactions
+        ecdh_share
+        dleq_proof
+      }
     }
   }
 }

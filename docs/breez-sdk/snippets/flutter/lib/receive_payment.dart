@@ -22,6 +22,7 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
           expirySecs: optionalExpirySecs,
           paymentHash: null,
           receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+          preimage: null,
           feePolicy: optionalFeePolicy));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,

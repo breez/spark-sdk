@@ -35,7 +35,9 @@ pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
     pub timestamp: u64,
-    pub description: String,
+    /// The server shows `Pay to <username>@<domain>` for a request without a
+    /// description.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,12 +51,18 @@ pub struct UnregisterLnurlPayRequest {
 pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
+    /// The description the server shows for the address. `None` from a server
+    /// that does not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransferLnurlPayRequest {
     pub username: String,
-    pub description: String,
+    /// The server shows `Pay to <username>@<domain>` for a request without a
+    /// description.
+    pub description: Option<String>,
     /// Hex-encoded secp256k1 compressed public key of the current owner (A).
     pub from_pubkey: String,
     /// Hex-encoded DER ECDSA signature by A over
@@ -77,6 +85,10 @@ pub struct TransferLnurlPayRequest {
 pub struct TransferLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
+    /// The description the server shows for the address. `None` from a server
+    /// that does not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -113,6 +125,10 @@ pub struct ListMetadataMetadata {
     pub updated_at: i64,
     /// The payment preimage if invoice has been paid
     pub preimage: Option<String>,
+    /// The Lightning address the invoice was requested on. `None` when the
+    /// server does not know it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightning_address: Option<String>,
 }
 
 pub fn sanitize_username(username: &str) -> String {

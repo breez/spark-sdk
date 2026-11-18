@@ -84,7 +84,9 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`, `token-allowances <subcommand>`, `pull-payment`
+
+**Bridging**: `bridging create`, `bridging from-cash-app`, `bridging to-cash-app`, `bridging status`
 
 **Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
@@ -159,6 +161,28 @@ buy-bitcoin --provider cashapp --amount-sat 50000
 
 Supported providers: `moonpay` (default), `cashapp`.
 
+### Bridging
+
+Create bridge orders where a payer on another chain or on Lightning pays a recipient,
+with no funds moving through the SDK wallet:
+
+```
+# Create a bridge to any recipient (Spark address, Lightning address, EVM/Solana/Tron address)
+bridging create <recipient> --amount 1000000 [--refund-address <addr>] [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Bridge from Cash App to USDC/USDT on an external chain
+bridging from-cash-app <recipient> --amount 1000000 [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Bridge USDC/USDT from an external chain to a Cash App user
+bridging to-cash-app <recipient> --amount 1000000 --refund-address <addr> [--fees-included] [--max-slippage-bps 50] [--route 1]
+
+# Check bridge status
+bridging status <bridge_id> [--status-token <token>]
+```
+
+Amounts are in stablecoin base units (6 decimals for USDC/USDT, so `1000000` = $1).
+Use `--route <n>` to select a specific route when multiple are available.
+
 ### Webhooks
 
 Register, unregister, and list webhooks for payment notifications:
@@ -170,6 +194,26 @@ webhooks unregister <webhook_id>
 ```
 
 Event types: `lightning-receive`, `lightning-send`, `coop-exit`, `static-deposit`.
+
+### Token Allowances
+
+Grant, revoke, and list token allowances:
+
+```
+token-allowances create <spender_address> <token_identifier> <expiry_time> --max-per-payment <amount|unlimited> --max-total <amount|unlimited> [-r <recipient> ...]
+token-allowances revoke <allowance_id>
+token-allowances list [owner|spender] [--counterparty-address <addr>] [--token-identifier <id>] [--include-inactive] [--offset <n>] [--limit <n>]
+```
+
+### Pull Payment
+
+Pull a payment from a wallet that granted this wallet a token allowance:
+
+```
+pull-payment <payer_address> <token_identifier> -r <[address:]amount> [-r ...]
+```
+
+Receivers are given as `amount` (pulls to this wallet) or `address:amount`. The command retries pending pulls until they settle or expire.
 
 ### Payment Filtering
 
@@ -198,6 +242,9 @@ advanced recover-funds --fee-rate 2 --destination bc1q...
 
 # Also sign it, and write it to a file for check-recover-funds to read back
 advanced recover-funds --fee-rate 2 --destination bc1q... --output-file recovery.json --sign
+
+# Fund one UTXO per fee-bumped transaction instead of per branch
+advanced recover-funds --fee-rate 2 --destination bc1q... --funding-strategy per-node
 
 # Fund the unilateral exit (for P2TR, pubkey is the internal key)
 advanced recover-funds --fee-rate 2 --destination bc1q... --utxo txid:vout:value:pubkey --secret-key <hex> --output-file recovery.json --sign

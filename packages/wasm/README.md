@@ -85,7 +85,7 @@ export default function Wallet() {
 
 > **Note**: This package requires Node.js v22 or higher.
 
-When developing a Node.js application, use `require("@breeztech/breez-sdk-spark")` (or the explicit `@breeztech/breez-sdk-spark/nodejs` subpath). No `init()` call is needed — the WASM module loads automatically.
+When developing a Node.js application, use `require("@breeztech/breez-sdk-spark")` or `import` from it (or the explicit `@breeztech/breez-sdk-spark/nodejs` subpath). No `init()` call is needed: the WASM module loads automatically.
 
 ```js
 const {
@@ -112,7 +112,7 @@ console.log(`Balance: ${info.balanceSats} sats`);
 |---------|-------------|---------------|
 | `@breeztech/breez-sdk-spark` | Node.js / Browser (default) | CJS / ESM |
 | `@breeztech/breez-sdk-spark/web` | Browser | ESM |
-| `@breeztech/breez-sdk-spark/nodejs` | Node.js | CJS |
+| `@breeztech/breez-sdk-spark/nodejs` | Node.js | CJS / ESM |
 | `@breeztech/breez-sdk-spark/bundler` | Bundler (Webpack, Vite) | ESM |
 | `@breeztech/breez-sdk-spark/deno` | Deno | ESM |
 | `@breeztech/breez-sdk-spark/ssr` | SSR (explicit) | ESM |

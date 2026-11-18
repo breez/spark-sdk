@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use breez_sdk_spark::signer::single_key_cpfp_signer;
 use breez_sdk_spark::{
-    BreezSdk, CheckRecoverFundsRequest, CpfpFundingKind, CpfpInput, ExitLeafSelection,
-    ExitTransactionStatus, ImportUnilateralExitStateRequest, PrepareRecoverFundsRequest,
-    PrepareRecoverFundsResponse, RecoverFundsRequest, RecoverFundsResponse, RecoveryMethod,
-    RecoveryVerdict, SkippedLeaf, SkippedLeafReason,
+    BreezSdk, CheckRecoverFundsRequest, CpfpFundingKind, CpfpFundingStrategy, CpfpInput,
+    ExitLeafSelection, ExitTransactionStatus, ImportUnilateralExitStateRequest,
+    PrepareRecoverFundsRequest, PrepareRecoverFundsResponse, RecoverFundsRequest,
+    RecoverFundsResponse, RecoveryMethod, RecoveryVerdict, SkippedLeaf, SkippedLeafReason,
 };
 use clap::{Subcommand, ValueEnum};
 use rustyline::{Editor, history::DefaultHistory};
@@ -29,6 +29,22 @@ impl From<FundingKindArg> for CpfpFundingKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum FundingStrategyArg {
+    PerBranch,
+    PerNode,
+}
+
+impl From<FundingStrategyArg> for CpfpFundingStrategy {
+    fn from(strategy: FundingStrategyArg) -> Self {
+        match strategy {
+            FundingStrategyArg::PerBranch => CpfpFundingStrategy::PerBranch,
+            FundingStrategyArg::PerNode => CpfpFundingStrategy::PerNode,
+        }
+    }
+}
+
 /// Expert-only commands that build raw transactions for you to broadcast
 /// yourself. Misuse can strand or lose funds.
 #[derive(Clone, Debug, Subcommand)]
@@ -45,6 +61,9 @@ pub enum AdvancedCommand {
         /// Funding UTXO kind.
         #[arg(long, value_enum, default_value_t = FundingKindArg::P2tr)]
         funding_kind: FundingKindArg,
+        /// Fund one UTXO per branch, or one per fee-bumped transaction.
+        #[arg(long, value_enum, default_value_t = FundingStrategyArg::PerBranch)]
+        funding_strategy: FundingStrategyArg,
         /// Destination address for the recovered funds.
         #[arg(long)]
         destination: String,
@@ -98,6 +117,7 @@ pub async fn handle_command(
         AdvancedCommand::RecoverFunds {
             fee_rate,
             funding_kind,
+            funding_strategy,
             destination,
             all,
             leaf_ids,
@@ -106,6 +126,7 @@ pub async fn handle_command(
             let request = PrepareRecoverFundsRequest {
                 fee_rate_sat_per_vbyte: fee_rate,
                 funding_kind: Some(funding_kind.into()),
+                funding_strategy: Some(funding_strategy.into()),
                 destination,
                 selection: recovery_selection(all, leaf_ids),
             };

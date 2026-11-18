@@ -2,6 +2,8 @@ import {
   OnchainConfirmationSpeed,
   FeePolicy,
   PaymentRequest,
+  PaymentStatus,
+  PaymentDetails_Tags,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
@@ -160,6 +162,21 @@ const exampleSendPaymentLightningBolt11 = async (
   console.log(payment)
 }
 
+const exampleGetPaymentPreimage = async (sdk: BreezSdk) => {
+  // ANCHOR: get-payment-preimage
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({
+    paymentId
+  })
+  const payment = response.payment
+  if (payment.details?.tag === PaymentDetails_Tags.Lightning) {
+    const htlc = payment.details.inner.htlcDetails
+    console.log(`Payment hash: ${htlc.paymentHash}`)
+    console.log(`Preimage: ${htlc.preimage ?? ''}`)
+  }
+  // ANCHOR_END: get-payment-preimage
+}
+
 const exampleSendPaymentOnchain = async (
   sdk: BreezSdk,
   prepareResponse: PrepareSendPaymentResponse
@@ -194,6 +211,31 @@ const exampleSendPaymentSpark = async (
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-spark
   console.log(payment)
+}
+
+const exampleFetchLightningSendStatus = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-lightning-send-status
+  const invoice = '<bolt11 invoice>'
+  const response = await sdk.fetchLightningSendStatus({ invoice })
+  switch (response.status) {
+    case PaymentStatus.Completed: {
+      console.log('Paid')
+      break
+    }
+    case PaymentStatus.Pending: {
+      console.log('Payment in flight')
+      break
+    }
+    case PaymentStatus.Failed: {
+      console.log('Payment failed')
+      break
+    }
+    case undefined: {
+      console.log('No Lightning payment found')
+      break
+    }
+  }
+  // ANCHOR_END: fetch-lightning-send-status
 }
 
 const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {

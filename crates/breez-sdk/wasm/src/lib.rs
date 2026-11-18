@@ -1,3 +1,4 @@
+mod bridging;
 mod chain_service;
 mod error;
 mod event;

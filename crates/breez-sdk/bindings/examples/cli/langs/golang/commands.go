@@ -27,6 +27,7 @@ type Command struct {
 var CommandNames = []string{
 	"get-info",
 	"get-payment",
+	"fetch-lightning-send-status",
 	"sync",
 	"list-payments",
 	"receive",
@@ -41,8 +42,6 @@ var CommandNames = []string{
 	"refund-deposit",
 	"list-unclaimed-deposits",
 	"buy-bitcoin",
-	"bridge-from-cash-app",
-	"bridge-to-cash-app",
 	"check-lightning-address-available",
 	"get-lightning-address",
 	"register-lightning-address",
@@ -58,6 +57,7 @@ var CommandNames = []string{
 	"set-user-settings",
 	"get-spark-status",
 	"pay-batch",
+	"pull-payment",
 }
 
 // BuildCommandRegistry returns a map of command name → Command.
@@ -65,6 +65,7 @@ func BuildCommandRegistry() map[string]Command {
 	return map[string]Command{
 		"get-info":                             {Name: "get-info", Description: "Get balance information", Run: handleGetInfo},
 		"get-payment":                          {Name: "get-payment", Description: "Get the payment with the given ID", Run: handleGetPayment},
+		"fetch-lightning-send-status":           {Name: "fetch-lightning-send-status", Description: "Fetch the status of a Lightning payment of a Bolt11 invoice", Run: handleFetchLightningSendStatus},
 		"sync":                                 {Name: "sync", Description: "Sync wallet state", Run: handleSync},
 		"list-payments":                        {Name: "list-payments", Description: "List payments", Run: handleListPayments},
 		"receive":                              {Name: "receive", Description: "Receive a payment", Run: handleReceive},
@@ -79,8 +80,6 @@ func BuildCommandRegistry() map[string]Command {
 		"refund-deposit":                       {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
 		"list-unclaimed-deposits":              {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
 		"buy-bitcoin":                          {Name: "buy-bitcoin", Description: "Buy Bitcoin using an external provider", Run: handleBuyBitcoin},
-		"bridge-from-cash-app":                 {Name: "bridge-from-cash-app", Description: "Bridge from Cash App to USDC/USDT on an external chain", Run: handleBridgeFromCashApp},
-		"bridge-to-cash-app":                   {Name: "bridge-to-cash-app", Description: "Bridge USDC/USDT from an external chain to a Cash App user", Run: handleBridgeToCashApp},
 		"check-lightning-address-available":    {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
 		"get-lightning-address":                {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
 		"register-lightning-address":           {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
@@ -96,6 +95,7 @@ func BuildCommandRegistry() map[string]Command {
 		"set-user-settings":                    {Name: "set-user-settings", Description: "Update user settings", Run: handleSetUserSettings},
 		"get-spark-status":                     {Name: "get-spark-status", Description: "Get Spark network service status", Run: handleGetSparkStatus},
 		"pay-batch":                            {Name: "pay-batch", Description: "Pay several recipients with one token transaction", Run: handlePayBatch},
+		"pull-payment":                         {Name: "pull-payment", Description: "Pull a payment from a wallet that granted this wallet an allowance", Run: handlePullPayment},
 	}
 }
 
@@ -112,10 +112,12 @@ func PrintHelp(registry map[string]Command) {
 		fmt.Printf("  %-40s %s\n", name, cmd.Description)
 	}
 	fmt.Printf("\n  %-40s %s\n", "advanced <subcommand>", "Expert-only commands (use 'advanced help' for details)")
+	fmt.Printf("  %-40s %s\n", "bridging <subcommand>", "Bridging commands (use 'bridging help' for details)")
 	fmt.Printf("  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
 	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
 	fmt.Printf("  %-40s %s\n", "webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)")
 	fmt.Printf("  %-40s %s\n", "stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)")
+	fmt.Printf("  %-40s %s\n", "token-allowances <subcommand>", "Token allowance commands (use 'token-allowances help' for details)")
 	fmt.Printf("  %-40s %s\n", "exit / quit", "Exit the CLI")
 	fmt.Printf("  %-40s %s\n", "help", "Show this help message")
 	fmt.Println()
@@ -158,6 +160,22 @@ func handleGetPayment(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	}
 
 	result, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{PaymentId: args[0]})
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
+	return nil
+}
+
+// --- fetch-lightning-send-status ---
+
+func handleFetchLightningSendStatus(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: fetch-lightning-send-status <invoice>")
+		return nil
+	}
+
+	result, err := sdk.FetchLightningSendStatus(breez_sdk_spark.FetchLightningSendStatusRequest{Invoice: args[0]})
 	if err = liftError(err); err != nil {
 		return err
 	}
@@ -288,11 +306,13 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 	senderPublicKey := fs.String("s", "", "Optional sender public key (sparkinvoice only)")
 	fs.StringVar(senderPublicKey, "sender-public-key", "", "Optional sender public key")
 	hodl := fs.Bool("hodl", false, "Create a HODL invoice (bolt11 only)")
+	callerPreimage := fs.String("preimage", "", "Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates")
 	newAddress := fs.Bool("new-address", false, "Get a new bitcoin deposit address (bitcoin only)")
 	crossChainMaxSlippageStr := fs.String("cross-chain-max-slippage-bps", "", "Max slippage in basis points for cross-chain receives (10..500)")
 	crossChainFeesIncluded := fs.Bool("cross-chain-fees-included", false, "Deduct fees from amount instead of padding onto deposit")
 	crossChainTargetOverpayStr := fs.String("cross-chain-target-overpay-bps", "", "Override for the overpay buffer in basis points (0..500)")
 	crossChainToBitcoin := fs.Bool("cross-chain-to-bitcoin", false, "Deliver cross-chain receive as Bitcoin (sats)")
+	crossChainRefundAddress := fs.String("cross-chain-refund-address", "", "Payer's address on the route's chain for refunds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -340,6 +360,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 		}
 
 	case "bolt11":
+		if *hodl && *callerPreimage != "" {
+			return fmt.Errorf("--hodl and --preimage are mutually exclusive")
+		}
 		pm := breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
 			Description: stringOrDefault(description, ""),
 		}
@@ -368,6 +391,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 			fmt.Println("Save the preimage! Use `claim-htlc-payment` with it to settle.")
 
 			pm.PaymentHash = &paymentHash
+		}
+		if *callerPreimage != "" {
+			pm.Preimage = callerPreimage
 		}
 		paymentMethod = pm
 
@@ -416,6 +442,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []
 			}
 			val32 := uint32(val)
 			pm.TargetOverpayBps = &val32
+		}
+		if *crossChainRefundAddress != "" {
+			pm.RefundAddress = crossChainRefundAddress
 		}
 		paymentMethod = pm
 
@@ -700,6 +729,85 @@ func handlePayBatch(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 		return err
 	}
 	printValue(response.Payments)
+	return nil
+}
+
+// --- pull-payment ---
+
+func parsePullReceiver(s string) (breez_sdk_spark.PullReceiver, error) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) == 2 {
+		amount, ok := new(big.Int).SetString(parts[1], 10)
+		if !ok {
+			return breez_sdk_spark.PullReceiver{}, fmt.Errorf("invalid amount in receiver '%s'", s)
+		}
+		addr := parts[0]
+		return breez_sdk_spark.PullReceiver{Amount: amount, ReceiverAddress: &addr}, nil
+	}
+	amount, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		return breez_sdk_spark.PullReceiver{}, fmt.Errorf("invalid amount in receiver '%s'", s)
+	}
+	return breez_sdk_spark.PullReceiver{Amount: amount}, nil
+}
+
+func handlePullPayment(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("pull-payment", flag.ContinueOnError)
+	var receiverArgs stringSliceFlag
+	fs.Var(&receiverArgs, "r", "Receiver: amount (this wallet) or address:amount (repeatable)")
+	fs.Var(&receiverArgs, "receiver", "Receiver")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 2 || len(receiverArgs) == 0 {
+		fmt.Println("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]")
+		fmt.Println("  Each receiver: amount (this wallet) or address:amount")
+		return nil
+	}
+
+	var receivers []breez_sdk_spark.PullReceiver
+	for _, raw := range receiverArgs {
+		r, err := parsePullReceiver(raw)
+		if err != nil {
+			return err
+		}
+		receivers = append(receivers, r)
+	}
+
+	prepareResponse, err := sdk.PreparePullPayment(breez_sdk_spark.PreparePullPaymentRequest{
+		PayerAddress:    positional[0],
+		TokenIdentifier: positional[1],
+		Receivers:       receivers,
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+
+	fmt.Printf("Pulling %v base units of %s from %s\n",
+		prepareResponse.Amount, prepareResponse.TokenIdentifier, prepareResponse.PayerAddress)
+	for _, r := range prepareResponse.Receivers {
+		addr := ""
+		if r.ReceiverAddress != nil {
+			addr = *r.ReceiverAddress
+		}
+		fmt.Printf("  %v to %s\n", r.Amount, addr)
+	}
+
+	line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		return fmt.Errorf("pull cancelled")
+	}
+
+	response, pullErr := pullUntilSettled(sdk, prepareResponse)
+	if pullErr != nil {
+		return pullErr
+	}
+	printValue(response)
 	return nil
 }
 
@@ -1198,155 +1306,9 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	fmt.Println("Open this URL in a browser to complete the purchase:")
 	fmt.Println(result.Url)
 	if result.CrossChainInfo != nil {
-		fmt.Println("Delivered as USDC on Solana. Quote:")
+		fmt.Println("Conversion quote:")
 		printValue(result.CrossChainInfo)
 	}
-	return nil
-}
-
-// --- bridge-from-cash-app ---
-
-func handleBridgeFromCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
-	fs := flag.NewFlagSet("bridge-from-cash-app", flag.ContinueOnError)
-	amountStr := fs.String("amount", "", "Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
-	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
-	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	positional := fs.Args()
-	if len(positional) < 1 || *amountStr == "" {
-		fmt.Println("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
-		return nil
-	}
-	recipient := positional[0]
-
-	parsed, err := sdk.Parse(recipient)
-	if err = liftError(err); err != nil {
-		return err
-	}
-	ccAddr, ok := parsed.(breez_sdk_spark.InputTypeCrossChainAddress)
-	if !ok {
-		return fmt.Errorf("recipient must be a cross-chain (EVM/Solana/Tron) address")
-	}
-	addressDetails := ccAddr.Field0
-	address := addressDetails.Address
-
-	deliveryMethod := breez_sdk_spark.DeliveryMethodLightning
-	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterSend{
-		AddressDetails: addressDetails,
-		DeliveryMethod: &deliveryMethod,
-	})
-	if err != nil {
-		return err
-	}
-
-	amount, ok := new(big.Int).SetString(*amountStr, 10)
-	if !ok {
-		return fmt.Errorf("invalid amount: %s", *amountStr)
-	}
-
-	req := breez_sdk_spark.BridgeFromCashAppRequest{
-		Address: address,
-		Route:   route,
-		Amount:  amount,
-	}
-
-	if *feesIncluded {
-		fp := breez_sdk_spark.FeePolicyFeesIncluded
-		req.FeePolicy = &fp
-	}
-
-	if *maxSlippageStr != "" {
-		val, err := strconv.ParseUint(*maxSlippageStr, 10, 32)
-		if err != nil {
-			return fmt.Errorf("invalid max slippage: %s", *maxSlippageStr)
-		}
-		val32 := uint32(val)
-		req.MaxSlippageBps = &val32
-	}
-
-	response, err := sdk.BridgeFromCashApp(req)
-	if err = liftError(err); err != nil {
-		return err
-	}
-
-	fmt.Println("Open this URL in a browser to complete the purchase:")
-	fmt.Println(response.Url)
-	serviceFeeAsset := serviceFeeDenomination(response.ServiceFeeAsset, response.ServiceFeeAssetDecimals)
-	fmt.Printf("Deposit ~%v sats; recipient receives ~%v %s, service fee %v %s, expires %v\n",
-		response.AmountSats, response.EstimatedOut, response.Asset,
-		response.ServiceFeeAmount, serviceFeeAsset, response.ExpiresAt)
-	return nil
-}
-
-// --- bridge-to-cash-app ---
-
-func handleBridgeToCashApp(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
-	fs := flag.NewFlagSet("bridge-to-cash-app", flag.ContinueOnError)
-	amountStr := fs.String("amount", "", "Amount in the source stablecoin's base units (6 decimals for USDC/USDT)")
-	refundAddress := fs.String("refund-address", "", "The payer's address on the source chain, refunded if delivery fails")
-	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from the amount instead of adding them on top")
-	maxSlippageStr := fs.String("max-slippage-bps", "", "Maximum slippage in basis points")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	positional := fs.Args()
-	if len(positional) < 1 || *amountStr == "" || *refundAddress == "" {
-		fmt.Println("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]")
-		return nil
-	}
-	recipient := positional[0]
-
-	deliveryMethod := breez_sdk_spark.DeliveryMethodLightning
-	route, err := selectCrossChainRoute(sdk, rl, breez_sdk_spark.CrossChainRouteFilterReceive{
-		ContractAddress: nil,
-		DeliveryMethod:  &deliveryMethod,
-	})
-	if err != nil {
-		return err
-	}
-
-	amount, ok := new(big.Int).SetString(*amountStr, 10)
-	if !ok {
-		return fmt.Errorf("invalid amount: %s", *amountStr)
-	}
-
-	req := breez_sdk_spark.BridgeToCashAppRequest{
-		Recipient:     recipient,
-		Route:         route,
-		Amount:        amount,
-		RefundAddress: *refundAddress,
-	}
-
-	if *feesIncluded {
-		fp := breez_sdk_spark.FeePolicyFeesIncluded
-		req.FeePolicy = &fp
-	}
-
-	if *maxSlippageStr != "" {
-		val, err := strconv.ParseUint(*maxSlippageStr, 10, 32)
-		if err != nil {
-			return fmt.Errorf("invalid max slippage: %s", *maxSlippageStr)
-		}
-		val32 := uint32(val)
-		req.MaxSlippageBps = &val32
-	}
-
-	response, err := sdk.BridgeToCashApp(req)
-	if err = liftError(err); err != nil {
-		return err
-	}
-
-	info := response.Info
-	fmt.Println("Ask the payer to pay:")
-	fmt.Println(response.PaymentRequest)
-	serviceFeeAsset := serviceFeeDenomination(info.ServiceFeeAsset, info.ServiceFeeAssetDecimals)
-	fmt.Printf("Deposit %v %s on %s to %s. Recipient receives ~%v sats, service fee %v %s, expires at %v\n",
-		info.DepositAmount, route.Asset, route.Chain, info.DepositAddress,
-		info.ExpectedReceivedAmount, info.ServiceFeeAmount, serviceFeeAsset, info.ExpiresAt)
 	return nil
 }
 

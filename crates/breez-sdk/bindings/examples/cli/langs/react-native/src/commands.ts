@@ -2,16 +2,17 @@
  * Command registry and all command handlers for the Breez SDK React Native CLI.
  *
  * Mirrors ALL commands from the Rust CLI:
- *   get-info, get-payment, sync, list-payments, receive, pay, pay-batch, lnurl-pay,
- *   lnurl-withdraw, lnurl-auth, claim-htlc-payment, claim-deposit,
- *   fetch-claim-deposit-quote, parse, refund-deposit, list-unclaimed-deposits,
- *   buy-bitcoin, bridge-from-cash-app, bridge-to-cash-app,
+ *   get-info, get-payment, fetch-lightning-send-status, sync, list-payments,
+ *   receive, pay, pay-batch, lnurl-pay, lnurl-withdraw, lnurl-auth,
+ *   claim-htlc-payment, claim-deposit, fetch-claim-deposit-quote, parse,
+ *   refund-deposit, list-unclaimed-deposits, buy-bitcoin,
  *   check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
- *   get-spark-status, advanced (subcommand), issuer (subcommand),
- *   contacts (subcommand), webhooks (subcommand)
+ *   get-spark-status, advanced (subcommand), bridging (subcommand),
+ *   issuer (subcommand), contacts (subcommand), token-allowances (subcommand),
+ *   pull-payment, webhooks (subcommand)
  */
 
 import {
@@ -23,7 +24,6 @@ import {
   OnchainConfirmationSpeed,
   ConversionType,
   ConversionOptions,
-  DeliveryMethod,
   FeePolicy,
   PaymentType,
   PaymentStatus,
@@ -50,12 +50,15 @@ import type {
   TokenIssuerInterface,
   CrossChainRoutePair,
   CrossChainAddressDetails,
+  PullReceiver,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
 import { dispatchAdvancedCommand } from './advanced'
+import { dispatchBridgingCommand } from './bridging'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
+import { dispatchTokenAllowancesCommand } from './token_allowances'
 import { dispatchWebhooksCommand } from './webhooks'
 import { dispatchStableBalanceCommand } from './stable_balance'
 
@@ -177,6 +180,7 @@ export function splitArgs(line: string): string[] {
 export const COMMAND_NAMES = [
   'get-info',
   'get-payment',
+  'fetch-lightning-send-status',
   'sync',
   'list-payments',
   'receive',
@@ -192,8 +196,7 @@ export const COMMAND_NAMES = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
-  'bridge-from-cash-app',
-  'bridge-to-cash-app',
+  'bridging',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -211,6 +214,8 @@ export const COMMAND_NAMES = [
   'advanced',
   'issuer',
   'contacts',
+  'token-allowances',
+  'pull-payment',
   'webhooks',
   'stable-balance',
 ]
@@ -225,6 +230,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
   const commands: CommandDef[] = [
     { name: 'get-info', description: 'Get balance information', run: handleGetInfo },
     { name: 'get-payment', description: 'Get the payment with the given ID', run: handleGetPayment },
+    { name: 'fetch-lightning-send-status', description: 'Fetch the status of a Lightning payment of a Bolt11 invoice from the operators', run: handleFetchLightningSendStatus },
     { name: 'sync', description: 'Sync wallet state', run: handleSync },
     { name: 'list-payments', description: 'List payments', run: handleListPayments },
     { name: 'receive', description: 'Receive a payment', run: handleReceive },
@@ -240,8 +246,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
     { name: 'buy-bitcoin', description: 'Buy Bitcoin via external provider', run: handleBuyBitcoin },
-    { name: 'bridge-from-cash-app', description: 'Bridge from Cash App to USDC/USDT on an external chain', run: handleBridgeFromCashApp },
-    { name: 'bridge-to-cash-app', description: 'Bridge USDC/USDT from an external chain to a Cash App user', run: handleBridgeToCashApp },
+    { name: 'bridging', description: 'Bridging commands (use "bridging help" for details)', run: handleBridging },
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
@@ -259,6 +264,8 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'advanced', description: 'Expert-only commands (use "advanced help" for details)', run: handleAdvanced },
     { name: 'issuer', description: 'Token issuer commands (use "issuer help" for details)', run: handleIssuer },
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
+    { name: 'token-allowances', description: 'Token allowance commands (use "token-allowances help" for details)', run: handleTokenAllowances },
+    { name: 'pull-payment', description: 'Pull a payment from a wallet that granted this wallet an allowance', run: handlePullPayment },
     { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
     { name: 'stable-balance', description: 'Stable balance commands (use "stable-balance help" for details)', run: handleStableBalance },
   ]
@@ -368,6 +375,17 @@ async function handleGetPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
   }
 
   const result = await sdk.getPayment({ paymentId: args[0] })
+  return formatValue(result)
+}
+
+// --- fetch-lightning-send-status ---
+
+async function handleFetchLightningSendStatus(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  if (args.length < 1) {
+    return 'Usage: fetch-lightning-send-status <invoice>'
+  }
+
+  const result = await sdk.fetchLightningSendStatus({ invoice: args[0] })
   return formatValue(result)
 }
 
@@ -485,7 +503,7 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
 async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const method = parseFlag(args, '--method', '-m')
   if (!method) {
-    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)\n  --cross-chain-to-bitcoin         Deliver as Bitcoin instead of stable token'
+    return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice/crosschain)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)\n  --preimage <hex>               Preimage (hex) for bolt11 invoice (conflicts with --hodl)\n  --cross-chain-max-slippage-bps   Max slippage bps (crosschain)\n  --cross-chain-fees-included      Deduct fees from amount (crosschain)\n  --cross-chain-target-overpay-bps Overpay buffer bps (crosschain)\n  --cross-chain-to-bitcoin         Deliver as Bitcoin instead of stable token\n  --cross-chain-refund-address <addr> Payer refund address (crosschain)'
   }
 
   const description = parseFlag(args, '--description', '-d')
@@ -494,11 +512,13 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
   const expirySecsStr = parseFlag(args, '--expiry-secs', '-e')
   const senderPublicKey = parseFlag(args, '--sender-public-key', '-s')
   const hodl = hasFlag(args, '--hodl')
+  const callerPreimage = parseFlag(args, '--preimage')
   const newAddress = hasFlag(args, '--new-address')
   const crossChainMaxSlippageBps = parseNumericFlag(args, '--cross-chain-max-slippage-bps')
   const crossChainFeesIncluded = hasFlag(args, '--cross-chain-fees-included')
   const crossChainTargetOverpayBps = parseNumericFlag(args, '--cross-chain-target-overpay-bps')
   const crossChainToBitcoin = hasFlag(args, '--cross-chain-to-bitcoin')
+  const crossChainRefundAddress = parseFlag(args, '--cross-chain-refund-address')
   const routeIndex = parseNumericFlag(args, '--route')
 
   const amount = amountStr !== undefined ? BigInt(amountStr) : undefined
@@ -540,6 +560,10 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
       break
 
     case 'bolt11': {
+      if (hodl && callerPreimage) {
+        return 'Error: --hodl and --preimage are mutually exclusive'
+      }
+
       let paymentHash: string | undefined
 
       if (hodl) {
@@ -561,6 +585,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         expirySecs,
         paymentHash,
         receiverIdentityPublicKey: undefined,
+        preimage: callerPreimage,
         feePolicy: undefined,
       })
       break
@@ -593,6 +618,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         feeMode,
         maxSlippageBps: crossChainMaxSlippageBps,
         targetOverpayBps: crossChainTargetOverpayBps,
+        refundAddress: crossChainRefundAddress,
       })
       break
     }
@@ -1183,114 +1209,16 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
     result.url,
   ]
   if (result.crossChainInfo) {
-    lines.push('Delivered as USDC on Solana. Quote:')
+    lines.push('Conversion quote:')
     lines.push(formatValue(result.crossChainInfo))
   }
   return lines.join('\n')
 }
 
-// --- bridge-from-cash-app ---
+// --- bridging (delegation) ---
 
-async function handleBridgeFromCashApp(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
-  if (positional.length < 1) {
-    return 'Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
-  }
-
-  const recipient = positional[0]
-  const amountStr = parseFlag(args, '--amount')
-  if (!amountStr) {
-    return 'Error: --amount is required'
-  }
-  const amount = BigInt(amountStr)
-  const feesIncluded = hasFlag(args, '--fees-included')
-  const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
-  const routeIndex = parseNumericFlag(args, '--route')
-
-  const parsed = await sdk.parse(recipient)
-  if (parsed.tag !== InputType_Tags.CrossChainAddress) {
-    return 'Error: Recipient must be a cross-chain (EVM/Solana/Tron) address'
-  }
-  const addressDetails = parsed.inner[0]
-
-  const routeResult = await selectCrossChainRoute(
-    sdk,
-    new CrossChainRouteFilter.Send({ addressDetails, deliveryMethod: DeliveryMethod.Lightning }),
-    routeIndex,
-  )
-
-  const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
-
-  const response = await sdk.bridgeFromCashApp({
-    address: addressDetails.address,
-    route: routeResult.route,
-    amount,
-    feePolicy,
-    maxSlippageBps,
-  })
-
-  const lines = [routeResult.message]
-  lines.push('Open this URL in a browser to complete the purchase:')
-  lines.push(response.url)
-  const serviceFeeAsset = serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)
-  lines.push(
-    `Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, ` +
-    `service fee ${response.serviceFeeAmount} ${serviceFeeAsset}, expires ${response.expiresAt}`
-  )
-  return lines.join('\n')
-}
-
-// --- bridge-to-cash-app ---
-
-async function handleBridgeToCashApp(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const positional = args.filter(a => !a.startsWith('-'))
-  if (positional.length < 1) {
-    return 'Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>] [--route <n>]'
-  }
-
-  const recipient = positional[0]
-  const amountStr = parseFlag(args, '--amount')
-  if (!amountStr) {
-    return 'Error: --amount is required'
-  }
-  const amount = BigInt(amountStr)
-  const refundAddress = parseFlag(args, '--refund-address')
-  if (!refundAddress) {
-    return 'Error: --refund-address is required'
-  }
-  const feesIncluded = hasFlag(args, '--fees-included')
-  const maxSlippageBps = parseNumericFlag(args, '--max-slippage-bps')
-  const routeIndex = parseNumericFlag(args, '--route')
-
-  const routeResult = await selectCrossChainRoute(
-    sdk,
-    new CrossChainRouteFilter.Receive({ contractAddress: undefined, deliveryMethod: DeliveryMethod.Lightning }),
-    routeIndex,
-  )
-
-  const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
-
-  const response = await sdk.bridgeToCashApp({
-    recipient,
-    route: routeResult.route,
-    amount,
-    feePolicy,
-    refundAddress,
-    maxSlippageBps,
-  })
-
-  const info = response.info
-  const route = routeResult.route
-  const serviceFeeAsset = serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)
-  const lines = [routeResult.message]
-  lines.push('Ask the payer to pay:')
-  lines.push(response.paymentRequest)
-  lines.push(
-    `Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. ` +
-    `Recipient receives ~${info.expectedReceivedAmount} sats, service fee ${info.serviceFeeAmount} ${serviceFeeAsset}, ` +
-    `expires at ${info.expiresAt}`
-  )
-  return lines.join('\n')
+async function handleBridging(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchBridgingCommand(args, sdk)
 }
 
 // --- check-lightning-address-available ---
@@ -1509,6 +1437,101 @@ async function handleIssuer(_sdk: BreezSdkInterface, tokenIssuer: TokenIssuerInt
 
 async function handleContacts(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchContactsCommand(args, sdk)
+}
+
+// --- token-allowances (delegation) ---
+
+async function handleTokenAllowances(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchTokenAllowancesCommand(args, sdk)
+}
+
+// --- pull-payment ---
+
+function parsePullReceiver(s: string): PullReceiver {
+  const colonIdx = s.indexOf(':')
+  if (colonIdx === -1) {
+    return { amount: BigInt(s), receiverAddress: undefined }
+  }
+  const address = s.substring(0, colonIdx)
+  const amountStr = s.substring(colonIdx + 1)
+  return { amount: BigInt(amountStr), receiverAddress: address || undefined }
+}
+
+async function handlePullPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = positionalArgs(args)
+  if (positional.length < 2) {
+    return 'Usage: pull-payment <payer_address> <token_identifier> -r <[address:]amount> [-r ...]'
+  }
+
+  const payerAddress = positional[0]
+  const tokenIdentifier = positional[1]
+  const receiverArgs = parseRepeatedFlag(args, '-r', '--receiver')
+
+  if (receiverArgs.length === 0) {
+    return 'Error: at least one -r/--receiver is required'
+  }
+
+  const receivers: PullReceiver[] = receiverArgs.map(parsePullReceiver)
+
+  const prepareResponse = await sdk.preparePullPayment({
+    payerAddress,
+    tokenIdentifier,
+    receivers,
+  })
+
+  const lines: string[] = []
+  lines.push(
+    `Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} from ${prepareResponse.payerAddress}`
+  )
+  for (const receiver of prepareResponse.receivers) {
+    lines.push(`  ${receiver.amount} to ${receiver.receiverAddress ?? ''}`)
+  }
+
+  const PULL_RETRY_INTERVAL_MS = 5000
+  const PULL_RETRY_WINDOW_MS = 10 * 60 * 1000
+  const deadline = Number(prepareResponse.expiryTime) * 1000 + PULL_RETRY_WINDOW_MS
+
+  let lastResult: any
+  let lastError: any
+
+  while (true) {
+    try {
+      lastResult = await sdk.pullPayment({ prepareResponse })
+      lastError = undefined
+    } catch (e: unknown) {
+      lastError = e
+      lastResult = undefined
+    }
+
+    const now = Date.now()
+
+    if (lastResult && lastResult.status !== PaymentStatus.Pending) {
+      break
+    }
+    if (lastError) {
+      const msg = lastError instanceof Error ? lastError.message : String(lastError)
+      const isRetryable = msg.includes('NetworkError') || msg.includes('SparkError')
+      if (!isRetryable) break
+    }
+    if (now >= deadline) break
+
+    if (lastResult) {
+      lines.push(`The pull ${lastResult.txHash} is pending, checking again in ${PULL_RETRY_INTERVAL_MS / 1000}s`)
+    } else if (lastError) {
+      const msg = lastError instanceof Error ? lastError.message : String(lastError)
+      lines.push(`Sending the pull failed (${msg}), trying again in ${PULL_RETRY_INTERVAL_MS / 1000}s`)
+    }
+
+    await new Promise<void>(resolve => setTimeout(() => resolve(), PULL_RETRY_INTERVAL_MS))
+  }
+
+  if (lastError) {
+    const msg = lastError instanceof Error ? lastError.message : String(lastError)
+    return lines.join('\n') + '\n' + `Error: ${msg}`
+  }
+
+  lines.push(formatValue(lastResult))
+  return lines.join('\n')
 }
 
 // --- webhooks (delegation) ---

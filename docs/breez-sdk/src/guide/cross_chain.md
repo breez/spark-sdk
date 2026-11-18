@@ -4,7 +4,9 @@ The SDK can send and receive USDC and USDT between a Spark wallet and several su
 
 The send flow is documented on the [Sending payments](./send_payment.md#usdc-usdt) page; the receive flow on the [Receiving payments](./receive_payment.md#usdc-usdt) page. This page covers shared concepts: providers, lifecycle, retry safety, and limitations.
 
-Routes listed by {{#name get_cross_chain_routes}} with an unset {{#name delivery_method}} are the ones this wallet sends from or receives into. Setting it to {{#enum DeliveryMethod::Lightning}} lists the routes funded or paid out over Lightning by someone else, used by the [Cash App bridges](./cash_app.md).
+{{#name get_cross_chain_routes}} lists the routes this wallet sends from or receives into, with its {{#name delivery_method}} left unset.
+
+To have a payer on another chain or on Lightning pay a recipient directly, with no funds moving through the SDK, use a [bridging client](./bridging.md). It lists its own routes with {{#name get_routes}}, and also runs the [Cash App bridges](./cash_app.md).
 
 ## Supported address formats
 
@@ -76,7 +78,7 @@ A rejected amount surfaces as {{#enum SdkError::CrossChainAmountOutOfRange}}, ca
 
 A route the provider won't serve surfaces as {{#enum SdkError::CrossChainRouteUnavailable}}. {{#name temporary}} indicates that a route is currently unavailable and the same request may succeed later, rather than requiring another route.
 
-When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. Enable it as described in [USDC/USDT configuration](./config.md#usdc-usdt).
+When {{#name cross_chain_config}} is unset, every cross-chain call, including {{#name get_cross_chain_routes}}, fails with {{#enum SdkError::CrossChainDisabled}}. Enable it as described in [USDC/USDT configuration](./config.md#usdc-usdt). A [bridging client](./bridging.md) doesn't need it.
 
 ## Slippage
 
@@ -116,16 +118,17 @@ The Spark-side transfer and the external cross-chain leg have distinct status fi
 | {{#name conversion_info.status}}                      | The provider-driven cross-chain leg                                         |
 | {{#name conversion_info.delivered_amount}}            | Final amount delivered to the recipient, set when terminal                  |
 | {{#name conversion_info.external_tx_hash}}            | Transaction on the non-Spark chain: the delivery, or the funding deposit    |
+| {{#name conversion_info.refund_tx_hash}}              | Transaction that refunded the payer, set once refunded                      |
 
 The cross-chain status walks one of:
 
 - **{{#enum ConversionStatus::Pending}}**: deposit/transfer submitted, provider working on the cross-chain leg.
 - **{{#enum ConversionStatus::Completed}}**: provider reports the order terminal-successful; {{#name delivered_amount}} is set, and {{#name external_tx_hash}} identifies the transaction on the non-Spark chain: the delivery on a send, the funding deposit on a receive. Boltz-provider conversions leave the hash unset.
 - **{{#enum ConversionStatus::RefundNeeded}}**: the cross-chain leg was rejected after deposit (typically because the realized rate exceeded {{#name max_slippage_bps}}); the deposit is awaiting refund. *(send only)*
-- **{{#enum ConversionStatus::Refunded}}**: the funds have been refunded back to the wallet.
+- **{{#enum ConversionStatus::Refunded}}**: the provider refunded the payer: the amount sent on a send, the sender's deposit on a receive. {{#name refund_tx_hash}} identifies the refund transaction when the provider reports one.
 - **{{#enum ConversionStatus::Failed}}**: terminal failure with no refund pending.
 
-A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment carries its {{#name conversion_info}} from its first event. The delivered amount and the deposit transaction follow in that event once the provider confirms the order.
+A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment carries its {{#name conversion_info}} from its first event, with the same {{#name quote_id}} as the {{#name cross_chain_info}} returned for the receive. The delivered amount and the deposit transaction follow in that event once the provider confirms the order.
 
 ## Send
 
@@ -172,6 +175,25 @@ To force a specific destination, build a {{#name SparkAsset}} variant: {{#enum S
 ### Quote expiry
 
 The receive prepare response carries an {{#name expires_at}} timestamp. The SDK does not gate on it: Orchestra reprices late deposits at the live rate. The receive monitor keeps probing for the deposit for 24 hours past {{#name expires_at}} before locally closing the row as unfunded; late deposits inside that window still link correctly.
+
+### Paying from Solana
+
+On Solana, the deposit address is a wallet address, not a token account. Each quote has its own, so it holds no USDC or USDT token account yet.
+
+Most wallet apps, such as Phantom, create the token account when sending, so a payer using one needs no extra step. A transaction built in code must create the deposit address's associated token account for the route's mint (e.g. with `createAssociatedTokenAccountIdempotentInstruction` from `@solana/spl-token`), then transfer to that account. A transfer to the deposit address itself fails, and no funds move. Creating the account costs the payer a small rent deposit (at most about 0.002 SOL).
+
+EVM and Tron deposits need no extra step, since token balances live in the token contract.
+
+### Refunds and failures
+
+If the provider can't complete a receive, for example because the deposit is below the route's minimum, it fails the order or refunds the deposit. A refund goes to the {{#name refund_address}} on {{#enum ReceivePaymentMethod::CrossChain}}: the payer's address on the route's chain, which can't be a token contract. Without one, the provider refunds to the address the deposit came from, but only when that is safe.
+
+<div class="warning">
+<h4>Developer note</h4>
+A refund address is required when the payer sends from an exchange. Exchanges send from shared addresses, which the provider never refunds to, so without one a deposit it can't deliver waits for manual recovery. It is also advised for deposits from BSC and Tron. Ask the payer for an address they control on the route's chain.
+</div>
+
+Either way nothing arrives over Spark, so the SDK records a receive {{#name Payment}} with status {{#enum PaymentStatus::Failed}} and emits {{#enum SdkEvent::PaymentFailed}}. Its amount is what the quote expected to deliver. A receive into a token is recorded as a token payment with an empty {{#name tx_hash}}, since no token transaction took place. The payment's {{#name conversion_info}} carries the receive's {{#name quote_id}}, the deposit in {{#name asset_amount_in}} and {{#name external_tx_hash}}, and the status {{#enum ConversionStatus::Refunded}} or {{#enum ConversionStatus::Failed}}. A refund also carries its {{#name refund_tx_hash}}.
 
 ## Limitations
 

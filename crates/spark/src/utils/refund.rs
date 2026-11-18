@@ -13,7 +13,7 @@ use crate::services::{
     LeafRefundJobs, RefundJob, SignedTx, build_refund_signing_job, into_signed_tx_groups,
     sign_leaf_refunds,
 };
-use crate::signer::{SignerError, SparkSigner};
+use crate::signer::{FrostAdaptor, SignerError, SparkSigner};
 use crate::utils::frost::derive_leaf_signing_public_key;
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
@@ -34,8 +34,8 @@ pub struct SignRefundsParams<'a> {
     pub receiver_pubkeys: &'a [PublicKey],
     pub payment_hash: Option<&'a sha256::Hash>,
     pub network: Network,
-    /// Optional adaptor public key for creating adaptor signatures (used in swap v3)
-    pub cpfp_adaptor_public_key: Option<&'a PublicKey>,
+    /// Set to make the CPFP refund signatures adaptor signatures (swap v3).
+    pub cpfp_adaptor: Option<FrostAdaptor>,
 }
 
 pub struct SignedRefundTransactions {
@@ -56,7 +56,7 @@ pub async fn sign_refunds(
         receiver_pubkeys,
         payment_hash,
         network,
-        cpfp_adaptor_public_key,
+        cpfp_adaptor,
     } = params;
     let identity_pubkey = spark_signer.get_identity_public_key().await?;
 
@@ -139,7 +139,7 @@ pub async fn sign_refunds(
             signing_public_key,
             commitments_at(&cpfp_signing_commitments, i)?,
             network,
-            cpfp_adaptor_public_key,
+            cpfp_adaptor,
         )?;
 
         let direct = if let Some(direct_tx) = direct_tx {
@@ -223,7 +223,7 @@ fn build_refund_job(
     signing_public_key: PublicKey,
     spark_commitments: BTreeMap<Identifier, SigningCommitments>,
     network: Network,
-    adaptor_public_key: Option<&PublicKey>,
+    adaptor: Option<FrostAdaptor>,
 ) -> Result<RefundJob, SignerError> {
     let parent_output = first_output(tx).map_err(|e| SignerError::Generic(e.to_string()))?;
     let sighash = sighash_from_tx(&refund_tx, 0, parent_output)
@@ -236,7 +236,7 @@ fn build_refund_job(
         refund_tx,
         sighash.to_raw_hash().to_byte_array(),
         spark_commitments,
-        adaptor_public_key,
+        adaptor,
         network,
     ))
 }
@@ -282,7 +282,7 @@ mod tests {
             receiver_pubkeys: &[receiver],
             payment_hash: None,
             network: Network::Regtest,
-            cpfp_adaptor_public_key: None,
+            cpfp_adaptor: None,
         })
         .await
         .unwrap();

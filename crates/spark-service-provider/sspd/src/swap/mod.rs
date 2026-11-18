@@ -12,7 +12,7 @@ use spark::operator::OperatorPool;
 use spark::services::{
     LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService, TransferStatus, TransferType,
 };
-use spark::signer::Signer;
+use spark::signer::{FrostAdaptor, Signer};
 use spark::tree::TreeNode;
 use thiserror::Error;
 use tracing::{error, info};
@@ -28,7 +28,7 @@ use crate::wakeup::Wakeup;
 use self::repository::{SwapDetail, SwapLeaf, SwapRecord};
 use self::select::swap_denominations;
 
-const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
+const SWAP_EXPIRY_DURATION: Duration = Duration::from_mins(2);
 
 #[async_trait::async_trait]
 pub trait SwapStore: Send + Sync {
@@ -328,7 +328,11 @@ impl SwapService {
             &leaf_key_tweaks,
             &caller,
             &primary_transfer_id,
-            &adaptor_public_key,
+            // The service signs with the default signer, which supports version 2.
+            FrostAdaptor {
+                public_key: adaptor_public_key,
+                v2: true,
+            },
             expiry_time,
         )
         .await?;

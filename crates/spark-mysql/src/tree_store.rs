@@ -3024,7 +3024,7 @@ mod tests {
         }
 
         let mut successes = 0;
-        let timeout = tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        let timeout = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => {
@@ -3416,7 +3416,7 @@ mod tests {
         }
 
         // Wait for all with global timeout
-        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
@@ -3493,7 +3493,7 @@ mod tests {
         }
 
         // Wait for all with global timeout
-        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
@@ -3554,7 +3554,7 @@ mod tests {
         // Wait for all with timeout
         let mut successes = 0;
         let mut insufficient = 0;
-        let timeout_result = tokio::time::timeout(std::time::Duration::from_mins(2), async {
+        let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(2 * 60), async {
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(Ok((i, status))) => {

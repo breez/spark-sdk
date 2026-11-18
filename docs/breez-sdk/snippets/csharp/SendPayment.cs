@@ -236,6 +236,21 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-payment-lightning-bolt11
         }
 
+        async Task GetPaymentPreimage(BreezSdk sdk)
+        {
+            // ANCHOR: get-payment-preimage
+            var paymentId = "<payment id>";
+            var response = await sdk.GetPayment(
+                request: new GetPaymentRequest(paymentId: paymentId)
+            );
+            if (response.payment.details is PaymentDetails.Lightning lightningDetails)
+            {
+                Console.WriteLine($"Payment hash: {lightningDetails.htlcDetails.paymentHash}");
+                Console.WriteLine($"Preimage: {lightningDetails.htlcDetails.preimage}");
+            }
+            // ANCHOR_END: get-payment-preimage
+        }
+
         async Task SendPaymentOnchain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-onchain
@@ -265,6 +280,31 @@ namespace BreezSdkSnippets
             var sendResponse = await sdk.SendPayment(request: request);
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-spark
+        }
+
+        async Task FetchLightningSendStatus(BreezSdk sdk)
+        {
+            // ANCHOR: fetch-lightning-send-status
+            var invoice = "<bolt11 invoice>";
+            var response = await sdk.FetchLightningSendStatus(
+                request: new FetchLightningSendStatusRequest(invoice: invoice)
+            );
+            switch (response.status)
+            {
+                case PaymentStatus.Completed:
+                    Console.WriteLine("Paid");
+                    break;
+                case PaymentStatus.Pending:
+                    Console.WriteLine("Payment in flight");
+                    break;
+                case PaymentStatus.Failed:
+                    Console.WriteLine("Payment failed");
+                    break;
+                case null:
+                    Console.WriteLine("No Lightning payment found");
+                    break;
+            }
+            // ANCHOR_END: fetch-lightning-send-status
         }
     }
 }

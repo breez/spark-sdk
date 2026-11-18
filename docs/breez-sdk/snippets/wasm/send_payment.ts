@@ -159,6 +159,20 @@ const exampleSendPaymentLightningBolt11 = async (
   console.log(payment)
 }
 
+const exampleGetPaymentPreimage = async (sdk: BreezSdk) => {
+  // ANCHOR: get-payment-preimage
+  const paymentId = '<payment id>'
+  const response = await sdk.getPayment({
+    paymentId
+  })
+  const payment = response.payment
+  if (payment.details?.type === 'lightning') {
+    console.log(`Payment hash: ${payment.details.htlcDetails.paymentHash}`)
+    console.log(`Preimage: ${payment.details.htlcDetails.preimage ?? ''}`)
+  }
+  // ANCHOR_END: get-payment-preimage
+}
+
 const exampleSendPaymentOnchain = async (
   sdk: BreezSdk,
   prepareResponse: PrepareSendPaymentResponse
@@ -193,6 +207,31 @@ const exampleSendPaymentSpark = async (
   const payment = sendResponse.payment
   // ANCHOR_END: send-payment-spark
   console.log(payment)
+}
+
+const exampleFetchLightningSendStatus = async (sdk: BreezSdk) => {
+  // ANCHOR: fetch-lightning-send-status
+  const invoice = '<bolt11 invoice>'
+  const response = await sdk.fetchLightningSendStatus({ invoice })
+  switch (response.status) {
+    case 'completed': {
+      console.log('Paid')
+      break
+    }
+    case 'pending': {
+      console.log('Payment in flight')
+      break
+    }
+    case 'failed': {
+      console.log('Payment failed')
+      break
+    }
+    case undefined: {
+      console.log('No Lightning payment found')
+      break
+    }
+  }
+  // ANCHOR_END: fetch-lightning-send-status
 }
 
 const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {

@@ -483,7 +483,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let rows = client
             .query(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          COALESCE(SUM(
                             CASE
                               WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
@@ -498,7 +498,8 @@ impl TokenOutputStore for PostgresTokenStore {
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = $1
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                           m.extra_metadata",
                 &[&self.identity],
             )
             .await
@@ -521,7 +522,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let rows = client
             .query(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
@@ -592,7 +593,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                     m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                     m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                      o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
@@ -645,7 +646,6 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(result)
     }
 
-    #[allow(clippy::cast_possible_wrap)]
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
@@ -683,28 +683,18 @@ impl TokenOutputStore for PostgresTokenStore {
         }
 
         // 2. Insert new outputs, grouped by the token each one names.
-        for (token_identifier, outputs) in group_outputs_by_token(&outputs_to_add.outputs) {
+        let spent_outpoints = self
+            .spent_outpoints_among(&tx, &outputs_to_add.outputs)
+            .await?;
+        let unspent_outputs = outputs_to_add.outputs.iter().filter(|o| {
+            !spent_outpoints.contains(&(o.prev_tx_hash.clone(), o.prev_tx_vout.cast_signed()))
+        });
+        for (token_identifier, outputs) in group_outputs_by_token(unspent_outputs) {
             let Some(metadata) = outputs_to_add.metadata_for(&token_identifier) else {
                 warn!("Skipping outputs of token {token_identifier}: no metadata provided");
                 continue;
             };
             self.upsert_metadata(&tx, metadata).await?;
-
-            // Clear spent status for outputs being (re-)added.
-            let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
-            let vouts: Vec<i32> = outputs.iter().map(|o| o.prev_tx_vout as i32).collect();
-            if !tx_hashes.is_empty() {
-                tx.execute(
-                    "DELETE FROM brz_token_spent_outputs \
-                     WHERE user_id = $1 \
-                       AND (prev_tx_hash, prev_tx_vout) IN ( \
-                         SELECT * FROM UNNEST($2::text[], $3::int[]) \
-                       )",
-                    &[&self.identity, &tx_hashes, &vouts],
-                )
-                .await
-                .map_err(map_err)?;
-            }
 
             for output in outputs {
                 self.insert_single_output(&tx, &token_identifier, output)
@@ -1133,6 +1123,9 @@ impl PostgresTokenStore {
                     .to_string(),
                 "ALTER TABLE brz_token_outputs DROP COLUMN id".to_string(),
             ],
+            // Migration 5: token extra metadata. Rows cached before it read as absent until the
+            // next refresh rewrites them.
+            vec!["ALTER TABLE brz_token_metadata ADD COLUMN extra_metadata BYTEA".to_string()],
         ]
     }
 
@@ -1319,6 +1312,33 @@ impl PostgresTokenStore {
         Ok(())
     }
 
+    async fn spent_outpoints_among(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        outputs: &[TokenOutputWithPrevOut],
+    ) -> Result<HashSet<(String, i32)>, TokenOutputServiceError> {
+        if outputs.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let tx_hashes: Vec<String> = outputs.iter().map(|o| o.prev_tx_hash.clone()).collect();
+        let vouts: Vec<i32> = outputs
+            .iter()
+            .map(|o| o.prev_tx_vout.cast_signed())
+            .collect();
+        let rows = tx
+            .query(
+                "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
+                 WHERE user_id = $1 \
+                   AND (prev_tx_hash, prev_tx_vout) IN ( \
+                     SELECT * FROM UNNEST($2::text[], $3::int[]) \
+                   )",
+                &[&self.identity, &tx_hashes, &vouts],
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+    }
+
     /// Inserts a single output into the database.
     #[allow(clippy::cast_possible_wrap)]
     async fn insert_single_output(
@@ -1362,8 +1382,8 @@ impl PostgresTokenStore {
         tx.execute(
             r"INSERT INTO brz_token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-                 is_freezable, creation_entity_public_key)
-              VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
+                 is_freezable, creation_entity_public_key, extra_metadata)
+              VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8, $10)
               ON CONFLICT (user_id, identifier) DO UPDATE SET
                 issuer_public_key = EXCLUDED.issuer_public_key,
                 name = EXCLUDED.name,
@@ -1371,7 +1391,8 @@ impl PostgresTokenStore {
                 decimals = EXCLUDED.decimals,
                 max_supply = EXCLUDED.max_supply,
                 is_freezable = EXCLUDED.is_freezable,
-                creation_entity_public_key = EXCLUDED.creation_entity_public_key",
+                creation_entity_public_key = EXCLUDED.creation_entity_public_key,
+                extra_metadata = EXCLUDED.extra_metadata",
             &[
                 &metadata.identifier,
                 &metadata.issuer_public_key.to_string(),
@@ -1382,6 +1403,7 @@ impl PostgresTokenStore {
                 &metadata.is_freezable,
                 &metadata.creation_entity_public_key.map(|pk| pk.to_string()),
                 &self.identity,
+                &metadata.extra_metadata,
             ],
         )
         .await
@@ -1464,6 +1486,7 @@ impl PostgresTokenStore {
         let max_supply_str: String = row.get("max_supply");
         let is_freezable: bool = row.get("is_freezable");
         let creation_entity_pk_str: Option<String> = row.get("creation_entity_public_key");
+        let extra_metadata: Option<Vec<u8>> = row.get("extra_metadata");
 
         Ok(TokenMetadata {
             identifier,
@@ -1476,6 +1499,7 @@ impl PostgresTokenStore {
             creation_entity_public_key: creation_entity_pk_str
                 .map(|s| s.parse().map_err(map_err))
                 .transpose()?,
+            extra_metadata,
         })
     }
 
@@ -1544,9 +1568,9 @@ fn validate_targets(
 }
 
 /// Groups outputs by the token each one names, keeping first-seen token order.
-fn group_outputs_by_token(
-    outputs: &[TokenOutputWithPrevOut],
-) -> Vec<(String, Vec<&TokenOutputWithPrevOut>)> {
+fn group_outputs_by_token<'a>(
+    outputs: impl IntoIterator<Item = &'a TokenOutputWithPrevOut>,
+) -> Vec<(String, Vec<&'a TokenOutputWithPrevOut>)> {
     let mut grouped: Vec<(String, Vec<&TokenOutputWithPrevOut>)> = Vec::new();
     for output in outputs {
         let identifier = &output.output.token_identifier;
@@ -1962,9 +1986,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_outputs_clears_spent_status() {
+    async fn test_update_token_outputs_skips_reserved_output() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+        shared_tests::test_update_token_outputs_skips_reserved_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_token_outputs_skips_spent_output() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_update_token_outputs_skips_spent_output(&fixture.store).await;
     }
 
     #[tokio::test]

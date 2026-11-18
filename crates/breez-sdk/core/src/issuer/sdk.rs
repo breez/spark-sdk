@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use spark_wallet::{SparkAddress, SparkWallet};
+use spark_wallet::{MAX_TOKEN_EXTRA_METADATA_BYTES, SparkAddress, SparkWallet};
 
 use crate::{
     BurnIssuerTokenRequest, CreateIssuerTokenRequest, FreezeIssuerTokenRequest,
@@ -63,6 +63,15 @@ impl TokenIssuer {
         &self,
         request: CreateIssuerTokenRequest,
     ) -> Result<TokenMetadata, SdkError> {
+        if request
+            .extra_metadata
+            .as_ref()
+            .is_some_and(|m| m.len() > MAX_TOKEN_EXTRA_METADATA_BYTES)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "Token extra metadata must be at most {MAX_TOKEN_EXTRA_METADATA_BYTES} bytes"
+            )));
+        }
         self.spark_wallet
             .create_issuer_token(
                 &request.name,
@@ -70,6 +79,7 @@ impl TokenIssuer {
                 request.decimals,
                 request.is_freezable,
                 request.max_supply,
+                request.extra_metadata,
             )
             .await?;
         self.get_issuer_token_metadata().await

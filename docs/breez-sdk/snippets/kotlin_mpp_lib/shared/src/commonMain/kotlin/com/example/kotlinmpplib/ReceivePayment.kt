@@ -24,6 +24,7 @@ class ReceivePayment {
                     optionalExpirySecs,
                     null,
                     optionalReceiverIdentityPublicKey,
+                    null,
                     optionalFeePolicy
                 )
             )

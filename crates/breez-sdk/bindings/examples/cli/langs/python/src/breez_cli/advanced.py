@@ -7,6 +7,7 @@ from breez_sdk_spark import (
     CooperativeRecoveryError,
     CooperativeRecoveryFailure,
     CpfpFundingKind,
+    CpfpFundingStrategy,
     CpfpInput,
     ExitLeafSelection,
     ExitTransactionStatus,
@@ -42,6 +43,12 @@ def _parse_funding_kind(kind_str):
     if kind_str == "p2wpkh":
         return CpfpFundingKind.P2WPKH()
     return CpfpFundingKind.P2TR()
+
+
+def _parse_funding_strategy(strategy_str):
+    if strategy_str == "per-node":
+        return CpfpFundingStrategy.PER_NODE
+    return CpfpFundingStrategy.PER_BRANCH
 
 
 def _parse_cpfp_input(s, funding_kind_str):
@@ -113,6 +120,9 @@ def _build_recover_funds_parser():
                    help="Target fee rate in sat/vByte")
     p.add_argument("--funding-kind", default="p2tr", choices=["p2wpkh", "p2tr"],
                    help="Funding UTXO kind (default: p2tr)")
+    p.add_argument("--funding-strategy", default="per-branch",
+                   choices=["per-branch", "per-node"],
+                   help="Fund one UTXO per branch, or one per fee-bumped transaction (default: per-branch)")
     p.add_argument("--destination", required=True,
                    help="Destination address for the recovered funds")
     selection = p.add_mutually_exclusive_group()
@@ -346,6 +356,7 @@ async def _recover_funds(sdk, session, request, funding_kind, output_file):
                 request=PrepareRecoverFundsRequest(
                     fee_rate_sat_per_vbyte=request.fee_rate_sat_per_vbyte,
                     funding_kind=request.funding_kind,
+                    funding_strategy=request.funding_strategy,
                     destination=request.destination,
                     selection=ExitLeafSelection.SPECIFIC(leaf_ids=cooperative),
                 )
@@ -378,6 +389,7 @@ async def _handle_recover_funds(sdk, session, args):
     request = PrepareRecoverFundsRequest(
         fee_rate_sat_per_vbyte=args.fee_rate,
         funding_kind=_parse_funding_kind(args.funding_kind),
+        funding_strategy=_parse_funding_strategy(args.funding_strategy),
         destination=args.destination,
         selection=_recovery_selection(args.all, args.leaf_ids or []),
     )

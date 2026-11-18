@@ -1,11 +1,14 @@
+use bitcoin::{
+    Address, Transaction, address::NetworkUnchecked, consensus::encode::deserialize_hex,
+};
 use breez_sdk_common::input::{
     self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
 };
 use spark_wallet::{
-    CoopExitAcceptance, CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment,
-    LightningSendStatus, Network as SparkNetwork, PreimageRequest, PreimageRequestStatus,
-    SspUserRequest, TokenTransactionStatus, TransferDirection, TransferStatus, TransferType,
-    WalletTransfer,
+    CoopExitAcceptance, CoopExitFeeQuote, CoopExitRequest, CoopExitSpeedFeeQuote, ExitSpeed,
+    LightningSendPayment, LightningSendStatus, Network as SparkNetwork, PreimageRequest,
+    PreimageRequestStatus, SilentPaymentAddress, SspUserRequest, TokenTransactionStatus,
+    TransferDirection, TransferStatus, TransferType, WalletTransfer,
 };
 use std::time::Duration;
 
@@ -112,6 +115,23 @@ fn htlc_details_from_preimage_request(
             .as_secs(),
         status,
     })
+}
+
+fn withdrawal_vout(request: &CoopExitRequest) -> Option<u32> {
+    let address = request.withdrawal_address.as_str();
+    let transaction: Transaction = deserialize_hex(&request.raw_coop_exit_transaction).ok()?;
+    let Ok(bitcoin_address) = address.parse::<Address<NetworkUnchecked>>() else {
+        // The SDK cannot derive a silent payment output's script from the address,
+        // because the script also depends on the transaction's inputs. Under
+        // Spark's rules the payout to a silent payment address is output 0.
+        return address.parse::<SilentPaymentAddress>().is_ok().then_some(0);
+    };
+    let script_pubkey = bitcoin_address.assume_checked().script_pubkey();
+    let index = transaction
+        .output
+        .iter()
+        .position(|output| output.script_pubkey == script_pubkey)?;
+    u32::try_from(index).ok()
 }
 
 impl PaymentMethod {
@@ -231,9 +251,22 @@ impl PaymentDetails {
                     conversion_info: None,
                 }
             }
-            SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
-                tx_id: request.coop_exit_txid.clone(),
-            },
+            SspUserRequest::CoopExitRequest(request) => {
+                let Some(vout) = withdrawal_vout(request) else {
+                    // An error here would stall the sync, so the payment is
+                    // stored without details instead.
+                    warn!(
+                        "The SSP's record of coop exit {} has no payout output; storing the payment without details",
+                        request.id
+                    );
+                    return Ok(None);
+                };
+                PaymentDetails::Withdraw {
+                    tx_id: request.coop_exit_txid.clone(),
+                    vout,
+                    destination_address: request.withdrawal_address.clone(),
+                }
+            }
             SspUserRequest::LeavesSwapRequest(_) => PaymentDetails::Spark {
                 invoice_details: None,
                 htlc_details: None,
@@ -596,6 +629,7 @@ impl From<spark_wallet::TokenMetadata> for TokenMetadata {
             decimals: value.decimals,
             max_supply: value.max_supply,
             is_freezable: value.is_freezable,
+            extra_metadata: value.extra_metadata,
         }
     }
 }
@@ -738,6 +772,15 @@ impl From<spark_wallet::OptimizationOutcome> for OptimizationOutcome {
     }
 }
 
+impl From<crate::CpfpFundingStrategy> for spark_wallet::CpfpFundingStrategy {
+    fn from(value: crate::CpfpFundingStrategy) -> Self {
+        match value {
+            crate::CpfpFundingStrategy::PerBranch => Self::PerBranch,
+            crate::CpfpFundingStrategy::PerNode => Self::PerNode,
+        }
+    }
+}
+
 impl From<crate::WebhookEventType> for spark_wallet::SparkWalletWebhookEventType {
     fn from(value: crate::WebhookEventType) -> Self {
         match value {
@@ -792,8 +835,8 @@ mod tests {
     use spark_wallet::{
         BitcoinNetwork, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CurrencyAmount, CurrencyUnit,
         LightningInvoice, LightningReceiveRequest, LightningReceiveRequestStatus,
-        LightningSendRequest, LightningSendRequestStatus, PublicKey, SspTransfer, Transfer,
-        TransferId, TransferReceiver,
+        LightningSendRequest, LightningSendRequestStatus, PublicKey, SparkCoopExitRequestStatus,
+        SspTransfer, Transfer, TransferId, TransferReceiver,
     };
 
     #[cfg(feature = "browser-tests")]
@@ -1139,5 +1182,136 @@ mod tests {
         );
         // No leaves known yet: the total stands in.
         assert_eq!(lightning_receive_fee_and_amount(100_000, 0), (0, 100_000));
+    }
+
+    fn coop_exit(withdrawal_address: &str, raw_coop_exit_transaction: &str) -> CoopExitRequest {
+        CoopExitRequest {
+            id: "request".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            network: BitcoinNetwork::Regtest,
+            fee: CurrencyAmount::default(),
+            withdrawal_address: withdrawal_address.to_string(),
+            l1_broadcast_fee: CurrencyAmount::default(),
+            exit_status: SparkCoopExitRequestStatus::Succeeded,
+            exit_expired_at: Utc::now(),
+            raw_connector_transaction: String::new(),
+            raw_coop_exit_transaction: raw_coop_exit_transaction.to_string(),
+            coop_exit_txid: "exit_txid".to_string(),
+            transfer: None,
+        }
+    }
+
+    fn regtest_address(key: PublicKey) -> Address {
+        Address::p2wpkh(
+            &bitcoin::CompressedPublicKey(key),
+            bitcoin::Network::Regtest,
+        )
+    }
+
+    fn exit_transaction_hex(addresses: &[&Address]) -> String {
+        let transaction = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: addresses
+                .iter()
+                .map(|address| bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(1_000),
+                    script_pubkey: address.script_pubkey(),
+                })
+                .collect(),
+        };
+        bitcoin::consensus::encode::serialize_hex(&transaction)
+    }
+
+    #[test_all]
+    fn a_withdrawal_carries_its_address_and_the_index_of_its_payout_output() {
+        let (ours, ssp) = (pk(1), pk(2));
+        let address = regtest_address(pk(7));
+        let raw_transaction = exit_transaction_hex(&[&regtest_address(ssp), &address]);
+        let wallet_transfer = WalletTransfer::from_transfer(
+            transfer(ours, ssp, TransferType::CooperativeExit),
+            Some(SspTransfer {
+                total_amount: CurrencyAmount::default(),
+                spark_id: None,
+                user_request: Some(SspUserRequest::CoopExitRequest(coop_exit(
+                    &address.to_string(),
+                    &raw_transaction,
+                ))),
+            }),
+            None,
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        let Some(PaymentDetails::Withdraw {
+            tx_id,
+            vout,
+            destination_address,
+        }) = payment.details
+        else {
+            panic!("expected withdraw details, got {:?}", payment.details);
+        };
+        assert_eq!(tx_id, "exit_txid");
+        assert_eq!(vout, 1);
+        assert_eq!(destination_address, address.to_string());
+    }
+
+    #[test_all]
+    fn a_withdrawal_without_a_payout_output_has_no_details() {
+        let (ours, ssp) = (pk(1), pk(2));
+        let address = regtest_address(pk(7));
+        let raw_transaction = exit_transaction_hex(&[&regtest_address(ssp)]);
+        let wallet_transfer = WalletTransfer::from_transfer(
+            transfer(ours, ssp, TransferType::CooperativeExit),
+            Some(SspTransfer {
+                total_amount: CurrencyAmount::default(),
+                spark_id: None,
+                user_request: Some(SspUserRequest::CoopExitRequest(coop_exit(
+                    &address.to_string(),
+                    &raw_transaction,
+                ))),
+            }),
+            None,
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert_eq!(payment.method, PaymentMethod::Withdraw);
+        assert!(payment.details.is_none(), "{:?}", payment.details);
+    }
+
+    #[test_all]
+    fn no_output_index_without_an_output_to_the_withdrawal_address() {
+        let address = regtest_address(pk(7));
+        let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(2))]);
+
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), &raw_transaction));
+
+        assert_eq!(vout, None);
+    }
+
+    #[test_all]
+    fn the_payout_to_a_silent_payment_address_is_output_zero() {
+        let address = SilentPaymentAddress::new(pk(1), pk(7), SparkNetwork::Regtest);
+        let raw_transaction = exit_transaction_hex(&[&regtest_address(pk(2))]);
+
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), &raw_transaction));
+
+        assert_eq!(vout, Some(0));
+    }
+
+    #[test_all]
+    fn no_output_index_when_the_exit_transaction_does_not_decode() {
+        let address = SilentPaymentAddress::new(pk(1), pk(7), SparkNetwork::Regtest);
+
+        let vout = withdrawal_vout(&coop_exit(&address.to_string(), "not a transaction"));
+
+        assert_eq!(vout, None);
     }
 }

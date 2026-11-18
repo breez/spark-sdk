@@ -326,7 +326,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let rows: Vec<Row> = conn
             .exec(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          CAST(COALESCE(SUM(
                             CASE
                               WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
@@ -341,7 +341,8 @@ impl TokenOutputStore for MysqlTokenStore {
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = ?
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                           m.extra_metadata",
                 (self.identity.clone(),),
             )
             .await
@@ -364,7 +365,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let rows: Vec<Row> = conn
             .exec(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                          o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
@@ -438,7 +439,7 @@ impl TokenOutputStore for MysqlTokenStore {
 
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                     m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                     m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                      o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
@@ -816,6 +817,13 @@ impl MysqlTokenStore {
                 ),
                 Migration::sql("ALTER TABLE brz_token_outputs DROP COLUMN id"),
             ],
+            // Migration 6: token extra metadata. Rows cached before it read as absent until the
+            // next refresh rewrites them.
+            vec![Migration::AddColumn {
+                table: "brz_token_metadata",
+                column: "extra_metadata",
+                definition: "VARBINARY(1024) NULL",
+            }],
         ]
     }
 
@@ -1330,7 +1338,6 @@ impl MysqlTokenStore {
         Ok(())
     }
 
-    #[allow(clippy::cast_possible_wrap)]
     async fn update_token_outputs_inner(
         &self,
         conn: &mut Conn,
@@ -1367,10 +1374,20 @@ impl MysqlTokenStore {
 
         // 2. Insert new outputs. Each output names its own token, so only the ones
         // whose token comes with metadata can be stored.
+        let spent_outpoints = self
+            .spent_outpoints_among(&mut tx, &outputs_to_add.outputs)
+            .await?;
         let mut insertable: Vec<&TokenOutputWithPrevOut> =
             Vec::with_capacity(outputs_to_add.outputs.len());
         let mut upserted_tokens: HashSet<&str> = HashSet::new();
         for output in &outputs_to_add.outputs {
+            let outpoint = (
+                output.prev_tx_hash.clone(),
+                output.prev_tx_vout.cast_signed(),
+            );
+            if spent_outpoints.contains(&outpoint) {
+                continue;
+            }
             let token_identifier = &output.output.token_identifier;
             let Some(metadata) = outputs_to_add.metadata_for(token_identifier) else {
                 warn!("Skipping outputs of token {token_identifier}: no metadata provided");
@@ -1380,25 +1397,6 @@ impl MysqlTokenStore {
                 self.upsert_metadata(&mut tx, metadata).await?;
             }
             insertable.push(output);
-        }
-
-        // Clear spent status for outputs being (re-)added.
-        if !insertable.is_empty() {
-            let pair_placeholders = vec!["(?, ?)"; insertable.len()].join(", ");
-            let sql = format!(
-                "DELETE FROM brz_token_spent_outputs \
-                 WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-            );
-            let mut params: Vec<Value> =
-                Vec::with_capacity(insertable.len().saturating_mul(2).saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            for output in &insertable {
-                params.push(Value::from(output.prev_tx_hash.clone()));
-                params.push(Value::from(output.prev_tx_vout as i32));
-            }
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
         }
 
         for output in insertable {
@@ -1506,6 +1504,33 @@ impl MysqlTokenStore {
         Ok(())
     }
 
+    async fn spent_outpoints_among(
+        &self,
+        tx: &mut mysql_async::Transaction<'_>,
+        outputs: &[TokenOutputWithPrevOut],
+    ) -> Result<HashSet<(String, i32)>, TokenOutputServiceError> {
+        if outputs.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let pair_placeholders = vec!["(?, ?)"; outputs.len()].join(", ");
+        let sql = format!(
+            "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
+             WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+        );
+        let mut params: Vec<Value> =
+            Vec::with_capacity(outputs.len().saturating_mul(2).saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        for output in outputs {
+            params.push(Value::from(output.prev_tx_hash.clone()));
+            params.push(Value::from(output.prev_tx_vout.cast_signed()));
+        }
+        let rows: Vec<(String, i32)> = tx
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        Ok(rows.into_iter().collect())
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     async fn insert_single_output(
         &self,
@@ -1550,8 +1575,8 @@ impl MysqlTokenStore {
         tx.exec_drop(
             r"INSERT INTO brz_token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-                 is_freezable, creation_entity_public_key)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_freezable, creation_entity_public_key, extra_metadata)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
                 issuer_public_key = VALUES(issuer_public_key),
                 name = VALUES(name),
@@ -1559,7 +1584,8 @@ impl MysqlTokenStore {
                 decimals = VALUES(decimals),
                 max_supply = VALUES(max_supply),
                 is_freezable = VALUES(is_freezable),
-                creation_entity_public_key = VALUES(creation_entity_public_key)",
+                creation_entity_public_key = VALUES(creation_entity_public_key),
+                extra_metadata = VALUES(extra_metadata)",
             (
                 self.identity.clone(),
                 &metadata.identifier,
@@ -1570,6 +1596,7 @@ impl MysqlTokenStore {
                 metadata.max_supply.to_string(),
                 metadata.is_freezable,
                 metadata.creation_entity_public_key.map(|pk| pk.to_string()),
+                metadata.extra_metadata.clone(),
             ),
         )
         .await
@@ -1667,6 +1694,9 @@ impl MysqlTokenStore {
         let creation_entity_pk_str: Option<String> = row
             .get::<Option<String>, _>("creation_entity_public_key")
             .unwrap_or(None);
+        let extra_metadata: Option<Vec<u8>> = row
+            .get::<Option<Vec<u8>>, _>("extra_metadata")
+            .unwrap_or(None);
 
         Ok(TokenMetadata {
             identifier,
@@ -1679,6 +1709,7 @@ impl MysqlTokenStore {
             creation_entity_public_key: creation_entity_pk_str
                 .map(|s| s.parse().map_err(map_err))
                 .transpose()?,
+            extra_metadata,
         })
     }
 
@@ -2094,9 +2125,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_outputs_clears_spent_status() {
+    async fn test_update_token_outputs_skips_reserved_output() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
-        shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+        shared_tests::test_update_token_outputs_skips_reserved_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_token_outputs_skips_spent_output() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_update_token_outputs_skips_spent_output(&fixture.store).await;
     }
 
     #[tokio::test]

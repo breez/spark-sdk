@@ -31,6 +31,7 @@ func PrepareRecovery(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareRec
 	quote, err := sdk.PrepareRecoverFunds(breez_sdk_spark.PrepareRecoverFundsRequest{
 		FeeRateSatPerVbyte: 2,
 		FundingKind:        &fundingKind,
+		FundingStrategy:    nil,
 		Destination:        "bc1q...your-destination-address",
 		Selection:          breez_sdk_spark.ExitLeafSelectionRecoverableOnly{},
 	})
@@ -74,6 +75,7 @@ func RecoverCooperatively(sdk *breez_sdk_spark.BreezSdk, quote breez_sdk_spark.P
 		cooperativeQuote, err := sdk.PrepareRecoverFunds(breez_sdk_spark.PrepareRecoverFundsRequest{
 			FeeRateSatPerVbyte: quote.FeeRateSatPerVbyte,
 			FundingKind:        nil,
+			FundingStrategy:    nil,
 			Destination:        quote.Destination,
 			Selection:          breez_sdk_spark.ExitLeafSelectionSpecific{LeafIds: leafIds},
 		})

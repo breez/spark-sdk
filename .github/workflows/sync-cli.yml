@@ -330,8 +330,8 @@ jobs:
     needs: [setup, sync]
     if: ${{ !inputs.dry-run && !cancelled() }}
     runs-on: ubuntu-latest
-    # Generous budget: the auto-merge step waits for up to four CI rounds.
-    timeout-minutes: 330
+    # The auto-merge step's own deadline ends the wait before this does.
+    timeout-minutes: 340
 
     permissions:
       contents: write
@@ -580,8 +580,10 @@ jobs:
       # A check that also fails on the base commit is pre-existing and does
       # not block the merge. Any other failure gets a Claude fix pass that may
       # edit only the language CLIs. CI reruns on each pushed fix, up to
-      # MAX_FIX_ATTEMPTS, and the PR merges once CI passes. A PR-caused
-      # failure in a check that already fails on main reads as pre-existing.
+      # MAX_FIX_ATTEMPTS, and the PR merges once CI passes. A fix pass starts
+      # on the first new failure, since a full CI round can take hours when
+      # runners are queued. A PR-caused failure in a check that already fails
+      # on main reads as pre-existing.
       - name: Auto-merge when CI passes
         if: steps.apply.outputs.has_changes == 'true' && steps.apply.outputs.all_clean == 'true'
         env:
@@ -602,32 +604,42 @@ jobs:
             CLAUDE.md. Do not commit. If the failure is unrelated to those
             files, change nothing.
         run: |
-          # Prints the gating checks once none is pending; fails on timeout.
-          wait_for_ci() {
+          # Prints the base commit's check runs as [{name, status, conclusion}].
+          base_runs() {
+            gh api --paginate "repos/$REPO/commits/$BASE_SHA/check-runs?per_page=100" \
+              --jq '.check_runs[] | {name, status, conclusion}' | jq -cs '.'
+          }
+
+          # Polls until the PR has a verdict, setting FAILING and NEW (failures
+          # the base commit does not share). Returns as soon as NEW is non-empty
+          # so a fix pass need not wait for slow checks; otherwise once every
+          # gating check is done. Fails at DEADLINE.
+          wait_for_verdict() {
             sleep 60
-            for _ in $(seq 1 118); do
+            while [ "$SECONDS" -lt "$DEADLINE" ]; do
               CHECKS=$(gh pr checks "$PR_NUMBER" --json name,bucket,link 2>/dev/null || true)
               echo "$CHECKS" | jq -e 'type == "array"' > /dev/null 2>&1 || CHECKS='[]'
               GATING=$(echo "$CHECKS" | jq -c --arg re "$IGNORED_CHECKS" '[.[] | select(.name | test($re) | not)]')
-              if echo "$GATING" | jq -e 'length > 0 and all(.bucket != "pending")' > /dev/null; then
-                echo "$GATING"
+              FAILING=$(echo "$GATING" | jq -c '[.[] | select(.bucket == "fail" or .bucket == "cancel")]')
+              NEW='[]'
+              UNDECIDED=0
+              if [ "$FAILING" != "[]" ]; then
+                if ! RUNS=$(base_runs); then sleep 30; continue; fi
+                # A failure is undecided while the base still runs that check.
+                NEW=$(echo "$FAILING" | jq -c --argjson runs "$RUNS" '[.[] | .name as $n
+                  | select([$runs[] | select(.name == $n)] as $b
+                      | ($b | any(.conclusion == "failure" or .conclusion == "timed_out") | not)
+                        and ($b | all(.status == "completed")))]')
+                [ "$NEW" != "[]" ] && return 0
+                UNDECIDED=$(echo "$FAILING" | jq --argjson runs "$RUNS" '[.[] | .name as $n
+                  | select($runs | any(.name == $n and .status != "completed"))] | length')
+              fi
+              if [ "$UNDECIDED" -eq 0 ] && echo "$GATING" | jq -e 'length > 0 and all(.bucket != "pending")' > /dev/null; then
                 return 0
               fi
               sleep 30
             done
             return 1
-          }
-
-          # Prints the names of checks that failed on the base commit; fails
-          # while any check named in $1 is still running there.
-          base_failures() {
-            RUNS=$(gh api --paginate "repos/$REPO/commits/$BASE_SHA/check-runs?per_page=100" \
-              --jq '.check_runs[]' | jq -s '.') || return 1
-            if echo "$RUNS" | jq -e --argjson names "$1" \
-              'any(.[]; (.name as $n | $names | index($n)) and .status != "completed")' > /dev/null; then
-              return 1
-            fi
-            echo "$RUNS" | jq -c '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name] | unique'
           }
 
           finish() {
@@ -637,29 +649,16 @@ jobs:
           }
 
           echo "::notice::All languages synced cleanly. Waiting for CI on PR #${PR_NUMBER}."
+          # Ends before the job timeout so a timeout leaves the PR open cleanly.
+          DEADLINE=$((SECONDS + 315 * 60))
           ATTEMPT=0
           while true; do
-            if ! GATING=$(wait_for_ci); then
+            if ! wait_for_verdict; then
               echo "::warning::Timed out waiting for CI on PR #${PR_NUMBER}. Leaving it open."
               exit 0
             fi
-            FAILING=$(echo "$GATING" | jq -c '[.[] | select(.bucket == "fail" or .bucket == "cancel")]')
-            [ "$FAILING" = "[]" ] && finish
-
-            BASE_FAILED=""
-            for _ in $(seq 1 60); do
-              BASE_FAILED=$(base_failures "$(echo "$FAILING" | jq -c 'map(.name)')") && break
-              BASE_FAILED=""
-              sleep 30
-            done
-            if [ -z "$BASE_FAILED" ]; then
-              echo "::warning::Timed out waiting for CI on base commit ${BASE_SHA}. Leaving PR #${PR_NUMBER} open."
-              exit 0
-            fi
-
-            NEW=$(echo "$FAILING" | jq -c --argjson base "$BASE_FAILED" '[.[] | select(.name as $n | $base | index($n) | not)]')
             if [ "$NEW" = "[]" ]; then
-              echo "::notice::Only pre-existing failures (also failing on ${BASE_SHA}): $(echo "$FAILING" | jq -r 'map(.name) | join(", ")')"
+              [ "$FAILING" != "[]" ] && echo "::notice::Only pre-existing failures (also failing on ${BASE_SHA}): $(echo "$FAILING" | jq -r 'map(.name) | join(", ")')"
               finish
             fi
 

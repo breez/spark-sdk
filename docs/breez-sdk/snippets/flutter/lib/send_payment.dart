@@ -161,6 +161,20 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
   return response;
 }
 
+Future<GetPaymentResponse> getPaymentPreimage(BreezSdk sdk) async {
+  // ANCHOR: get-payment-preimage
+  String paymentId = "<payment id>";
+  GetPaymentRequest request = GetPaymentRequest(paymentId: paymentId);
+  GetPaymentResponse response = await sdk.getPayment(request: request);
+  final details = response.payment.details;
+  if (details is PaymentDetails_Lightning) {
+    print("Payment hash: ${details.htlcDetails.paymentHash}");
+    print("Preimage: ${details.htlcDetails.preimage}");
+  }
+  // ANCHOR_END: get-payment-preimage
+  return response;
+}
+
 Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
@@ -190,6 +204,28 @@ Future<SendPaymentResponse> sendPaymentSpark(
   // ANCHOR_END: send-payment-spark
   print(payment);
   return response;
+}
+
+Future<void> fetchLightningSendStatus(BreezSdk sdk) async {
+  // ANCHOR: fetch-lightning-send-status
+  String invoice = "<bolt11 invoice>";
+  final request = FetchLightningSendStatusRequest(invoice: invoice);
+  final response = await sdk.fetchLightningSendStatus(request: request);
+  switch (response.status) {
+    case PaymentStatus.completed:
+      print("Paid");
+      break;
+    case PaymentStatus.pending:
+      print("Payment in flight");
+      break;
+    case PaymentStatus.failed:
+      print("Payment failed");
+      break;
+    case null:
+      print("No Lightning payment found");
+      break;
+  }
+  // ANCHOR_END: fetch-lightning-send-status
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(

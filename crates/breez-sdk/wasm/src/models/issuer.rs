@@ -5,6 +5,7 @@ pub struct CreateIssuerTokenRequest {
     pub decimals: u32,
     pub is_freezable: bool,
     pub max_supply: u128,
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MintIssuerTokenRequest)]

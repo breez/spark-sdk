@@ -8,6 +8,10 @@ pub struct CreateIssuerTokenRequest {
     pub decimals: u32,
     pub is_freezable: bool,
     pub max_supply: u128,
+    /// Arbitrary data to attach to the token, such as an icon or a JSON description, of at most
+    /// 1024 bytes. It is part of the token identifier, so it cannot be changed after creation.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Serialize)]

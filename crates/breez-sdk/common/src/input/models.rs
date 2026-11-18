@@ -142,7 +142,7 @@ pub enum InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -231,13 +231,6 @@ pub struct LightningAddressDetails {
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,
     pub bip_353_address: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
 }
 
 #[derive(Deserialize, Debug)]

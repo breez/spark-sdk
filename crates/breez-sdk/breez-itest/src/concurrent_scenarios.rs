@@ -509,6 +509,7 @@ where
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
 

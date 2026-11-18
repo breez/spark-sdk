@@ -12,6 +12,8 @@ To create an invoice for another Spark wallet, set {{#name receiver_identity_pub
 
 **Note:** the payment may fallback to a direct Spark payment (if the payer's client supports this).
 
+To create the invoice with your own preimage, set {{#name preimage}}. Each invoice needs a new random preimage. An invoice with a user-created preimage never includes a Spark address.
+
 When a partner fee applies to the invoice, the response's {{#name fee}} reports it. By default the payer covers it: the invoice is issued for the amount plus the fee, and you receive the amount. Set {{#name fee_policy}} to {{#enum FeePolicy::FeesIncluded}} to issue the invoice for exactly the amount and deduct the fee from what you receive. An invoice without an amount always deducts the fee, so its fee is a {{#enum ReceiveFee::Rate}} of what the payer sends. With {{#name prefer_spark_over_lightning}} enabled the invoice carries your Spark address, which a payer could use to skip the fee, so no partner fee applies to it.
 
 {{#tabs receive_payment:receive-payment-lightning-bolt11}}
@@ -66,6 +68,8 @@ Call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Receiv
 
 Build {{#enum ReceivePaymentMethod::CrossChain}} with the chosen route and an `amount`.
 
+Set {{#name refund_address}} to the payer's address on the route's chain, where a deposit the provider can't deliver is returned. It is required when the payer sends from an exchange. See [Refunds and failures](./cross_chain.md#refunds-and-failures).
+
 The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the source asset's base units, per the route's {{#name CrossChainRoutePair.decimals}}. USD-stable sources sit at USD parity, so `1_000_000` is 1 USDC (6 decimals), about $1.
 
 {{#name fee_mode}} controls what the amount means:
@@ -77,7 +81,7 @@ The {{#name amount}} on {{#enum ReceivePaymentMethod::CrossChain}} is in the sou
 
 {{#name max_slippage_bps}} (10 to 500) bounds the price movement tolerated between quote and delivery. {{#name target_overpay_bps}} (0 to 500) sets the FeesExcluded overpay buffer. Left unset, the SDK defaults apply.
 
-The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. The receiver pays no fee; the sender's deposit covers it.
+The {{#name payment_request}} field carries an EIP-681 URI for EVM routes and the bare deposit address for Solana and Tron. A Solana transfer built in code must also create the deposit address's token account, which wallet apps do on their own (see [Paying from Solana](./cross_chain.md#paying-from-solana)). The {{#name cross_chain_info}} block surfaces the bare deposit address, deposit amount, expected receive amount, destination denomination, and quote {{#name expires_at}}. Its {{#name quote_id}} is also in the {{#name conversion_info}} of the incoming payment, which matches the payment to this receive. The receiver pays no fee, since the sender's deposit covers it.
 
 The provider's fee in {{#name service_fee_amount}} is in its own asset, {{#name service_fee_asset}}, which can differ from both the deposit and the destination asset. Format it with {{#name service_fee_asset_decimals}}, not the route's decimals. The fee includes your [partner fee](./cross_chain_partner_fees.md) if you set one.
 
@@ -124,3 +128,4 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 | **PaymentPending**   | The sender's deposit was detected and the inbound Spark transfer claim is in progress.               | Show payment as pending.                         |
 | **PaymentSucceeded** | The inbound Spark transfer is claimed and the payment is complete.                                   | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
 | **PaymentMetadataUpdated** | The provider confirmed the order: the payment's {{#name conversion_info}} now carries the delivered amount and the deposit transaction. The payment is reported with its {{#name conversion_info}} from its first event on, so this only completes it. | Refresh the payment in the UI with the details carried by the event. |
+| **PaymentFailed** | The provider refunded the deposit to the sender or failed the order, so nothing was received. See [refunds and failures](./cross_chain.md#refunds-and-failures). | Show the payment as failed. When its {{#name conversion_info}} status is {{#enum ConversionStatus::Refunded}}, tell the user the deposit was sent back. |

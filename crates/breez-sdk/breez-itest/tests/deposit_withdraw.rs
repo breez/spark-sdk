@@ -9,6 +9,82 @@ use tracing::{info, warn};
 // Local helpers
 // ---------------------
 
+#[cfg(not(feature = "local-itest"))]
+async fn wait_for_transaction(env: &Environment, txid: &str) -> Result<bitcoin::Transaction> {
+    for _ in 0..60 {
+        if let Ok(tx) = env.transaction(txid).await {
+            return Ok(tx);
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
+    anyhow::bail!("transaction {txid} did not reach the chain")
+}
+
+/// The indexes of the outputs of `tx` that an spdk wallet with `receiver`'s
+/// keys finds as its own. The wallet decides which inputs count from the
+/// scripts of the outputs they spend, so the parents come from the chain.
+#[cfg(not(feature = "local-itest"))]
+async fn outputs_found_by_silent_payment_wallet(
+    env: &Environment,
+    tx: &bitcoin::Transaction,
+    receiver: &silentpayments::receiving::Receiver,
+    scan_secret: &bitcoin::secp256k1::SecretKey,
+) -> Result<Vec<usize>> {
+    use std::collections::{HashMap, HashSet};
+
+    use bitcoin::secp256k1::XOnlyPublicKey;
+    use silentpayments::utils::OutPoint;
+    use silentpayments::utils::receiving::{
+        calculate_ecdh_shared_secret, calculate_tweak_data, get_pubkey_from_input,
+    };
+
+    let mut input_keys = Vec::new();
+    let mut outpoints = Vec::new();
+    for input in &tx.input {
+        let previous = input.previous_output;
+        let parent = env.transaction(&previous.txid.to_string()).await?;
+        let spent = parent
+            .output
+            .get(usize::try_from(previous.vout)?)
+            .ok_or_else(|| anyhow::anyhow!("the parent of {previous} has no such output"))?;
+        if let Some(key) = get_pubkey_from_input(
+            input.script_sig.as_bytes(),
+            &input.witness.to_vec(),
+            spent.script_pubkey.as_bytes(),
+        )? {
+            input_keys.push(key);
+        }
+        outpoints.push(OutPoint::from_txid_and_vout(
+            &previous.txid.to_string(),
+            previous.vout,
+        )?);
+    }
+    let tweak_data = calculate_tweak_data(&input_keys.iter().collect::<Vec<_>>(), &outpoints)?;
+    let shared_secret = calculate_ecdh_shared_secret(&tweak_data, scan_secret);
+
+    let taproot_outputs = tx
+        .output
+        .iter()
+        .enumerate()
+        .filter(|(_, output)| output.script_pubkey.is_p2tr())
+        .map(|(index, output)| {
+            let key = XOnlyPublicKey::from_slice(&output.script_pubkey.as_bytes()[2..])?;
+            Ok((index, key))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let keys: Vec<XOnlyPublicKey> = taproot_outputs.iter().map(|(_, key)| *key).collect();
+    let found: HashSet<XOnlyPublicKey> = receiver
+        .scan_transaction(&shared_secret, &keys)?
+        .into_values()
+        .flat_map(HashMap::into_keys)
+        .collect();
+    Ok(taproot_outputs
+        .into_iter()
+        .filter(|(_, key)| found.contains(key))
+        .map(|(index, _)| index)
+        .collect())
+}
+
 async fn wait_for_unclaimed_event(
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
     timeout: u64,
@@ -223,6 +299,17 @@ async fn test_onchain_withdraw_to_static_address(#[future] env: Result<Environme
     info!("Alice withdraw status: {:?}", send_resp.payment.status);
     assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
     assert!(matches!(send_resp.payment.payment_type, PaymentType::Send));
+    let Some(PaymentDetails::Withdraw {
+        destination_address,
+        ..
+    }) = &send_resp.payment.details
+    else {
+        anyhow::bail!(
+            "expected withdraw details, got {:?}",
+            send_resp.payment.details
+        );
+    };
+    assert_eq!(destination_address, &bob_address);
 
     let stored_payment = alice
         .sdk
@@ -269,6 +356,104 @@ async fn test_onchain_withdraw_to_static_address(#[future] env: Result<Environme
         unclaimed.is_empty(),
         "Unclaimed deposits should be empty after auto-claim"
     );
+
+    Ok(())
+}
+
+// The local sspd does not support silent payment withdrawals.
+#[cfg(not(feature = "local-itest"))]
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_onchain_withdraw_to_silent_payment_address(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    let env = env.await?;
+    let mut alice = env.create_wallet().await?;
+    ensure_funded(&mut alice, 120_000).await?;
+
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let scan_secret = bitcoin::secp256k1::SecretKey::from_slice(&[21; 32])?;
+    let spend_key = bitcoin::secp256k1::SecretKey::from_slice(&[22; 32])?.public_key(&secp);
+    let receiver = silentpayments::receiving::Receiver::new(
+        silentpayments::SpVersion::ZERO,
+        scan_secret.public_key(&secp),
+        spend_key,
+        silentpayments::receiving::Label::new(scan_secret, 0),
+        silentpayments::Network::Regtest,
+    )?;
+    let address = receiver.receiving_code().to_string();
+    info!("Silent payment address: {address}");
+
+    // A BIP-353 record usually contains a URI like this one. The payer picks the
+    // silent payment address, since the SDK cannot pay the BOLT12 offer.
+    let uri = format!(
+        "bitcoin:?sp={address}&lno=lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese"
+    );
+    let InputType::Bip21(bip_21) = alice.sdk.parse(&uri).await? else {
+        anyhow::bail!("expected a BIP-21 URI");
+    };
+    let [
+        InputType::SilentPaymentAddress(silent_payment),
+        InputType::Bolt12Offer(_),
+    ] = &bip_21.payment_methods[..]
+    else {
+        anyhow::bail!("unexpected payment methods: {:?}", bip_21.payment_methods);
+    };
+
+    let amount = 15_000u64;
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: PaymentRequest::Input {
+                input: silent_payment.address.clone(),
+            },
+            amount: Some(u128::from(amount)),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let SendPaymentMethod::BitcoinAddress {
+        address: details, ..
+    } = &prepare.payment_method
+    else {
+        anyhow::bail!(
+            "expected an on-chain send, got {:?}",
+            prepare.payment_method
+        );
+    };
+    assert_eq!(details.address, address);
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
+    let Some(PaymentDetails::Withdraw {
+        tx_id,
+        vout,
+        destination_address,
+    }) = send_resp.payment.details
+    else {
+        anyhow::bail!(
+            "expected withdraw details, got {:?}",
+            send_resp.payment.details
+        );
+    };
+    assert_eq!(vout, 0);
+    assert_eq!(destination_address, address);
+
+    // The recipient's wallet finds the payout without the SSP's proof.
+    let tx = wait_for_transaction(&env, &tx_id).await?;
+    assert_eq!(
+        outputs_found_by_silent_payment_wallet(&env, &tx, &receiver, &scan_secret).await?,
+        vec![0]
+    );
+    assert_eq!(tx.output[0].value.to_sat(), amount);
 
     Ok(())
 }

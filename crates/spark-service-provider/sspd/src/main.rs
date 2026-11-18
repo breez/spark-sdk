@@ -31,7 +31,6 @@ use internal_server::ssp_internal_api::pool_server::PoolServer;
 use internal_server::ssp_internal_api::ssp_manager_server::SspManagerServer;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use sqlx::postgres::PgPoolOptions;
 #[cfg(not(unix))]
 use tokio::signal;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -84,7 +83,7 @@ struct Args {
 
     /// The most connections the daemon has open to the postgres database.
     #[arg(long, default_value = "10")]
-    pub db_max_connections: u32,
+    pub db_max_connections: usize,
 
     /// Address to the bitcoind rpc. bitcoind has to run with `-txospenderindex`.
     #[arg(long, default_value = "http://localhost:8332")]
@@ -211,14 +210,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let pgpool = Arc::new(
-        PgPoolOptions::new()
-            .max_connections(args.db_max_connections)
-            .connect(&args.db_url)
+        postgresql::connect(&args.db_url, args.db_max_connections)
             .await
-            .map_err(|e| format!("failed to connect to postgres: {e:?}"))?,
+            .map_err(|e| e.to_string())?,
     );
     if args.auto_migrate {
-        postgresql::migrate(&pgpool).await?;
+        postgresql::migrate(&pgpool)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     let chain_client = Arc::new(BitcoindClient::new(

@@ -172,10 +172,11 @@ public static class IssuerCommands
         var decimalsStr = GetFlag(args, "--decimals") ?? "6";
         var freezable = HasFlag(args, "-f", "--freezable");
         var maxSupplyStr = GetFlag(args, "--max-supply");
+        var extraMetadata = GetFlag(args, "-e", "--extra-metadata");
 
         if (name == null || ticker == null)
         {
-            Console.WriteLine("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N]");
+            Console.WriteLine("Usage: issuer create-token --name <name> --ticker <ticker> [--decimals N] [--freezable] [--max-supply N] [-e <text>]");
             return;
         }
 
@@ -187,7 +188,10 @@ public static class IssuerCommands
             ticker: ticker,
             decimals: decimals,
             isFreezable: freezable,
-            maxSupply: maxSupply
+            maxSupply: maxSupply,
+            extraMetadata: extraMetadata != null
+                ? System.Text.Encoding.UTF8.GetBytes(extraMetadata)
+                : null
         ));
         Serialization.PrintValue(result);
     }

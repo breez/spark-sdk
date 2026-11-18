@@ -5,14 +5,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
+use deadpool_postgres::Pool;
 use spark::services::TransferId;
-use sqlx::PgPool;
+use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::{execute, query, query_one, query_opt, transfer_uuid};
 use crate::coop_exit::repository::{CoopExitRecord, CoopExitStore};
 use crate::wallet::onchain::record_spends;
 
-#[derive(sqlx::FromRow)]
 struct CoopExitRow {
     id: String,
     user_identity_public_key: Vec<u8>,
@@ -30,6 +31,31 @@ struct CoopExitRow {
     settled: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&Row> for CoopExitRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_identity_public_key: row.try_get("user_identity_public_key")?,
+            user_transfer_id: row.try_get("user_transfer_id")?,
+            withdrawal_address: row.try_get("withdrawal_address")?,
+            amount_sats: row.try_get("amount_sats")?,
+            fee_sats: row.try_get("fee_sats")?,
+            raw_coop_exit_tx: row.try_get("raw_coop_exit_tx")?,
+            raw_connector_tx: row.try_get("raw_connector_tx")?,
+            coop_exit_txid: row.try_get("coop_exit_txid")?,
+            prevouts: row.try_get("prevouts")?,
+            completed: row.try_get("completed")?,
+            broadcast_txid: row.try_get("broadcast_txid")?,
+            leaves_claimed: row.try_get("leaves_claimed")?,
+            settled: row.try_get("settled")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 impl TryFrom<CoopExitRow> for CoopExitRecord {
@@ -65,12 +91,18 @@ fn sats_to_i64(sats: u64) -> Result<i64, String> {
     i64::try_from(sats).map_err(|e| format!("amount exceeds i64: {e}"))
 }
 
+fn coop_exit(row: &Row) -> Result<CoopExitRecord, String> {
+    CoopExitRow::try_from(row)
+        .map_err(|e| e.to_string())?
+        .try_into()
+}
+
 pub struct PostgresCoopExitStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresCoopExitStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
@@ -93,28 +125,31 @@ impl CoopExitStore for PostgresCoopExitStore {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
-        sqlx::query(
+        let mut client = self.pool.get().await.map_err(|e| e.to_string())?;
+        let db = client.transaction().await.map_err(|e| e.to_string())?;
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_coop_exit_requests
                (id, user_identity_public_key, user_transfer_id, withdrawal_address,
                 amount_sats, fee_sats, raw_coop_exit_tx, raw_connector_tx, coop_exit_txid,
                 prevouts)
-               VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            &[
+                &record.id,
+                &record.user_identity_public_key.serialize().to_vec(),
+                &transfer_uuid(&record.user_transfer_id),
+                &record.withdrawal_address,
+                &sats_to_i64(record.amount_sats)?,
+                &sats_to_i64(record.fee_sats)?,
+                &record.raw_coop_exit_tx.as_slice(),
+                &record.raw_connector_tx.as_slice(),
+                &record.coop_exit_txid,
+                &prevouts_json,
+            ],
         )
-        .bind(&record.id)
-        .bind(record.user_identity_public_key.serialize().to_vec())
-        .bind(record.user_transfer_id.to_string())
-        .bind(&record.withdrawal_address)
-        .bind(sats_to_i64(record.amount_sats)?)
-        .bind(sats_to_i64(record.fee_sats)?)
-        .bind(record.raw_coop_exit_tx.as_slice())
-        .bind(record.raw_connector_tx.as_slice())
-        .bind(&record.coop_exit_txid)
-        .bind(prevouts_json)
-        .execute(&mut *db)
         .await
         .map_err(|e| e.to_string())?;
-        record_spends(&mut db, &txid, &outpoints)
+        record_spends(&db, &txid, &outpoints)
             .await
             .map_err(|e| e.to_string())?;
         // The connector tx's spend is recorded too: if the wallet spent the exit's
@@ -126,51 +161,56 @@ impl CoopExitStore for PostgresCoopExitStore {
             .iter()
             .map(|input| input.previous_output)
             .collect();
-        record_spends(&mut db, &connector.compute_txid(), &connector_inputs)
+        record_spends(&db, &connector.compute_txid(), &connector_inputs)
             .await
             .map_err(|e| e.to_string())?;
-        sqlx::query(
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_coop_exit_leaves (leaf_id, request_id)
                SELECT UNNEST($1::text[]), $2"#,
+            &[&leaf_ids, &record.id],
         )
-        .bind(leaf_ids)
-        .bind(&record.id)
-        .execute(&mut *db)
         .await
         .map_err(|e| e.to_string())?;
         db.commit().await.map_err(|e| e.to_string())
     }
 
     async fn any_leaf_in_open_request(&self, leaf_ids: &[String]) -> Result<bool, String> {
-        sqlx::query_scalar(
+        query_one(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT EXISTS (SELECT 1 FROM brz_ssp_coop_exit_leaves WHERE leaf_id = ANY($1))"#,
+            &[&leaf_ids],
         )
-        .bind(leaf_ids)
-        .fetch_one(self.pool.as_ref())
         .await
+        .and_then(|row| row.try_get(0))
         .map_err(|e| e.to_string())
     }
 
     async fn abandon(&self, id: &str) -> Result<(), String> {
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let mut client = self.pool.get().await.map_err(|e| e.to_string())?;
+        let db = client.transaction().await.map_err(|e| e.to_string())?;
         // Deleting the request first locks its row, so a concurrent completion
         // either lands first and keeps the request and its coins, or finds the
         // request gone.
-        let abandoned: Option<(String, Vec<u8>)> = sqlx::query_as(
+        let abandoned: Option<(String, Vec<u8>)> = query_opt(
+            &db,
             r#"DELETE FROM brz_ssp_coop_exit_requests WHERE id = $1 AND NOT completed
                RETURNING coop_exit_txid, raw_connector_tx"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(&mut *db)
         .await
+        .and_then(|row| {
+            row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+                .transpose()
+        })
         .map_err(|e| e.to_string())?;
         if let Some((txid, raw_connector_tx)) = abandoned {
             let connector_txid = connector_tx(&raw_connector_tx)?.compute_txid().to_string();
-            sqlx::query(
+            execute(
+                &db,
                 r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)"#,
+                &[&vec![txid, connector_txid]],
             )
-            .bind(vec![txid, connector_txid])
-            .execute(&mut *db)
             .await
             .map_err(|e| e.to_string())?;
         }
@@ -181,14 +221,15 @@ impl CoopExitStore for PostgresCoopExitStore {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Option<CoopExitRecord>, String> {
-        sqlx::query_as::<_, CoopExitRow>(
-            r#"SELECT * FROM brz_ssp_coop_exit_requests WHERE user_transfer_id = $1::uuid"#,
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"SELECT * FROM brz_ssp_coop_exit_requests WHERE user_transfer_id = $1"#,
+            &[&transfer_uuid(transfer_id)],
         )
-        .bind(transfer_id.to_string())
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(CoopExitRecord::try_from)
+        .as_ref()
+        .map(coop_exit)
         .transpose()
     }
 
@@ -196,17 +237,17 @@ impl CoopExitStore for PostgresCoopExitStore {
         &self,
         transfer_ids: &[TransferId],
     ) -> Result<Vec<CoopExitRecord>, String> {
-        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
-        sqlx::query_as::<_, CoopExitRow>(
+        let ids: Vec<Uuid> = transfer_ids.iter().map(transfer_uuid).collect();
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_coop_exit_requests
-               WHERE user_transfer_id = ANY($1::uuid[])"#,
+               WHERE user_transfer_id = ANY($1)"#,
+            &[&ids],
         )
-        .bind(&ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(CoopExitRecord::try_from)
+        .iter()
+        .map(coop_exit)
         .collect()
     }
 
@@ -214,118 +255,126 @@ impl CoopExitStore for PostgresCoopExitStore {
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<CoopExitRecord>, String> {
-        sqlx::query_as::<_, CoopExitRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_coop_exit_requests
                WHERE NOT completed AND created_at < $1
                ORDER BY created_at"#,
+            &[&cutoff],
         )
-        .bind(cutoff)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(CoopExitRecord::try_from)
+        .iter()
+        .map(coop_exit)
         .collect()
     }
 
     async fn set_completed(&self, id: &str) -> Result<(), String> {
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
-        sqlx::query(
+        let mut client = self.pool.get().await.map_err(|e| e.to_string())?;
+        let db = client.transaction().await.map_err(|e| e.to_string())?;
+        execute(
+            &db,
             r#"UPDATE brz_ssp_coop_exit_requests SET completed = TRUE, updated_at = NOW() WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .execute(&mut *db)
         .await
         .map_err(|e| e.to_string())?;
-        sqlx::query(r#"DELETE FROM brz_ssp_coop_exit_leaves WHERE request_id = $1"#)
-            .bind(id)
-            .execute(&mut *db)
-            .await
-            .map_err(|e| e.to_string())?;
+        execute(
+            &db,
+            r#"DELETE FROM brz_ssp_coop_exit_leaves WHERE request_id = $1"#,
+            &[&id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         db.commit().await.map_err(|e| e.to_string())
     }
 
     async fn set_settled(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_coop_exit_requests SET settled = TRUE, updated_at = NOW() WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_broadcast_txid(&self, id: &str, txid: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_coop_exit_requests SET broadcast_txid = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &txid],
         )
-        .bind(id)
-        .bind(txid)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_leaves_claimed(&self, id: &str) -> Result<(), String> {
-        let mut db = self.pool.begin().await.map_err(|e| e.to_string())?;
-        let raw_connector_tx: Option<Vec<u8>> = sqlx::query_scalar(
+        let mut client = self.pool.get().await.map_err(|e| e.to_string())?;
+        let db = client.transaction().await.map_err(|e| e.to_string())?;
+        let raw_connector_tx: Option<Vec<u8>> = query_opt(
+            &db,
             r#"UPDATE brz_ssp_coop_exit_requests SET leaves_claimed = TRUE, updated_at = NOW()
                WHERE id = $1 RETURNING raw_connector_tx"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(&mut *db)
         .await
+        .and_then(|row| row.map(|row| row.try_get(0)).transpose())
         .map_err(|e| e.to_string())?;
         if let Some(raw_connector_tx) = raw_connector_tx {
-            sqlx::query(r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = $1"#)
-                .bind(connector_tx(&raw_connector_tx)?.compute_txid().to_string())
-                .execute(&mut *db)
-                .await
-                .map_err(|e| e.to_string())?;
+            execute(
+                &db,
+                r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = $1"#,
+                &[&connector_tx(&raw_connector_tx)?.compute_txid().to_string()],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
         db.commit().await.map_err(|e| e.to_string())
     }
 
     async fn get(&self, id: &str) -> Result<Option<CoopExitRecord>, String> {
-        sqlx::query_as::<_, CoopExitRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_coop_exit_requests WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(CoopExitRecord::try_from)
+        .as_ref()
+        .map(coop_exit)
         .transpose()
     }
 
     async fn pending(&self) -> Result<Vec<CoopExitRecord>, String> {
-        sqlx::query_as::<_, CoopExitRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_coop_exit_requests
                WHERE completed AND NOT settled
                ORDER BY created_at"#,
+            &[],
         )
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(CoopExitRecord::try_from)
+        .iter()
+        .map(coop_exit)
         .collect()
     }
 
     async fn list(&self, limit: u32) -> Result<Vec<CoopExitRecord>, String> {
-        sqlx::query_as::<_, CoopExitRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_coop_exit_requests
                ORDER BY created_at DESC
                LIMIT $1"#,
+            &[&i64::from(limit)],
         )
-        .bind(i64::from(limit))
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(CoopExitRecord::try_from)
+        .iter()
+        .map(coop_exit)
         .collect()
     }
 }
@@ -347,7 +396,7 @@ mod tests {
 
     struct Fixture {
         store: PostgresCoopExitStore,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -363,24 +412,25 @@ mod tests {
         }
 
         async fn created(&self, id: &str, minutes_ago: i32) {
-            sqlx::query(
+            execute(
+                &self.pool.get().await.unwrap(),
                 "UPDATE brz_ssp_coop_exit_requests
                  SET created_at = NOW() - make_interval(mins => $2) WHERE id = $1",
+                &[&id, &minutes_ago],
             )
-            .bind(id)
-            .bind(minutes_ago)
-            .execute(&*self.pool)
             .await
             .unwrap();
         }
 
         async fn withheld(&self) -> Vec<Spend> {
-            let mut spends: Vec<Spend> = sqlx::query_as(
-                "SELECT tx_id, output_index, spending_txid FROM brz_ssp_onchain_wallet_spends",
-            )
-            .fetch_all(&*self.pool)
-            .await
-            .unwrap();
+            let client = self.pool.get().await.unwrap();
+            let sql =
+                "SELECT tx_id, output_index, spending_txid FROM brz_ssp_onchain_wallet_spends";
+            let rows = query(&client, sql, &[]).await.unwrap();
+            let mut spends: Vec<Spend> = rows
+                .iter()
+                .map(|row| (row.get(0), row.get(1), row.get(2)))
+                .collect();
             spends.sort();
             spends
         }

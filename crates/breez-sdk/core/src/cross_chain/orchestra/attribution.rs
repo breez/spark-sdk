@@ -38,9 +38,9 @@ impl Attribution {
             .as_ref()
             .map(|id| format!("{PARTNER_AFFILIATE_PREFIX}{id}"));
         if let Some(id) = &partner_affiliate_id {
-            info!("Orchestra: partner affiliate id {id}");
+            debug!("Orchestra: partner affiliate id {id}");
         } else {
-            info!("Orchestra: no partner affiliate id, sending {DEFAULT_AFFILIATE_ID} only");
+            debug!("Orchestra: no partner affiliate id, sending {DEFAULT_AFFILIATE_ID} only");
         }
         Self {
             partner_affiliate_id,

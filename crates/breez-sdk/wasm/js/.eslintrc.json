@@ -43,22 +43,6 @@
     },
     {
       "files": [
-        "mysql-storage/*",
-        "node-storage/*",
-        "node-tree-store/*",
-        "passkey-prf-provider/*",
-        "postgres-session-store/*",
-        "postgres-storage/*",
-        "postgres-token-store/*",
-        "postgres-tree-store/*",
-        "web-storage/*"
-      ],
-      "rules": {
-        "no-console": "warn"
-      }
-    },
-    {
-      "files": [
         "*/tests/timezone-scenario.cjs"
       ],
       "rules": {

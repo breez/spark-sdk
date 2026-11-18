@@ -99,7 +99,7 @@ impl ExternalSigningSigner for TurnkeySigningSigner {
         // 32-byte digest, so Turnkey signs it as-is (NO_OP).
         let sign_with = self
             .client
-            .compressed_pubkey_at(self.identity_rooted_path(&path))
+            .ensure_account(&self.identity_rooted_path(&path), ADDRESS_FORMAT_COMPRESSED)
             .await
             .map_err(to_signer_err)?;
         let result = self
@@ -118,7 +118,7 @@ impl ExternalSigningSigner for TurnkeySigningSigner {
     ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
         let sign_with = self
             .client
-            .compressed_pubkey_at(self.identity_rooted_path(&path))
+            .ensure_account(&self.identity_rooted_path(&path), ADDRESS_FORMAT_COMPRESSED)
             .await
             .map_err(to_signer_err)?;
         let result = self
@@ -160,8 +160,8 @@ impl ExternalSigningSigner for TurnkeySigningSigner {
         // hash is signed as-is (NO_OP).
         let sign_with = self
             .client
-            .create_account(
-                self.identity_rooted_path(&path),
+            .ensure_account(
+                &self.identity_rooted_path(&path),
                 spark_address_format(self.network).map_err(to_signer_err)?,
             )
             .await

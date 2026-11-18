@@ -62,8 +62,11 @@ pub use persist::{
     path::default_storage_path,
 };
 pub use sdk::{
-    BreezSdk, GetSparkStatusRequest, default_config, default_server_config, get_spark_status,
-    init_logging, parse_spark_config,
+    BreezSdk, BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient, BridgingConfig,
+    CreateBridgeRequest, CreateBridgeResponse, GetBridgeRoutesRequest, GetBridgeRoutesResponse,
+    GetBridgeStatusRequest, GetBridgeStatusResponse, GetSparkStatusRequest,
+    default_bridging_config, default_config, default_server_config, get_spark_status, init_logging,
+    new_bridging_client, parse_spark_config,
 };
 pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
@@ -105,16 +108,10 @@ pub use spark_wallet::token_store_tests;
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
-#[allow(clippy::doc_markdown)]
-pub(crate) mod built_info {
-    // The file has been placed there by the build script.
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
 pub(crate) fn default_user_agent() -> String {
     format!(
         "{}/{}",
-        crate::built_info::PKG_NAME,
-        crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+        env!("CARGO_PKG_NAME"),
+        spark_wallet::GIT_VERSION.unwrap_or(env!("CARGO_PKG_VERSION")),
     )
 }

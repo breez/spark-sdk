@@ -1,4 +1,5 @@
-//! Shared validation building blocks for the send-payment prepare flow.
+//! Shared validation building blocks for the send-payment prepare flow, and
+//! for the refund address a cross-chain receive or bridge takes.
 //!
 //! These are the cross-cutting checks that every payment type enforces. Each
 //! per-type `prepare/<type>.rs::validate_request` calls them first, so the
@@ -6,16 +7,16 @@
 
 use breez_sdk_common::input;
 
+use crate::sdk::SdkInputParser;
 use crate::utils::time::try_now_secs;
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, CrossChainRouteFilter,
-    CrossChainRoutePair, FeePolicy, SparkInvoiceDetails,
+    CrossChainRoutePair, FeePolicy, InputType, SparkInvoiceDetails,
     cross_chain::{
-        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+        CrossChainContext, DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
         MIN_CROSS_CHAIN_SLIPPAGE_BPS,
     },
     error::SdkError,
-    sdk::BreezSdk,
 };
 
 /// Validates that a Spark invoice can be paid by us: it has not expired, and it
@@ -156,7 +157,7 @@ pub(in crate::sdk) fn validate_recipient_not_contract_address(
 /// contributes rather than an error: this feeds a best-effort guard, and a
 /// provider being briefly unreachable must not block a valid send.
 pub(in crate::sdk) async fn known_token_contracts(
-    sdk: &BreezSdk,
+    cross_chain_context: &CrossChainContext,
     address: &str,
     address_family: input::CrossChainAddressFamily,
     route: &CrossChainRoutePair,
@@ -174,7 +175,7 @@ pub(in crate::sdk) async fn known_token_contracts(
         delivery_method: None,
     };
 
-    let mut listed = match sdk.get_cross_chain_routes(&filter).await {
+    let mut listed = match cross_chain_context.list_routes(&filter).await {
         Ok(routes) => routes,
         Err(e) => {
             tracing::warn!(
@@ -189,6 +190,38 @@ pub(in crate::sdk) async fn known_token_contracts(
         .into_iter()
         .filter_map(|r| r.contract_address.map(|c| (c, r.asset, r.chain)))
         .collect()
+}
+
+/// Parses the payer's refund address, when given, and checks it is an address
+/// on `route`'s chain that isn't a token contract.
+pub(in crate::sdk) async fn validate_refund_address(
+    cross_chain_context: &CrossChainContext,
+    input_parser: &SdkInputParser,
+    refund_address: Option<&str>,
+    route: &CrossChainRoutePair,
+) -> Result<Option<String>, SdkError> {
+    let Some(refund_address) = refund_address else {
+        return Ok(None);
+    };
+    let parsed: InputType = input_parser.parse(refund_address).await?.into();
+    let InputType::CrossChainAddress(refund) = parsed else {
+        return Err(SdkError::InvalidInput(
+            "Refund address must be a cross-chain (EVM/Solana/Tron) address".to_string(),
+        ));
+    };
+    let refund_family: input::CrossChainAddressFamily = refund.address_family.into();
+    validate_address_family_against_route(refund_family, route)?;
+    let known_contracts =
+        known_token_contracts(cross_chain_context, &refund.address, refund_family, route).await;
+    validate_recipient_not_contract_address(&refund.address, refund_family, &known_contracts)
+        .map_err(|_| {
+            SdkError::InvalidInput(
+                "Refund address is a token contract. Funds refunded to it cannot be \
+             recovered. Use the payer's wallet address instead."
+                    .to_string(),
+            )
+        })?;
+    Ok(Some(refund.address))
 }
 
 /// Resolves the slippage bps to use for the provider leg.
@@ -233,9 +266,11 @@ pub(in crate::sdk) fn resolve_direct_overpay_amount(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{CrossChainAcceptedAsset, CrossChainProvider, DeliveryMethod, SparkAsset};
-    use macros::test_all;
+    use macros::{async_test_all, test_all};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -555,5 +590,117 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    // ---- validate_refund_address ----
+
+    const PAYER_TRON: &str = "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9";
+    const PAYER_EVM: &str = "0x9d9089eE0D37EF0815336de64FbBCB8a99da8344";
+
+    struct NoFiat;
+
+    #[macros::async_trait]
+    impl breez_sdk_common::fiat::FiatService for NoFiat {
+        async fn fetch_fiat_currencies(
+            &self,
+        ) -> Result<
+            Vec<breez_sdk_common::fiat::FiatCurrency>,
+            breez_sdk_common::error::ServiceConnectivityError,
+        > {
+            panic!("unexpected fiat lookup")
+        }
+
+        async fn fetch_fiat_rates(
+            &self,
+        ) -> Result<
+            Vec<breez_sdk_common::fiat::Rate>,
+            breez_sdk_common::error::ServiceConnectivityError,
+        > {
+            panic!("unexpected fiat lookup")
+        }
+    }
+
+    struct Offline;
+
+    #[macros::async_trait]
+    impl platform_utils::HttpClient for Offline {
+        async fn get(
+            &self,
+            url: String,
+            _: Option<std::collections::HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            panic!("unexpected GET {url}")
+        }
+        async fn post(
+            &self,
+            url: String,
+            _: Option<std::collections::HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            panic!("unexpected POST {url}")
+        }
+        async fn delete(
+            &self,
+            url: String,
+            _: Option<std::collections::HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            panic!("unexpected DELETE {url}")
+        }
+    }
+
+    /// Checks `refund_address` against a Tron USDT route, offline. With no
+    /// provider to list routes, the token contracts known are the route's own.
+    async fn check_tron_refund(refund_address: Option<&str>) -> Result<Option<String>, SdkError> {
+        let context = CrossChainContext::new(Arc::new(NoFiat));
+        let parser = SdkInputParser::new(
+            breez_sdk_common::dns::Resolver::with_proxy(None).unwrap(),
+            Arc::new(Offline),
+            None,
+        );
+        let route = route_with_contract("tron", Some(USDT_TRON));
+        validate_refund_address(&context, &parser, refund_address, &route).await
+    }
+
+    fn invalid_input_message(result: Result<Option<String>, SdkError>) -> String {
+        match result {
+            Err(SdkError::InvalidInput(msg)) => msg,
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[async_test_all]
+    async fn a_refund_address_is_optional() {
+        assert_eq!(check_tron_refund(None).await.unwrap(), None);
+    }
+
+    #[async_test_all]
+    async fn a_refund_address_on_the_routes_chain_is_accepted() {
+        assert_eq!(
+            check_tron_refund(Some(PAYER_TRON))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(PAYER_TRON)
+        );
+    }
+
+    #[async_test_all]
+    async fn a_refund_address_on_another_chain_is_rejected() {
+        let msg = invalid_input_message(check_tron_refund(Some(PAYER_EVM)).await);
+        assert!(msg.contains("tron"), "{msg}");
+    }
+
+    #[async_test_all]
+    async fn a_token_contract_is_not_a_refund_address() {
+        let msg = invalid_input_message(check_tron_refund(Some(USDT_TRON)).await);
+        assert!(msg.contains("token contract"), "{msg}");
+    }
+
+    #[async_test_all]
+    async fn a_refund_address_must_be_a_cross_chain_address() {
+        let spark_address = "spark1pgss98a8ctz6t632ss24c4xst2axg9r9lac38lvhq7v79t4x8sdcme3jcqeruk";
+        let msg = invalid_input_message(check_tron_refund(Some(spark_address)).await);
+        assert!(msg.contains("cross-chain"), "{msg}");
     }
 }

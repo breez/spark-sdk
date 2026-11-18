@@ -49,6 +49,7 @@ function parseCliArgs() {
     storeLabel: false,
     rpid: undefined,
     lnurlDomain: undefined,
+    realTimeSyncServerUrl: undefined,
     proxy: undefined,
     proxyUser: undefined,
     proxyPassword: undefined
@@ -111,6 +112,9 @@ function parseCliArgs() {
       case '--lnurl-domain':
         opts.lnurlDomain = args[++i]
         break
+      case '--real-time-sync-server-url':
+        opts.realTimeSyncServerUrl = args[++i]
+        break
       case '--proxy':
         opts.proxy = args[++i]
         break
@@ -143,6 +147,7 @@ function parseCliArgs() {
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
         console.log('  --server-mode                                Run in server mode (background_tasks_enabled=false)')
         console.log('  --lnurl-domain <domain>                      LNURL server domain for lightning address registration')
+        console.log('  --real-time-sync-server-url <url>            Real-time sync server URL (overrides network default)')
         console.log('  --proxy <HOST:PORT>                          Route every connection through a SOCKS5 proxy')
         console.log('  --proxy-user <user>                          Username for SOCKS5 authentication (requires --proxy-password)')
         console.log('  --proxy-password <password>                  Password for SOCKS5 authentication (requires --proxy-user)')
@@ -349,6 +354,10 @@ async function main() {
 
   if (opts.lnurlDomain !== undefined) {
     config.lnurlDomain = opts.lnurlDomain
+  }
+
+  if (opts.realTimeSyncServerUrl !== undefined) {
+    config.realTimeSyncServerUrl = opts.realTimeSyncServerUrl
   }
 
   // Stable balance config

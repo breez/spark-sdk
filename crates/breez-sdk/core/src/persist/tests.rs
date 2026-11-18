@@ -5,9 +5,9 @@ use chrono::Utc;
 use crate::{
     ChainTransaction, DepositClaimError, InstantClaimStatus, LeafRecovery, LnurlWithdrawInfo,
     MaxFee, MaxOnchainFee, Payment, PaymentDetails, PaymentMetadata, PaymentMethod, PaymentStatus,
-    PaymentType, RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage,
-    StoredWatchtowerExitOutput, TokenMetadata, TokenTransactionType, UpdateDepositPayload,
-    UpdateLeafRecovery, UpdateWatchedAddressPayload, WatchtowerExitRecovery,
+    PaymentTokenMetadata, PaymentType, RefundState, SparkHtlcDetails, SparkHtlcStatus, Storage,
+    StoredWatchtowerExitOutput, TokenTransactionType, UpdateDepositPayload, UpdateLeafRecovery,
+    UpdateWatchedAddressPayload, WatchtowerExitRecovery,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
@@ -340,7 +340,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
 #[allow(clippy::too_many_lines)]
 pub async fn test_storage(storage: Box<dyn Storage>) {
     use crate::SetLnurlMetadataItem;
-    use crate::models::{LnurlPayInfo, TokenMetadata};
+    use crate::models::{LnurlPayInfo, PaymentTokenMetadata};
 
     // Test 1: Spark invoice payment
     let spark_payment = Payment {
@@ -385,7 +385,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     // Test 3: Transfer token payment with invoice
-    let token_metadata = TokenMetadata {
+    let token_metadata = PaymentTokenMetadata {
         identifier: "token123".to_string(),
         issuer_public_key: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
             .to_string(),
@@ -574,6 +574,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         sender_comment: Some("Test sender comment".to_string()),
         nostr_zap_request: Some(r#"{"kind":9734,"content":"test zap"}"#.to_string()),
         nostr_zap_receipt: Some(r#"{"kind":9735,"content":"test receipt"}"#.to_string()),
+        lightning_address: Some("alice@example.com".to_string()),
     };
     let lightning_lnurl_receive_payment = Payment {
         id: "lightning_lnurl_receive_pmt".to_string(),
@@ -607,6 +608,8 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         method: PaymentMethod::Withdraw,
         details: Some(PaymentDetails::Withdraw {
             tx_id: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12".to_string(),
+            vout: 1,
+            destination_address: "bcrt1p_withdraw_destination".to_string(),
         }),
         conversion_details: None,
     };
@@ -822,6 +825,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
             payment_hash: lnurl_receive_payment_hash.clone(),
             sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+            lightning_address: lnurl_receive_metadata.lightning_address.clone(),
         }])
         .await
         .unwrap();
@@ -1016,6 +1020,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     (Some(r_info), Some(e_info)) => {
                         assert_eq!(r_info.nostr_zap_request, e_info.nostr_zap_request);
                         assert_eq!(r_info.sender_comment, e_info.sender_comment);
+                        assert_eq!(r_info.lightning_address, e_info.lightning_address);
                     }
                     (None, None) => {}
                     _ => panic!(
@@ -1025,10 +1030,20 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 }
             }
             (
-                Some(PaymentDetails::Withdraw { tx_id: r_tx_id }),
-                Some(PaymentDetails::Withdraw { tx_id: e_tx_id }),
+                Some(PaymentDetails::Withdraw {
+                    tx_id: r_tx_id,
+                    vout: r_vout,
+                    destination_address: r_destination_address,
+                }),
+                Some(PaymentDetails::Withdraw {
+                    tx_id: e_tx_id,
+                    vout: e_vout,
+                    destination_address: e_destination_address,
+                }),
             ) => {
                 assert_eq!(r_tx_id, e_tx_id);
+                assert_eq!(r_vout, e_vout);
+                assert_eq!(r_destination_address, e_destination_address);
             }
             (
                 Some(PaymentDetails::Deposit {
@@ -1129,6 +1144,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_receipt: Some(
                 r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string(),
             ),
+            lightning_address: Some("alice@example.com".to_string()),
         }])
         .await
         .unwrap();
@@ -1158,6 +1174,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_receipt,
                 Some(r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string()),
                 "Nostr zap receipt should match"
+            );
+            assert_eq!(
+                metadata.lightning_address,
+                Some("alice@example.com".to_string()),
+                "Lightning address should match"
             );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),
@@ -1223,12 +1244,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 sender_comment: Some("Nice work!".to_string()),
                 nostr_zap_request: None,
                 nostr_zap_receipt: None,
+                lightning_address: Some("bob@example.com".to_string()),
             },
             SetLnurlMetadataItem {
                 payment_hash: "zaphash3".to_string(),
                 sender_comment: None,
                 nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 nostr_zap_receipt: None,
+                lightning_address: None,
             },
         ])
         .await
@@ -1254,6 +1277,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_request, None,
                 "Second payment should not have zap request"
             );
+            assert_eq!(
+                metadata.lightning_address,
+                Some("bob@example.com".to_string()),
+                "Second payment should have Lightning address"
+            );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),
     }
@@ -1276,6 +1304,40 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 metadata.nostr_zap_request,
                 Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 "Third payment should have zap request"
+            );
+            assert_eq!(
+                metadata.lightning_address, None,
+                "Third payment should not have Lightning address"
+            );
+        }
+        _ => panic!("Expected Lightning payment with lnurl receive metadata"),
+    }
+
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: "zaphash3".to_string(),
+            sender_comment: None,
+            nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
+            nostr_zap_receipt: None,
+            lightning_address: Some("carol@example.com".to_string()),
+        }])
+        .await
+        .unwrap();
+
+    let updated_zap3 = storage
+        .get_payment_by_id(lightning_zap_payment3.id.clone())
+        .await
+        .unwrap();
+
+    match updated_zap3.details {
+        Some(PaymentDetails::Lightning {
+            lnurl_receive_metadata: Some(metadata),
+            ..
+        }) => {
+            assert_eq!(
+                metadata.lightning_address,
+                Some("carol@example.com".to_string()),
+                "Setting metadata again should replace the Lightning address"
             );
         }
         _ => panic!("Expected Lightning payment with lnurl receive metadata"),
@@ -2218,7 +2280,7 @@ pub async fn test_payment_status_filtering(storage: Box<dyn Storage>) {
 
 #[allow(clippy::too_many_lines)]
 pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
-    use crate::models::TokenMetadata;
+    use crate::models::PaymentTokenMetadata;
 
     // Create payments with different asset types
     let spark_payment = Payment {
@@ -2267,7 +2329,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         timestamp: 3000,
         method: PaymentMethod::Token,
         details: Some(PaymentDetails::Token {
-            metadata: TokenMetadata {
+            metadata: PaymentTokenMetadata {
                 identifier: "token_id_1".to_string(),
                 issuer_public_key: "pubkey".to_string(),
                 name: "Token 1".to_string(),
@@ -2294,6 +2356,8 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         method: PaymentMethod::Withdraw,
         details: Some(PaymentDetails::Withdraw {
             tx_id: "withdraw_tx_1".to_string(),
+            vout: 0,
+            destination_address: "bcrt1p_withdraw_1_destination".to_string(),
         }),
         conversion_details: None,
     };
@@ -2572,7 +2636,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         timestamp: 1000,
         method: PaymentMethod::Token,
         details: Some(PaymentDetails::Token {
-            metadata: crate::TokenMetadata {
+            metadata: crate::PaymentTokenMetadata {
                 identifier: "token1".to_string(),
                 issuer_public_key: "pubkey1".to_string(),
                 name: "Test Token".to_string(),
@@ -2789,6 +2853,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             estimated_out: 99_500_000,
             delivered_amount: None,
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: crate::ConversionStatus::Pending,
             fee_amount: Some(500_000),
             service_fee_amount: Some(500),
@@ -2837,6 +2902,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             estimated_out: 50_000_000,
             delivered_amount: None,
             external_tx_hash: Some("3hNfQ8xLpQqZ1vJm5rWt7YkC2dGbApS9eFhNzUvXwR4t".to_string()),
+            refund_tx_hash: None,
             status: crate::ConversionStatus::Completed,
             fee_amount: Some(500_000),
             service_fee_amount: Some(250),
@@ -2875,6 +2941,75 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         .await
         .unwrap();
 
+    // Add a refunded Orchestra receive (should NOT match OrchestraPending).
+    // Nothing arrived over Spark, so the row carries only the conversion.
+    let orchestra_refunded_metadata = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo::Orchestra {
+            order_id: "ord_345".to_string(),
+            quote_id: "q_678".to_string(),
+            chain: "base".to_string(),
+            chain_id: Some("8453".to_string()),
+            asset: "USDC".to_string(),
+            recipient_address: "spark1recipient".to_string(),
+            asset_amount_in: Some(2_000_000),
+            estimated_out: 3_000,
+            delivered_amount: None,
+            external_tx_hash: Some("0xdeposit".to_string()),
+            refund_tx_hash: Some("0xrefund".to_string()),
+            status: crate::ConversionStatus::Refunded,
+            fee_amount: Some(20_000),
+            service_fee_amount: Some(20_000),
+            service_fee_asset: Some("USDC".to_string()),
+            service_fee_asset_decimals: Some(6),
+            read_token: None,
+            asset_decimals: 6,
+            asset_contract: Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string()),
+        }),
+        ..Default::default()
+    };
+    let orchestra_refunded_payment = Payment {
+        id: "q_678".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Failed,
+        amount: 3_000,
+        fees: 0,
+        timestamp: 6000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage
+        .insert_payment_metadata("q_678".to_string(), orchestra_refunded_metadata)
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(orchestra_refunded_payment)
+        .await
+        .unwrap();
+    let refunded = storage
+        .get_payment_by_id("q_678".to_string())
+        .await
+        .unwrap();
+    assert_eq!(refunded.status, PaymentStatus::Failed);
+    let Some(PaymentDetails::Spark {
+        conversion_info:
+            Some(crate::ConversionInfo::Orchestra {
+                status,
+                refund_tx_hash,
+                ..
+            }),
+        ..
+    }) = refunded.details
+    else {
+        panic!("Expected Spark details with Orchestra conversion info");
+    };
+    assert_eq!(status, crate::ConversionStatus::Refunded);
+    assert_eq!(refund_tx_hash.as_deref(), Some("0xrefund"));
+
     // OrchestraPending should return only the pending orchestra payment
     let orchestra_pending_filter = storage
         .list_payments(StorageListPaymentsRequest {
@@ -2903,7 +3038,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
     assert_eq!(amm_only.len(), 1);
     assert_eq!(amm_only[0].id, "without_refund");
 
-    // No filter should return all spark payments (original 2 + 2 orchestra = 4)
+    // No filter should return all spark payments (original 2 + 3 orchestra = 5)
     let all_spark_with_orchestra = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
@@ -2914,7 +3049,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         })
         .await
         .unwrap();
-    assert_eq!(all_spark_with_orchestra.len(), 4);
+    assert_eq!(all_spark_with_orchestra.len(), 5);
 
     // -----------------------------------------------------------------
     // Boltz-specific filter tests
@@ -3025,7 +3160,7 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
 
 #[allow(clippy::too_many_lines)]
 pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
-    let token_metadata = TokenMetadata {
+    let token_metadata = PaymentTokenMetadata {
         identifier: "token123".to_string(),
         issuer_public_key: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
             .to_string(),
@@ -3557,6 +3692,69 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
     assert_eq!(
         htlc_details.as_ref().unwrap().preimage.as_ref().unwrap(),
         "preimage_123"
+    );
+}
+
+fn withdraw_payment(id: &str, vout: u32, destination_address: &str) -> Payment {
+    Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 10_000,
+        fees: 100,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Withdraw,
+        details: Some(PaymentDetails::Withdraw {
+            tx_id: format!("{id}_tx"),
+            vout,
+            destination_address: destination_address.to_string(),
+        }),
+        conversion_details: None,
+    }
+}
+
+async fn stored_withdraw_details(storage: &dyn Storage, id: &str) -> (String, u32, String) {
+    let payment = storage.get_payment_by_id(id.to_string()).await.unwrap();
+    let Some(PaymentDetails::Withdraw {
+        tx_id,
+        vout,
+        destination_address,
+    }) = payment.details
+    else {
+        panic!(
+            "expected withdraw details for {id}, got {:?}",
+            payment.details
+        );
+    };
+    (tx_id, vout, destination_address)
+}
+
+pub async fn test_withdraw_details(storage: Box<dyn Storage>) {
+    storage
+        .apply_payment_update(withdraw_payment("withdraw", 1, "bcrt1p_destination"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_withdraw_details(storage.as_ref(), "withdraw").await,
+        (
+            "withdraw_tx".to_string(),
+            1,
+            "bcrt1p_destination".to_string()
+        )
+    );
+
+    // After an upgrade, the SDK rewrites past withdrawals with this kind of update.
+    storage
+        .apply_payment_update(withdraw_payment("withdraw", 0, "sprt1q_destination"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_withdraw_details(storage.as_ref(), "withdraw").await,
+        (
+            "withdraw_tx".to_string(),
+            0,
+            "sprt1q_destination".to_string()
+        )
     );
 }
 

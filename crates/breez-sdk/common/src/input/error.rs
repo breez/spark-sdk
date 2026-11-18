@@ -10,14 +10,17 @@ pub enum Bip21Error {
     InvalidAmount,
     #[error("bip21 contains invalid parameter value for '{0}'")]
     InvalidParameter(String),
-    #[error("bip21 parameter missing equals character")]
-    MissingEquals,
     #[error("bip21 contains parameter '{0}' multiple times")]
     MultipleParams(String),
     #[error("bip21 contains unknown required parameter '{0}'")]
     UnknownRequiredParameter(String),
     #[error("bip21 does not contain any payment methods")]
     NoPaymentMethods,
+    #[error(
+        "bip21 contains more than {} payment methods",
+        super::MAX_PAYMENT_METHODS
+    )]
+    TooManyPaymentMethods,
 }
 
 impl Bip21Error {
@@ -36,6 +39,8 @@ impl Bip21Error {
 pub enum ParseError {
     #[error("empty input")]
     EmptyInput,
+    #[error("input is longer than {} bytes", super::MAX_INPUT_LENGTH)]
+    InputTooLong,
     #[error("Bip-21 error: {0}")]
     Bip21Error(Bip21Error),
     #[error("invalid input")]

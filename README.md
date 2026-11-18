@@ -175,8 +175,8 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] USDC receive support
 - [x] Detect pending mempool deposits
 - [x] Instant claim of on-chain deposits
+- [x] Token allowance
 - [ ] Add additional fees via the partner portal
-- [ ] Token allowance
 - [ ] Delegated spend
 - [ ] NWC
 - [ ] Bolt12

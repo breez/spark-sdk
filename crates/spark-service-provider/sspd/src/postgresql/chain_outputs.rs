@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use bitcoin::{OutPoint, Txid};
-use sqlx::postgres::PgRow;
-use sqlx::{PgConnection, Row};
+use deadpool_postgres::GenericClient;
+use tokio_postgres::Row;
 
-use super::ChainRepository;
+use super::{ChainRepository, execute, query, query_one};
 use crate::chain::TransactionConfirmations;
 use crate::chain::{
     ChainRepositoryError, ConfirmedOutput, OutputSpend, OutputStates, Spender, WatchedOutput,
@@ -31,7 +31,7 @@ const OUTPUT_STATES: &str = r"SELECT o.tx_id, o.output_index, spent.spending_tx_
          ON queued.tx_id = o.tx_id AND queued.output_index = o.output_index
        WHERE spent.tx_id IS NOT NULL OR queued.tx_id IS NOT NULL";
 
-fn read_state(states: &mut OutputStates, row: &PgRow) -> Result<(), ChainRepositoryError> {
+fn read_state(states: &mut OutputStates, row: &Row) -> Result<(), ChainRepositoryError> {
     let outpoint = outpoint(row.try_get("tx_id")?, row.try_get("output_index")?)?;
     let spender: Option<String> = row.try_get("spending_tx_id")?;
     let height: Option<i64> = row.try_get("height")?;
@@ -58,7 +58,7 @@ impl ChainRepository {
     /// the spend check through [`Self::watched`].
     pub async fn watch_outputs(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         outputs: &[WatchedOutput],
     ) -> Result<(), ChainRepositoryError> {
         if outputs.is_empty() {
@@ -75,7 +75,8 @@ impl ChainRepository {
             .collect();
         // Postgres inserts the rows in sorted order, so two callers that insert
         // the same outputs take their locks in the same order and never deadlock.
-        sqlx::query(
+        execute(
+            db,
             r"WITH watched AS (
                    INSERT INTO brz_ssp_chain_watch_outputs
                        (tx_id, output_index, input_tx_id, input_output_index)
@@ -89,12 +90,13 @@ impl ChainRepository {
                )
                INSERT INTO brz_ssp_chain_unchecked_outputs (tx_id, output_index)
                SELECT tx_id, output_index FROM watched",
+            &[
+                &tx_ids,
+                &output_indices,
+                &input_tx_ids,
+                &input_output_indices,
+            ],
         )
-        .bind(&tx_ids)
-        .bind(&output_indices)
-        .bind(&input_tx_ids)
-        .bind(&input_output_indices)
-        .execute(db)
         .await?;
         Ok(())
     }
@@ -107,7 +109,7 @@ impl ChainRepository {
     /// not watched.
     pub async fn output_states(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         outpoints: &[OutPoint],
     ) -> Result<OutputStates, ChainRepositoryError> {
         let mut states = OutputStates::default();
@@ -115,11 +117,7 @@ impl ChainRepository {
             return Ok(states);
         }
         let (tx_ids, output_indices) = ids(outpoints);
-        let rows = sqlx::query(OUTPUT_STATES)
-            .bind(&tx_ids)
-            .bind(&output_indices)
-            .fetch_all(db)
-            .await?;
+        let rows = query(db, OUTPUT_STATES, &[&tx_ids, &output_indices]).await?;
         for row in &rows {
             read_state(&mut states, row)?;
         }
@@ -129,21 +127,22 @@ impl ChainRepository {
     pub async fn spent_and_unchecked_outputs(
         &self,
     ) -> Result<(Vec<OutPoint>, Vec<OutPoint>), ChainRepositoryError> {
-        let rows: Vec<(String, i32, bool)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"SELECT tx_id, output_index, TRUE FROM brz_ssp_chain_spent_outputs
              UNION ALL
                SELECT tx_id, output_index, FALSE FROM brz_ssp_chain_unchecked_outputs",
+            &[],
         )
-        .fetch_all(&*self.pool)
         .await?;
         let (mut spent, mut unchecked) = (Vec::new(), Vec::new());
-        for (tx_id, index, is_spent) in &rows {
-            let outputs = if *is_spent {
+        for row in &rows {
+            let outputs = if row.try_get(2)? {
                 &mut spent
             } else {
                 &mut unchecked
             };
-            outputs.push(outpoint(tx_id, *index)?);
+            outputs.push(outpoint(row.try_get(0)?, row.try_get(1)?)?);
         }
         Ok((spent, unchecked))
     }
@@ -155,7 +154,8 @@ impl ChainRepository {
     pub async fn confirmed_unspent_outputs(
         &self,
     ) -> Result<Vec<ConfirmedOutput>, ChainRepositoryError> {
-        let rows: Vec<(String, i32, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"SELECT w.tx_id, w.output_index, confirmed.height
                FROM brz_ssp_chain_spent_outputs confirmed
                JOIN brz_ssp_chain_watch_outputs w
@@ -169,14 +169,14 @@ impl ChainRepository {
                          SELECT 1 FROM brz_ssp_chain_unchecked_outputs queued
                          WHERE queued.tx_id = w.tx_id AND queued.output_index = w.output_index)
                ORDER BY confirmed.height, w.tx_id, w.output_index",
+            &[],
         )
-        .fetch_all(&*self.pool)
         .await?;
         rows.iter()
-            .map(|(tx_id, index, height)| {
+            .map(|row| {
                 Ok(ConfirmedOutput {
-                    outpoint: outpoint(tx_id, *index)?,
-                    height: height.cast_unsigned(),
+                    outpoint: outpoint(row.try_get(0)?, row.try_get(1)?)?,
+                    height: row.try_get::<_, i64>(2)?.cast_unsigned(),
                 })
             })
             .collect()
@@ -186,25 +186,21 @@ impl ChainRepository {
     /// height of each of `txids` that is in a block of the chain record.
     pub async fn output_states_and_tx_heights(
         &self,
-        db: &mut PgConnection,
+        db: &impl GenericClient,
         outpoints: &[OutPoint],
         txids: &[Txid],
     ) -> Result<(OutputStates, HashMap<Txid, u64>), ChainRepositoryError> {
         let (tx_ids, output_indices) = ids(outpoints);
         let block_tx_ids: Vec<String> = txids.iter().map(ToString::to_string).collect();
-        let rows = sqlx::query(&format!(
+        let sql = format!(
             r"SELECT states.*, NULL::bigint AS tx_height FROM ({OUTPUT_STATES}) states
              UNION ALL
                SELECT tb.tx_id, NULL, NULL, NULL, FALSE, b.height
                FROM brz_ssp_chain_tx_blocks tb
                JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
                WHERE tb.tx_id = ANY($3)"
-        ))
-        .bind(&tx_ids)
-        .bind(&output_indices)
-        .bind(&block_tx_ids)
-        .fetch_all(db)
-        .await?;
+        );
+        let rows = query(db, &sql, &[&tx_ids, &output_indices, &block_tx_ids]).await?;
         let mut states = OutputStates::default();
         let mut heights = HashMap::new();
         for row in &rows {
@@ -226,17 +222,21 @@ impl ChainRepository {
         txids: &[Txid],
     ) -> Result<HashMap<Txid, u64>, ChainRepositoryError> {
         let tx_ids: Vec<String> = txids.iter().map(ToString::to_string).collect();
-        let rows: Vec<(String, i64)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"SELECT tb.tx_id, b.height
                FROM brz_ssp_chain_tx_blocks tb
                JOIN brz_ssp_chain_blocks b ON b.block_hash = tb.block_hash
                WHERE tb.tx_id = ANY($1)",
+            &[&tx_ids],
         )
-        .bind(&tx_ids)
-        .fetch_all(&*self.pool)
         .await?;
         rows.iter()
-            .map(|(tx_id, height)| Ok((tx_id.parse()?, height.cast_unsigned())))
+            .map(|row| {
+                let tx_id: &str = row.try_get(0)?;
+                let height: i64 = row.try_get(1)?;
+                Ok((tx_id.parse()?, height.cast_unsigned()))
+            })
             .collect()
     }
 
@@ -263,7 +263,8 @@ impl ChainRepository {
         if tx_ids.is_empty() {
             return Ok(0);
         }
-        let recorded = sqlx::query(
+        let recorded = execute(
+            &self.pool.get().await?,
             r"INSERT INTO brz_ssp_chain_tx_blocks (tx_id, block_hash)
                SELECT confirmed.tx_id, block.block_hash
                FROM UNNEST($1::text[], $2::text[], $3::bigint[])
@@ -272,13 +273,9 @@ impl ChainRepository {
                JOIN brz_ssp_chain_blocks block ON block.height = tip.height - confirmed.depth
                WHERE tip.height = (SELECT MAX(height) FROM brz_ssp_chain_blocks)
                ON CONFLICT (tx_id, block_hash) DO NOTHING",
+            &[&tx_ids, &best_blocks, &depths],
         )
-        .bind(&tx_ids)
-        .bind(&best_blocks)
-        .bind(&depths)
-        .execute(&*self.pool)
-        .await?
-        .rows_affected();
+        .await?;
         Ok(recorded)
     }
 
@@ -290,7 +287,8 @@ impl ChainRepository {
         &self,
         limit: u32,
     ) -> Result<Vec<OutPoint>, ChainRepositoryError> {
-        let rows: Vec<(String, i32)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r"SELECT queued.tx_id, queued.output_index
                FROM brz_ssp_chain_unchecked_outputs queued
                JOIN brz_ssp_chain_watch_outputs w
@@ -301,12 +299,11 @@ impl ChainRepository {
                      AND queued_input.output_index = w.input_output_index)
                ORDER BY queued.tx_id, queued.output_index
                LIMIT $1",
+            &[&i64::from(limit)],
         )
-        .bind(i64::from(limit))
-        .fetch_all(&*self.pool)
         .await?;
         rows.iter()
-            .map(|(tx_id, index)| outpoint(tx_id, *index))
+            .map(|row| outpoint(row.try_get(0)?, row.try_get(1)?))
             .collect()
     }
 
@@ -317,7 +314,8 @@ impl ChainRepository {
     /// spend of that input by that transaction. Returns how many outputs it
     /// removed.
     pub async fn drop_unconfirmed_outputs(&self) -> Result<u64, ChainRepositoryError> {
-        let dropped = sqlx::query(
+        let dropped = execute(
+            &self.pool.get().await?,
             r"WITH RECURSIVE unconfirmed AS (
                    SELECT queued.tx_id, queued.output_index
                    FROM brz_ssp_chain_unchecked_outputs queued
@@ -347,10 +345,9 @@ impl ChainRepository {
                USING unconfirmed
                WHERE queued.tx_id = unconfirmed.tx_id
                  AND queued.output_index = unconfirmed.output_index",
+            &[],
         )
-        .execute(&*self.pool)
-        .await?
-        .rows_affected();
+        .await?;
         Ok(dropped)
     }
 
@@ -389,7 +386,8 @@ impl ChainRepository {
 
         // Postgres records the spends and removes the outputs from the queue in
         // one statement, so it commits both or neither.
-        let recorded: i64 = sqlx::query_scalar(
+        let recorded: i64 = query_one(
+            &self.pool.get().await?,
             r"WITH recorded AS (
                    INSERT INTO brz_ssp_chain_spent_outputs
                        (tx_id, output_index, spending_tx_id, block_hash, height)
@@ -409,16 +407,18 @@ impl ChainRepository {
                      AND queued.output_index = checked.output_index
                )
                SELECT COUNT(*) FROM recorded",
+            &[
+                &spent_ids,
+                &spent_indices,
+                &spenders,
+                &blocks,
+                &heights,
+                &checked_ids,
+                &checked_indices,
+            ],
         )
-        .bind(&spent_ids)
-        .bind(&spent_indices)
-        .bind(&spenders)
-        .bind(&blocks)
-        .bind(&heights)
-        .bind(&checked_ids)
-        .bind(&checked_indices)
-        .fetch_one(&*self.pool)
-        .await?;
+        .await?
+        .try_get(0)?;
         Ok(recorded.cast_unsigned())
     }
 }

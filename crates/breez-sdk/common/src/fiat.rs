@@ -63,7 +63,7 @@ impl FiatService for BreezServer {
     }
 
     async fn fetch_fiat_rates(&self) -> Result<Vec<Rate>, ServiceConnectivityError> {
-        let mut client = self.get_information_client().await;
+        let mut client = self.get_information_client().await?;
 
         let request = RatesRequest {};
         let response = with_connection_retry!(client.rates(request))

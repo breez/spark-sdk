@@ -668,9 +668,9 @@ mod tests {
     use bitcoin::secp256k1::SecretKey;
     use bitcoin::transaction::Version;
     use bitcoin::{Address, Amount, BlockHash, Network, ScriptBuf, Sequence, TxIn, Witness};
+    use deadpool_postgres::Pool;
     use spark::operator::rpc::OperatorRpcError;
     use spark::tree::{SigningKeyshare, TreeNodeStatus, chain_reaches_root};
-    use sqlx::PgPool;
     use uuid::Uuid;
 
     use super::*;
@@ -1146,7 +1146,7 @@ mod tests {
         check: IncomingLeafCheck,
         coordinator: Arc<Coordinator>,
         bitcoind: Arc<Bitcoind>,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -1240,10 +1240,11 @@ mod tests {
                 .add_block(&block(height), &[funded], &[])
                 .await
                 .unwrap();
-            let mut db = self.pool.begin().await.unwrap();
+            let mut client = self.pool.get().await.unwrap();
+            let db = client.transaction().await.unwrap();
             self.check
                 .leaf_store
-                .insert_leaves(&mut db, std::slice::from_ref(&tree.pedigree))
+                .insert_leaves(&db, std::slice::from_ref(&tree.pedigree))
                 .await
                 .unwrap();
             db.commit().await.unwrap();

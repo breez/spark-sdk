@@ -320,7 +320,8 @@ impl BreezSdk {
             self.spark_wallet.clone(),
             self.storage.clone(),
             self.event_emitter.clone(),
-        );
+        )
+        .with_sync_interval_secs(self.config.sync_interval_secs);
         sync_service.sync_payments(initial_sync_complete).await?;
 
         Ok(())

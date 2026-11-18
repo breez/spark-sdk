@@ -49,6 +49,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
            pd.tx_id AS deposit_tx_id,
            pd.vout AS deposit_vout,
            p.spark,
@@ -72,6 +74,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.lightning_address AS lnurl_lightning_address,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM payments p
@@ -367,13 +370,15 @@ class SqliteStorage {
           this._runPaymentUpsert(payment);
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           this._runPaymentUpsert(payment);
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldEmit = false;
@@ -395,8 +400,8 @@ class SqliteStorage {
 
   _runPaymentUpsert(payment) {
     const paymentInsert = this.db.prepare(
-      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @spark)
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @withdrawVout, @withdrawDestinationAddress, @spark)
        ON CONFLICT(id) DO UPDATE SET
          payment_type=excluded.payment_type,
          status=excluded.status,
@@ -405,6 +410,8 @@ class SqliteStorage {
          timestamp=excluded.timestamp,
          method=excluded.method,
          withdraw_tx_id=excluded.withdraw_tx_id,
+         withdraw_vout=excluded.withdraw_vout,
+         withdraw_destination_address=excluded.withdraw_destination_address,
          spark=excluded.spark`
     );
     const depositInsert = this.db.prepare(
@@ -447,6 +454,7 @@ class SqliteStorage {
           htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)`
     );
 
+    const withdraw = payment.details?.type === "withdraw" ? payment.details : null;
     paymentInsert.run({
       id: payment.id,
       paymentType: payment.paymentType,
@@ -455,8 +463,9 @@ class SqliteStorage {
       fees: payment.fees.toString(),
       timestamp: payment.timestamp,
       method: payment.method ? toJson(payment.method) : null,
-      withdrawTxId:
-        payment.details?.type === "withdraw" ? payment.details.txId : null,
+      withdrawTxId: withdraw?.txId ?? null,
+      withdrawVout: withdraw?.vout ?? null,
+      withdrawDestinationAddress: withdraw?.destinationAddress ?? null,
       spark: payment.details?.type === "spark" ? 1 : null,
     });
 
@@ -508,6 +517,10 @@ class SqliteStorage {
           : null,
       });
     }
+  }
+
+  _log(level, line) {
+    this.logger?.log({ line, level });
   }
 
   _normalizePaymentStatus(status) {
@@ -580,7 +593,7 @@ class SqliteStorage {
   /**
    * Gets payments that have any of the specified parent payment IDs.
    * @param {string[]} parentPaymentIds - Array of parent payment IDs
-   * @returns {Promise<Object>} Map of parentPaymentId -> array of RelatedPayment objects
+   * @returns {Promise<Object>} Map of parentPaymentId -> array of Payment objects
    */
   getPaymentsByParentIds(parentPaymentIds) {
     try {
@@ -1015,7 +1028,7 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address) VALUES (?, ?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -1024,7 +1037,8 @@ class SqliteStorage {
             item.paymentHash,
             item.nostrZapRequest || null,
             item.nostrZapReceipt || null,
-            item.senderComment || null
+            item.senderComment || null,
+            item.lightningAddress || null
           );
         }
       });
@@ -1088,6 +1102,7 @@ class SqliteStorage {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          lightningAddress: row.lnurl_lightning_address || null,
         };
       }
 
@@ -1102,10 +1117,16 @@ class SqliteStorage {
         }
       }
     } else if (row.withdraw_tx_id) {
-      details = {
-        type: "withdraw",
-        txId: row.withdraw_tx_id,
-      };
+      // A withdrawal stored before the SDK kept these values has no details
+      // until the next sync rewrites it.
+      if (row.withdraw_vout != null && row.withdraw_destination_address != null) {
+        details = {
+          type: "withdraw",
+          txId: row.withdraw_tx_id,
+          vout: row.withdraw_vout,
+          destinationAddress: row.withdraw_destination_address,
+        };
+      }
     } else if (row.deposit_tx_id) {
       details = {
         type: "deposit",

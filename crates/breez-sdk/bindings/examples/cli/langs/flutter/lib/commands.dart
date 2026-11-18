@@ -7,16 +7,19 @@ import 'package:crypto/crypto.dart';
 
 import 'cli.dart';
 import 'serialization.dart';
+import 'token_allowances.dart';
 
 /// All top-level command names (used for help text).
 const commandNames = [
   'get-info',
   'get-payment',
+  'fetch-lightning-send-status',
   'sync',
   'list-payments',
   'receive',
   'pay',
   'pay-batch',
+  'pull-payment',
   'lnurl-pay',
   'lnurl-withdraw',
   'lnurl-auth',
@@ -27,8 +30,6 @@ const commandNames = [
   'refund-deposit',
   'list-unclaimed-deposits',
   'buy-bitcoin',
-  'bridge-from-cash-app',
-  'bridge-to-cash-app',
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
@@ -58,11 +59,19 @@ Map<String, CommandEntry> buildCommandRegistry() {
   return {
     'get-info': CommandEntry('Get balance information', _handleGetInfo),
     'get-payment': CommandEntry('Get the payment with the given ID', _handleGetPayment),
+    'fetch-lightning-send-status': CommandEntry(
+      'Fetch the status of a Lightning payment of a Bolt11 invoice from the operators',
+      _handleFetchLightningSendStatus,
+    ),
     'sync': CommandEntry('Sync wallet state', _handleSync),
     'list-payments': CommandEntry('List payments', _handleListPayments),
     'receive': CommandEntry('Receive a payment', _handleReceive),
     'pay': CommandEntry('Pay the given payment request', _handlePay),
     'pay-batch': CommandEntry('Pay several recipients with one token transaction', _handlePayBatch),
+    'pull-payment': CommandEntry(
+      'Pull a payment from a wallet that granted an allowance',
+      _handlePullPayment,
+    ),
     'lnurl-pay': CommandEntry('Pay using LNURL', _handleLnurlPay),
     'lnurl-withdraw': CommandEntry('Withdraw using LNURL', _handleLnurlWithdraw),
     'lnurl-auth': CommandEntry('Authenticate using LNURL', _handleLnurlAuth),
@@ -76,14 +85,6 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'refund-deposit': CommandEntry('Refund an on-chain deposit', _handleRefundDeposit),
     'list-unclaimed-deposits': CommandEntry('List unclaimed on-chain deposits', _handleListUnclaimedDeposits),
     'buy-bitcoin': CommandEntry('Buy Bitcoin using an external provider', _handleBuyBitcoin),
-    'bridge-from-cash-app': CommandEntry(
-      'Bridge from Cash App to USDC/USDT on an external chain',
-      _handleBridgeFromCashApp,
-    ),
-    'bridge-to-cash-app': CommandEntry(
-      'Bridge USDC/USDT from an external chain to a Cash App user',
-      _handleBridgeToCashApp,
-    ),
     'check-lightning-address-available': CommandEntry(
       'Check if a lightning address username is available',
       _handleCheckLightningAddressAvailable,
@@ -171,6 +172,20 @@ Future<void> _handleGetPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   parser.parse(args);
   final paymentId = args.last;
   final result = await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId));
+  printValue(result);
+}
+
+// --- fetch-lightning-send-status ---
+
+Future<void> _handleFetchLightningSendStatus(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: fetch-lightning-send-status <invoice>');
+    return;
+  }
+  final invoice = args.first;
+  final result = await sdk.fetchLightningSendStatus(
+    request: FetchLightningSendStatusRequest(invoice: invoice),
+  );
   printValue(result);
 }
 
@@ -328,6 +343,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         ..addOption('expiry-secs', abbr: 'e')
         ..addOption('sender-public-key', abbr: 's')
         ..addFlag('hodl', defaultsTo: false)
+        ..addOption('preimage', help: 'Preimage (hex) for the bolt11 invoice (conflicts with --hodl)')
         ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address')
         ..addOption(
           'cross-chain-max-slippage-bps',
@@ -335,11 +351,8 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         )
         ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
         ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)')
-        ..addFlag(
-          'cross-chain-to-bitcoin',
-          defaultsTo: false,
-          help: 'Deliver cross-chain receive as Bitcoin',
-        );
+        ..addFlag('cross-chain-to-bitcoin', defaultsTo: false, help: 'Deliver cross-chain receive as Bitcoin')
+        ..addOption('cross-chain-refund-address', help: "Payer's address on the route's chain for refunds");
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -352,6 +365,11 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
   final expirySecs = expirySecsStr != null ? int.parse(expirySecsStr) : null;
   final senderPublicKey = results.option('sender-public-key');
   final hodl = results.flag('hodl');
+  final callerPreimage = results.option('preimage');
+  if (hodl && callerPreimage != null) {
+    print('--hodl and --preimage conflict: use one or the other');
+    return;
+  }
   final newAddress = results.flag('new-address');
 
   ReceivePaymentMethod paymentMethod;
@@ -392,6 +410,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         expirySecs: expirySecs,
         paymentHash: paymentHash,
         receiverIdentityPublicKey: null,
+        preimage: callerPreimage,
         feePolicy: null,
       );
     case 'crosschain':
@@ -415,6 +434,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
       final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
       final targetOverpayBpsStr = results.option('cross-chain-target-overpay-bps');
       final targetOverpayBps = targetOverpayBpsStr != null ? int.parse(targetOverpayBpsStr) : null;
+      final crossChainRefundAddress = results.option('cross-chain-refund-address');
       SparkAsset? destination;
       if (crossChainToBitcoin) {
         destination = SparkAsset.bitcoin();
@@ -428,6 +448,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         feeMode: feeMode,
         maxSlippageBps: maxSlippageBps,
         targetOverpayBps: targetOverpayBps,
+        refundAddress: crossChainRefundAddress,
       );
     default:
       print('Invalid payment method: $method');
@@ -636,6 +657,83 @@ Future<void> _handlePayBatch(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
 
   final response = await sdk.sendBatch(request: SendBatchRequest(prepareResponse: prepareResponse));
   printValue(response.payments);
+}
+
+// --- pull-payment ---
+
+PullReceiver? _parsePullReceiver(String s) {
+  final colonIdx = s.lastIndexOf(':');
+  if (colonIdx < 0) {
+    final amount = BigInt.tryParse(s);
+    if (amount == null) {
+      print("Invalid receiver '$s': expected an amount or 'address:amount'");
+      return null;
+    }
+    return PullReceiver(receiverAddress: null, amount: amount);
+  }
+  final address = s.substring(0, colonIdx);
+  final amountStr = s.substring(colonIdx + 1);
+  final amount = BigInt.tryParse(amountStr);
+  if (amount == null) {
+    print("Invalid amount in receiver '$s'");
+    return null;
+  }
+  return PullReceiver(receiverAddress: address.isNotEmpty ? address : null, amount: amount);
+}
+
+Future<void> _handlePullPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  final parser = _parser('pull-payment')
+    ..addMultiOption('receiver', abbr: 'r', help: 'amount or address:amount (repeatable)');
+  final results = _parseArgs(
+    parser,
+    args,
+    'pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver>...]',
+  );
+  if (results == null) return;
+
+  if (results.rest.length < 2) {
+    print('Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver>...]');
+    return;
+  }
+  final payerAddress = results.rest[0];
+  final tokenIdentifier = results.rest[1];
+
+  final receiverStrs = results.multiOption('receiver');
+  if (receiverStrs.isEmpty) {
+    print('At least one --receiver (-r) is required');
+    return;
+  }
+
+  final receivers = <PullReceiver>[];
+  for (final s in receiverStrs) {
+    final r = _parsePullReceiver(s);
+    if (r == null) return;
+    receivers.add(r);
+  }
+
+  final prepareResponse = await sdk.preparePullPayment(
+    request: PreparePullPaymentRequest(
+      payerAddress: payerAddress,
+      tokenIdentifier: tokenIdentifier,
+      receivers: receivers,
+    ),
+  );
+
+  print(
+    'Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} '
+    'from ${prepareResponse.payerAddress}',
+  );
+  for (final receiver in prepareResponse.receivers) {
+    print('  ${receiver.amount} to ${receiver.receiverAddress ?? ''}');
+  }
+  final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+  if (answer.toLowerCase() != 'y') {
+    print('Pull cancelled');
+    return;
+  }
+
+  final response = await pullUntilSettled(sdk, prepareResponse);
+  printValue(response);
 }
 
 // --- lnurl-pay ---
@@ -1011,127 +1109,9 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   print(result.url);
   final info = result.crossChainInfo;
   if (info != null) {
-    print('Delivered as USDC on Solana. Quote:');
+    print('Conversion quote:');
     printValue(info);
   }
-}
-
-// --- bridge-from-cash-app ---
-
-Future<void> _handleBridgeFromCashApp(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('bridge-from-cash-app')
-        ..addOption(
-          'amount',
-          mandatory: true,
-          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
-        )
-        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
-  final results = _parseArgs(parser, args, 'bridge-from-cash-app <recipient> --amount <amount> [options]');
-  if (results == null) return;
-
-  if (results.rest.isEmpty) {
-    print('Usage: bridge-from-cash-app <recipient> --amount <amount> [options]');
-    return;
-  }
-  final recipient = results.rest.first;
-  final amount = BigInt.parse(results.option('amount')!);
-  final feesIncluded = results.flag('fees-included');
-  final maxSlippageBpsStr = results.option('max-slippage-bps');
-  final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
-
-  final parsed = await sdk.parse(input: recipient);
-  if (parsed is! InputType_CrossChainAddress) {
-    print('Recipient must be a cross-chain (EVM/Solana/Tron) address');
-    return;
-  }
-  final addressDetails = parsed.field0;
-  final address = addressDetails.address;
-  final route = await _selectCrossChainRoute(
-    sdk,
-    CrossChainRouteFilter.send(addressDetails: addressDetails, deliveryMethod: DeliveryMethod.lightning),
-  );
-  if (route == null) return;
-
-  final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
-
-  final response = await sdk.bridgeFromCashApp(
-    request: BridgeFromCashAppRequest(
-      address: address,
-      route: route,
-      amount: amount,
-      feePolicy: feePolicy,
-      maxSlippageBps: maxSlippageBps,
-    ),
-  );
-  print('Open this URL in a browser to complete the purchase:');
-  print(response.url);
-  print(
-    'Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} '
-    '${response.asset}, service fee ${response.serviceFeeAmount} '
-    '${_serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, expires ${response.expiresAt}',
-  );
-}
-
-// --- bridge-to-cash-app ---
-
-Future<void> _handleBridgeToCashApp(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('bridge-to-cash-app')
-        ..addOption(
-          'amount',
-          mandatory: true,
-          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
-        )
-        ..addOption('refund-address', mandatory: true, help: 'Payer address on the source chain for refunds')
-        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
-  final results = _parseArgs(
-    parser,
-    args,
-    'bridge-to-cash-app <recipient> --amount <amount> --refund-address <addr> [options]',
-  );
-  if (results == null) return;
-
-  if (results.rest.isEmpty) {
-    print('Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <addr> [options]');
-    return;
-  }
-  final recipient = results.rest.first;
-  final amount = BigInt.parse(results.option('amount')!);
-  final refundAddress = results.option('refund-address')!;
-  final feesIncluded = results.flag('fees-included');
-  final maxSlippageBpsStr = results.option('max-slippage-bps');
-  final maxSlippageBps = maxSlippageBpsStr != null ? int.parse(maxSlippageBpsStr) : null;
-
-  final route = await _selectCrossChainRoute(
-    sdk,
-    CrossChainRouteFilter.receive(contractAddress: null, deliveryMethod: DeliveryMethod.lightning),
-  );
-  if (route == null) return;
-
-  final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
-
-  final response = await sdk.bridgeToCashApp(
-    request: BridgeToCashAppRequest(
-      recipient: recipient,
-      route: route,
-      amount: amount,
-      feePolicy: feePolicy,
-      refundAddress: refundAddress,
-      maxSlippageBps: maxSlippageBps,
-    ),
-  );
-  final info = response.info;
-  print('Ask the payer to pay:');
-  print(response.paymentRequest);
-  print(
-    'Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. '
-    'Recipient receives ~${info.expectedReceivedAmount} sats, service fee ${info.serviceFeeAmount} '
-    '${_serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)}, '
-    'expires at ${info.expiresAt}',
-  );
 }
 
 // --- check-lightning-address-available ---

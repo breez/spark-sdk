@@ -75,6 +75,8 @@ If your web server sits behind a CDN or load balancer, set `X-Forwarded-For` to 
 
 Run the [LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) yourself, point your domain to it, and add the domain to the server's allowed domains. There is no need to contact Breez. See the server's README for how to build, configure and run it.
 
+Update the server before you update the SDK in your apps. The server is backward compatible with older SDK versions, but the SDK is not backward compatible with older server versions.
+
 ## Configuring the SDK
 
 Once your domain is set up, pass it as {{#name lnurl_domain}} in the SDK configuration, as described in [Configuring Lightning addresses for users](./receive_lnurl_pay.md#configuring-lightning-addresses-for-users).

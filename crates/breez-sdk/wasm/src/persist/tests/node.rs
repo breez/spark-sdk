@@ -160,6 +160,13 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_withdraw_details() {
+    let storage = create_test_storage("withdraw_details").await;
+
+    breez_sdk_spark::storage_tests::test_withdraw_details(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_terminal_status_is_not_replaced() {
     let storage = create_test_storage("payment_terminal_guard").await;
 
@@ -345,7 +352,7 @@ async fn test_migration_from_v17_to_v18() {
         timestamp: 1234567893,
         method: breez_sdk_spark::PaymentMethod::Token,
         details: Some(breez_sdk_spark::PaymentDetails::Token {
-            metadata: breez_sdk_spark::TokenMetadata {
+            metadata: breez_sdk_spark::PaymentTokenMetadata {
                 identifier: "another-token-id".to_string(),
                 issuer_public_key: "02".to_string() + &"b".repeat(64),
                 name: "Another Token".to_string(),

@@ -338,11 +338,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_storage_error)?;
 
-        // JS returns { parentId: RelatedPayment[] }
+        // JS returns { parentId: Payment[] }
         let js_map: HashMap<String, Vec<Payment>> = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        // Convert WASM RelatedPayment to core RelatedPayment
+        // Convert WASM Payment to core Payment
         let result_map: HashMap<String, Vec<breez_sdk_spark::Payment>> = js_map
             .into_iter()
             .map(|(parent_id, children)| {
@@ -621,7 +621,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     listLeafRecoveries: () => Promise<LeafRecovery[]>;
     updateLeafRecovery: (update: UpdateLeafRecovery) => Promise<void>;
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
-    getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
+    getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: Payment[] }>;
     listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
     getContact: (id: string) => Promise<Contact>;
     insertContact: (contact: Contact) => Promise<void>;

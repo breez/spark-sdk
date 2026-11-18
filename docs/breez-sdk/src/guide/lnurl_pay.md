@@ -4,8 +4,9 @@
 
 ## Preparing LNURL Payments
 
-During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request,
-and also returns the fees related to the payment so they can be confirmed.
+During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request, and also returns the fees related to the payment so they can be confirmed.
+
+A Cash App username prefixed with `$` (e.g. `$alice`) [parses](parse.md) to {{#enum InputType::LightningAddress}} for the user's Lightning address, `alice@cash.app`, so the same flow pays a Cash App user.
 
 Payments can be sent without holding Bitcoin by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.md">Converting tokens</a> for more information.
 
@@ -31,7 +32,7 @@ When [stable balance](./stable_balance.md) is active, you can send your entire w
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
 - **Prepare Response** - The response from the [Preparing LNURL Payments](lnurl_pay.md#preparing-lnurl-payments) step.
-- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made. The payment's id is the idempotency key.
 
 {{#tabs lnurl_pay:lnurl-pay}}
 

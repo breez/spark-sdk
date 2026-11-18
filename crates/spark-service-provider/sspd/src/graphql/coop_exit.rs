@@ -73,7 +73,7 @@ pub fn coop_exit_record_to_type(
         network,
         request_status: Some(request_status),
         fee: currency_amount_sats(record.fee_sats),
-        withdrawal_address: Some(record.withdrawal_address.clone()),
+        withdrawal_address: record.withdrawal_address.clone(),
         l1_broadcast_fee: currency_amount_sats(0),
         fee_quote: None,
         exit_speed: None,

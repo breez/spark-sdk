@@ -6,10 +6,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
+use deadpool_postgres::Pool;
 use spark::services::{Preimage, TransferId};
-use sqlx::PgPool;
+use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::{execute, query, query_opt, transfer_uuid};
 use crate::lightning::node::LightningPaymentId;
 use crate::lightning::repository::{
     HoldInvoiceStatus, HtlcOutput, LightningReceiveRecord, LightningSendRecord, LightningStore,
@@ -33,7 +35,6 @@ fn invoice_status_str(status: HoldInvoiceStatus) -> &'static str {
     }
 }
 
-#[derive(sqlx::FromRow)]
 struct SendRow {
     id: String,
     user_identity_public_key: Vec<u8>,
@@ -50,6 +51,30 @@ struct SendRow {
     leaves_claimed: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&Row> for SendRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_identity_public_key: row.try_get("user_identity_public_key")?,
+            encoded_invoice: row.try_get("encoded_invoice")?,
+            payment_hash: row.try_get("payment_hash")?,
+            amount_sats: row.try_get("amount_sats")?,
+            fee_sats: row.try_get("fee_sats")?,
+            user_transfer_id: row.try_get("user_transfer_id")?,
+            htlc_address: row.try_get("htlc_address")?,
+            idempotency_key: row.try_get("idempotency_key")?,
+            ln_payment_id: row.try_get("ln_payment_id")?,
+            preimage: row.try_get("preimage")?,
+            payment_status: row.try_get("payment_status")?,
+            leaves_claimed: row.try_get("leaves_claimed")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 impl TryFrom<SendRow> for LightningSendRecord {
@@ -90,7 +115,6 @@ impl TryFrom<SendRow> for LightningSendRecord {
     }
 }
 
-#[derive(sqlx::FromRow)]
 struct ReceiveRow {
     id: String,
     user_identity_public_key: Vec<u8>,
@@ -106,6 +130,29 @@ struct ReceiveRow {
     memo: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&Row> for ReceiveRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_identity_public_key: row.try_get("user_identity_public_key")?,
+            requester_identity_public_key: row.try_get("requester_identity_public_key")?,
+            payment_hash: row.try_get("payment_hash")?,
+            amount_sats: row.try_get("amount_sats")?,
+            encoded_invoice: row.try_get("encoded_invoice")?,
+            transfer_id: row.try_get("transfer_id")?,
+            transfer_amount_sats: row.try_get("transfer_amount_sats")?,
+            preimage: row.try_get("preimage")?,
+            invoice_status: row.try_get("invoice_status")?,
+            expires_at: row.try_get("expires_at")?,
+            memo: row.try_get("memo")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
 }
 
 impl TryFrom<ReceiveRow> for LightningReceiveRecord {
@@ -160,12 +207,24 @@ fn sats_to_i64(sats: u64) -> Result<i64, String> {
     i64::try_from(sats).map_err(|e| format!("amount exceeds i64: {e}"))
 }
 
+fn send(row: &Row) -> Result<LightningSendRecord, String> {
+    SendRow::try_from(row)
+        .map_err(|e| e.to_string())?
+        .try_into()
+}
+
+fn receive(row: &Row) -> Result<LightningReceiveRecord, String> {
+    ReceiveRow::try_from(row)
+        .map_err(|e| e.to_string())?
+        .try_into()
+}
+
 pub struct PostgresLightningStore {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PostgresLightningStore {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
@@ -174,53 +233,71 @@ impl PostgresLightningStore {
 impl LightningStore for PostgresLightningStore {
     /// Watches the send's HTLC address with the same commit.
     async fn insert_send(&self, record: &LightningSendRecord) -> Result<(), String> {
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
-        sqlx::query(
+        let mut client = self.pool.get().await.map_err(|e| e.to_string())?;
+        let tx = client.transaction().await.map_err(|e| e.to_string())?;
+        execute(
+            &tx,
             r#"INSERT INTO brz_ssp_lightning_send_requests
                (id, user_identity_public_key, encoded_invoice, payment_hash, amount_sats,
                 fee_sats, user_transfer_id, htlc_address, idempotency_key)
-               VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8, $9)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+            &[
+                &record.id,
+                &record.user_identity_public_key.serialize().to_vec(),
+                &record.encoded_invoice,
+                &record.payment_hash.as_byte_array().to_vec(),
+                &sats_to_i64(record.amount_sats)?,
+                &sats_to_i64(record.fee_sats)?,
+                &transfer_uuid(&record.user_transfer_id),
+                &record.htlc_address,
+                &record.idempotency_key.as_deref(),
+            ],
         )
-        .bind(&record.id)
-        .bind(record.user_identity_public_key.serialize().to_vec())
-        .bind(&record.encoded_invoice)
-        .bind(record.payment_hash.as_byte_array().to_vec())
-        .bind(sats_to_i64(record.amount_sats)?)
-        .bind(sats_to_i64(record.fee_sats)?)
-        .bind(record.user_transfer_id.to_string())
-        .bind(&record.htlc_address)
-        .bind(record.idempotency_key.as_deref())
-        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-        sqlx::query(
+        execute(
+            &tx,
             r#"INSERT INTO brz_ssp_chain_watch_addresses (address) VALUES ($1) ON CONFLICT DO NOTHING"#,
+            &[&record.htlc_address],
         )
-        .bind(&record.htlc_address)
-        .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())
     }
 
     async fn unswept_htlc_outputs(&self) -> Result<Vec<HtlcOutput>, String> {
-        let rows: Vec<(String, Vec<u8>, Vec<u8>, Option<String>, String, i32, i64)> =
-            sqlx::query_as(
-                r#"SELECT s.id, s.user_identity_public_key, s.preimage, s.htlc_sweep_address,
-                          o.tx_id, o.output_index, o.amount
-                   FROM brz_ssp_chain_tx_outputs o
-                   INNER JOIN brz_ssp_lightning_send_requests s ON s.htlc_address = o.address
-                   INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
-                   WHERE s.preimage IS NOT NULL
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM brz_ssp_chain_tx_inputs i
-                       INNER JOIN brz_ssp_chain_tx_blocks itb ON itb.tx_id = i.spending_tx_id
-                       WHERE i.tx_id = o.tx_id AND i.output_index = o.output_index)"#,
-            )
-            .fetch_all(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, Vec<u8>, Vec<u8>, Option<String>, String, i32, i64)> = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"SELECT s.id, s.user_identity_public_key, s.preimage, s.htlc_sweep_address,
+                      o.tx_id, o.output_index, o.amount
+               FROM brz_ssp_chain_tx_outputs o
+               INNER JOIN brz_ssp_lightning_send_requests s ON s.htlc_address = o.address
+               INNER JOIN brz_ssp_chain_tx_blocks tb ON tb.tx_id = o.tx_id
+               WHERE s.preimage IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM brz_ssp_chain_tx_inputs i
+                   INNER JOIN brz_ssp_chain_tx_blocks itb ON itb.tx_id = i.spending_tx_id
+                   WHERE i.tx_id = o.tx_id AND i.output_index = o.output_index)"#,
+            &[],
+        )
+        .await
+        .and_then(|rows| {
+            rows.iter()
+                .map(|row| {
+                    Ok((
+                        row.try_get(0)?,
+                        row.try_get(1)?,
+                        row.try_get(2)?,
+                        row.try_get(3)?,
+                        row.try_get(4)?,
+                        row.try_get(5)?,
+                        row.try_get(6)?,
+                    ))
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())?;
         rows.into_iter()
             .map(
                 |(send_id, user, preimage, sweep_address, tx_id, output_index, amount)| {
@@ -245,14 +322,13 @@ impl LightningStore for PostgresLightningStore {
     }
 
     async fn set_htlc_sweep_address(&self, send_id: &str, address: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_send_requests
                SET htlc_sweep_address = $2, updated_at = NOW()
                WHERE id = $1 AND htlc_sweep_address IS NULL"#,
+            &[&send_id, &address],
         )
-        .bind(send_id)
-        .bind(address)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -263,63 +339,60 @@ impl LightningStore for PostgresLightningStore {
         id: &str,
         ln_payment_id: &LightningPaymentId,
     ) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_send_requests SET ln_payment_id = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &ln_payment_id.0],
         )
-            .bind(id)
-            .bind(&ln_payment_id.0)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_send_succeeded(&self, id: &str, preimage: &Preimage) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_send_requests
                SET preimage = $2, payment_status = $3, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &preimage.to_vec(), &SEND_SUCCEEDED],
         )
-        .bind(id)
-        .bind(preimage.to_vec())
-        .bind(SEND_SUCCEEDED)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_send_failed(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_send_requests SET payment_status = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &SEND_FAILED],
         )
-        .bind(id)
-        .bind(SEND_FAILED)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_send_leaves_claimed(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_send_requests SET leaves_claimed = TRUE, updated_at = NOW() WHERE id = $1"#,
+            &[&id],
         )
-            .bind(id)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn get_send(&self, id: &str) -> Result<Option<LightningSendRecord>, String> {
-        sqlx::query_as::<_, SendRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningSendRecord::try_from)
+        .as_ref()
+        .map(send)
         .transpose()
     }
 
@@ -327,14 +400,15 @@ impl LightningStore for PostgresLightningStore {
         &self,
         idempotency_key: &str,
     ) -> Result<Option<LightningSendRecord>, String> {
-        sqlx::query_as::<_, SendRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE idempotency_key = $1"#,
+            &[&idempotency_key],
         )
-        .bind(idempotency_key)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningSendRecord::try_from)
+        .as_ref()
+        .map(send)
         .transpose()
     }
 
@@ -342,14 +416,15 @@ impl LightningStore for PostgresLightningStore {
         &self,
         transfer_id: &TransferId,
     ) -> Result<Option<LightningSendRecord>, String> {
-        sqlx::query_as::<_, SendRow>(
-            r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE user_transfer_id = $1::uuid"#,
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"SELECT * FROM brz_ssp_lightning_send_requests WHERE user_transfer_id = $1"#,
+            &[&transfer_uuid(transfer_id)],
         )
-        .bind(transfer_id.to_string())
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningSendRecord::try_from)
+        .as_ref()
+        .map(send)
         .transpose()
     }
 
@@ -357,17 +432,17 @@ impl LightningStore for PostgresLightningStore {
         &self,
         transfer_ids: &[TransferId],
     ) -> Result<Vec<LightningSendRecord>, String> {
-        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
-        sqlx::query_as::<_, SendRow>(
+        let ids: Vec<Uuid> = transfer_ids.iter().map(transfer_uuid).collect();
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_send_requests
-               WHERE user_transfer_id = ANY($1::uuid[])"#,
+               WHERE user_transfer_id = ANY($1)"#,
+            &[&ids],
         )
-        .bind(&ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(LightningSendRecord::try_from)
+        .iter()
+        .map(send)
         .collect()
     }
 
@@ -375,50 +450,53 @@ impl LightningStore for PostgresLightningStore {
         &self,
         payment_hash: &sha256::Hash,
     ) -> Result<Option<LightningSendRecord>, String> {
-        sqlx::query_as::<_, SendRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_send_requests
                WHERE payment_hash = $1 AND payment_status <> $2"#,
+            &[&payment_hash.as_byte_array().to_vec(), &SEND_FAILED],
         )
-        .bind(payment_hash.as_byte_array().to_vec())
-        .bind(SEND_FAILED)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningSendRecord::try_from)
+        .as_ref()
+        .map(send)
         .transpose()
     }
 
     async fn pending_sends(&self) -> Result<Vec<LightningSendRecord>, String> {
-        sqlx::query_as::<_, SendRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_send_requests
                WHERE payment_status = 'pending'
                   OR (payment_status = 'succeeded' AND NOT leaves_claimed)
                ORDER BY created_at"#,
+            &[],
         )
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(LightningSendRecord::try_from)
+        .iter()
+        .map(send)
         .collect()
     }
 
     async fn insert_receive(&self, record: &LightningReceiveRecord) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"INSERT INTO brz_ssp_lightning_receive_requests
                (id, user_identity_public_key, requester_identity_public_key, payment_hash,
                 amount_sats, encoded_invoice, expires_at, memo)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+            &[
+                &record.id,
+                &record.user_identity_public_key.serialize().to_vec(),
+                &record.requester_identity_public_key.serialize().to_vec(),
+                &record.payment_hash.as_byte_array().to_vec(),
+                &sats_to_i64(record.amount_sats)?,
+                &record.encoded_invoice,
+                &record.expires_at,
+                &record.memo.as_deref(),
+            ],
         )
-        .bind(&record.id)
-        .bind(record.user_identity_public_key.serialize().to_vec())
-        .bind(record.requester_identity_public_key.serialize().to_vec())
-        .bind(record.payment_hash.as_byte_array().to_vec())
-        .bind(sats_to_i64(record.amount_sats)?)
-        .bind(&record.encoded_invoice)
-        .bind(record.expires_at)
-        .bind(record.memo.as_deref())
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -430,42 +508,39 @@ impl LightningStore for PostgresLightningStore {
         transfer_id: &TransferId,
         amount_sats: u64,
     ) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_receive_requests
-               SET transfer_id = $2::uuid, transfer_amount_sats = $3, updated_at = NOW()
+               SET transfer_id = $2, transfer_amount_sats = $3, updated_at = NOW()
                WHERE id = $1"#,
+            &[&id, &transfer_uuid(transfer_id), &sats_to_i64(amount_sats)?],
         )
-        .bind(id)
-        .bind(transfer_id.to_string())
-        .bind(sats_to_i64(amount_sats)?)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn clear_receive_handover(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_receive_requests
                SET transfer_id = NULL, transfer_amount_sats = NULL, updated_at = NOW()
                WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn set_receive_preimage(&self, id: &str, preimage: &Preimage) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_receive_requests SET preimage = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &preimage.to_vec()],
         )
-            .bind(id)
-            .bind(preimage.to_vec())
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -474,26 +549,26 @@ impl LightningStore for PostgresLightningStore {
         id: &str,
         status: HoldInvoiceStatus,
     ) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"UPDATE brz_ssp_lightning_receive_requests SET invoice_status = $2, updated_at = NOW() WHERE id = $1"#,
+            &[&id, &invoice_status_str(status)],
         )
-            .bind(id)
-            .bind(invoice_status_str(status))
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn get_receive(&self, id: &str) -> Result<Option<LightningReceiveRecord>, String> {
-        sqlx::query_as::<_, ReceiveRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_receive_requests WHERE id = $1"#,
+            &[&id],
         )
-        .bind(id)
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningReceiveRecord::try_from)
+        .as_ref()
+        .map(receive)
         .transpose()
     }
 
@@ -501,14 +576,15 @@ impl LightningStore for PostgresLightningStore {
         &self,
         payment_hash: &sha256::Hash,
     ) -> Result<Option<LightningReceiveRecord>, String> {
-        sqlx::query_as::<_, ReceiveRow>(
+        query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_receive_requests WHERE payment_hash = $1"#,
+            &[&payment_hash.as_byte_array().to_vec()],
         )
-        .bind(payment_hash.as_byte_array().to_vec())
-        .fetch_optional(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .map(LightningReceiveRecord::try_from)
+        .as_ref()
+        .map(receive)
         .transpose()
     }
 
@@ -516,30 +592,31 @@ impl LightningStore for PostgresLightningStore {
         &self,
         transfer_ids: &[TransferId],
     ) -> Result<Vec<LightningReceiveRecord>, String> {
-        let ids: Vec<String> = transfer_ids.iter().map(ToString::to_string).collect();
-        sqlx::query_as::<_, ReceiveRow>(
+        let ids: Vec<Uuid> = transfer_ids.iter().map(transfer_uuid).collect();
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_receive_requests
-               WHERE transfer_id = ANY($1::uuid[])"#,
+               WHERE transfer_id = ANY($1)"#,
+            &[&ids],
         )
-        .bind(&ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(LightningReceiveRecord::try_from)
+        .iter()
+        .map(receive)
         .collect()
     }
 
     async fn pending_receives(&self) -> Result<Vec<LightningReceiveRecord>, String> {
-        sqlx::query_as::<_, ReceiveRow>(
+        query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT * FROM brz_ssp_lightning_receive_requests
                WHERE invoice_status = 'pending' ORDER BY created_at"#,
+            &[],
         )
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(LightningReceiveRecord::try_from)
+        .iter()
+        .map(receive)
         .collect()
     }
 
@@ -552,25 +629,26 @@ impl LightningStore for PostgresLightningStore {
             .map(|hash| hash.as_byte_array().to_vec())
             .collect();
         receives(
-            sqlx::query_as::<_, ReceiveRow>(
+            query(
+                &self.pool.get().await.map_err(|e| e.to_string())?,
                 r#"SELECT * FROM brz_ssp_lightning_receive_requests
                    WHERE payment_hash = ANY($1)
                      AND invoice_status = 'pending' AND transfer_id IS NULL"#,
+                &[&hashes],
             )
-            .bind(hashes)
-            .fetch_all(self.pool.as_ref())
             .await,
         )
     }
 
     async fn handing_over_receives(&self) -> Result<Vec<LightningReceiveRecord>, String> {
         receives(
-            sqlx::query_as::<_, ReceiveRow>(
+            query(
+                &self.pool.get().await.map_err(|e| e.to_string())?,
                 r#"SELECT * FROM brz_ssp_lightning_receive_requests
                    WHERE invoice_status = 'pending' AND transfer_id IS NOT NULL
                    ORDER BY created_at"#,
+                &[],
             )
-            .fetch_all(self.pool.as_ref())
             .await,
         )
     }
@@ -581,26 +659,25 @@ impl LightningStore for PostgresLightningStore {
         limit: i64,
     ) -> Result<Vec<LightningReceiveRecord>, String> {
         receives(
-            sqlx::query_as::<_, ReceiveRow>(
+            query(
+                &self.pool.get().await.map_err(|e| e.to_string())?,
                 r#"SELECT * FROM brz_ssp_lightning_receive_requests
                    WHERE invoice_status = 'pending' AND transfer_id IS NULL AND expires_at < $1
                    ORDER BY expires_at
                    LIMIT $2"#,
+                &[&time, &limit],
             )
-            .bind(time)
-            .bind(limit)
-            .fetch_all(self.pool.as_ref())
             .await,
         )
     }
 }
 
 fn receives(
-    rows: Result<Vec<ReceiveRow>, sqlx::Error>,
+    rows: Result<Vec<Row>, tokio_postgres::Error>,
 ) -> Result<Vec<LightningReceiveRecord>, String> {
     rows.map_err(|e| e.to_string())?
-        .into_iter()
-        .map(LightningReceiveRecord::try_from)
+        .iter()
+        .map(receive)
         .collect()
 }
 
@@ -618,7 +695,7 @@ mod tests {
     struct Fixture {
         store: PostgresLightningStore,
         chain: ChainRepository,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -694,10 +771,10 @@ mod tests {
         }
 
         async fn watched_addresses(&self) -> Vec<String> {
-            sqlx::query_scalar("SELECT address FROM brz_ssp_chain_watch_addresses ORDER BY address")
-                .fetch_all(&*self.pool)
-                .await
-                .unwrap()
+            let client = self.pool.get().await.unwrap();
+            let sql = "SELECT address FROM brz_ssp_chain_watch_addresses ORDER BY address";
+            let rows = query(&client, sql, &[]).await.unwrap();
+            rows.iter().map(|row| row.get(0)).collect()
         }
     }
 

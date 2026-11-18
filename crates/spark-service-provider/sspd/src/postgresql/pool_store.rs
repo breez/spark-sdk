@@ -6,11 +6,12 @@ use std::sync::Arc;
 
 use bitcoin::{OutPoint, Txid};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::Pool;
 use spark::tree::{LeafPedigree, TreeNode, TreeNodeId};
-use sqlx::PgPool;
-use sqlx::types::Json;
+use tokio_postgres::Row;
+use tokio_postgres::types::Json;
 
-use super::{LeafStoreError, PostgresLeafStore};
+use super::{LeafStoreError, PostgresLeafStore, execute, query, query_opt};
 
 use crate::leaves::LeafSigningKeys;
 use crate::pool::repository::{DepositTree, DepositTx, FundingBump, TreeNodes};
@@ -18,7 +19,6 @@ use crate::wallet::onchain::record_spends;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-#[derive(sqlx::FromRow)]
 struct DepositTreeRow {
     txid: String,
     raw_tx: Vec<u8>,
@@ -33,12 +33,32 @@ struct DepositTreeRow {
     leaf_count: Option<i32>,
 }
 
+impl TryFrom<&Row> for DepositTreeRow {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: &Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            txid: row.try_get("txid")?,
+            raw_tx: row.try_get("raw_tx")?,
+            fee_sats: row.try_get("fee_sats")?,
+            stored_height: row.try_get("stored_height")?,
+            bump_tx: row.try_get("bump_tx")?,
+            bump_fee_sats: row.try_get("bump_fee_sats")?,
+            bump_height: row.try_get("bump_height")?,
+            vout: row.try_get("vout")?,
+            deposit_address: row.try_get("deposit_address")?,
+            denomination: row.try_get("denomination")?,
+            leaf_count: row.try_get("leaf_count")?,
+        })
+    }
+}
+
 pub struct PoolRepository {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl PoolRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 
@@ -49,18 +69,21 @@ impl PoolRepository {
         deposit: &DepositTx,
         nodes: &[TreeNodes],
         signing_leaf_ids: &[(TreeNodeId, TreeNodeId)],
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), BoxError> {
         let txid = deposit.tx.compute_txid();
-        let mut db = self.pool.begin().await?;
-        sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_spark_pool_deposit_txs (txid, raw_tx, fee_sats, stored_height)
                VALUES ($1, $2, $3, $4)"#,
+            &[
+                &txid.to_string(),
+                &bitcoin::consensus::serialize(&deposit.tx),
+                &deposit.fee_sats.cast_signed(),
+                &deposit.stored_height.cast_signed(),
+            ],
         )
-        .bind(txid.to_string())
-        .bind(bitcoin::consensus::serialize(&deposit.tx))
-        .bind(deposit.fee_sats.cast_signed())
-        .bind(deposit.stored_height.cast_signed())
-        .execute(&mut *db)
         .await?;
         let trees: Vec<_> = deposit.trees.iter().zip(nodes).collect();
         let vouts: Vec<i32> = trees
@@ -81,44 +104,47 @@ impl PoolRepository {
             .collect();
         let leaves: Vec<_> = trees.iter().map(|(_, n)| Json(&n.leaves)).collect();
         let branches: Vec<_> = trees.iter().map(|(_, n)| Json(&n.branches)).collect();
-        sqlx::query(
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_spark_pool_deposit_trees
                (txid, vout, deposit_address, denomination, leaf_count, leaves, branches)
                SELECT $1, tree.*
                FROM UNNEST($2::int[], $3::text[], $4::bigint[], $5::int[], $6::jsonb[],
                            $7::jsonb[])
                     AS tree (vout, deposit_address, denomination, leaf_count, leaves, branches)"#,
+            &[
+                &txid.to_string(),
+                &vouts,
+                &addresses,
+                &denominations,
+                &leaf_counts,
+                &leaves,
+                &branches,
+            ],
         )
-        .bind(txid.to_string())
-        .bind(&vouts)
-        .bind(&addresses)
-        .bind(&denominations)
-        .bind(&leaf_counts)
-        .bind(&leaves)
-        .bind(&branches)
-        .execute(&mut *db)
         .await?;
         let (node_ids, deposit_leaf_ids): (Vec<String>, Vec<String>) = signing_leaf_ids
             .iter()
             .map(|(node_id, leaf_id)| (node_id.to_string(), leaf_id.to_string()))
             .unzip();
-        sqlx::query(
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_spark_leaf_id_map (node_id, deposit_leaf_id)
                SELECT * FROM UNNEST($1::text[], $2::text[])"#,
+            &[&node_ids, &deposit_leaf_ids],
         )
-        .bind(&node_ids)
-        .bind(&deposit_leaf_ids)
-        .execute(&mut *db)
         .await?;
         let inputs: Vec<OutPoint> = deposit.tx.input.iter().map(|i| i.previous_output).collect();
-        record_spends(&mut db, &txid, &inputs).await?;
-        db.commit().await
+        record_spends(&db, &txid, &inputs).await?;
+        db.commit().await?;
+        Ok(())
     }
 
     /// Every funding transaction with a tree not yet in the pool or fee bump children
     /// not yet settled, carrying only those trees and its latest child.
     pub async fn open_deposits(&self) -> Result<Vec<DepositTx>, BoxError> {
-        let rows: Vec<DepositTreeRow> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await?,
             r#"SELECT t.txid, t.raw_tx, t.fee_sats, t.stored_height,
                       b.raw_tx AS bump_tx, b.fee_sats AS bump_fee_sats, b.height AS bump_height,
                       d.vout, d.deposit_address, d.denomination, d.leaf_count
@@ -133,13 +159,14 @@ impl PoolRepository {
                    ) b ON TRUE
                    WHERE d.txid IS NOT NULL OR t.bump_pending
                    ORDER BY t.created_at, d.vout"#,
+            &[],
         )
-        .fetch_all(self.pool.as_ref())
         .await?;
 
         let mut deposits: Vec<DepositTx> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
-        for row in rows {
+        for row in &rows {
+            let row = DepositTreeRow::try_from(row)?;
             let position = if let Some(position) = index.get(&row.txid) {
                 *position
             } else {
@@ -185,34 +212,34 @@ impl PoolRepository {
 
     /// Stores a fee bump child of funding transaction `funding_txid` with the wallet
     /// coins it spends. Earlier children keep theirs: any of them can still confirm.
-    pub async fn add_bump(
-        &self,
-        funding_txid: &Txid,
-        bump: &FundingBump,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn add_bump(&self, funding_txid: &Txid, bump: &FundingBump) -> Result<(), BoxError> {
         let txid = bump.tx.compute_txid();
-        let mut db = self.pool.begin().await?;
-        sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        execute(
+            &db,
             r#"INSERT INTO brz_ssp_spark_pool_funding_bumps (txid, funding_txid, raw_tx, fee_sats, height)
                VALUES ($1, $2, $3, $4, $5)
                ON CONFLICT DO NOTHING"#,
+            &[
+                &txid.to_string(),
+                &funding_txid.to_string(),
+                &bitcoin::consensus::serialize(&bump.tx),
+                &bump.fee_sats.cast_signed(),
+                &bump.height.cast_signed(),
+            ],
         )
-        .bind(txid.to_string())
-        .bind(funding_txid.to_string())
-        .bind(bitcoin::consensus::serialize(&bump.tx))
-        .bind(bump.fee_sats.cast_signed())
-        .bind(bump.height.cast_signed())
-        .execute(&mut *db)
         .await?;
-        sqlx::query(
+        execute(
+            &db,
             r#"UPDATE brz_ssp_spark_pool_deposit_txs SET bump_pending = TRUE WHERE txid = $1"#,
+            &[&funding_txid.to_string()],
         )
-        .bind(funding_txid.to_string())
-        .execute(&mut *db)
         .await?;
         let inputs: Vec<OutPoint> = bump.tx.input.iter().map(|i| i.previous_output).collect();
-        record_spends(&mut db, &txid, &inputs).await?;
-        db.commit().await
+        record_spends(&db, &txid, &inputs).await?;
+        db.commit().await?;
+        Ok(())
     }
 
     /// Drops every fee bump child of `funding_txid` but `confirmed`, and frees the
@@ -221,66 +248,80 @@ impl PoolRepository {
         &self,
         funding_txid: &Txid,
         confirmed: &Txid,
-    ) -> Result<(), sqlx::Error> {
-        let mut db = self.pool.begin().await?;
-        let lost: Vec<String> = sqlx::query_scalar(
+    ) -> Result<(), BoxError> {
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        let lost = query(
+            &db,
             r#"DELETE FROM brz_ssp_spark_pool_funding_bumps
                WHERE funding_txid = $1 AND txid <> $2
                RETURNING txid"#,
+            &[&funding_txid.to_string(), &confirmed.to_string()],
         )
-        .bind(funding_txid.to_string())
-        .bind(confirmed.to_string())
-        .fetch_all(&mut *db)
+        .await?
+        .iter()
+        .map(|row| row.try_get(0))
+        .collect::<Result<Vec<String>, _>>()?;
+        execute(
+            &db,
+            r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)"#,
+            &[&lost],
+        )
         .await?;
-        sqlx::query(r#"DELETE FROM brz_ssp_onchain_wallet_spends WHERE spending_txid = ANY($1)"#)
-            .bind(&lost)
-            .execute(&mut *db)
-            .await?;
-        sqlx::query(
+        execute(
+            &db,
             r#"UPDATE brz_ssp_spark_pool_deposit_txs SET bump_pending = FALSE WHERE txid = $1"#,
+            &[&funding_txid.to_string()],
         )
-        .bind(funding_txid.to_string())
-        .execute(&mut *db)
         .await?;
-        db.commit().await
+        db.commit().await?;
+        Ok(())
     }
 
     /// Deletes a funding transaction, its trees and its fee bump children, and frees
     /// the wallet coins they spend.
-    pub async fn retire_deposit(&self, deposit: &DepositTx) -> Result<(), sqlx::Error> {
+    pub async fn retire_deposit(&self, deposit: &DepositTx) -> Result<(), BoxError> {
         let txid = deposit.tx.compute_txid().to_string();
-        let mut db = self.pool.begin().await?;
-        sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        execute(
+            &db,
             r#"DELETE FROM brz_ssp_onchain_wallet_spends
                WHERE spending_txid = $1
                OR spending_txid IN (SELECT txid FROM brz_ssp_spark_pool_funding_bumps WHERE funding_txid = $1)"#,
+            &[&txid],
         )
-        .bind(&txid)
-        .execute(&mut *db)
         .await?;
-        sqlx::query(r#"DELETE FROM brz_ssp_spark_pool_deposit_trees WHERE txid = $1"#)
-            .bind(&txid)
-            .execute(&mut *db)
-            .await?;
-        sqlx::query(r#"DELETE FROM brz_ssp_spark_pool_deposit_txs WHERE txid = $1"#)
-            .bind(&txid)
-            .execute(&mut *db)
-            .await?;
-        db.commit().await
+        execute(
+            &db,
+            r#"DELETE FROM brz_ssp_spark_pool_deposit_trees WHERE txid = $1"#,
+            &[&txid],
+        )
+        .await?;
+        execute(
+            &db,
+            r#"DELETE FROM brz_ssp_spark_pool_deposit_txs WHERE txid = $1"#,
+            &[&txid],
+        )
+        .await?;
+        db.commit().await?;
+        Ok(())
     }
 
-    pub async fn tree_nodes(&self, outpoint: &OutPoint) -> Result<TreeNodes, sqlx::Error> {
-        let (leaves, branches): (Json<Vec<TreeNode>>, Json<Vec<TreeNode>>) = sqlx::query_as(
+    /// Returns `None` when the store has no tree on `outpoint`.
+    pub async fn tree_nodes(&self, outpoint: &OutPoint) -> Result<Option<TreeNodes>, BoxError> {
+        let row = query_opt(
+            &self.pool.get().await?,
             r#"SELECT leaves, branches FROM brz_ssp_spark_pool_deposit_trees WHERE txid = $1 AND vout = $2"#,
+            &[&outpoint.txid.to_string(), &outpoint.vout.cast_signed()],
         )
-        .bind(outpoint.txid.to_string())
-        .bind(outpoint.vout.cast_signed())
-        .fetch_one(self.pool.as_ref())
         .await?;
-        Ok(TreeNodes {
-            leaves: leaves.0,
-            branches: branches.0,
-        })
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let Json(leaves) = row.try_get(0)?;
+        let Json(branches) = row.try_get(1)?;
+        Ok(Some(TreeNodes { leaves, branches }))
     }
 
     /// Returns `false`, and changes nothing, for a tree that is pooled already.
@@ -291,22 +332,21 @@ impl PoolRepository {
         leaves: &[LeafPedigree],
         queried_at: DateTime<Utc>,
     ) -> Result<bool, LeafStoreError> {
-        let mut db = self.pool.begin().await?;
-        let marked = sqlx::query(
+        let mut client = self.pool.get().await?;
+        let db = client.transaction().await?;
+        let marked = execute(
+            &db,
             r#"UPDATE brz_ssp_spark_pool_deposit_trees SET pooled = TRUE
                WHERE txid = $1 AND vout = $2 AND NOT pooled"#,
+            &[&outpoint.txid.to_string(), &outpoint.vout.cast_signed()],
         )
-        .bind(outpoint.txid.to_string())
-        .bind(outpoint.vout.cast_signed())
-        .execute(&mut *db)
-        .await?
-        .rows_affected();
+        .await?;
         if marked == 0 {
             return Ok(false);
         }
-        leaf_store.insert_leaves(&mut db, leaves).await?;
+        leaf_store.insert_leaves(&db, leaves).await?;
         let reported: Vec<TreeNode> = leaves.iter().map(|leaf| leaf.leaf.clone()).collect();
-        leaf_store.observe(&mut db, &reported, queried_at).await?;
+        leaf_store.observe(&db, &reported, queried_at).await?;
         db.commit().await?;
         leaf_store.wake_spend_check();
         Ok(true)
@@ -316,11 +356,13 @@ impl PoolRepository {
 #[async_trait::async_trait]
 impl LeafSigningKeys for PoolRepository {
     async fn mark_signing_under_node_id(&self, node_ids: &[String]) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM brz_ssp_spark_leaf_id_map WHERE node_id = ANY($1)"#)
-            .bind(node_ids)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"DELETE FROM brz_ssp_spark_leaf_id_map WHERE node_id = ANY($1)"#,
+            &[&node_ids],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -328,15 +370,18 @@ impl LeafSigningKeys for PoolRepository {
         &self,
         node_ids: &[String],
     ) -> Result<HashMap<String, String>, String> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT node_id, deposit_leaf_id FROM brz_ssp_spark_leaf_id_map
                WHERE node_id = ANY($1)"#,
+            &[&node_ids],
         )
-        .bind(node_ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
-        Ok(rows.into_iter().collect())
+        rows.iter()
+            .map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+            .collect::<Result<_, tokio_postgres::Error>>()
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -356,6 +401,7 @@ mod tests {
     use crate::chain::{AddressUtxo, BlockHeader, ChainRepository as _, Txo};
     use crate::postgresql::ChainRepository;
     use crate::postgresql::leaf_store::tests::{leaf, node, ssp};
+    use crate::postgresql::query_one;
     use crate::postgresql::testing::TestDatabase;
     use crate::wallet::onchain::OnchainWallet;
 
@@ -478,7 +524,7 @@ mod tests {
         leaf_store: PostgresLeafStore,
         chain: Arc<ChainRepository>,
         wallet: OnchainWallet<ChainRepository>,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -575,10 +621,9 @@ mod tests {
         }
 
         async fn count(&self, table: &str) -> i64 {
-            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&*self.pool)
-                .await
-                .unwrap()
+            let client = self.pool.get().await.unwrap();
+            let sql = format!("SELECT COUNT(*) FROM {table}");
+            query_one(&client, &sql, &[]).await.unwrap().get(0)
         }
     }
 
@@ -677,6 +722,7 @@ mod tests {
 
         for (tree, nodes) in funding.deposit.trees.iter().zip(&funding.nodes) {
             let stored = fixture.store.tree_nodes(&tree.outpoint).await.unwrap();
+            let stored = stored.unwrap();
             assert_eq!(stored.leaves, nodes.leaves);
             assert_eq!(stored.branches, nodes.branches);
         }
@@ -691,7 +737,7 @@ mod tests {
 
         let nodes = fixture.store.tree_nodes(&not_a_tree).await;
 
-        assert!(matches!(nodes, Err(sqlx::Error::RowNotFound)));
+        assert!(nodes.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -755,7 +801,7 @@ mod tests {
         assert!(inserted.is_err());
         assert_eq!(txids(&fixture.open().await), [stored.txid()]);
         let tree = &refused.deposit.trees[0].outpoint;
-        assert!(fixture.store.tree_nodes(tree).await.is_err());
+        assert!(fixture.store.tree_nodes(tree).await.unwrap().is_none());
         assert_eq!(fixture.coins().await, [coin]);
     }
 
@@ -1174,7 +1220,7 @@ mod tests {
         assert_eq!(latest_bump(&open[0]), Some(fields(&kept_bump)));
         for (tree, nodes) in kept.deposit.trees.iter().zip(&kept.nodes) {
             let stored = fixture.store.tree_nodes(&tree.outpoint).await.unwrap();
-            assert_eq!(stored.leaves, nodes.leaves);
+            assert_eq!(stored.unwrap().leaves, nodes.leaves);
         }
         assert_eq!(fixture.coins().await, [retired_coin]);
     }

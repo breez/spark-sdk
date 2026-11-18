@@ -101,20 +101,20 @@ class MysqlMigrationManager {
         const migrations = this._getMigrations(identity);
 
         if (currentVersion >= migrations.length) {
-          this._log("info", `Database is up to date (version ${currentVersion})`);
+          this._log("INFO", `Database is up to date (version ${currentVersion})`);
           await conn.query("COMMIT");
           return;
         }
 
         this._log(
-          "info",
+          "INFO",
           `Migrating database from version ${currentVersion} to ${migrations.length}`
         );
 
         for (let i = currentVersion; i < migrations.length; i++) {
           const migration = migrations[i];
           const version = i + 1;
-          this._log("debug", `Running migration ${version}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${version}: ${migration.name}`);
 
           for (const step of migration.sql) {
             await runMigrationStep(conn, step);
@@ -127,7 +127,7 @@ class MysqlMigrationManager {
         }
 
         await conn.query("COMMIT");
-        this._log("info", "Database migration completed successfully");
+        this._log("INFO", "Database migration completed successfully");
       } catch (error) {
         await conn.query("ROLLBACK").catch(() => {});
         throw new StorageError(
@@ -146,11 +146,7 @@ class MysqlMigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    } else if (level === "error") {
-      console.error(`[MysqlMigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -653,6 +649,25 @@ class MysqlMigrationManager {
               txid VARCHAR(255) NOT NULL,
               PRIMARY KEY (user_id, leaf_id)
           )`,
+        ],
+      },
+      {
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and fills in both columns for past withdrawals.
+        name: "Add withdrawal destination address and output index",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_vout INT UNSIGNED NULL`,
+          `ALTER TABLE brz_payments ADD COLUMN withdraw_destination_address TEXT NULL`,
+          `UPDATE brz_settings
+           SET value = JSON_SET(value, '$.offset', 0)
+           WHERE \`key\` = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
+      {
+        name: "Add lightning address to brz_lnurl_receive_metadata and force its re-sync",
+        sql: [
+          `ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN lightning_address LONGTEXT NULL`,
+          `DELETE FROM brz_settings WHERE \`key\` = 'lnurl_metadata_updated_after'`,
         ],
       },
     ];

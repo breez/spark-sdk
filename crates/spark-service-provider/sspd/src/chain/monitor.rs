@@ -831,7 +831,7 @@ mod tests {
             Network::Regtest,
             Arc::clone(bitcoind),
             Arc::clone(store),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             Vec::new(),
             ChainTip::default(),
             Synced::new(),

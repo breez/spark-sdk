@@ -271,6 +271,23 @@ class SendPayment {
         // ANCHOR_END: send-payment-lightning-bolt11
     }
 
+    suspend fun getPaymentPreimage(sdk: BreezSdk) {
+        // ANCHOR: get-payment-preimage
+        try {
+            val paymentId = "<payment id>"
+            val response = sdk.getPayment(GetPaymentRequest(paymentId))
+            val details = response.payment.details
+            if (details is PaymentDetails.Lightning) {
+                val htlc = details.htlcDetails
+                // Log.v("Breez", "Payment hash: ${htlc.paymentHash}")
+                // Log.v("Breez", "Preimage: ${htlc.preimage}")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: get-payment-preimage
+    }
+
     suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {
@@ -308,5 +325,32 @@ class SendPayment {
             // handle error
         }
         // ANCHOR_END: send-payment-spark
+    }
+
+    suspend fun fetchLightningSendStatus(sdk: BreezSdk) {
+        // ANCHOR: fetch-lightning-send-status
+        try {
+            val invoice = "<bolt11 invoice>"
+            val response = sdk.fetchLightningSendStatus(
+                FetchLightningSendStatusRequest(invoice = invoice)
+            )
+            when (response.status) {
+                PaymentStatus.COMPLETED -> {
+                    // Log.v("Breez", "Paid")
+                }
+                PaymentStatus.PENDING -> {
+                    // Log.v("Breez", "Payment in flight")
+                }
+                PaymentStatus.FAILED -> {
+                    // Log.v("Breez", "Payment failed")
+                }
+                null -> {
+                    // Log.v("Breez", "No Lightning payment found")
+                }
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: fetch-lightning-send-status
     }
 }

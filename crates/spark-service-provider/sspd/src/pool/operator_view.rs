@@ -24,10 +24,10 @@ use crate::postgresql::{Dispute, LeafStoreError, PostgresLeafStore};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-const PASS_PAUSE: Duration = Duration::from_secs(5 * 60);
+const PASS_PAUSE: Duration = Duration::from_mins(5);
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+const MAX_BACKOFF: Duration = Duration::from_mins(1);
 
 pub struct OperatorViewDeps {
     pub operator_pool: Arc<OperatorPool>,

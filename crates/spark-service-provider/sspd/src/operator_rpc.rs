@@ -179,7 +179,7 @@ pub async fn counter_transfer(
     leaf_key_tweaks: &[spark::services::LeafKeyTweak],
     receiver_public_key: &bitcoin::secp256k1::PublicKey,
     primary_transfer_id: &spark::services::TransferId,
-    cpfp_adaptor_public_key: &bitcoin::secp256k1::PublicKey,
+    cpfp_adaptor: spark::signer::FrostAdaptor,
     expiry_time: Option<std::time::SystemTime>,
 ) -> std::result::Result<spark::services::Transfer, spark::services::ServiceError> {
     let mut prepared = transfer_service
@@ -189,7 +189,7 @@ pub async fn counter_transfer(
             receiver_public_key,
             None,
             expiry_time,
-            Some(cpfp_adaptor_public_key),
+            Some(cpfp_adaptor),
         )
         .await?;
 
@@ -204,7 +204,8 @@ pub async fn counter_transfer(
         CounterTransferRequest {
             transfer: Some(prepared.transfer_request),
             adaptor_public_keys: Some(AdaptorPublicKeyPackage {
-                adaptor_public_key: cpfp_adaptor_public_key.serialize().to_vec(),
+                adaptor_public_key: cpfp_adaptor.public_key.serialize().to_vec(),
+                adaptor_v2: cpfp_adaptor.v2,
                 ..Default::default()
             }),
             primary_transfer_id: primary_transfer_id.to_string(),

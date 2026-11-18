@@ -156,6 +156,12 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_withdraw_details() {
+    let storage = create_test_storage("pg_withdraw_details").await;
+    breez_sdk_spark::storage_tests::test_withdraw_details(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_terminal_status_is_not_replaced() {
     let storage = create_test_storage("pg_payment_terminal_guard").await;
     breez_sdk_spark::storage_tests::test_payment_terminal_status_is_not_replaced(Box::new(storage))

@@ -45,11 +45,12 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
             "db-storage-api",
             "secp-lowmemory",
             "release-max-level-debug",
+            "boltz",
         ]),
     ),
     // `fido2` hardware-key support.
     ("cli", ClippyFeatures::All),
-    // `uniffi-cli` and `span-trace`.
+    // `span-trace`.
     ("breez-sdk-spark-bindings", ClippyFeatures::All),
     // The React Native build: no database backends or their API.
     ("breez-sdk-spark-bindings", ClippyFeatures::NoDefault(&[])),
@@ -1080,6 +1081,7 @@ fn itest_cmd() -> Result<()> {
         "idempotency_tests",
         "lightning_hodl",
         "lightning_send_server_mode",
+        "lightning_send_status",
         "message_signing",
         "optimization",
         "rtsync",

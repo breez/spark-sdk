@@ -1,13 +1,21 @@
 #![allow(clippy::similar_names)]
 
+use bech32::{
+    Bech32m, Fe32, Hrp,
+    primitives::iter::{ByteIterExt, Fe32IterExt},
+};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use macros::async_test_all;
 use serde_json::json;
+use spark_wallet::{Network, SilentPaymentAddress};
 
 use crate::input::error::Bip21Error;
 use crate::input::parser::InputParser;
 use crate::input::{
-    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType, ParseError,
+    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType,
+    MAX_INPUT_LENGTH, MAX_PAYMENT_METHODS, ParseError,
 };
+use crate::network::BitcoinNetwork;
 use crate::test_utils::mock_dns_resolver::MockDnsResolver;
 use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
@@ -231,6 +239,119 @@ async fn test_bip21_with_invalid_silent_payment() {
     ));
 }
 
+/// From the BIP-352 test vectors.
+const SILENT_PAYMENT_ADDRESS: &str = "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv";
+
+fn silent_payment_keys() -> (PublicKey, PublicKey) {
+    let secp = Secp256k1::new();
+    let key =
+        |seed: u8| PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[seed; 32]).unwrap());
+    (key(1), key(2))
+}
+
+async fn parse(input: &str) -> Result<InputType, ParseError> {
+    InputParser::new(MockDnsResolver::new(), MockRestClient::new(), None)
+        .parse(input)
+        .await
+}
+
+#[async_test_all]
+async fn test_silent_payment_address() {
+    let result = parse(SILENT_PAYMENT_ADDRESS).await;
+    assert!(matches!(
+        result,
+        Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails {
+            address,
+            network: BitcoinNetwork::Bitcoin,
+            source: _,
+        })) if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_uppercase() {
+    let result = parse(&SILENT_PAYMENT_ADDRESS.to_uppercase()).await;
+    assert!(matches!(
+        result,
+        Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. }))
+            if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_networks() {
+    let (scan_key, spend_key) = silent_payment_keys();
+    for (network, expected) in [
+        (Network::Signet, BitcoinNetwork::Signet),
+        (Network::Regtest, BitcoinNetwork::Regtest),
+    ] {
+        let address = SilentPaymentAddress::new(scan_key, spend_key, network).to_string();
+        let result = parse(&address).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::SilentPaymentAddress(BitcoinAddressDetails { network, .. }))
+                    if *network == expected
+            ),
+            "{address}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_silent_payment_address_version_1() {
+    let (scan_key, spend_key) = silent_payment_keys();
+    let payload = [scan_key.serialize(), spend_key.serialize()].concat();
+    let address: String = payload
+        .into_iter()
+        .bytes_to_fes()
+        .with_checksum::<Bech32m>(&Hrp::parse("sp").unwrap())
+        .with_witness_version(Fe32::P)
+        .chars()
+        .collect();
+    assert!(matches!(
+        parse(&address).await,
+        Err(ParseError::InvalidInput)
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_silent_payment() {
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    let result = parse(&format!("bitcoin:{addr}?sp={SILENT_PAYMENT_ADDRESS}")).await;
+
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [
+            InputType::BitcoinAddress(_),
+            InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. }),
+        ] if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_only_silent_payment() {
+    let result = parse(&format!("bitcoin:?sp={SILENT_PAYMENT_ADDRESS}")).await;
+
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [InputType::SilentPaymentAddress(BitcoinAddressDetails { address, .. })]
+            if address == SILENT_PAYMENT_ADDRESS
+    ));
+}
+
 #[async_test_all]
 async fn test_bip21_with_missing_equals() {
     let mock_dns_resolver = MockDnsResolver::new();
@@ -239,11 +360,185 @@ async fn test_bip21_with_missing_equals() {
 
     let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
 
-    // BIP21 with parameter missing equals sign
+    // BIP21 with an unknown parameter missing the equals sign
     let bip21_with_missing_equals = format!("bitcoin:{addr}?labelvalue");
     let result = input_parser.parse(&bip21_with_missing_equals).await;
 
-    assert!(matches!(result, Err(ParseError::Bip21Error(_))));
+    assert!(matches!(
+        result,
+        Ok(InputType::Bip21(Bip21Details { extras, label: None, payment_methods, .. }))
+        if extras.is_empty() && payment_methods.len() == 1
+    ));
+
+    // BIP21 with an unknown required parameter missing the equals sign
+    let bip21_with_missing_equals = format!("bitcoin:{addr}?req-labelvalue");
+    let result = input_parser.parse(&bip21_with_missing_equals).await;
+
+    assert!(matches!(
+        result,
+        Err(ParseError::Bip21Error(Bip21Error::UnknownRequiredParameter(key)))
+        if key == "labelvalue"
+    ));
+}
+
+#[async_test_all]
+async fn test_bip21_with_known_parameter_missing_equals() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+
+    for key in [
+        "amount",
+        "assetid",
+        "label",
+        "lightning",
+        "lno",
+        "message",
+        "sp",
+        "spark",
+    ] {
+        let result = input_parser.parse(&format!("bitcoin:{addr}?{key}")).await;
+        assert!(
+            matches!(
+                &result,
+                Err(ParseError::Bip21Error(Bip21Error::InvalidParameter(name))) if name == key
+            ),
+            "{key}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_bip21_with_empty_parameters() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+
+    for (params, expected_amount_sat, expected_label) in [
+        ("", None, None),
+        ("amount=0.001&", Some(100_000), None),
+        ("&amount=0.001", Some(100_000), None),
+        ("amount=0.001&&label=x", Some(100_000), Some("x")),
+    ] {
+        let bip21 = format!("bitcoin:{addr}?{params}");
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::Bip21(Bip21Details { amount_sat, extras, label, payment_methods, .. }))
+                if *amount_sat == expected_amount_sat
+                    && label.as_deref() == expected_label
+                    && extras.is_empty()
+                    && payment_methods.len() == 1
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_bip21_with_segwit_parameters() {
+    use crate::network::BitcoinNetwork::{Bitcoin, Regtest, Signet};
+
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    // The addresses in the BIP-321 examples of these URIs have invalid
+    // checksums. These are BIP-173 and BIP-350 test vectors.
+    let mainnet_v0 = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    let mainnet_v1 = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0";
+    let testnet_v0 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
+    // The witness program of mainnet_v0, encoded for regtest.
+    let regtest_v0 = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+    let mainnet_v0_upper = mainnet_v0.to_uppercase();
+    let mainnet_v1_upper = mainnet_v1.to_uppercase();
+
+    for (bip21, expected_addresses) in [
+        (
+            format!("bitcoin:?bc={mainnet_v0}&bc={mainnet_v1}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        (
+            format!("BITCOIN:{mainnet_v0_upper}?BC={mainnet_v1_upper}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        (
+            format!("BITCOIN:?BC={mainnet_v0_upper}&BC={mainnet_v1_upper}"),
+            vec![(mainnet_v0, Bitcoin), (mainnet_v1, Bitcoin)],
+        ),
+        // The parser reports signet for a tb address in the URI body too.
+        (
+            format!("bitcoin:?tb={testnet_v0}"),
+            vec![(testnet_v0, Signet)],
+        ),
+        (
+            format!("bitcoin:?bcrt={regtest_v0}"),
+            vec![(regtest_v0, Regtest)],
+        ),
+        (
+            format!("bitcoin:?req-bc={mainnet_v0}"),
+            vec![(mainnet_v0, Bitcoin)],
+        ),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        let Ok(InputType::Bip21(Bip21Details {
+            payment_methods, ..
+        })) = &result
+        else {
+            panic!("{bip21}: {result:?}");
+        };
+        let addresses: Vec<_> = payment_methods
+            .iter()
+            .map(|payment_method| match payment_method {
+                InputType::BitcoinAddress(details) => (details.address.as_str(), details.network),
+                other => panic!("{bip21}: {other:?}"),
+            })
+            .collect();
+        assert_eq!(addresses, expected_addresses, "{bip21}");
+    }
+}
+
+#[async_test_all]
+async fn test_bip21_with_invalid_segwit_parameters() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    let mainnet = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    let testnet = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
+    let regtest = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+    // rust-bitcoin accepts this base58 testnet address for regtest.
+    let testnet_base58 = "2N83imGV3gPwBzKJQvWJ7cRUY2SpUyU6A5e";
+    // An address from the BIP-321 examples. Its checksum is invalid.
+    let invalid_checksum = "bc1qufgy354j3kmvuch987xe4s40836x3h0lg8f5nq";
+
+    for (bip21, key) in [
+        (format!("bitcoin:?bc={testnet}"), "bc"),
+        (format!("bitcoin:?bc={regtest}"), "bc"),
+        (format!("bitcoin:?bc={addr}"), "bc"),
+        (format!("bitcoin:?bc={invalid_checksum}"), "bc"),
+        (format!("bitcoin:?tb={mainnet}"), "tb"),
+        (format!("bitcoin:?bcrt={mainnet}"), "bcrt"),
+        (format!("bitcoin:?bcrt={testnet_base58}"), "bcrt"),
+        (format!("bitcoin:{addr}?bc"), "bc"),
+        (format!("bitcoin:{addr}?bcrt"), "bcrt"),
+        (format!("bitcoin:{addr}?tb"), "tb"),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Err(ParseError::Bip21Error(Bip21Error::InvalidParameter(name))) if name == key
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
 }
 
 #[async_test_all]
@@ -257,6 +552,78 @@ async fn test_bip21_without_payment_methods() {
     let result = input_parser.parse(bip21_no_methods).await;
 
     assert!(matches!(result, Err(ParseError::Bip21Error(_))));
+}
+
+#[async_test_all]
+async fn test_input_length_limit() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let uri = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?foo=";
+    let longest = format!(
+        "{uri}{}",
+        "a".repeat(MAX_INPUT_LENGTH.saturating_sub(uri.len()))
+    );
+    let result = input_parser.parse(&longest).await;
+    assert!(matches!(result, Ok(InputType::Bip21(_))), "{result:?}");
+
+    let result = input_parser.parse(&format!("{longest}a")).await;
+    assert!(
+        matches!(result, Err(ParseError::InputTooLong)),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
+async fn test_bip21_payment_method_limit() {
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let bc = "bc=bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj";
+    let params = vec![bc; MAX_PAYMENT_METHODS.saturating_sub(1)].join("&");
+    let most = format!("bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?{params}");
+    let result = input_parser.parse(&most).await;
+    assert!(
+        matches!(
+            &result,
+            Ok(InputType::Bip21(bip21)) if bip21.payment_methods.len() == MAX_PAYMENT_METHODS
+        ),
+        "{result:?}"
+    );
+
+    let result = input_parser.parse(&format!("{most}&{bc}")).await;
+    assert!(
+        matches!(
+            result,
+            Err(ParseError::Bip21Error(Bip21Error::TooManyPaymentMethods))
+        ),
+        "{result:?}"
+    );
+}
+
+#[async_test_all]
+async fn test_bip353_record_length_limit() {
+    let record = "bitcoin:1andreas3batLhQa2FawWjeyjCqyBzypd?foo=";
+    let longest = format!(
+        "{record}{}",
+        "a".repeat(MAX_INPUT_LENGTH.saturating_sub(record.len()))
+    );
+    let mock_dns_resolver = MockDnsResolver::new();
+    mock_dns_resolver.add_response(vec![longest.clone()]);
+    mock_dns_resolver.add_response(vec![format!("{longest}a")]);
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let result = input_parser.parse("user@example.com").await;
+    assert!(matches!(result, Ok(InputType::Bip21(_))), "{result:?}");
+
+    let result = input_parser.parse("user@example.com").await;
+    assert!(
+        matches!(result, Err(ParseError::InvalidInput)),
+        "{result:?}"
+    );
 }
 
 #[async_test_all]
@@ -290,21 +657,27 @@ async fn test_bip353_with_multibyte_dns_record() {
 
 #[async_test_all]
 async fn test_bip353_address() {
+    let silent_payment_address = "sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c";
     let mock_dns_resolver = MockDnsResolver::new();
-    mock_dns_resolver.add_response(vec![String::from("bitcoin:?sp=sp1qqweplq6ylpfrzuq6hfznzmv28djsraupudz0s0dclyt8erh70pgwxqkz2ydatksrdzf770umsntsmcjp4kcz7jqu03jeszh0gdmpjzmrf5u4zh0c&lno=lno1pqps7sjqpgtyzm3qv4uxzmtsd3jjqer9wd3hy6tsw35k7msjzfpy7nz5yqcnygrfdej82um5wf5k2uckyypwa3eyt44h6txtxquqh7lz5djge4afgfjn7k4rgrkuag0jsd5vxg")]);
+    mock_dns_resolver.add_response(vec![format!("bitcoin:?sp={silent_payment_address}&lno=lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese")]);
     let mock_rest_client = MockRestClient::new();
     let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
 
-    // Test with a BIP-353 address
-    let bip353_address = "user@bitcoin-domain.com";
-
-    // This should be handled by parse_bip_353
-    // Since mocking DNS is complex, we'll just ensure the method exists and is called
-    let result = input_parser.parse(bip353_address).await;
-    println!("Debug - bip353 address result: {result:?}");
-
-    // The result might be Err if DNS mocking isn't set up
-    // Just check the method exists and runs without crashing
+    let result = input_parser.parse("user@bitcoin-domain.com").await;
+    let Ok(InputType::Bip21(Bip21Details {
+        payment_methods, ..
+    })) = result
+    else {
+        panic!("expected a BIP21 URI, got {result:?}");
+    };
+    assert!(matches!(
+        &payment_methods[..],
+        [
+            InputType::SilentPaymentAddress(BitcoinAddressDetails { address, source, .. }),
+            InputType::Bolt12Offer(_),
+        ] if address == silent_payment_address
+            && source.bip_353_address.as_deref() == Some("user@bitcoin-domain.com")
+    ));
 }
 
 #[async_test_all]
@@ -353,6 +726,76 @@ async fn test_bip353_address_too_long() {
 
     // Should not be recognized as a BIP353 address
     assert!(!matches!(result, Ok(InputType::Bip21(_))));
+}
+
+#[async_test_all]
+async fn test_bip21_with_at_sign_skips_bip_353() {
+    let dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+    let addr = "1andreas3batLhQa2FawWjeyjCqyBzypd";
+    for bip21 in [
+        format!("bitcoin:{addr}?label=alice@example.com"),
+        format!("BITCOIN:{addr}?LABEL=alice@example.com"),
+    ] {
+        let result = input_parser.parse(&bip21).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(InputType::Bip21(Bip21Details { label, payment_methods, .. }))
+                if label.as_deref() == Some("alice@example.com") && payment_methods.len() == 1
+            ),
+            "{bip21}: {result:?}"
+        );
+    }
+
+    let names = dns_resolver.queried_names();
+    assert!(names.is_empty(), "{names:?}");
+}
+
+#[async_test_all]
+async fn test_invalid_bip353_address_skips_lookup() {
+    let dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+    for input in [
+        "lightning:user@example.com",
+        "https://user:pass@example.com/",
+        "üser@example.com",
+    ] {
+        let result = input_parser.parse(input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "{input}: {result:?}"
+        );
+    }
+
+    let names = dns_resolver.queried_names();
+    assert!(names.is_empty(), "{names:?}");
+}
+
+#[async_test_all]
+async fn test_bip353_address_lookup_name() {
+    for (input, dns_name) in [
+        ("user@example.com", "user.user._bitcoin-payment.example.com"),
+        (
+            "₿a.x_domain_cname_wild@dnssec_proof_tests.bitcoin.ninja",
+            "a.x_domain_cname_wild.user._bitcoin-payment.dnssec_proof_tests.bitcoin.ninja",
+        ),
+    ] {
+        let dns_resolver = MockDnsResolver::new();
+        let mock_rest_client = MockRestClient::new();
+        let input_parser = InputParser::new(dns_resolver.clone(), mock_rest_client, None);
+
+        let result = input_parser.parse(input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "{input}: {result:?}"
+        );
+        assert_eq!(dns_resolver.queried_names(), [dns_name]);
+    }
 }
 
 /// Integration test for BIP353 address resolution using real DNS.   

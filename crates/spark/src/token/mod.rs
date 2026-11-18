@@ -24,6 +24,9 @@ use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
+/// Largest `extra_metadata` the operators accept on a token create transaction.
+pub const MAX_TOKEN_EXTRA_METADATA_BYTES: usize = 1024;
+
 pub enum GetTokenOutputsFilter<'a> {
     Identifier(&'a str),
     IssuerPublicKey(&'a PublicKey),
@@ -39,6 +42,7 @@ pub struct TokenMetadata {
     pub max_supply: u128,
     pub is_freezable: bool,
     pub creation_entity_public_key: Option<PublicKey>,
+    pub extra_metadata: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -284,7 +288,8 @@ pub trait TokenOutputStore: Send + Sync {
     /// transaction coordinates) and inserts new outputs into the store.
     ///
     /// Removed outputs are marked as spent so that a concurrent refresh will
-    /// not re-add them.
+    /// not re-add them. The store does not insert an output that is reserved
+    /// or marked as spent.
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],
@@ -357,11 +362,6 @@ pub trait TokenOutputService: Send + Sync {
         filter: GetTokenOutputsFilter<'_>,
     ) -> Result<TokenMetadata, TokenOutputServiceError>;
 
-    /// Atomically removes spent outputs (identified by their previous
-    /// transaction coordinates) and inserts new outputs into the store.
-    ///
-    /// Removed outputs are marked as spent so that a concurrent refresh will
-    /// not re-add them.
     async fn update_token_outputs(
         &self,
         outputs_to_remove: &[(String, u32)],

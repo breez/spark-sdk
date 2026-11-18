@@ -123,12 +123,9 @@ impl TurnkeyWalletManager {
     /// Creates a fresh HD wallet (random seed) named `wallet_name`, ready for
     /// `create_turnkey_signer`, and returns the new wallet id.
     ///
-    /// Seeds BOTH identity-account formats up front, in this one activity: the
-    /// compressed key (ECDSA, for operator auth and user signatures) and the
-    /// Spark key (BIP-340 Schnorr, for token and Spark-invoice signing). A
-    /// second format cannot be added to an occupied path by a later call, and
-    /// generic `SIGN_RAW` needs the account row to exist, so both must be
-    /// materialized together here.
+    /// Seeds both identity-account formats in this one activity: the compressed
+    /// key (ECDSA, for operator auth and user signatures) and the Spark key
+    /// (BIP-340 Schnorr, for token and Spark-invoice signing).
     pub async fn create_wallet(&self, wallet_name: String) -> Result<String, TurnkeyError> {
         let identity_account = |address_format: &'static str| WalletAccountParams {
             curve: CURVE_SECP256K1,

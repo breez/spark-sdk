@@ -3,9 +3,13 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     FeePolicy,
+    FetchLightningSendStatusRequest,
     GetInfoRequest,
+    GetPaymentRequest,
     OnchainConfirmationSpeed,
+    PaymentDetails,
     PaymentRequest,
+    PaymentStatus,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
     SendPaymentRequest,
@@ -197,6 +201,24 @@ async def send_payment_lightning_bolt11(
     # ANCHOR_END: send-payment-lightning-bolt11
 
 
+async def get_payment_preimage(sdk: BreezSdk):
+    # ANCHOR: get-payment-preimage
+    payment_id = "<payment id>"
+    try:
+        response = await sdk.get_payment(
+            request=GetPaymentRequest(payment_id=payment_id)
+        )
+        payment = response.payment
+        if isinstance(payment.details, PaymentDetails.LIGHTNING):
+            htlc_details = payment.details.htlc_details
+            logging.debug(f"Payment hash: {htlc_details.payment_hash}")
+            logging.debug(f"Preimage: {htlc_details.preimage}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: get-payment-preimage
+
+
 async def send_payment_onchain(
     sdk: BreezSdk, prepare_response: PrepareSendPaymentResponse
 ):
@@ -235,6 +257,26 @@ async def send_payment_spark(
         logging.error(error)
         raise
     # ANCHOR_END: send-payment-spark
+
+
+async def fetch_lightning_send_status(sdk: BreezSdk):
+    # ANCHOR: fetch-lightning-send-status
+    invoice = "<bolt11 invoice>"
+    try:
+        request = FetchLightningSendStatusRequest(invoice=invoice)
+        response = await sdk.fetch_lightning_send_status(request=request)
+        if response.status == PaymentStatus.COMPLETED:
+            logging.debug("Paid")
+        elif response.status == PaymentStatus.PENDING:
+            logging.debug("Payment in flight")
+        elif response.status == PaymentStatus.FAILED:
+            logging.debug("Payment failed")
+        elif response.status is None:
+            logging.debug("No Lightning payment found")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: fetch-lightning-send-status
 
 
 async def prepare_send_payment_fees_included(sdk: BreezSdk):

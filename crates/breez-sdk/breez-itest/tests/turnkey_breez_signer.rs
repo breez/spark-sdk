@@ -1,13 +1,14 @@
 //! Live coverage for the Turnkey-backed `ExternalBreezSigner` methods that the
 //! signer-backend flows never touch (LNURL and real-time sync are off there):
-//! ECDSA signing and recovery, HMAC, and the ECIES round-trip. Turnkey signs;
-//! every assertion verifies locally against the key derived at the same path.
+//! ECDSA signing and recovery, Schnorr signing, HMAC, and the ECIES round-trip.
+//! Turnkey signs; every assertion verifies locally against the key derived at
+//! the same path.
 #![cfg(feature = "turnkey")]
 
 use anyhow::Result;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, RecoveryId};
-use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, ecdsa};
+use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, ecdsa, schnorr};
 use breez_sdk_itest::turnkey::provision_turnkey_wallet;
 use breez_sdk_spark::signer::external_types::MessageBytes;
 use tracing::info;
@@ -81,5 +82,33 @@ async fn breez_signer_signing_flows() -> Result<()> {
     assert_eq!(decrypted, plaintext, "ecies must round-trip");
 
     info!("[Turnkey] breez signer flows verified");
+    Ok(())
+}
+
+/// Schnorr signing at a path whose oldest account is the compressed one, from
+/// two signer instances: the second finds the existing Spark-format account
+/// and must sign with it, not with the compressed account.
+#[test_log::test(tokio::test)]
+async fn breez_signer_schnorr_across_signer_instances() -> Result<()> {
+    let (config, _guard) = provision_turnkey_wallet().await?;
+    let secp = Secp256k1::new();
+    let digest = sha256::Hash::hash(b"turnkey breez signer schnorr itest").to_byte_array();
+    let message = Message::from_digest(digest);
+
+    for instance in 1..=2 {
+        let breez = breez_sdk_spark::turnkey::create_turnkey_signer(config.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?
+            .breez_signer;
+        // Creates the compressed account on the first instance.
+        let pubkey =
+            PublicKey::from_slice(&breez.derive_public_key(TEST_PATH.to_string()).await?.bytes)?;
+        let sig_bytes = breez
+            .sign_hash_schnorr(digest.to_vec(), TEST_PATH.to_string())
+            .await?;
+        let signature = schnorr::Signature::from_slice(&sig_bytes.bytes)?;
+        secp.verify_schnorr(&signature, &message, &pubkey.x_only_public_key().0)?;
+        info!("[Turnkey] instance {instance}: sign_hash_schnorr verified against the derived key");
+    }
     Ok(())
 }

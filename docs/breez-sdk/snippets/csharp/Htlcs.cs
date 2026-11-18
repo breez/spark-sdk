@@ -64,6 +64,7 @@ namespace BreezSdkSnippets
                         expirySecs: null,
                         paymentHash: paymentHash,
                         receiverIdentityPublicKey: null,
+                        preimage: null,
                         feePolicy: null
                     )
                 )

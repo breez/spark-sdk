@@ -3,7 +3,8 @@ use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse,
+    FetchConversionLimitsResponse, FetchLightningSendStatusRequest,
+    FetchLightningSendStatusResponse, GetPaymentRequest, GetPaymentResponse,
     RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
@@ -22,6 +23,7 @@ use super::BreezSdk;
 
 pub(in crate::sdk) mod client_signing;
 pub(in crate::sdk) mod conversion;
+mod lightning_send_status;
 mod polling;
 pub(in crate::sdk) mod prepare;
 pub(in crate::sdk) mod receive;
@@ -297,32 +299,20 @@ impl BreezSdk {
 
         Ok(GetPaymentResponse { payment })
     }
+
+    /// Fetches the status of this wallet's Lightning payment of a Bolt11 invoice from the Spark
+    /// operators, without reading the local payment history. A payment made by a direct Spark
+    /// transfer to the invoice's Spark address is not covered.
+    pub async fn fetch_lightning_send_status(
+        &self,
+        request: FetchLightningSendStatusRequest,
+    ) -> Result<FetchLightningSendStatusResponse, SdkError> {
+        lightning_send_status::fetch_lightning_send_status(self, request).await
+    }
 }
 
 // Private payment methods
 impl BreezSdk {
-    pub(crate) async fn receive_bolt11_invoice(
-        &self,
-        description: String,
-        amount_sats: Option<u64>,
-        expiry_secs: Option<u32>,
-        payment_hash: Option<String>,
-        receiver_identity_public_key: Option<String>,
-    ) -> Result<ReceivePaymentResponse, SdkError> {
-        // Unquoted: callers of this path need an invoice for exactly the
-        // amount they name.
-        receive::receive_bolt11_invoice(
-            self,
-            description,
-            amount_sats,
-            expiry_secs,
-            payment_hash,
-            receiver_identity_public_key,
-            None,
-        )
-        .await
-    }
-
     pub(crate) async fn receive_bolt11_invoice_inner(
         &self,
         description: String,
@@ -330,6 +320,7 @@ impl BreezSdk {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
+        preimage: Option<String>,
     ) -> Result<LightningReceivePayment, SdkError> {
         // Unquoted: callers of this path need an invoice for exactly the
         // amount they name.
@@ -340,6 +331,7 @@ impl BreezSdk {
             expiry_secs,
             payment_hash,
             receiver_identity_public_key,
+            preimage,
             None,
         )
         .await

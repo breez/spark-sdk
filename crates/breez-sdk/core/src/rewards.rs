@@ -365,6 +365,7 @@ mod tests {
                             decimals: 6,
                             max_supply: 0,
                             is_freezable: false,
+                            extra_metadata: None,
                         },
                     },
                 )

@@ -448,7 +448,7 @@ let tokenIssuer = sdk.getTokenIssuer()
 let registry = buildCommandRegistry()
 
 // Set up tab completion
-allCompletionCommands = commandNames + advancedCommandNames + issuerCommandNames + contactsCommandNames + webhooksCommandNames + stableBalanceCommandNames + ["help", "exit", "quit"]
+allCompletionCommands = commandNames + advancedCommandNames + bridgingCommandNames + issuerCommandNames + contactsCommandNames + tokenAllowancesCommandNames + webhooksCommandNames + stableBalanceCommandNames + ["help", "exit", "quit"]
 rl_attempted_completion_function = attemptedCompletion
 
 // Load history
@@ -497,10 +497,14 @@ replLoop: while true {
 
     if cmdName == "advanced" {
         await dispatchAdvancedCommand(cmdArgs, sdk: sdk)
+    } else if cmdName == "bridging" {
+        await dispatchBridgingCommand(cmdArgs, sdk: sdk)
     } else if cmdName == "issuer" {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer: tokenIssuer)
     } else if cmdName == "contacts" {
         await dispatchContactsCommand(cmdArgs, sdk: sdk)
+    } else if cmdName == "token-allowances" {
+        await dispatchTokenAllowancesCommand(cmdArgs, sdk: sdk)
     } else if cmdName == "webhooks" {
         await dispatchWebhooksCommand(cmdArgs, sdk: sdk)
     } else if cmdName == "stable-balance" {

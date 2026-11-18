@@ -22,6 +22,7 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                     expirySecs: optionalExpirySecs,
                     paymentHash: nil,
                     receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
+                    preimage: nil,
                     feePolicy: optionalFeePolicy
                 )
             ))

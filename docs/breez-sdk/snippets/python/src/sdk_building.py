@@ -283,6 +283,7 @@ async def server_mode_request_handler(sdk: BreezSdk):
         expiry_secs=3600,
         payment_hash=None,
         receiver_identity_public_key=None,
+        preimage=None,
         fee_policy=None,
     )
     response = await sdk.receive_payment(

@@ -33,5 +33,9 @@ fn setup_x86_64_android_workaround() {
 }
 
 fn main() {
+    // Without declared inputs, cargo runs this script again and relinks the
+    // library whenever a file in this package changes.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     setup_x86_64_android_workaround();
 }

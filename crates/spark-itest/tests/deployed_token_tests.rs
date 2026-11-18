@@ -61,6 +61,7 @@ async fn test_many_outputs() -> Result<()> {
             2,
             false,
             2_000_000, // Larger supply for many small outputs
+            None,
         )
         .await?;
     info!("Created token");
@@ -242,7 +243,7 @@ async fn issuer_wallet_with_signer(
     .await?;
 
     wallet
-        .create_issuer_token(name, ticker, 2, false, supply)
+        .create_issuer_token(name, ticker, 2, false, supply, None)
         .await?;
     wallet.mint_issuer_token(supply).await?;
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

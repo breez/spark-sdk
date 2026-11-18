@@ -18,6 +18,7 @@ string? stableBalanceDefaultActiveLabel = null;
 ulong? stableBalanceThreshold = null;
 bool serverMode = false;
 string? lnurlDomain = null;
+string? realTimeSyncServerUrl = null;
 string? proxyAddress = null;
 string? proxyUser = null;
 string? proxyPassword = null;
@@ -85,6 +86,9 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--lnurl-domain":
             if (i + 1 < args.Length) lnurlDomain = args[++i];
+            break;
+        case "--real-time-sync-server-url":
+            if (i + 1 < args.Length) realTimeSyncServerUrl = args[++i];
             break;
         case "--proxy":
             if (i + 1 < args.Length) proxyAddress = args[++i];
@@ -282,6 +286,7 @@ await RunInteractiveMode(
     stableBalanceConfig,
     passkeyConfig,
     lnurlDomain,
+    realTimeSyncServerUrl,
     proxy
 );
 
@@ -348,6 +353,7 @@ static void PrintUsage()
     Console.WriteLine("  --rpid <RPID>                               Relying party ID for FIDO2 provider (requires --passkey)");
     Console.WriteLine("  --server-mode                               Run in server mode (background tasks disabled)");
     Console.WriteLine("  --lnurl-domain <DOMAIN>                     LNURL server domain for lightning address registration");
+    Console.WriteLine("  --real-time-sync-server-url <URL>           Real-time sync server URL (overrides network default)");
     Console.WriteLine("  --proxy <HOST:PORT>                         Route connections through a SOCKS5 proxy");
     Console.WriteLine("  --proxy-user <USER>                         SOCKS5 username (requires --proxy and --proxy-password)");
     Console.WriteLine("  --proxy-password <PASS>                     SOCKS5 password (requires --proxy and --proxy-user)");
@@ -366,6 +372,7 @@ static async Task RunInteractiveMode(
     StableBalanceConfig? stableBalanceConfig,
     CliPasskeyConfig? passkeyConfig,
     string? lnurlDomain,
+    string? realTimeSyncServerUrl,
     ProxyConfig? proxy)
 {
     // Init logging
@@ -413,6 +420,10 @@ static async Task RunInteractiveMode(
     if (lnurlDomain != null)
     {
         config = config with { lnurlDomain = lnurlDomain };
+    }
+    if (realTimeSyncServerUrl != null)
+    {
+        config = config with { realTimeSyncServerUrl = realTimeSyncServerUrl };
     }
     if (network == Network.Mainnet)
     {
@@ -483,10 +494,12 @@ static async Task RunInteractiveMode(
     var allCommands = new List<string>();
     allCommands.AddRange(CommandNames.All);
     allCommands.AddRange(AdvancedCommandNames.All);
+    allCommands.AddRange(BridgingCommandNames.All);
     allCommands.AddRange(IssuerCommandNames.All);
     allCommands.AddRange(ContactCommandNames.All);
     allCommands.AddRange(WebhookCommandNames.All);
     allCommands.AddRange(StableBalanceCommandNames.All);
+    allCommands.AddRange(TokenAllowanceCommandNames.All);
     allCommands.Add("exit");
     allCommands.Add("quit");
     allCommands.Add("help");
@@ -574,6 +587,10 @@ static async Task RunInteractiveMode(
             {
                 await AdvancedCommands.DispatchCommand(cmdArgs, sdk, Readline);
             }
+            else if (cmdName == "bridging")
+            {
+                await BridgingCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
             else if (cmdName == "issuer")
             {
                 await IssuerCommands.DispatchCommand(cmdArgs, tokenIssuer, Readline);
@@ -589,6 +606,10 @@ static async Task RunInteractiveMode(
             else if (cmdName == "stable-balance")
             {
                 await StableBalanceCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "token-allowances")
+            {
+                await TokenAllowanceCommands.DispatchCommand(cmdArgs, sdk, Readline);
             }
             else if (registry.TryGetValue(cmdName, out var cmd))
             {

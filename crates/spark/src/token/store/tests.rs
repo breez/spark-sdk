@@ -506,9 +506,15 @@ async fn test_finalize_swap_marks_spent_and_tracks_completion() {
 }
 
 #[async_test_all]
-async fn test_insert_outputs_clears_spent_status() {
+async fn test_update_token_outputs_skips_reserved_output() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_insert_outputs_clears_spent_status(&store).await;
+    shared_tests::test_update_token_outputs_skips_reserved_output(&store).await;
+}
+
+#[async_test_all]
+async fn test_update_token_outputs_skips_spent_output() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_update_token_outputs_skips_spent_output(&store).await;
 }
 
 #[async_test_all]

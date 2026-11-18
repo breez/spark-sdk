@@ -73,6 +73,10 @@ pub struct ExternalFrostJob {
     pub operator_commitments: Vec<IdentifierCommitmentPair>,
     /// Optional adaptor public key (33 bytes compressed).
     pub adaptor_public_key: Option<Vec<u8>>,
+    /// Sign the adaptor signature with version 2 adaptor signing, whose FROST
+    /// binding factors include the adaptor point. Only set when the signer's
+    /// `supports_adaptor_v2` returns true.
+    pub adaptor_v2: bool,
 }
 
 impl ExternalFrostJob {
@@ -92,7 +96,8 @@ impl ExternalFrostJob {
             sighash: job.sighash.to_vec(),
             verifying_key: job.verifying_key.serialize().to_vec(),
             operator_commitments,
-            adaptor_public_key: job.adaptor_public_key.map(|pk| pk.serialize().to_vec()),
+            adaptor_public_key: job.adaptor.map(|a| a.public_key.serialize().to_vec()),
+            adaptor_v2: job.adaptor.is_some_and(|a| a.v2),
         })
     }
 
@@ -112,11 +117,15 @@ impl ExternalFrostJob {
                 ))
             })
             .collect::<Result<_, SdkError>>()?;
-        let adaptor_public_key = self
+        let adaptor = self
             .adaptor_public_key
             .as_ref()
             .map(|b| {
                 secp256k1::PublicKey::from_slice(b)
+                    .map(|public_key| spark_wallet::FrostAdaptor {
+                        public_key,
+                        v2: self.adaptor_v2,
+                    })
                     .map_err(|e| SdkError::Generic(format!("Invalid adaptor public key: {e}")))
             })
             .transpose()?;
@@ -125,7 +134,7 @@ impl ExternalFrostJob {
             sighash,
             verifying_key,
             operator_commitments,
-            adaptor_public_key,
+            adaptor,
         })
     }
 }

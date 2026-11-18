@@ -12,7 +12,7 @@ For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md).
 During the prepare step, the SDK ensures that the inputs are valid with respect to the payment request type,
 and also returns the fees related to the payment so they can be confirmed.
 
-The payment request field supports Lightning invoices, Bitcoin addresses, Spark addresses and Spark invoices.
+The payment request field supports Lightning invoices, Bitcoin addresses, silent payment addresses, Spark addresses and Spark invoices.
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -31,6 +31,10 @@ If the invoice also contains a Spark address, the payment can be sent directly v
 
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
+#### Lightning address and Cash App
+
+Lightning addresses are paid with [LNURL-Pay](lnurl_pay.md) rather than {{#name prepare_send_payment}}. This is also how to pay a Cash App user: a Cash App username prefixed with `$` (e.g. `$alice`) [parses](parse.md) to the user's Lightning address, `alice@cash.app`. A wallet holding a [stable balance](./stable_balance.md) converts it to Bitcoin for the payment automatically.
+
 ### Bitcoin
 
 For Bitcoin addresses, the amount must be set in the request. The prepare response includes fee quotes for three payment speeds: Slow, Medium, and Fast.
@@ -40,6 +44,10 @@ The quote's {{#name is_estimate}} flag is set when your bitcoin balance is zero 
 Fee quotes are short lived. If one is close to expiry by the time you send, the SDK fetches a fresh quote for you. It will not spend more than the payment allows, so a fee that rises beyond that fails the send and asks you to prepare again.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
+
+#### Silent payment address
+
+You send to a silent payment address ([BIP352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki)) the same way as to a Bitcoin address: the prepare response's {{#name payment_method}} is {{#enum SendPaymentMethod::BitcoinAddress}}.
 
 ### Spark
 
@@ -96,7 +104,7 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 
 - **Prepare Response** - The response from the [Preparing the Payment](send_payment.md#preparing-payments) step.
 - **Options** - Any payment method specific options for the payment (see below).
-- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
+- **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made. The payment's id is the idempotency key. Without an idempotency key, the SDK gives every payment a unique id, including a second payment of the same invoice.
 
 ### Lightning
 
@@ -106,6 +114,14 @@ In the optional send payment options for BOLT11 invoices, you can set:
 - **Completion Timeout** - By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the timeout is reached, a pending payment object is returned. If the payment completes within the timeout, the completed payment object is returned.
 
 {{#tabs send_payment:send-payment-lightning-bolt11}}
+
+#### Proof of payment
+
+When a Lightning payment completes, the recipient has released the payment preimage, and the SDK stores it in the payment's {{#name htlc_details}}. The SHA-256 hash of the preimage equals the invoice's payment hash, which proves the recipient was paid. To read it later, fetch the payment with {{#name get_payment}}:
+
+{{#tabs send_payment:get-payment-preimage}}
+
+A payment settled through a Spark transfer has no preimage. See [Prefer Spark over Lightning](config.md#prefer-spark-over-lightning).
 
 ### Bitcoin
 
@@ -166,3 +182,21 @@ The {{#enum SdkEvent::Synced}} event is also emitted as the SDK syncs in the bac
 | -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The deposit transfer has been submitted to the provider. The cross-chain leg is awaiting settlement.     | Show payment as pending; the bridge leg may take several minutes depending on the provider and destination chain. |
 | **PaymentSucceeded** | The provider reports the cross-chain order terminal. The amount actually delivered to the recipient is carried on the conversion info. | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
+
+## Checking a Lightning payment
+
+The payment list syncs in the background, so after a wallet is restored it may not yet show payments sent before the restore or from another device. To check whether this wallet has already paid a BOLT11 invoice without waiting for the sync, call {{#name fetch_lightning_send_status}}. It asks the Spark operators instead of reading the payment list.
+
+The response's {{#name status}} is:
+
+- {{#enum PaymentStatus::Completed}} when a payment of the invoice completed. {{#name preimage}} then holds the preimage that proves it.
+- {{#enum PaymentStatus::Pending}} when a payment is still in flight.
+- {{#enum PaymentStatus::Failed}} when every payment of the invoice failed.
+- Unset when this wallet has not sent a Lightning payment for the invoice.
+
+{{#tabs send_payment:fetch-lightning-send-status}}
+
+<div class="warning">
+<h4>Developer note</h4>
+Only Lightning payments are found. An invoice paid by a direct Spark transfer to its Spark address (see <a href="send_payment.md#lightning-1">Prefer Spark</a>) is not, so an unset status does not mean the invoice is unpaid.
+</div>

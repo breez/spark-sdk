@@ -200,6 +200,8 @@ fn package_wasm_target(
         bail!("wasm-pack build failed for target {}", target);
     }
 
+    declare_symbol_dispose(&out_path)?;
+
     // For Node.js target, copy the JavaScript sqlite storage implementation
     if target == "nodejs" {
         copy_nodejs_storage_files(crate_dir, &out_path)?;
@@ -231,6 +233,26 @@ fn package_wasm_target(
     println!("Successfully built WASM target: {}", target);
     Ok(())
 }
+
+/// Prepends a declaration of `Symbol.dispose`, which TypeScript needs to check
+/// the `[Symbol.dispose]()` methods wasm-bindgen puts on exported classes.
+/// With a reference to the `esnext.disposable` lib instead, TypeScript would
+/// also accept `DisposableStack` and `using` in every consumer, including
+/// consumers whose runtimes lack them.
+fn declare_symbol_dispose(out_path: &Path) -> Result<()> {
+    let dts = out_path.join("breez_sdk_spark_wasm.d.ts");
+    let content =
+        fs::read_to_string(&dts).with_context(|| format!("Failed to read {}", dts.display()))?;
+    fs::write(&dts, format!("{SYMBOL_DISPOSE_DECLARATION}{content}"))
+        .with_context(|| format!("Failed to write {}", dts.display()))
+}
+
+const SYMBOL_DISPOSE_DECLARATION: &str = "declare global {
+    interface SymbolConstructor {
+        readonly dispose: unique symbol;
+    }
+}
+";
 
 /// Parsed exports from a wasm-bindgen generated `.d.ts` file.
 struct WasmExports {
@@ -425,6 +447,8 @@ fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<
 /// Generate an ESM wrapper at `pkg_dir/nodejs/index.mjs` so that
 /// `import { connect } from '@breeztech/breez-sdk-spark'` works in ESM
 /// contexts (e.g. Vite SSR) where the `"node"` export condition is active.
+/// Its `index.d.mts` types that entry as ESM: without it, TypeScript falls
+/// back to the CommonJS `index.d.ts`.
 fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
     let dts = pkg_dir.join("nodejs/breez_sdk_spark_wasm.d.ts");
     let exports = parse_wasm_exports(&dts)?;
@@ -450,6 +474,12 @@ fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
     let count = exports.functions.len() + exports.classes.len();
     fs::write(pkg_dir.join("nodejs/index.mjs"), &mjs)
         .with_context(|| "Failed to write nodejs/index.mjs")?;
+
+    let dmts = "export * from \"./breez_sdk_spark_wasm.js\";\n\
+                import * as pkg from \"./breez_sdk_spark_wasm.js\";\n\
+                export default pkg;\n";
+    fs::write(pkg_dir.join("nodejs/index.d.mts"), dmts)
+        .with_context(|| "Failed to write nodejs/index.d.mts")?;
 
     println!("Created Node.js ESM wrapper with {count} exports");
     Ok(())
@@ -1119,127 +1149,37 @@ fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
 
-// Automatically import and set up the storage for Node.js
-try {
-    const { createDefaultStorage } = require('./storage/index.cjs');
-
-    // Make createDefaultStorage available globally for WASM to find
-    global.createDefaultStorage = createDefaultStorage;
-
-    console.log('Breez SDK: Node.js storage automatically enabled');
-} catch (error) {
-    console.warn('Breez SDK: Failed to load Node.js storage:', error.message);
-    console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
-}
-
-// Automatically import and set up the default tree store for Node.js
-try {
-    const { createDefaultTreeStore } = require('./tree-store/index.cjs');
-
-    // Make createDefaultTreeStore available globally for the WASM bridge to find.
-    global.createDefaultTreeStore = createDefaultTreeStore;
-} catch (error) {
-    console.warn('Breez SDK: Failed to load Node.js tree store:', error.message);
-    console.warn('Breez SDK: Tree state will not be persisted. Ignore this warning if you are not using the default storage.');
-}
-
-// Automatically import and set up the PostgreSQL storage for Node.js
-try {
-    const { createPostgresStorage, createPostgresPool, createPostgresStorageWithPool } = require('./postgres-storage/index.cjs');
-    global.createPostgresStorage = createPostgresStorage;
-    global.createPostgresPool = createPostgresPool;
-    global.createPostgresStorageWithPool = createPostgresStorageWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load PostgreSQL storage:', error.message);
-    }
-    // The WASM bridge builds every PostgreSQL store from a pool, so a caller that asks
-    // for PostgreSQL storage gets this load error.
-    global.createPostgresPool = () => { throw error; };
-}
-
-// Automatically import and set up the PostgreSQL tree store for Node.js
-try {
-    const { createPostgresTreeStore, createPostgresTreeStoreWithPool } = require('./postgres-tree-store/index.cjs');
-    global.createPostgresTreeStore = createPostgresTreeStore;
-    global.createPostgresTreeStoreWithPool = createPostgresTreeStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load PostgreSQL tree store:', error.message);
+// The WASM bridge calls the storage factories as globals. When a storage module fails to
+// load, for example because its optional database driver is not installed, its factories
+// fail with the load error, so only an app that uses that storage gets it. The bridge
+// awaits every factory except the pool factories.
+function registerFactories(file, names, poolNames = []) {
+    try {
+        const factories = require(file);
+        for (const name of [...names, ...poolNames]) {
+            global[name] = factories[name];
+        }
+    } catch (error) {
+        for (const name of names) {
+            global[name] = () => Promise.reject(error);
+        }
+        for (const name of poolNames) {
+            global[name] = () => { throw error; };
+        }
     }
 }
 
-// Automatically import and set up the PostgreSQL token store for Node.js
-try {
-    const { createPostgresTokenStore, createPostgresTokenStoreWithPool } = require('./postgres-token-store/index.cjs');
-    global.createPostgresTokenStore = createPostgresTokenStore;
-    global.createPostgresTokenStoreWithPool = createPostgresTokenStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load PostgreSQL token store:', error.message);
-    }
-}
+registerFactories('./storage/index.cjs', ['createDefaultStorage']);
+registerFactories('./tree-store/index.cjs', ['createDefaultTreeStore']);
+registerFactories('./postgres-storage/index.cjs', ['createPostgresStorage', 'createPostgresStorageWithPool'], ['createPostgresPool']);
+registerFactories('./postgres-tree-store/index.cjs', ['createPostgresTreeStore', 'createPostgresTreeStoreWithPool']);
+registerFactories('./postgres-token-store/index.cjs', ['createPostgresTokenStore', 'createPostgresTokenStoreWithPool']);
+registerFactories('./postgres-session-store/index.cjs', ['createPostgresSessionStore', 'createPostgresSessionStoreWithPool']);
+registerFactories('./mysql-storage/index.cjs', ['createMysqlStorage', 'createMysqlStorageWithPool'], ['createMysqlPool']);
+registerFactories('./mysql-tree-store/index.cjs', ['createMysqlTreeStore', 'createMysqlTreeStoreWithPool']);
+registerFactories('./mysql-token-store/index.cjs', ['createMysqlTokenStore', 'createMysqlTokenStoreWithPool']);
+registerFactories('./mysql-session-store/index.cjs', ['createMysqlSessionStore', 'createMysqlSessionStoreWithPool']);
 
-// Automatically import and set up the PostgreSQL session store for Node.js
-try {
-    const { createPostgresSessionStore, createPostgresSessionStoreWithPool } = require('./postgres-session-store/index.cjs');
-    global.createPostgresSessionStore = createPostgresSessionStore;
-    global.createPostgresSessionStoreWithPool = createPostgresSessionStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load PostgreSQL session store:', error.message);
-    }
-}
-
-// Automatically import and set up the MySQL storage for Node.js
-try {
-    const { createMysqlStorage, createMysqlPool, createMysqlStorageWithPool } = require('./mysql-storage/index.cjs');
-    global.createMysqlStorage = createMysqlStorage;
-    global.createMysqlPool = createMysqlPool;
-    global.createMysqlStorageWithPool = createMysqlStorageWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load MySQL storage:', error.message);
-    }
-    // The WASM bridge builds every MySQL store from a pool, so a caller that asks
-    // for MySQL storage gets this load error.
-    global.createMysqlPool = () => { throw error; };
-}
-
-// Automatically import and set up the MySQL tree store for Node.js
-try {
-    const { createMysqlTreeStore, createMysqlTreeStoreWithPool } = require('./mysql-tree-store/index.cjs');
-    global.createMysqlTreeStore = createMysqlTreeStore;
-    global.createMysqlTreeStoreWithPool = createMysqlTreeStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load MySQL tree store:', error.message);
-    }
-}
-
-// Automatically import and set up the MySQL token store for Node.js
-try {
-    const { createMysqlTokenStore, createMysqlTokenStoreWithPool } = require('./mysql-token-store/index.cjs');
-    global.createMysqlTokenStore = createMysqlTokenStore;
-    global.createMysqlTokenStoreWithPool = createMysqlTokenStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load MySQL token store:', error.message);
-    }
-}
-
-// Automatically import and set up the MySQL session store for Node.js
-try {
-    const { createMysqlSessionStore, createMysqlSessionStoreWithPool } = require('./mysql-session-store/index.cjs');
-    global.createMysqlSessionStore = createMysqlSessionStore;
-    global.createMysqlSessionStoreWithPool = createMysqlSessionStoreWithPool;
-} catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') {
-        console.warn('Breez SDK: Failed to load MySQL session store:', error.message);
-    }
-}
-
-// Export all WASM functions
 module.exports = wasmModule;
 "#;
 
@@ -1426,31 +1366,24 @@ let storageSetupComplete = false;
 const setupWebStorage = async () => {
     if (storageSetupComplete) return;
     
+    // The WASM bridge calls the storage factories as globals. When a storage module fails to
+    // load, its factory rejects with the load error, so only an app that uses that storage
+    // gets it.
     try {
-        // Dynamic import of storage module
         const { createDefaultStorage } = await import('./storage/index.js');
-
-        // Make createDefaultStorage available globally for WASM to find
         globalThis.createDefaultStorage = createDefaultStorage;
-
-        console.log('Breez SDK: Web IndexedDB storage automatically enabled');
         storageSetupComplete = true;
     } catch (error) {
-        console.warn('Breez SDK: Failed to load Web storage:', error.message);
-        console.warn('Breez SDK: Storage operations may not work properly. Ignore this warning if you are not using the default storage.');
+        globalThis.createDefaultStorage = () => Promise.reject(error);
     }
 
     try {
-        // Dynamic import of the IndexedDB tree store module
+        // The browser tree store uses its own `-tree` database.
         const { createWebTreeStore } = await import('./tree-store/index.js');
-
-        // Make createDefaultTreeStore available globally for the WASM bridge to
-        // find. The browser store uses its own `-tree` database.
         globalThis.createDefaultTreeStore = (dbName, logger) =>
             createWebTreeStore(`${dbName}-tree`, logger);
     } catch (error) {
-        console.warn('Breez SDK: Failed to load Web tree store:', error.message);
-        console.warn('Breez SDK: Tree state will not be persisted. Ignore this warning if you are not using the default storage.');
+        globalThis.createDefaultTreeStore = () => Promise.reject(error);
     }
 };
 
@@ -1618,12 +1551,13 @@ mod tests {
         );
         let entry = fs::read_to_string(out.join("index.js")).expect("read node entry");
         assert!(
-            entry.contains("global.createDefaultTreeStore"),
-            "node entry does not expose createDefaultTreeStore"
+            entry.contains("global[name] = factories[name];"),
+            "node entry does not expose its storage factories as globals"
         );
         assert!(
-            entry.contains("./tree-store/index.cjs")
-                && entry.contains("global.createDefaultTreeStore = createDefaultTreeStore"),
+            entry.contains(
+                "registerFactories('./tree-store/index.cjs', ['createDefaultTreeStore']);"
+            ),
             "node entry does not back createDefaultTreeStore with the tree store"
         );
         let pkg = fs::read_to_string(out.join("package.json")).expect("read node package.json");

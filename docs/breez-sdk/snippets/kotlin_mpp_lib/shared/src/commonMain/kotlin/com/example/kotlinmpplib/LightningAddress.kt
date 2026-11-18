@@ -96,6 +96,25 @@ class LightningAddress {
         // ANCHOR_END: delete-lightning-address
     }
 
+    suspend fun accessLightningAddress(sdk: BreezSdk) {
+        val paymentId = "<payment id>"
+        val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val payment = response.payment
+
+        // ANCHOR: access-lightning-address
+        // Check if this is a lightning payment with LNURL receive metadata
+        if (payment.details is PaymentDetails.Lightning) {
+            val details = payment.details as PaymentDetails.Lightning
+            val metadata = details.lnurlReceiveMetadata
+
+            // Access the Lightning address the sender paid, if present
+            metadata?.lightningAddress?.let { lightningAddress ->
+                println("Lightning address: $lightningAddress")
+            }
+        }
+        // ANCHOR_END: access-lightning-address
+    }
+
     suspend fun accessSenderComment(sdk: BreezSdk) {
         val paymentId = "<payment id>"
         val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))

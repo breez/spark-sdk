@@ -27,7 +27,7 @@ class MigrationManager {
     const transaction = event.target.transaction;
 
     this._log(
-      "info",
+      "INFO",
       `Upgrading IndexedDB from version ${oldVersion} to ${newVersion}`
     );
 
@@ -35,14 +35,14 @@ class MigrationManager {
       for (let i = oldVersion; i < newVersion; i++) {
         const migration = this.migrations[i];
         if (migration) {
-          this._log("debug", `Running migration ${i + 1}: ${migration.name}`);
+          this._log("DEBUG", `Running migration ${i + 1}: ${migration.name}`);
           migration.upgrade(db, transaction);
         }
       }
-      this._log("info", `Database migration completed successfully`);
+      this._log("INFO", `Database migration completed successfully`);
     } catch (error) {
       this._log(
-        "error",
+        "ERROR",
         `Migration failed at version ${oldVersion}: ${error.message}`
       );
       throw new this.StorageError(
@@ -53,14 +53,7 @@ class MigrationManager {
   }
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({
-        line: message,
-        level: level,
-      });
-    } else if (level === "error") {
-      console.error(`[MigrationManager] ${message}`);
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -149,7 +142,7 @@ class MigrationManager {
               }
             });
 
-            console.log(`Migrated ${updated} payment records to BigInt format`);
+            this._log("INFO", `Migrated ${updated} payment records to BigInt format`);
           };
         },
       },
@@ -653,6 +646,77 @@ class MigrationManager {
           }
         },
       },
+      {
+        // A withdrawal stored before the SDK kept its destination address and
+        // output index loses its details, which the SDK cannot rebuild here.
+        // With the sync offset at 0, the SDK re-fetches every transfer on its
+        // next sync and rewrites past withdrawals with both values.
+        name: "Clear legacy withdrawal details and reset sync offset",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payments")) {
+            const paymentStore = transaction.objectStore("payments");
+            // The cursor opens from a callback, so it reads the payments after
+            // the earlier steps of this upgrade have written theirs.
+            paymentStore.count().onsuccess = () => {
+              const cursorRequest = paymentStore.openCursor();
+              cursorRequest.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) return;
+                const payment = cursor.value;
+                let details = null;
+                if (payment.details && typeof payment.details === "string") {
+                  try {
+                    details = JSON.parse(payment.details);
+                  } catch (e) {
+                    details = null;
+                  }
+                } else {
+                  details = payment.details;
+                }
+                if (
+                  details &&
+                  details.type === "withdraw" &&
+                  (details.vout == null || details.destinationAddress == null)
+                ) {
+                  payment.details = null;
+                  cursor.update(payment);
+                }
+                cursor.continue();
+              };
+            };
+          }
+          if (!db.objectStoreNames.contains("settings")) {
+            return;
+          }
+          const settingsStore = transaction.objectStore("settings");
+          const getRequest = settingsStore.get("sync_offset");
+          getRequest.onsuccess = () => {
+            const syncCache = getRequest.result;
+            if (!syncCache || !syncCache.value) {
+              return;
+            }
+            try {
+              const syncInfo = JSON.parse(syncCache.value);
+              syncInfo.offset = 0;
+              settingsStore.put({
+                key: "sync_offset",
+                value: toJson(syncInfo),
+              });
+            } catch (e) {
+              // If parsing fails, just continue
+            }
+          };
+        },
+      },
+      {
+        name: "Force lnurl_receive_metadata re-sync for the lightning address",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("lnurl_metadata_updated_after");
+          }
+        },
+      },
     ];
   }
 }
@@ -681,7 +745,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 23; // Current schema version (= migration count)
+    this.dbVersion = 25; // Current schema version (= migration count)
   }
 
   /**
@@ -1071,13 +1135,15 @@ class IndexedDBStorage {
           shouldPersist = true;
           shouldEmit = true;
         } else if (stored === next) {
-          console.debug(
+          this._log(
+            "DEBUG",
             `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
           shouldPersist = true;
           shouldEmit = false;
         } else if (this._isFinalPaymentStatus(stored)) {
-          console.warn(
+          this._log(
+            "WARN",
             `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
           shouldPersist = false;
@@ -1293,7 +1359,7 @@ class IndexedDBStorage {
   /**
    * Gets payments that have any of the specified parent payment IDs.
    * @param {string[]} parentPaymentIds - Array of parent payment IDs
-   * @returns {Promise<Object>} Map of parentPaymentId -> array of RelatedPayment objects
+   * @returns {Promise<Object>} Map of parentPaymentId -> array of Payment objects
    */
   async getPaymentsByParentIds(parentPaymentIds) {
     if (!this.db) {
@@ -2007,6 +2073,7 @@ class IndexedDBStorage {
           nostrZapRequest: item.nostrZapRequest || null,
           nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
+          lightningAddress: item.lightningAddress || null,
         });
 
         request.onsuccess = () => {
@@ -2725,6 +2792,10 @@ class IndexedDBStorage {
     };
   }
 
+  _log(level, line) {
+    this.logger?.log({ line, level });
+  }
+
   _normalizePaymentStatus(status) {
     return typeof status === "string" ? status.toLowerCase() : status;
   }
@@ -3040,6 +3111,7 @@ class IndexedDBStorage {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
+            lightningAddress: lnurlReceiveMetadata.lightningAddress || null,
           };
         }
         resolve(payment);

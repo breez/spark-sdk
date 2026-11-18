@@ -23,6 +23,7 @@ public static class CommandNames
     {
         "get-info",
         "get-payment",
+        "fetch-lightning-send-status",
         "sync",
         "list-payments",
         "receive",
@@ -38,8 +39,6 @@ public static class CommandNames
         "refund-deposit",
         "list-unclaimed-deposits",
         "buy-bitcoin",
-        "bridge-from-cash-app",
-        "bridge-to-cash-app",
         "check-lightning-address-available",
         "get-lightning-address",
         "register-lightning-address",
@@ -53,6 +52,7 @@ public static class CommandNames
         "fetch-conversion-limits",
         "get-user-settings",
         "set-user-settings",
+        "pull-payment",
         "get-spark-status",
     };
 }
@@ -80,6 +80,12 @@ public static class Commands
                 Name = "get-payment",
                 Description = "Get the payment with the given ID",
                 Run = HandleGetPayment
+            },
+            ["fetch-lightning-send-status"] = new()
+            {
+                Name = "fetch-lightning-send-status",
+                Description = "Fetch the status of this wallet's Lightning payment of a Bolt11 invoice from the operators",
+                Run = HandleFetchLightningSendStatus
             },
             ["sync"] = new()
             {
@@ -110,6 +116,12 @@ public static class Commands
                 Name = "pay-batch",
                 Description = "Pay several recipients with one token transaction",
                 Run = HandlePayBatch
+            },
+            ["pull-payment"] = new()
+            {
+                Name = "pull-payment",
+                Description = "Pull a payment from a wallet that granted this wallet an allowance",
+                Run = HandlePullPayment
             },
             ["lnurl-pay"] = new()
             {
@@ -170,18 +182,6 @@ public static class Commands
                 Name = "buy-bitcoin",
                 Description = "Buy Bitcoin using an external provider",
                 Run = HandleBuyBitcoin
-            },
-            ["bridge-from-cash-app"] = new()
-            {
-                Name = "bridge-from-cash-app",
-                Description = "Bridge from Cash App to USDC/USDT on an external chain",
-                Run = HandleBridgeFromCashApp
-            },
-            ["bridge-to-cash-app"] = new()
-            {
-                Name = "bridge-to-cash-app",
-                Description = "Bridge USDC/USDT from an external chain to a Cash App user",
-                Run = HandleBridgeToCashApp
             },
             ["check-lightning-address-available"] = new()
             {
@@ -283,10 +283,12 @@ public static class Commands
             Console.WriteLine($"  {name,-40} {registry[name].Description}");
         }
         Console.WriteLine($"  {"advanced <subcommand>",-40} Expert-only commands (use 'advanced help' for details)");
+        Console.WriteLine($"  {"bridging <subcommand>",-40} Bridging commands (use 'bridging help' for details)");
         Console.WriteLine($"  {"issuer <subcommand>",-40} Token issuer commands (use 'issuer help' for details)");
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
         Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");
         Console.WriteLine($"  {"stable-balance <subcommand>",-40} Stable balance commands (use 'stable-balance help' for details)");
+        Console.WriteLine($"  {"token-allowances <subcommand>",-40} Token allowance commands (use 'token-allowances help' for details)");
         Console.WriteLine($"  {"exit / quit",-40} Exit the CLI");
         Console.WriteLine($"  {"help",-40} Show this help message");
         Console.WriteLine();
@@ -407,6 +409,22 @@ public static class Commands
         }
 
         var result = await sdk.GetPayment(request: new GetPaymentRequest(paymentId: args[0]));
+        Serialization.PrintValue(result);
+    }
+
+    // --- fetch-lightning-send-status ---
+
+    private static async Task HandleFetchLightningSendStatus(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        if (args.Length < 1)
+        {
+            Console.WriteLine("Usage: fetch-lightning-send-status <invoice>");
+            return;
+        }
+
+        var result = await sdk.FetchLightningSendStatus(
+            request: new FetchLightningSendStatusRequest(invoice: args[0])
+        );
         Serialization.PrintValue(result);
     }
 
@@ -532,11 +550,13 @@ public static class Commands
         var expirySecsStr = GetFlag(args, "-e", "--expiry-secs");
         var senderPubKey = GetFlag(args, "-s", "--sender-public-key");
         var hodl = HasFlag(args, "--hodl");
+        var preimage = GetFlag(args, "--preimage");
         var newAddress = HasFlag(args, "--new-address");
         var crossChainMaxSlippageStr = GetFlag(args, "--cross-chain-max-slippage-bps");
         var crossChainFeesIncluded = HasFlag(args, "--cross-chain-fees-included");
         var crossChainTargetOverpayStr = GetFlag(args, "--cross-chain-target-overpay-bps");
         var crossChainToBitcoin = HasFlag(args, "--cross-chain-to-bitcoin");
+        var crossChainRefundAddress = GetFlag(args, "--cross-chain-refund-address");
 
         if (method == null)
         {
@@ -575,6 +595,12 @@ public static class Commands
                 break;
 
             case "bolt11":
+                if (hodl && preimage != null)
+                {
+                    Console.Error.WriteLine("--hodl and --preimage cannot be used together");
+                    return;
+                }
+
                 ulong? amountSats = null;
                 if (amountStr != null)
                 {
@@ -586,10 +612,10 @@ public static class Commands
                 {
                     var preimageBytes = new byte[32];
                     RandomNumberGenerator.Fill(preimageBytes);
-                    var preimage = Convert.ToHexString(preimageBytes).ToLowerInvariant();
+                    var hodlPreimage = Convert.ToHexString(preimageBytes).ToLowerInvariant();
                     paymentHash = ComputeSha256Hex(preimageBytes);
 
-                    Console.WriteLine($"HODL invoice preimage: {preimage}");
+                    Console.WriteLine($"HODL invoice preimage: {hodlPreimage}");
                     Console.WriteLine($"Payment hash: {paymentHash}");
                     Console.WriteLine("Save the preimage! Use `claim-htlc-payment` with it to settle.");
                 }
@@ -600,6 +626,7 @@ public static class Commands
                     expirySecs: ParseOptionalUint(expirySecsStr),
                     paymentHash: paymentHash,
                     receiverIdentityPublicKey: null,
+                    preimage: preimage,
                     feePolicy: null
                 );
                 break;
@@ -628,7 +655,8 @@ public static class Commands
                     destination: destination,
                     feeMode: feeMode,
                     maxSlippageBps: ParseOptionalUint(crossChainMaxSlippageStr),
-                    targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr)
+                    targetOverpayBps: ParseOptionalUint(crossChainTargetOverpayStr),
+                    refundAddress: crossChainRefundAddress
                 );
                 break;
 
@@ -837,6 +865,104 @@ public static class Commands
         );
 
         Serialization.PrintValue(response.payments);
+    }
+
+    // --- pull-payment ---
+
+    private static async Task HandlePullPayment(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var receiverStrs = GetAllFlags(args, "-r", "--receiver");
+        var positional = GetPositionalArgs(args);
+
+        if (positional.Length < 2 || receiverStrs.Length == 0)
+        {
+            Console.WriteLine("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]");
+            Console.WriteLine("  receiver format: amount (this wallet) or address:amount");
+            return;
+        }
+
+        var payerAddress = positional[0];
+        var tokenIdentifier = positional[1];
+
+        var receivers = new List<PullReceiver>();
+        foreach (var s in receiverStrs)
+        {
+            var colonIdx = s.LastIndexOf(':');
+            string? receiverAddress = null;
+            string amountStr;
+            if (colonIdx >= 0)
+            {
+                receiverAddress = s[..colonIdx];
+                amountStr = s[(colonIdx + 1)..];
+            }
+            else
+            {
+                amountStr = s;
+            }
+
+            if (!BigInteger.TryParse(amountStr, out var amount))
+            {
+                Console.Error.WriteLine($"Invalid amount in receiver '{s}'");
+                return;
+            }
+
+            receivers.Add(new PullReceiver(
+                amount: amount,
+                receiverAddress: receiverAddress
+            ));
+        }
+
+        var prepareResponse = await sdk.PreparePullPayment(
+            request: new PreparePullPaymentRequest(
+                payerAddress: payerAddress,
+                tokenIdentifier: tokenIdentifier,
+                receivers: receivers.ToArray()
+            )
+        );
+
+        Console.WriteLine($"Pulling {prepareResponse.amount} base units of {prepareResponse.tokenIdentifier} from {prepareResponse.payerAddress}");
+        foreach (var receiver in prepareResponse.receivers)
+        {
+            Console.WriteLine($"  {receiver.amount} to {receiver.receiverAddress ?? ""}");
+        }
+
+        var line = readline("Do you want to continue (y/n) [y]: ");
+        if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
+        {
+            Console.WriteLine("Pull cancelled");
+            return;
+        }
+
+        var retryInterval = TimeSpan.FromSeconds(5);
+        var retryWindow = TimeSpan.FromMinutes(10);
+        var deadline = DateTimeOffset.FromUnixTimeSeconds((long)prepareResponse.expiryTime).Add(retryWindow);
+
+        while (true)
+        {
+            try
+            {
+                var response = await sdk.PullPayment(
+                    request: new PullPaymentRequest(prepareResponse: prepareResponse)
+                );
+
+                if (response.status == PaymentStatus.Pending && DateTimeOffset.UtcNow < deadline)
+                {
+                    Console.WriteLine($"The pull {response.txHash} is pending, checking again in {(int)retryInterval.TotalSeconds}s");
+                    await Task.Delay(retryInterval);
+                    continue;
+                }
+
+                Serialization.PrintValue(response);
+                return;
+            }
+            catch (SdkException ex) when (
+                (ex is SdkException.NetworkException || ex is SdkException.SparkException)
+                && DateTimeOffset.UtcNow < deadline)
+            {
+                Console.WriteLine($"Sending the pull failed ({ex.Message}), trying again in {(int)retryInterval.TotalSeconds}s");
+                await Task.Delay(retryInterval);
+            }
+        }
     }
 
     // --- lnurl-pay ---
@@ -1229,106 +1355,9 @@ public static class Commands
         Console.WriteLine(result.url);
         if (result.crossChainInfo is { } info)
         {
-            Console.WriteLine("Delivered as USDC on Solana. Quote:");
+            Console.WriteLine("Conversion quote:");
             Serialization.PrintValue(info);
         }
-    }
-
-    // --- bridge-from-cash-app ---
-
-    private static async Task HandleBridgeFromCashApp(BreezSdk sdk, Func<string, string?> readline, string[] args)
-    {
-        var positional = GetPositionalArgs(args);
-        var amountStr = GetFlag(args, "-a", "--amount");
-        var feesIncluded = HasFlag(args, "--fees-included");
-        var maxSlippageStr = GetFlag(args, "--max-slippage-bps");
-
-        if (positional.Length < 1 || amountStr == null)
-        {
-            Console.WriteLine("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]");
-            return;
-        }
-
-        var recipient = positional[0];
-
-        var parsed = await sdk.Parse(recipient);
-        if (parsed is not InputType.CrossChainAddress crossChainAddr)
-        {
-            Console.Error.WriteLine("Recipient must be a cross-chain (EVM/Solana/Tron) address");
-            return;
-        }
-
-        var addressDetails = crossChainAddr.v1;
-        var address = addressDetails.address;
-        var filter = new CrossChainRouteFilter.Send(
-            addressDetails: addressDetails,
-            deliveryMethod: DeliveryMethod.Lightning
-        );
-        var route = await SelectCrossChainRoute(sdk, readline, filter);
-        if (route == null) return;
-
-        FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
-
-        var response = await sdk.BridgeFromCashApp(request: new BridgeFromCashAppRequest(
-            address: address,
-            route: route,
-            amount: BigInteger.Parse(amountStr),
-            feePolicy: feePolicy,
-            maxSlippageBps: ParseOptionalUint(maxSlippageStr)
-        ));
-
-        Console.WriteLine("Open this URL in a browser to complete the purchase:");
-        Console.WriteLine(response.url);
-        var serviceFeeDenom = ServiceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals);
-        Console.WriteLine(
-            $"Deposit ~{response.amountSats} sats; recipient receives ~{response.estimatedOut} {response.asset}, " +
-            $"service fee {response.serviceFeeAmount} {serviceFeeDenom}, expires {response.expiresAt}");
-    }
-
-    // --- bridge-to-cash-app ---
-
-    private static async Task HandleBridgeToCashApp(BreezSdk sdk, Func<string, string?> readline, string[] args)
-    {
-        var positional = GetPositionalArgs(args);
-        var amountStr = GetFlag(args, "-a", "--amount");
-        var refundAddress = GetFlag(args, "--refund-address");
-        var feesIncluded = HasFlag(args, "--fees-included");
-        var maxSlippageStr = GetFlag(args, "--max-slippage-bps");
-
-        if (positional.Length < 1 || amountStr == null || refundAddress == null)
-        {
-            Console.WriteLine("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]");
-            return;
-        }
-
-        var recipient = positional[0];
-
-        var filter = new CrossChainRouteFilter.Receive(
-            contractAddress: null,
-            deliveryMethod: DeliveryMethod.Lightning
-        );
-        var route = await SelectCrossChainRoute(sdk, readline, filter);
-        if (route == null) return;
-
-        FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
-
-        var response = await sdk.BridgeToCashApp(request: new BridgeToCashAppRequest(
-            recipient: recipient,
-            route: route,
-            amount: BigInteger.Parse(amountStr),
-            feePolicy: feePolicy,
-            refundAddress: refundAddress,
-            maxSlippageBps: ParseOptionalUint(maxSlippageStr)
-        ));
-
-        var info = response.info;
-        Console.WriteLine("Ask the payer to pay:");
-        Console.WriteLine(response.paymentRequest);
-        var serviceFeeDenom = ServiceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals);
-        Console.WriteLine(
-            $"Deposit {info.depositAmount} {route.asset} on {route.chain} to {info.depositAddress}. " +
-            $"Recipient receives ~{info.expectedReceivedAmount} sats, " +
-            $"service fee {info.serviceFeeAmount} {serviceFeeDenom}, expires at {info.expiresAt}");
     }
 
     // --- check-lightning-address-available ---

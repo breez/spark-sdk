@@ -108,7 +108,7 @@ The event is sent to the webhooks of the wallet that created the invoice. Lightn
 |-------|------|-------------|
 | `status` | `string` | A `SparkCoopExitRequestStatus` value: `INITIATED`, `COMPLETE_REQUEST_RECEIVED`, `INBOUND_TRANSFER_CHECKED`, `TX_BROADCASTING_SCHEDULED`, `TX_BROADCASTING_FAILED`, `TX_BROADCASTED`, `ON_CHAIN_TX_CONFIRMED`, `INBOUND_TRANSFER_CLAIMING_FAILED`, `SUCCEEDED`, `EXPIRING_SCHEDULED`, `EXPIRING_FAILED`, `EXPIRED`, `FAILING_SCHEDULED`, `FAILING_FAILED`, `FAILED`, `TX_SIGNED`, `WAITING_ON_TX_CONFIRMATIONS`, `INBOUND_TRANSFER_CLAIMING_SCHEDULED` |
 | `fee` | `amount` | Fee for the cooperative exit, excluding `l1_broadcast_fee` |
-| `withdrawal_address` | `string \| null` | Bitcoin address to withdraw to |
+| `withdrawal_address` | `string` | Bitcoin address to withdraw to |
 | `l1_broadcast_fee` | `amount` | On-chain fee of the cooperative exit |
 | `exit_speed` | `string \| null` | Requested exit speed: `FAST`, `MEDIUM` or `SLOW` |
 | `coop_exit_txid` | `string` | Id of the cooperative exit transaction |

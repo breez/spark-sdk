@@ -147,6 +147,19 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
     print(payment)
 }
 
+func getPaymentPreimage(sdk: BreezSdk) async throws {
+    // ANCHOR: get-payment-preimage
+    let paymentId = "<payment id>"
+    let response = try await sdk.getPayment(
+        request: GetPaymentRequest(paymentId: paymentId)
+    )
+    if case let .lightning(_, _, _, htlcDetails, _, _, _, _) = response.payment.details {
+        print("Payment hash: \(htlcDetails.paymentHash)")
+        print("Preimage: \(String(describing: htlcDetails.preimage))")
+    }
+    // ANCHOR_END: get-payment-preimage
+}
+
 func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-onchain
     // Select the confirmation speed for the on-chain transaction
@@ -176,6 +189,25 @@ func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse
     let payment = sendResponse.payment
     // ANCHOR_END: send-payment-spark
     print(payment)
+}
+
+func fetchLightningSendStatus(sdk: BreezSdk) async throws {
+    // ANCHOR: fetch-lightning-send-status
+    let invoice = "<bolt11 invoice>"
+    let response = try await sdk.fetchLightningSendStatus(
+        request: FetchLightningSendStatusRequest(invoice: invoice)
+    )
+    switch response.status {
+    case .completed:
+        print("Paid")
+    case .pending:
+        print("Payment in flight")
+    case .failed:
+        print("Payment failed")
+    case nil:
+        print("No Lightning payment found")
+    }
+    // ANCHOR_END: fetch-lightning-send-status
 }
 
 func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {

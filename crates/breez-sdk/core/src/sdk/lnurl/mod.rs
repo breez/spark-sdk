@@ -105,6 +105,7 @@ impl BreezSdk {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         let payment_request = receive.invoice.clone();

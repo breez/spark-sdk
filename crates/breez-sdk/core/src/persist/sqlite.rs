@@ -436,6 +436,18 @@ impl SqliteStorage {
                 leaf_id TEXT NOT NULL PRIMARY KEY,
                 txid TEXT NOT NULL
             );",
+            // The destination address and output index of a withdrawal. With the
+            // sync offset at 0, the SDK re-fetches every transfer on its next sync
+            // and fills in both columns for past withdrawals.
+            "ALTER TABLE payments ADD COLUMN withdraw_vout INTEGER;
+             ALTER TABLE payments ADD COLUMN withdraw_destination_address TEXT;
+             UPDATE settings
+             SET value = json_set(value, '$.offset', 0)
+             WHERE key = 'sync_offset' AND json_valid(value);",
+            "ALTER TABLE lnurl_receive_metadata ADD COLUMN lightning_address TEXT;",
+            // Clear the lnurl_metadata_updated_after setting so the SDK fetches the
+            // Lightning address of payments it already synced.
+            "DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after';",
         ]
     }
 }
@@ -512,16 +524,31 @@ impl SqliteStorage {
     #[allow(clippy::too_many_lines)]
     fn insert_payment_in_tx(tx: &Transaction<'_>, payment: Payment) -> Result<(), StorageError> {
         // Compute detail columns for the main payments row
-        let (withdraw_tx_id, spark): (Option<&str>, Option<bool>) = match &payment.details {
-            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None),
-            Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
-            _ => (None, None),
-        };
+        let (withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark) =
+            match &payment.details {
+                Some(PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                }) => (
+                    Some(tx_id.as_str()),
+                    Some(*vout),
+                    Some(destination_address.as_str()),
+                    None,
+                ),
+                Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+                Some(
+                    PaymentDetails::Token { .. }
+                    | PaymentDetails::Lightning { .. }
+                    | PaymentDetails::Deposit { .. },
+                )
+                | None => (None, None, None, None),
+            };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, withdraw_vout, withdraw_destination_address, spark)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 payment_type=excluded.payment_type,
                 status=excluded.status,
@@ -530,6 +557,8 @@ impl SqliteStorage {
                 timestamp=excluded.timestamp,
                 method=excluded.method,
                 withdraw_tx_id=excluded.withdraw_tx_id,
+                withdraw_vout=excluded.withdraw_vout,
+                withdraw_destination_address=excluded.withdraw_destination_address,
                 spark=excluded.spark",
             params![
                 payment.id,
@@ -540,6 +569,8 @@ impl SqliteStorage {
                 payment.timestamp,
                 payment.method,
                 withdraw_tx_id,
+                withdraw_vout,
+                withdraw_destination_address,
                 spark,
             ],
         )?;
@@ -1012,7 +1043,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(32)?;
+            let parent_payment_id: String = row.get(35)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1332,13 +1363,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, lightning_address)
+                 VALUES (?, ?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
+                    metadata.lightning_address,
                 ],
             )?;
         }
@@ -1838,7 +1870,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-34 are used by `map_payment`, index 35 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1872,6 +1904,9 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
+           p.withdraw_vout,
+           p.withdraw_destination_address,
+           lrm.lightning_address AS lnurl_lightning_address,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -1920,12 +1955,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let lnurl_nostr_zap_request: Option<String> = row.get(27)?;
             let lnurl_nostr_zap_receipt: Option<String> = row.get(28)?;
             let lnurl_sender_comment: Option<String> = row.get(29)?;
+            let lnurl_lightning_address: Option<String> = row.get(34)?;
             let lnurl_payment_hash: Option<String> = row.get(30)?;
             let lnurl_receive_metadata = if lnurl_payment_hash.is_some() {
                 Some(LnurlReceiveMetadata {
                     nostr_zap_request: lnurl_nostr_zap_request,
                     nostr_zap_receipt: lnurl_nostr_zap_receipt,
                     sender_comment: lnurl_sender_comment,
+                    lightning_address: lnurl_lightning_address,
                 })
             } else {
                 None
@@ -1945,7 +1982,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 conversion_info,
             })
         }
-        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, Some(tx_id), _, _, _) => {
+            let vout: Option<u32> = row.get(32)?;
+            let destination_address: Option<String> = row.get(33)?;
+            // A withdrawal stored before the SDK kept these values has no details
+            // until the next sync rewrites it.
+            vout.zip(destination_address)
+                .map(|(vout, destination_address)| PaymentDetails::Withdraw {
+                    tx_id,
+                    vout,
+                    destination_address,
+                })
+        }
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
             tx_id,
             vout: row.get::<_, Option<u32>>(9)?.ok_or_else(|| {
@@ -2411,6 +2459,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_withdraw_details() {
+        let temp_dir = create_temp_dir("sqlite_storage_withdraw_details");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_withdraw_details(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_payment_terminal_status_is_not_replaced() {
         let temp_dir = create_temp_dir("sqlite_storage_payment_terminal_guard");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2439,8 +2495,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn test_migration_tx_type() {
         use crate::{
-            Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, Storage,
-            TokenMetadata, TokenTransactionType,
+            Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentTokenMetadata,
+            PaymentType, Storage, TokenTransactionType,
             persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
         };
         use rusqlite::{Connection, params};
@@ -2553,7 +2609,7 @@ mod tests {
             timestamp: 1_234_567_891,
             method: PaymentMethod::Token,
             details: Some(PaymentDetails::Token {
-                metadata: TokenMetadata {
+                metadata: PaymentTokenMetadata {
                     identifier: "another-token-id".to_string(),
                     issuer_public_key: format!("02{}", "b".repeat(64)),
                     name: "Another Token".to_string(),

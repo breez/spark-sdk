@@ -72,7 +72,10 @@ macro_rules! version_module {
                         address: format!("https://127.0.0.1:{}", operator.host_port).parse()?,
                         ca_cert: Some(operator.ca_cert.as_bytes().to_vec()),
                         id: operator.index,
-                        identifier: operator.identifier,
+                        // Rebuilt from the index (the fixture's identifier is index + 1):
+                        // each build links its own FROST version, so the fixture's
+                        // `Identifier` type is not this build's.
+                        identifier: u16::try_from(operator.index + 1)?.try_into()?,
                         identity_public_key: operator.public_key,
                         user_agent: None,
                     });
@@ -175,14 +178,17 @@ macro_rules! version_module {
             }
 
             /// Polls `sync()` (which refreshes leaves and claims pending
-            /// transfers) until the balance equals `expected`.
+            /// transfers) until the available leaves add up to `expected`.
             pub async fn await_balance(wallet: &SparkWallet, expected: u64) -> Result<()> {
                 crate::wait_for(
                     || async {
                         if wallet.sync().await.is_err() {
                             return false;
                         }
-                        wallet.get_balance().await.is_ok_and(|b| b == expected)
+                        wallet
+                            .list_leaves()
+                            .await
+                            .is_ok_and(|leaves| leaves.available_balance() == expected)
                     },
                     60,
                     &format!("balance == {expected}"),

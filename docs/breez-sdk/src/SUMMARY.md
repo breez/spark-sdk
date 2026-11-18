@@ -56,6 +56,7 @@
 - [Cash App and USDC/USDT](guide/cash_app.md)
   - [Cash App to USDC/USDT](guide/cash_app_to_usdc_usdt.md)
   - [USDC/USDT to Cash App](guide/usdc_usdt_to_cash_app.md)
+- [Bridging USDC/USDT](guide/bridging.md)
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)
@@ -77,6 +78,7 @@
   - [Managing webhooks](guide/webhooks.md)
   - [Recovering funds](guide/recover_funds.md)
 - [Moving to production](guide/moving_to_production.md)
+- [Reporting an issue](guide/reporting_an_issue.md)
 
 ---
 

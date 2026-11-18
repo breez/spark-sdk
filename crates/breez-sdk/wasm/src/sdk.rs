@@ -517,6 +517,18 @@ impl BreezSdk {
         Ok(self.sdk.get_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "fetchLightningSendStatus")]
+    pub async fn fetch_lightning_send_status(
+        &self,
+        request: FetchLightningSendStatusRequest,
+    ) -> WasmResult<FetchLightningSendStatusResponse> {
+        Ok(self
+            .sdk
+            .fetch_lightning_send_status(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "claimDeposit")]
     pub async fn claim_deposit(
         &self,
@@ -705,7 +717,7 @@ impl BreezSdk {
         Ok(self.sdk.buy_bitcoin(request.into()).await?.into())
     }
 
-    /// @deprecated Use `bridgeFromCashApp`.
+    /// @deprecated Use `bridgeFromCashApp` on the client from `getBridgingClient`.
     #[wasm_bindgen(js_name = "preparePaymentLink")]
     pub async fn prepare_payment_link(
         &self,
@@ -714,6 +726,7 @@ impl BreezSdk {
         Ok(self.sdk.prepare_payment_link(request.into()).await?.into())
     }
 
+    /// @deprecated Use `bridgeFromCashApp` on the client from `getBridgingClient`.
     #[wasm_bindgen(js_name = "bridgeFromCashApp")]
     pub async fn bridge_from_cash_app(
         &self,
@@ -722,12 +735,20 @@ impl BreezSdk {
         Ok(self.sdk.bridge_from_cash_app(request.into()).await?.into())
     }
 
+    /// @deprecated Use `bridgeToCashApp` on the client from `getBridgingClient`.
     #[wasm_bindgen(js_name = "bridgeToCashApp")]
     pub async fn bridge_to_cash_app(
         &self,
         request: BridgeToCashAppRequest,
     ) -> WasmResult<BridgeToCashAppResponse> {
         Ok(self.sdk.bridge_to_cash_app(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "getBridgingClient")]
+    pub fn get_bridging_client(&self) -> WasmResult<crate::bridging::BridgingClient> {
+        Ok(crate::bridging::BridgingClient {
+            inner: self.sdk.get_bridging_client()?,
+        })
     }
 
     #[wasm_bindgen(js_name = "registerWebhook")]

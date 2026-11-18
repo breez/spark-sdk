@@ -269,7 +269,7 @@ sup {
     font-size: 2rem;
 }
 .toggle div {
-    color: var(--sidebar-bg);
+    color: transparent;
     width: 0;
 }
 

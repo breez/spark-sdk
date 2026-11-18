@@ -3,7 +3,7 @@ use bitcoin::Address;
 use rstest::*;
 use spark_itest::{
     faucet::RegtestFaucet,
-    helpers::{create_regtest_wallet, wait_for_event},
+    helpers::{create_regtest_wallet, sync_until_available, wait_for_event},
     mempool::MempoolClient,
 };
 use spark_wallet::{ExitSpeed, WalletEvent};
@@ -82,6 +82,7 @@ async fn test_non_static_deposit_with_faucet() -> Result<()> {
     })
     .await?;
     info!("Deposit confirmed");
+    sync_until_available(&wallet, &leaves).await?;
 
     // Verify balance increased
     let final_balance = wallet.get_balance().await?;
@@ -194,6 +195,7 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
     })
     .await?;
     info!("Deposit confirmed");
+    sync_until_available(&alice, &leaves).await?;
 
     let alice_balance = alice.get_balance().await?;
     assert_eq!(alice_balance, deposit_amount);

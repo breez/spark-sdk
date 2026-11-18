@@ -32,9 +32,9 @@ use crate::{
     },
     signer::{PrepareTokenTransactionRequest, SparkSigner, TokenTransactionKind},
     token::{
-        GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
-        with_reserved_token_outputs,
+        GetTokenOutputsFilter, MAX_TOKEN_EXTRA_METADATA_BYTES, ReservationPurpose,
+        ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput, TokenOutputService,
+        TokenOutputWithPrevOut, TokenOutputs, with_reserved_token_outputs,
     },
     utils::paging::{PagingFilter, PagingResult, pager},
 };
@@ -345,12 +345,9 @@ impl TokenService {
         }
 
         // Query metadata for uncached tokens
-        let mut queried_metadata = Vec::new();
-        if !uncached_identifiers.is_empty() || !uncached_issuer_public_keys.is_empty() {
-            queried_metadata = self
-                .query_tokens_metadata(&uncached_identifiers, &uncached_issuer_public_keys)
-                .await?;
-        }
+        let queried_metadata = self
+            .query_tokens_metadata(&uncached_identifiers, &uncached_issuer_public_keys)
+            .await?;
 
         // Combine cached and queried metadata
         let mut all_metadata = cached_metadata;
@@ -359,11 +356,17 @@ impl TokenService {
         Ok(all_metadata)
     }
 
-    async fn query_tokens_metadata(
+    /// Returns the metadata for the given token identifiers as the SE reports it, without reading
+    /// the local cache.
+    pub async fn query_tokens_metadata(
         &self,
         token_identifiers: &[&str],
         issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, ServiceError> {
+        if token_identifiers.is_empty() && issuer_public_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let token_identifiers = token_identifiers
             .iter()
             .map(|id| {
@@ -542,6 +545,7 @@ impl TokenService {
         decimals: u32,
         is_freezable: bool,
         max_supply: u128,
+        extra_metadata: Option<Vec<u8>>,
     ) -> Result<TokenTransaction, ServiceError> {
         if self.get_issuer_token_metadata().await.is_ok() {
             return Err(ServiceError::Generic(
@@ -549,7 +553,7 @@ impl TokenService {
             ));
         }
 
-        validate_create_token_params(name, ticker, decimals)?;
+        validate_create_token_params(name, ticker, decimals, extra_metadata.as_deref())?;
 
         let identity_public_key = self.spark_signer.get_identity_public_key().await?;
         let now = SystemTime::now();
@@ -562,8 +566,8 @@ impl TokenService {
                 max_supply: max_supply.to_be_bytes().to_vec(),
                 is_freezable,
                 // Absent and empty select different token identifier formats on the operator, so
-                // this stays `None` to keep producing the identifiers this wallet always has.
-                extra_metadata: None,
+                // empty is sent as absent to keep the format of tokens created without metadata.
+                extra_metadata: extra_metadata.filter(|m| !m.is_empty()),
                 operator_identity_public_keys: self.get_operator_identity_public_keys()?,
                 network: self.proto_network()?,
                 validity_duration_seconds: self.tokens_config.transaction_validity_duration_seconds,
@@ -1534,6 +1538,7 @@ fn validate_create_token_params(
     name: &str,
     ticker: &str,
     decimals: u32,
+    extra_metadata: Option<&[u8]>,
 ) -> Result<(), ServiceError> {
     if !unicode_normalization::is_nfc(name) {
         return Err(ServiceError::Generic(
@@ -1559,6 +1564,11 @@ fn validate_create_token_params(
         return Err(ServiceError::Generic(
             "Decimals must be an between 0 and 255".to_string(),
         ));
+    }
+    if extra_metadata.is_some_and(|m| m.len() > MAX_TOKEN_EXTRA_METADATA_BYTES) {
+        return Err(ServiceError::Generic(format!(
+            "Token extra metadata must be at most {MAX_TOKEN_EXTRA_METADATA_BYTES} bytes"
+        )));
     }
 
     Ok(())
@@ -1633,14 +1643,14 @@ mod tests {
     #[test_all]
     fn test_validate_create_token_params_valid() {
         // Valid parameters
-        assert!(validate_create_token_params("Bitcoin", "BTC", 8).is_ok());
-        assert!(validate_create_token_params("ABC", "ABC", 0).is_ok());
-        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255).is_ok());
+        assert!(validate_create_token_params("Bitcoin", "BTC", 8, None).is_ok());
+        assert!(validate_create_token_params("ABC", "ABC", 0, None).is_ok());
+        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255, None).is_ok());
     }
 
     #[test_all]
     fn test_validate_create_token_params_name_too_short() {
-        let result = validate_create_token_params("AB", "BTC", 8);
+        let result = validate_create_token_params("AB", "BTC", 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1652,7 +1662,7 @@ mod tests {
 
     #[test_all]
     fn test_validate_create_token_params_name_too_long() {
-        let result = validate_create_token_params("123456789012345678901", "BTC", 8);
+        let result = validate_create_token_params("123456789012345678901", "BTC", 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1664,7 +1674,7 @@ mod tests {
 
     #[test_all]
     fn test_validate_create_token_params_ticker_too_short() {
-        let result = validate_create_token_params("Bitcoin", "AB", 8);
+        let result = validate_create_token_params("Bitcoin", "AB", 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1676,7 +1686,7 @@ mod tests {
 
     #[test_all]
     fn test_validate_create_token_params_ticker_too_long() {
-        let result = validate_create_token_params("Bitcoin", "ABCDEFG", 8);
+        let result = validate_create_token_params("Bitcoin", "ABCDEFG", 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1688,7 +1698,7 @@ mod tests {
 
     #[test_all]
     fn test_validate_create_token_params_decimals_too_large() {
-        let result = validate_create_token_params("Bitcoin", "BTC", 256);
+        let result = validate_create_token_params("Bitcoin", "BTC", 256, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1703,7 +1713,7 @@ mod tests {
         // Using a string that is not NFC normalized (combining characters)
         // "é" as e + combining acute accent (U+0065 U+0301) instead of composed form (U+00E9)
         let non_nfc_name = "Caf\u{0065}\u{0301}";
-        let result = validate_create_token_params(non_nfc_name, "BTC", 8);
+        let result = validate_create_token_params(non_nfc_name, "BTC", 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1717,7 +1727,7 @@ mod tests {
     fn test_validate_create_token_params_ticker_not_nfc() {
         // Using a string that is not NFC normalized
         let non_nfc_ticker = "BT\u{0065}\u{0301}";
-        let result = validate_create_token_params("Bitcoin", non_nfc_ticker, 8);
+        let result = validate_create_token_params("Bitcoin", non_nfc_ticker, 8, None);
         assert!(result.is_err());
         assert!(
             result
@@ -1730,16 +1740,25 @@ mod tests {
     #[test_all]
     fn test_validate_create_token_params_edge_cases() {
         // Minimum valid values
-        assert!(validate_create_token_params("ABC", "ABC", 0).is_ok());
+        assert!(validate_create_token_params("ABC", "ABC", 0, None).is_ok());
 
         // Maximum valid values
-        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255).is_ok());
+        assert!(validate_create_token_params("12345678901234567890", "ABCDEF", 255, None).is_ok());
 
         // Exactly at boundaries
-        assert!(validate_create_token_params("123", "ABC", 0).is_ok());
-        assert!(validate_create_token_params("12345678901234567890", "ABC", 0).is_ok());
-        assert!(validate_create_token_params("Bitcoin", "ABC", 0).is_ok());
-        assert!(validate_create_token_params("Bitcoin", "ABCDEF", 0).is_ok());
+        assert!(validate_create_token_params("123", "ABC", 0, None).is_ok());
+        assert!(validate_create_token_params("12345678901234567890", "ABC", 0, None).is_ok());
+        assert!(validate_create_token_params("Bitcoin", "ABC", 0, None).is_ok());
+        assert!(validate_create_token_params("Bitcoin", "ABCDEF", 0, None).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_create_token_params_extra_metadata() {
+        let max = vec![0_u8; super::MAX_TOKEN_EXTRA_METADATA_BYTES];
+        assert!(validate_create_token_params("Bitcoin", "BTC", 8, Some(&max)).is_ok());
+
+        let too_long = vec![0_u8; super::MAX_TOKEN_EXTRA_METADATA_BYTES + 1];
+        assert!(validate_create_token_params("Bitcoin", "BTC", 8, Some(&too_long)).is_err());
     }
 
     #[test_all]

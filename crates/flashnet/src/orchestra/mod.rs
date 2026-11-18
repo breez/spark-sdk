@@ -7,5 +7,7 @@
 pub mod client;
 pub mod models;
 
-pub use client::{OrchestraClient, OrchestraConfigResolver, derive_idempotency_key};
+pub use client::{
+    OrchestraClient, OrchestraConfigResolver, derive_idempotency_key, transfer_to_deposit,
+};
 pub use models::*;

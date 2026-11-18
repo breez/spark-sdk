@@ -2,7 +2,6 @@ mod default_signer;
 mod error;
 mod models;
 mod nonce_store;
-mod secret_sharing;
 mod spark_signer;
 mod spark_signer_adapter;
 #[cfg(test)]
@@ -93,7 +92,7 @@ pub trait Signer: Send + Sync + 'static {
     /// Split a secret into threshold shares with proofs
     async fn split_secret_with_proofs(
         &self,
-        secret: &SecretToSplit,
+        secret: &SecretSource,
         threshold: u32,
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
@@ -137,7 +136,7 @@ pub trait Signer: Send + Sync + 'static {
     /// * `verifying_key` - The group's verifying key (threshold public key)
     /// * `self_nonce_commitment` - The local user's previously generated commitment
     /// * `statechain_commitments` - Map of identifier to commitment values from statechain participants
-    /// * `adaptor_public_key` - Optional adaptor public key for adaptor signatures
+    /// * `adaptor` - Set for an adaptor signature
     ///
     /// # Returns
     /// A signature share that can be combined with other shares to form a complete signature

@@ -18,6 +18,11 @@ pub enum BitcoinNetwork {
 pub enum ParseError {
     #[error("empty input")]
     EmptyInput,
+    #[error(
+        "input is longer than {} bytes",
+        breez_sdk_common::input::MAX_INPUT_LENGTH
+    )]
+    InputTooLong,
     #[error("Bip-21 error: {0}")]
     Bip21Error(Bip21Error),
     #[error("invalid input")]
@@ -39,14 +44,17 @@ pub enum Bip21Error {
     InvalidAmount,
     #[error("bip21 contains invalid parameter value for '{0}'")]
     InvalidParameter(String),
-    #[error("bip21 parameter missing equals character")]
-    MissingEquals,
     #[error("bip21 contains parameter '{0}' multiple times")]
     MultipleParams(String),
     #[error("bip21 contains unknown required parameter '{0}'")]
     UnknownRequiredParameter(String),
     #[error("bip21 does not contain any payment methods")]
     NoPaymentMethods,
+    #[error(
+        "bip21 contains more than {} payment methods",
+        breez_sdk_common::input::MAX_PAYMENT_METHODS
+    )]
+    TooManyPaymentMethods,
 }
 
 #[derive(Clone, Debug, Error)]
@@ -268,7 +276,7 @@ pub enum InputType {
     Bolt12Offer(Bolt12OfferDetails),
     LightningAddress(LightningAddressDetails),
     LnurlPay(LnurlPayRequestDetails),
-    SilentPaymentAddress(SilentPaymentAddressDetails),
+    SilentPaymentAddress(BitcoinAddressDetails),
     LnurlAuth(LnurlAuthRequestDetails),
     Url(String),
     Bip21(Bip21Details),
@@ -470,15 +478,6 @@ pub struct LightningAddressDetails {
 pub struct PaymentRequestSource {
     pub bip_21_uri: Option<String>,
     pub bip_353_address: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[macros::derive_from(breez_sdk_common::input::SilentPaymentAddressDetails)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct SilentPaymentAddressDetails {
-    pub address: String,
-    pub network: BitcoinNetwork,
-    pub source: PaymentRequestSource,
 }
 
 /// Configuration for an external input parser

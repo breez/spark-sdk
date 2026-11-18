@@ -13,6 +13,7 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
             decimals: 2,
             is_freezable: false,
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
 
@@ -152,7 +153,7 @@ async fn test_01_token_transfer(#[future] env: Result<Environment>) -> Result<()
             Some(PaymentDetails::Token {
                 metadata,
                 ..
-            }) if metadata == token_metadata
+            }) if metadata == PaymentTokenMetadata::from(token_metadata.clone())
         ),
         "Alice should have token payment details with correct metadata"
     );
@@ -195,7 +196,7 @@ async fn test_01_token_transfer(#[future] env: Result<Environment>) -> Result<()
             Some(PaymentDetails::Token {
                 metadata,
                 ..
-            }) if metadata == token_metadata
+            }) if metadata == PaymentTokenMetadata::from(token_metadata.clone())
         ),
         "Bob should have token payment details with correct metadata"
     );
@@ -349,7 +350,7 @@ async fn test_02_token_invoice(#[future] env: Result<Environment>) -> Result<()>
             Some(PaymentDetails::Token {
                 metadata,
                 ..
-            }) if metadata == token_metadata
+            }) if metadata == PaymentTokenMetadata::from(token_metadata.clone())
         ),
         "Alice should have token payment details with correct metadata"
     );
@@ -388,7 +389,7 @@ async fn test_02_token_invoice(#[future] env: Result<Environment>) -> Result<()>
             Some(PaymentDetails::Token {
                 metadata,
                 ..
-            }) if metadata == token_metadata
+            }) if metadata == PaymentTokenMetadata::from(token_metadata.clone())
         ),
         "Bob should have token payment details with correct metadata"
     );
@@ -551,6 +552,7 @@ async fn test_04_token_freeze_unfreeze(#[future] env: Result<Environment>) -> Re
             decimals: 2,
             is_freezable: true, // Make it freezable
             max_supply: 1_000_000,
+            extra_metadata: None,
         })
         .await?;
 
@@ -899,6 +901,7 @@ async fn test_06_supply_limits(#[future] env: Result<Environment>) -> Result<()>
             decimals: 2,
             is_freezable: false,
             max_supply,
+            extra_metadata: None,
         })
         .await?;
 
@@ -1042,7 +1045,8 @@ async fn test_07_token_payment_realtime_event(#[future] env: Result<Environment>
     assert!(
         matches!(
             bob_payment.details,
-            Some(PaymentDetails::Token { ref metadata, .. }) if *metadata == token_metadata
+            Some(PaymentDetails::Token { ref metadata, .. })
+                if *metadata == PaymentTokenMetadata::from(token_metadata.clone())
         ),
         "Bob's payment should carry the correct token metadata"
     );
@@ -1794,5 +1798,66 @@ async fn test_11_token_batch_across_tokens(#[future] env: Result<Environment>) -
     );
 
     info!("=== Test test_11_token_batch_across_tokens PASSED ===");
+    Ok(())
+}
+
+/// Test 12: Extra metadata set at creation is readable but kept out of payments
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_12_token_extra_metadata(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    info!("=== Starting test_12_token_extra_metadata ===");
+
+    let alice = env.create_wallet().await?;
+    let issuer = alice.sdk.get_token_issuer();
+    let request = |extra_metadata| CreateIssuerTokenRequest {
+        name: "Metadata Token".to_string(),
+        ticker: "META".to_string(),
+        decimals: 2,
+        is_freezable: false,
+        max_supply: 1_000_000,
+        extra_metadata: Some(extra_metadata),
+    };
+
+    let oversized = issuer.create_issuer_token(request(vec![0; 1025])).await;
+    assert!(
+        matches!(oversized, Err(SdkError::InvalidInput(_))),
+        "Oversized extra metadata should be rejected, got {oversized:?}"
+    );
+
+    let extra_metadata = br#"{"icon":"https://example.com/icon.png"}"#.to_vec();
+    let token_metadata = issuer
+        .create_issuer_token(request(extra_metadata.clone()))
+        .await?;
+    assert_eq!(token_metadata.extra_metadata, Some(extra_metadata.clone()));
+
+    let queried = alice
+        .sdk
+        .get_tokens_metadata(GetTokensMetadataRequest {
+            token_identifiers: vec![token_metadata.identifier.clone()],
+        })
+        .await?
+        .tokens_metadata;
+    assert_eq!(queried.len(), 1);
+    assert_eq!(queried[0].extra_metadata, Some(extra_metadata.clone()));
+
+    issuer
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000 })
+        .await?;
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .remove(&token_metadata.identifier)
+        .expect("Token balance should exist after minting");
+    assert_eq!(balance.token_metadata.extra_metadata, Some(extra_metadata));
+
+    info!("=== Test test_12_token_extra_metadata PASSED ===");
     Ok(())
 }

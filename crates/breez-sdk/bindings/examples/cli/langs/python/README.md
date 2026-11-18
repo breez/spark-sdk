@@ -77,11 +77,13 @@ make clean            Remove venv and build artifacts
 
 Once inside the REPL, type `help` to see all commands. The CLI supports:
 
-**Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
+**Wallet**: `get-info`, `sync`, `get-payment`, `fetch-lightning-send-status`, `list-payments`, `recommended-fees`
 
 **Payments**: `receive`, `pay`, `pay-batch`, `pull-payment`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
+
+**Bridging**: `bridging create`, `bridging from-cash-app`, `bridging to-cash-app`, `bridging status`
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 

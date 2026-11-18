@@ -301,6 +301,81 @@ impl std::fmt::Debug for ReadToken {
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/orchestration/onramp
+// ---------------------------------------------------------------------------
+
+/// An order funded over Lightning, paid from Cash App or another wallet.
+///
+/// `appFees` is not modelled: Orchestra refuses it from client keys.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnrampRequest {
+    pub destination_chain: String,
+    pub destination_asset: String,
+    pub recipient_address: String,
+    /// In the source leg's smallest units (sats).
+    pub amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount_mode: Option<AmountMode>,
+    /// Lightning address or amountless BOLT11 invoice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refund_address: Option<String>,
+    /// Label carried by the order. Up to 64 letters, digits and `.`, `_`,
+    /// `:`, `-`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Refused on routes without fee settlement, such as Lightning to Spark.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub affiliate_ids: Vec<String>,
+}
+
+/// Links that open a wallet on the order's invoice.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentLinks {
+    pub cash_app: String,
+    #[serde(default)]
+    pub short_url: Option<String>,
+}
+
+/// A created onramp order and the invoice that funds it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnrampResponse {
+    pub order_id: String,
+    /// The order's quote. Its `deposit_address` is the BOLT11 invoice to pay,
+    /// its `expires_at` is when the invoice and order expire (a payment made
+    /// before then can still settle afterwards), and its `read_token` is bound
+    /// to the order: read it with `GET /status?id=`.
+    #[serde(flatten)]
+    pub quote: QuoteResponse,
+    #[serde(default)]
+    pub payment_links: Option<PaymentLinks>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// Request fields the server dropped.
+    #[serde(default)]
+    pub ignored_fields: Vec<String>,
+}
+
+/// What `/onramp` answered.
+#[derive(Debug, Clone)]
+pub enum OnrampOutcome {
+    /// The order was created and its invoice can be paid.
+    Created(Box<OnrampResponse>),
+    /// The order is held for screening review and has no invoice to pay yet.
+    HeldForReview { order_id: String, status: String },
+}
+
+/// The `202` body of an order held for review.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OnrampHeldResponse {
+    pub order_id: String,
+    pub status: String,
+}
+
+// ---------------------------------------------------------------------------
 // POST /v1/orchestration/submit
 // ---------------------------------------------------------------------------
 
@@ -351,7 +426,9 @@ pub enum OrderStatus {
     FallbackDelivered,
     /// The order expired without a deposit.
     Expired,
-    /// The deposit was unconfirmed or replaced. The order can resume.
+    /// The deposit was unconfirmed or replaced. The order can resume. A
+    /// Lightning order whose invoice expired unpaid also ends here, with
+    /// error `lightning_deposit_timeout`.
     Unfulfilled,
     /// Catch-all for any status variant Orchestra adds in the future.
     #[serde(other)]
@@ -372,6 +449,19 @@ pub struct StatusResponse {
     pub order: Order,
     #[serde(default)]
     pub stages: Vec<Stage>,
+}
+
+/// `GET /v1/explorer/operations`: the public explorer's lookup by order,
+/// quote or transaction id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplorerOperationsResponse {
+    pub operations: Vec<ExplorerOperation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExplorerOperation {
+    /// The order, with its addresses redacted.
+    pub operation: Order,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -452,6 +542,10 @@ pub struct Order {
     pub updated_at: String,
     #[serde(default)]
     pub completed_at: Option<String>,
+    /// The order that recovered this order's replaced deposit. It carries the
+    /// delivered result.
+    #[serde(default)]
+    pub superseded_by_operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -509,6 +603,45 @@ mod limits_response_tests {
                 .and_then(|b| b.max_cents.as_deref()),
             Some("9030000")
         );
+    }
+
+    #[test]
+    fn deserializes_an_explorer_operation_as_an_order() {
+        let response: ExplorerOperationsResponse = serde_json::from_value(serde_json::json!({
+            "operations": [{
+                "operation": {
+                    "id": "ord_1",
+                    "type": "order",
+                    "status": "completed",
+                    "quoteId": "q_1",
+                    "sourceChain": "base",
+                    "sourceAsset": "USDC",
+                    "sourceTxHash": "0xdeposit",
+                    "sourceTxVout": null,
+                    "destinationChain": "polygon",
+                    "destinationAsset": "USDC",
+                    "destinationTxHash": "0xdelivery",
+                    "amountIn": "4000000",
+                    "amountOut": "3950396",
+                    "slippageBps": 50,
+                    "attempts": 1,
+                    "refundTxHash": null,
+                    "errorCode": null,
+                    "createdAt": "2026-11-02T10:54:40.000Z",
+                    "updatedAt": "2026-11-02T10:55:49.973Z",
+                    "completedAt": "2026-11-02T10:55:49.973Z",
+                },
+                "partner": null,
+                "refs": [{ "type": "source", "value": "0xdeposit", "chain": "base" }],
+            }],
+            "nextOffset": null,
+        }))
+        .unwrap();
+        let order = &response.operations[0].operation;
+        assert_eq!(order.status, OrderStatus::Completed);
+        assert_eq!(order.quote_id.as_deref(), Some("q_1"));
+        assert_eq!(order.amount_out.as_deref(), Some("3950396"));
+        assert_eq!(order.destination_tx_hash.as_deref(), Some("0xdelivery"));
     }
 
     #[test]

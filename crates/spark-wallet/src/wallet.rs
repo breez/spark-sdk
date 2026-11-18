@@ -47,17 +47,19 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService,
-        ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription,
-        LeafKeyTweak, LightningReceivePayment, LightningSendPayment, LightningService,
-        PayLightningResult, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
-        QueryHtlcFilter, QueryTokenTransactionsFilter, QuotedLightningSend, ServiceError,
-        StaticDepositQuote, Swap, TimelockManager, TokenTransaction, Transfer, TransferId,
-        TransferObserver, TransferService, TransferStatus, TransferTokenOutput, TransferType,
-        UnilateralExitLeafFilter, Utxo, WatchtowerRecoveryService,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpFundingStrategy, CpfpInput,
+        DepositService, ExitChainState, ExitSpeed, Fee, FreezeIssuerTokenResponse, HtlcService,
+        InvoiceDescription, InvoicePreimage, LeafKeyTweak, LightningReceivePayment,
+        LightningSendPayment, LightningService, PayLightningResult, Preimage,
+        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        QueryTokenTransactionsFilter, QuotedLightningSend, ServiceError, StaticDepositQuote, Swap,
+        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
+        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitLeafFilter, Utxo,
+        WatchtowerRecoveryService, WithdrawalAddress, WithdrawalAddressError,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
+    silent_payment::SilentPaymentAddress,
     ssp::{
         InstantStaticDepositPlan, InstantStaticDepositQuote, InstantStaticDepositQuoteResult,
         IssuedQuote, ServiceProvider, SspTransfer, SspUserRequest,
@@ -886,10 +888,12 @@ impl SparkWallet {
     /// With `quote_basis` set, the invoice is priced by an SSP fee quote that
     /// reads `amount_sat` on that basis; the returned payment carries its fee.
     /// When no usable quote can be had, the invoice is created unquoted.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_lightning_invoice(
         &self,
         amount_sat: u64,
         description: Option<InvoiceDescription>,
+        preimage: InvoicePreimage,
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
@@ -900,7 +904,7 @@ impl SparkWallet {
             .create_lightning_invoice(
                 amount_sat,
                 description,
-                None,
+                preimage,
                 expiry_secs,
                 include_spark_address,
                 public_key,
@@ -909,29 +913,16 @@ impl SparkWallet {
             .await?)
     }
 
-    /// Creates a HODL Lightning invoice for this wallet. The SSP will hold the
-    /// HTLC until `claim_htlc` is called with the preimage matching the
-    /// payment_hash.
-    /// With `quote_basis` set, it is priced by a fee quote, as on
-    /// [`create_lightning_invoice`](Self::create_lightning_invoice).
-    pub async fn create_hodl_lightning_invoice(
+    fn parse_withdrawal_address(
         &self,
-        amount_sat: u64,
-        description: Option<InvoiceDescription>,
-        payment_hash: Hash,
-        expiry_secs: Option<u32>,
-        quote_basis: Option<ReceiveAmountBasis>,
-    ) -> Result<LightningReceivePayment, SparkWalletError> {
-        Ok(self
-            .lightning_service
-            .create_hodl_lightning_invoice(
-                amount_sat,
-                description,
-                payment_hash,
-                expiry_secs,
-                quote_basis,
-            )
-            .await?)
+        withdrawal_address: &str,
+    ) -> Result<WithdrawalAddress, SparkWalletError> {
+        WithdrawalAddress::parse(withdrawal_address, self.config.network).map_err(|e| match e {
+            WithdrawalAddressError::Invalid(_) => SparkWalletError::InvalidAddress(format!(
+                "Invalid withdrawal address: {withdrawal_address}"
+            )),
+            WithdrawalAddressError::WrongNetwork(_) => SparkWalletError::InvalidNetwork,
+        })
     }
 
     /// `amount_sats` prices the quote against the leaves that would fund a
@@ -943,16 +934,7 @@ impl SparkWallet {
         withdrawal_address: &str,
         amount_sats: Option<u64>,
     ) -> Result<CoopExitFeeQuote, SparkWalletError> {
-        // Validate withdrawal address
-        let withdrawal_address = withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let withdrawal_address = self.parse_withdrawal_address(withdrawal_address)?;
 
         // Selects leaves totaling `amount_sats` if provided, otherwise retrieves all available leaves.
         let target_amounts =
@@ -964,7 +946,7 @@ impl SparkWallet {
         // Fetches fee quote for the coop exit then cancels the reservation.
         let fee_quote_res = self
             .coop_exit_service
-            .fetch_coop_exit_fee_quote(reservation.leaves.clone(), withdrawal_address)
+            .fetch_coop_exit_fee_quote(reservation.leaves.clone(), &withdrawal_address)
             .await;
         self.tree_service.cancel_reservation(reservation).await?;
 
@@ -990,6 +972,30 @@ impl SparkWallet {
             .lightning_service
             .get_lightning_send_payment(id)
             .await?)
+    }
+
+    /// Queries the operators for the preimage requests this wallet sent for a payment hash.
+    pub async fn query_sent_preimage_requests(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Vec<PreimageRequest>, SparkWalletError> {
+        Ok(self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    payment_hashes: vec![payment_hash.to_string()],
+                    identity_public_key: self.identity_public_key,
+                    status: None,
+                    transfer_ids: Vec::new(),
+                    match_role: PreimageRequestRole::Sender,
+                },
+                None,
+            )
+            .await?
+            .items
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     pub fn extract_spark_address(
@@ -1065,15 +1071,7 @@ impl SparkWallet {
         refund_address: &str,
         fee: Fee,
     ) -> Result<Transaction, SparkWalletError> {
-        let refund_address = refund_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid refund address: {refund_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let refund_address = parse_refund_address(refund_address, self.config.network)?;
 
         // The operators reject the refund with MISSING_ENTITY until their chain
         // watcher indexes the deposit UTXO the coordinator already revealed. Back
@@ -1654,15 +1652,7 @@ impl SparkWallet {
         transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
-        let withdrawal_address = withdrawal_address
-            .parse::<Address<NetworkUnchecked>>()
-            .map_err(|_| {
-                SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
-                ))
-            })?
-            .require_network(self.config.network.into())
-            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+        let withdrawal_address = self.parse_withdrawal_address(withdrawal_address)?;
 
         // Calculate the fee based on the exit speed
         let fee_sats = fee_quote.fee_sats(&exit_speed);
@@ -2027,6 +2017,7 @@ impl SparkWallet {
         funding_input_weight: u64,
         funding_output_script_len: usize,
         change_dust_limit: u64,
+        funding_strategy: CpfpFundingStrategy,
         destination_script_len: usize,
         on_chain: &ExitChainState,
     ) -> Result<spark::services::UnilateralExitQuote, SparkWalletError> {
@@ -2037,6 +2028,7 @@ impl SparkWallet {
             funding_input_weight,
             funding_output_script_len,
             change_dust_limit,
+            funding_strategy,
             fee_rate_sat_per_kw,
             destination_script_len,
             on_chain,
@@ -2051,6 +2043,7 @@ impl SparkWallet {
         context: &ExitContext,
         fee_rate_sat_per_kw: u64,
         inputs: Vec<CpfpInput>,
+        funding_strategy: CpfpFundingStrategy,
         destination_script_len: usize,
         on_chain: &ExitChainState,
     ) -> Result<spark::services::UnilateralExitPlan, SparkWalletError> {
@@ -2059,6 +2052,7 @@ impl SparkWallet {
             &context.leaf_ids,
             context.filter,
             inputs,
+            funding_strategy,
             fee_rate_sat_per_kw,
             destination_script_len,
             on_chain,
@@ -2068,6 +2062,7 @@ impl SparkWallet {
             selected_leaves = plan.selected_leaves.len(),
             tree_nodes = plan.tree_nodes.len(),
             has_fan_out = plan.fan_out_psbt.is_some(),
+            ?funding_strategy,
             "prepare_unilateral_exit_plan: planned"
         );
 
@@ -2435,13 +2430,15 @@ impl SparkWallet {
         .to_string())
     }
 
-    pub async fn get_tokens_metadata(
+    /// Returns the metadata for the given tokens as the operators report it, without reading the
+    /// token output store.
+    pub async fn query_tokens_metadata(
         &self,
         token_identifiers: &[&str],
         issuer_public_keys: &[PublicKey],
     ) -> Result<Vec<TokenMetadata>, SparkWalletError> {
         self.token_service
-            .get_tokens_metadata(token_identifiers, issuer_public_keys)
+            .query_tokens_metadata(token_identifiers, issuer_public_keys)
             .await
             .map_err(Into::into)
     }
@@ -2469,10 +2466,18 @@ impl SparkWallet {
         decimals: u32,
         is_freezable: bool,
         max_supply: u128,
+        extra_metadata: Option<Vec<u8>>,
     ) -> Result<TokenTransaction, SparkWalletError> {
         let token_transaction = self
             .token_service
-            .create_issuer_token(name, ticker, decimals, is_freezable, max_supply)
+            .create_issuer_token(
+                name,
+                ticker,
+                decimals,
+                is_freezable,
+                max_supply,
+                extra_metadata,
+            )
             .await?;
         Ok(token_transaction)
     }
@@ -3652,6 +3657,25 @@ fn validate_invoiced_transaction_is_single_token(
     Ok(())
 }
 
+fn parse_refund_address(
+    refund_address: &str,
+    network: spark::Network,
+) -> Result<Address, SparkWalletError> {
+    refund_address
+        .parse::<Address<NetworkUnchecked>>()
+        .map_err(|_| {
+            if refund_address.parse::<SilentPaymentAddress>().is_ok() {
+                SparkWalletError::SilentPaymentAddressNotSupported("deposit refunds")
+            } else {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid refund address: {refund_address}"
+                ))
+            }
+        })?
+        .require_network(network.into())
+        .map_err(|_| SparkWalletError::InvalidNetwork)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3668,6 +3692,26 @@ mod tests {
             tests::{create_test_node_with_parent, create_test_tree_node},
         },
     };
+
+    #[macros::test_all]
+    fn refunds_reject_silent_payment_addresses() {
+        assert!(matches!(
+            parse_refund_address(
+                "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+                Network::Mainnet
+            ),
+            Err(SparkWalletError::SilentPaymentAddressNotSupported(
+                "deposit refunds"
+            ))
+        ));
+        assert!(
+            parse_refund_address(
+                "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+                Network::Regtest
+            )
+            .is_ok()
+        );
+    }
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

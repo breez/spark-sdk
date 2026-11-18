@@ -215,6 +215,7 @@ const exampleServerModeRequestHandler = async (sdk: BreezSdk): Promise<string> =
       expirySecs: 3600,
       paymentHash: undefined,
       receiverIdentityPublicKey: undefined,
+      preimage: undefined,
       feePolicy: undefined
     }
   })

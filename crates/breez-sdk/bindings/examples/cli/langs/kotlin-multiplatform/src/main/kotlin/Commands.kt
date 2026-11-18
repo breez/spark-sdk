@@ -1,5 +1,6 @@
 import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
+import kotlinx.coroutines.delay
 import org.jline.reader.LineReader
 
 /**
@@ -32,8 +33,6 @@ val COMMAND_NAMES = listOf(
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
-    "bridge-from-cash-app",
-    "bridge-to-cash-app",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -45,6 +44,8 @@ val COMMAND_NAMES = listOf(
     "recommended-fees",
     "get-tokens-metadata",
     "fetch-conversion-limits",
+    "pull-payment",
+    "fetch-lightning-send-status",
     "get-user-settings",
     "set-user-settings",
     "get-spark-status",
@@ -62,6 +63,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "receive" to CliCommand("receive", "Receive a payment", ::handleReceive),
         "pay" to CliCommand("pay", "Pay the given payment request", ::handlePay),
         "pay-batch" to CliCommand("pay-batch", "Pay several recipients with one token transaction", ::handlePayBatch),
+        "pull-payment" to CliCommand("pull-payment", "Pull a payment from a wallet that granted an allowance", ::handlePullPayment),
         "lnurl-pay" to CliCommand("lnurl-pay", "Pay using LNURL", ::handleLnurlPay),
         "lnurl-withdraw" to CliCommand("lnurl-withdraw", "Withdraw using LNURL", ::handleLnurlWithdraw),
         "lnurl-auth" to CliCommand("lnurl-auth", "Authenticate using LNURL", ::handleLnurlAuth),
@@ -72,8 +74,6 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
         "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via an external provider", ::handleBuyBitcoin),
-        "bridge-from-cash-app" to CliCommand("bridge-from-cash-app", "Bridge from Cash App to USDC/USDT on an external chain", ::handleBridgeFromCashApp),
-        "bridge-to-cash-app" to CliCommand("bridge-to-cash-app", "Bridge USDC/USDT from an external chain to a Cash App user", ::handleBridgeToCashApp),
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
@@ -85,6 +85,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "recommended-fees" to CliCommand("recommended-fees", "Get recommended BTC fees", ::handleRecommendedFees),
         "get-tokens-metadata" to CliCommand("get-tokens-metadata", "Get metadata for token(s)", ::handleGetTokensMetadata),
         "fetch-conversion-limits" to CliCommand("fetch-conversion-limits", "Fetch conversion limits for a token", ::handleFetchConversionLimits),
+        "fetch-lightning-send-status" to CliCommand("fetch-lightning-send-status", "Fetch the status of a Lightning payment of a Bolt11 invoice from the operators", ::handleFetchLightningSendStatus),
         "get-user-settings" to CliCommand("get-user-settings", "Get user settings", ::handleGetUserSettings),
         "set-user-settings" to CliCommand("set-user-settings", "Update user settings", ::handleSetUserSettings),
         "get-spark-status" to CliCommand("get-spark-status", "Get Spark network service status", ::handleGetSparkStatus),
@@ -309,11 +310,13 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val expirySecs = fp.getUInt("e", "expiry-secs")
     val senderPublicKey = fp.getString("s", "sender-public-key")
     val hodl = fp.hasFlag("hodl")
+    val preimage = fp.getString("preimage")
     val newAddress = fp.hasFlag("new-address")
     val crossChainMaxSlippageBps = fp.getUInt("cross-chain-max-slippage-bps")
     val crossChainFeesIncluded = fp.hasFlag("cross-chain-fees-included")
     val crossChainTargetOverpayBps = fp.getUInt("cross-chain-target-overpay-bps")
     val crossChainToBitcoin = fp.hasFlag("cross-chain-to-bitcoin")
+    val crossChainRefundAddress = fp.getString("cross-chain-refund-address")
 
     if (method == null) {
         println("Usage: receive -m <method> [options]")
@@ -325,11 +328,13 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         println("  -e, --expiry-secs <secs>                   Expiry in seconds")
         println("  -s, --sender-public-key <key>              Sender public key (spark invoice only)")
         println("  --hodl                                     Create a HODL invoice (bolt11 only)")
+        println("  --preimage <hex>                           Preimage (hex) for bolt11 invoice (conflicts with --hodl)")
         println("  --new-address                              Get a new bitcoin deposit address")
         println("  --cross-chain-max-slippage-bps <bps>       Max slippage in basis points (10..500, cross-chain only)")
         println("  --cross-chain-fees-included                Deduct fees from amount (cross-chain only)")
         println("  --cross-chain-target-overpay-bps <bps>     Overpay buffer in basis points (0..500, cross-chain only)")
         println("  --cross-chain-to-bitcoin                   Deliver cross-chain receive as Bitcoin (cross-chain only)")
+        println("  --cross-chain-refund-address <addr>        Payer's address for cross-chain refunds (cross-chain only)")
         return
     }
 
@@ -363,6 +368,10 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         "bitcoin" -> ReceivePaymentMethod.BitcoinAddress(newAddress = newAddress)
 
         "bolt11" -> {
+            if (hodl && preimage != null) {
+                println("Error: --hodl and --preimage are mutually exclusive")
+                return
+            }
             var paymentHash: String? = null
             if (hodl) {
                 val random = java.security.SecureRandom()
@@ -394,6 +403,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 expirySecs = expirySecs,
                 paymentHash = paymentHash,
                 receiverIdentityPublicKey = null,
+                preimage = preimage,
                 feePolicy = null,
             )
         }
@@ -418,6 +428,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 feeMode = feeMode,
                 maxSlippageBps = crossChainMaxSlippageBps,
                 targetOverpayBps = crossChainTargetOverpayBps,
+                refundAddress = crossChainRefundAddress,
             )
         }
 
@@ -620,6 +631,95 @@ suspend fun handlePayBatch(sdk: BreezSdk, reader: LineReader, args: List<String>
 
     val response = sdk.sendBatch(SendBatchRequest(prepareResponse = prepareResponse))
     printValue(response.payments)
+}
+
+// --- pull-payment ---
+
+suspend fun handlePullPayment(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val receiverStrs = fp.getAll("r", "receiver")
+
+    if (fp.positional.size < 2 || receiverStrs.isEmpty()) {
+        println("Usage: pull-payment <payer_address> <token_identifier> -r <receiver> [-r <receiver> ...]")
+        println("Each receiver: amount (this wallet) or address:amount")
+        return
+    }
+
+    val payerAddress = fp.positional[0]
+    val tokenIdentifier = fp.positional[1]
+
+    val receivers = receiverStrs.map { s ->
+        val parts = s.split(":", limit = 2)
+        if (parts.size == 1) {
+            val amount = try {
+                BigInteger.parseString(parts[0])
+            } catch (e: Exception) {
+                println("Error: Invalid amount in receiver '$s'")
+                return
+            }
+            PullReceiver(amount = amount, receiverAddress = null)
+        } else {
+            val amount = try {
+                BigInteger.parseString(parts[1])
+            } catch (e: Exception) {
+                println("Error: Invalid amount in receiver '$s'")
+                return
+            }
+            PullReceiver(amount = amount, receiverAddress = parts[0])
+        }
+    }
+
+    val prepareResponse = sdk.preparePullPayment(
+        PreparePullPaymentRequest(
+            payerAddress = payerAddress,
+            tokenIdentifier = tokenIdentifier,
+            receivers = receivers,
+        )
+    )
+
+    println("Pulling ${prepareResponse.amount} base units of ${prepareResponse.tokenIdentifier} from ${prepareResponse.payerAddress}")
+    for (receiver in prepareResponse.receivers) {
+        println("  ${receiver.amount} to ${receiver.receiverAddress ?: ""}")
+    }
+    val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
+    if (line != "y") {
+        println("Pull cancelled")
+        return
+    }
+
+    val response = pullUntilSettled(sdk, prepareResponse)
+    printValue(response)
+}
+
+private const val PULL_RETRY_INTERVAL_MS = 5_000L
+private const val PULL_RETRY_WINDOW_SECS = 600L
+
+private fun mayStillSettle(e: Exception): Boolean {
+    val name = e::class.qualifiedName ?: e::class.simpleName ?: ""
+    return "NetworkError" in name || "SparkError" in name
+}
+
+suspend fun pullUntilSettled(
+    sdk: BreezSdk,
+    prepareResponse: PreparePullPaymentResponse,
+): PullPaymentResponse {
+    val deadlineSecs = prepareResponse.expiryTime.toLong() + PULL_RETRY_WINDOW_SECS
+    while (true) {
+        val nowSecs = System.currentTimeMillis() / 1000
+        try {
+            val response = sdk.pullPayment(PullPaymentRequest(prepareResponse = prepareResponse))
+            if (response.status != PaymentStatus.PENDING || nowSecs >= deadlineSecs) {
+                return response
+            }
+            println("The pull ${response.txHash} is pending, checking again in ${PULL_RETRY_INTERVAL_MS / 1000}s")
+        } catch (e: Exception) {
+            if (!mayStillSettle(e) || nowSecs >= deadlineSecs) {
+                throw e
+            }
+            println("Sending the pull failed (${e.message}), trying again in ${PULL_RETRY_INTERVAL_MS / 1000}s")
+        }
+        delay(PULL_RETRY_INTERVAL_MS)
+    }
 }
 
 // --- lnurl-pay ---
@@ -995,123 +1095,9 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     println("Open this URL in a browser to complete the purchase:")
     println(result.url)
     result.crossChainInfo?.let { info ->
-        println("Delivered as USDC on Solana. Quote:")
+        println("Conversion quote:")
         printValue(info)
     }
-}
-
-// --- bridge-from-cash-app ---
-
-suspend fun handleBridgeFromCashApp(sdk: BreezSdk, reader: LineReader, args: List<String>) {
-    val fp = FlagParser(args)
-    val amountStr = fp.getString("amount")
-    val feesIncluded = fp.hasFlag("fees-included")
-    val maxSlippageBps = fp.getUInt("max-slippage-bps")
-
-    if (fp.positional.isEmpty() || amountStr == null) {
-        println("Usage: bridge-from-cash-app <recipient> --amount <amount> [--fees-included] [--max-slippage-bps <bps>]")
-        return
-    }
-
-    val recipient = fp.positional[0]
-    val amount = try {
-        BigInteger.parseString(amountStr)
-    } catch (e: Exception) {
-        println("Invalid amount: $amountStr")
-        return
-    }
-
-    val parsed = sdk.parse(recipient)
-    val addressDetails = when (parsed) {
-        is InputType.CrossChainAddress -> parsed.v1
-        else -> {
-            println("Error: Recipient must be a cross-chain (EVM/Solana/Tron) address")
-            return
-        }
-    }
-
-    val address = addressDetails.address
-    val route = selectCrossChainRoute(
-        sdk,
-        reader,
-        CrossChainRouteFilter.Send(
-            addressDetails = addressDetails,
-            deliveryMethod = DeliveryMethod.LIGHTNING,
-        ),
-    )
-
-    val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
-
-    val response = sdk.bridgeFromCashApp(
-        BridgeFromCashAppRequest(
-            address = address,
-            route = route,
-            amount = amount,
-            feePolicy = feePolicy,
-            maxSlippageBps = maxSlippageBps,
-        )
-    )
-    println("Open this URL in a browser to complete the purchase:")
-    println(response.url)
-    println(
-        "Deposit ~${response.amountSats} sats; recipient receives ~${response.estimatedOut} ${response.asset}, " +
-        "service fee ${response.serviceFeeAmount} ${serviceFeeDenomination(response.serviceFeeAsset, response.serviceFeeAssetDecimals)}, " +
-        "expires ${response.expiresAt}"
-    )
-}
-
-// --- bridge-to-cash-app ---
-
-suspend fun handleBridgeToCashApp(sdk: BreezSdk, reader: LineReader, args: List<String>) {
-    val fp = FlagParser(args)
-    val amountStr = fp.getString("amount")
-    val refundAddress = fp.getString("refund-address")
-    val feesIncluded = fp.hasFlag("fees-included")
-    val maxSlippageBps = fp.getUInt("max-slippage-bps")
-
-    if (fp.positional.isEmpty() || amountStr == null || refundAddress == null) {
-        println("Usage: bridge-to-cash-app <recipient> --amount <amount> --refund-address <address> [--fees-included] [--max-slippage-bps <bps>]")
-        return
-    }
-
-    val recipient = fp.positional[0]
-    val amount = try {
-        BigInteger.parseString(amountStr)
-    } catch (e: Exception) {
-        println("Invalid amount: $amountStr")
-        return
-    }
-
-    val route = selectCrossChainRoute(
-        sdk,
-        reader,
-        CrossChainRouteFilter.Receive(
-            contractAddress = null,
-            deliveryMethod = DeliveryMethod.LIGHTNING,
-        ),
-    )
-
-    val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
-
-    val response = sdk.bridgeToCashApp(
-        BridgeToCashAppRequest(
-            recipient = recipient,
-            route = route,
-            amount = amount,
-            feePolicy = feePolicy,
-            refundAddress = refundAddress,
-            maxSlippageBps = maxSlippageBps,
-        )
-    )
-    val info = response.info
-    println("Ask the payer to pay:")
-    println(response.paymentRequest)
-    println(
-        "Deposit ${info.depositAmount} ${route.asset} on ${route.chain} to ${info.depositAddress}. " +
-        "Recipient receives ~${info.expectedReceivedAmount} sats, " +
-        "service fee ${info.serviceFeeAmount} ${serviceFeeDenomination(info.serviceFeeAsset, info.serviceFeeAssetDecimals)}, " +
-        "expires at ${info.expiresAt}"
-    )
 }
 
 // --- check-lightning-address-available ---
@@ -1277,6 +1263,18 @@ suspend fun handleFetchConversionLimits(sdk: BreezSdk, reader: LineReader, args:
     }
 
     val result = sdk.fetchConversionLimits(req)
+    printValue(result)
+}
+
+// --- fetch-lightning-send-status ---
+
+suspend fun handleFetchLightningSendStatus(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    if (args.isEmpty()) {
+        println("Usage: fetch-lightning-send-status <invoice>")
+        return
+    }
+
+    val result = sdk.fetchLightningSendStatus(FetchLightningSendStatusRequest(invoice = args[0]))
     printValue(result)
 }
 

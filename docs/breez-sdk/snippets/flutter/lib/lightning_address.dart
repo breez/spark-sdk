@@ -101,6 +101,27 @@ Future<void> deleteLightningAddress(BreezSdk sdk) async {
   // ANCHOR_END: delete-lightning-address
 }
 
+Future<void> accessLightningAddress(BreezSdk sdk) async {
+  final paymentId = '<payment id>';
+  final response = await sdk.getPayment(
+    request: GetPaymentRequest(paymentId: paymentId),
+  );
+  final payment = response.payment;
+
+  // ANCHOR: access-lightning-address
+  // Check if this is a lightning payment with LNURL receive metadata
+  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+    final metadata = lightningDetails.lnurlReceiveMetadata;
+
+    // Access the Lightning address the sender paid, if present
+    final lightningAddress = metadata?.lightningAddress;
+    if (lightningAddress != null) {
+      print('Lightning address: $lightningAddress');
+    }
+  }
+  // ANCHOR_END: access-lightning-address
+}
+
 Future<void> accessSenderComment(BreezSdk sdk) async {
   final paymentId = '<payment id>';
   final response = await sdk.getPayment(

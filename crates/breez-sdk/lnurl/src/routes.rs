@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::domain_aliases::{ActualDomain, Verbatim, replace_domain};
 use crate::{
     invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
@@ -39,7 +40,7 @@ use crate::{
         LnurlRepository, LnurlRepositoryError, NameStatus, StatementClaim, TransferRequest,
     },
     state::State,
-    user::{USERNAME_VALIDATION_REGEX, User},
+    user::{USERNAME_VALIDATION_REGEX, User, shown_description},
 };
 
 /// Named locally for how it reads at the call sites, defined in `lnurl-models`
@@ -146,6 +147,7 @@ where
     /// what lets a wallet see a name it gave up as one it may take back.
     pub async fn available_for_pubkey(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<CheckUsernameAvailableRequest>,
@@ -166,11 +168,11 @@ where
         // Claims nothing, for the same reason as `recover`. No legacy message
         // either: the route is new, so every signature it ever sees is v2.
         let message =
-            signed_message::available(&domain, &identity.to_string(), &username, timestamp);
+            signed_message::available(&actual_domain, &identity.to_string(), &username, timestamp);
         let secp = Secp256k1::new();
         if verify_signature_ecdsa(&secp, &message, &signature, &identity).is_err() {
-            trace!("invalid signature for availability check on domain '{domain}'");
-            return Err(invalid_signature_for_domain(&domain));
+            trace!("invalid signature for availability check on domain '{actual_domain}'");
+            return Err(invalid_signature_for_domain(&actual_domain));
         }
 
         let status = name_status(&state, &domain, &username, Some(&identity.to_string())).await?;
@@ -182,6 +184,7 @@ where
 
     pub async fn register(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
@@ -194,19 +197,20 @@ where
         } = payload;
         let username = sanitize_username(&username);
         validate_username(&username)?;
-        // The description and the resolved domain are both fields of the v2
+        // The description and the actual domain are both fields of the v2
         // message, so both are settled before anything verifies a signature.
         // Resolving the domain first also refuses a request naming a host this
         // server does not serve without spending the statement.
-        validate_description(&description)?;
+        validate_description(description.as_deref())?;
         let domain = sanitize_domain(&state, &host).await?;
 
         let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
             return Err(invalid_timestamp());
         }
-        let candidates = register_candidates(&domain, &username, &description, timestamp);
-        let candidate = verify_candidates(&pubkey, &signature, &candidates, &domain)?;
+        let candidates =
+            register_candidates(&actual_domain, &username, description.as_deref(), timestamp);
+        let candidate = verify_candidates(&pubkey, &signature, &candidates, &actual_domain)?;
         // Register and the legacy unregister candidate cover identical bytes,
         // so claiming here spends the statement for both routes. The claim
         // outlives that candidate: it also keeps a spent statement from
@@ -261,12 +265,18 @@ where
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
+            description: Some(shown_description(
+                &user.name,
+                &user.domain,
+                user.description.as_deref(),
+            )),
         }))
     }
 
     #[allow(clippy::too_many_lines)]
     pub async fn transfer(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(to_pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<TransferLnurlPayRequest>,
@@ -281,7 +291,7 @@ where
         } = payload;
         let username = sanitize_username(&username);
         validate_username(&username)?;
-        validate_description(&description)?;
+        validate_description(description.as_deref())?;
         let domain = sanitize_domain(&state, &host).await?;
 
         let (from_pk, from_sig) = parse_signed_request(&from_pubkey, &from_signature)?;
@@ -300,19 +310,26 @@ where
         // Role-tagged, so the current owner's signature does not verify in the
         // transferee's slot. The transferee's message commits to the description
         // because the transferee is the one choosing it.
-        let from_candidates =
-            transfer_from_candidates(&domain, &username, &from_pk, &to_pk, &to_pubkey, timestamp);
-        let to_candidates = transfer_to_candidates(
-            &domain,
+        let from_candidates = transfer_from_candidates(
+            &actual_domain,
             &username,
             &from_pk,
             &to_pk,
             &to_pubkey,
-            &description,
             timestamp,
         );
-        let authorization = verify_candidates(&from_pk, &from_sig, &from_candidates, &domain)?;
-        verify_candidates(&to_pk, &to_sig, &to_candidates, &domain)?;
+        let to_candidates = transfer_to_candidates(
+            &actual_domain,
+            &username,
+            &from_pk,
+            &to_pk,
+            &to_pubkey,
+            description.as_deref(),
+            timestamp,
+        );
+        let authorization =
+            verify_candidates(&from_pk, &from_sig, &from_candidates, &actual_domain)?;
+        verify_candidates(&to_pk, &to_sig, &to_candidates, &actual_domain)?;
 
         if from_pk == to_pk {
             return Err((
@@ -333,7 +350,7 @@ where
                     from_pubkey: &from_pk.to_string(),
                     to_pubkey: &to_pk.to_string(),
                     username: &username,
-                    description: &description,
+                    description: description.as_deref(),
                 },
                 StatementClaim {
                     hash: &statement_hash(&from_pk, &authorization.message),
@@ -390,11 +407,17 @@ where
         Ok(Json(TransferLnurlPayResponse {
             lnurl,
             lightning_address: format!("{username}@{domain}"),
+            description: Some(shown_description(
+                &username,
+                &domain,
+                description.as_deref(),
+            )),
         }))
     }
 
     pub async fn unregister(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<UnregisterLnurlPayRequest>,
@@ -405,17 +428,16 @@ where
             timestamp,
         } = payload;
         let username = sanitize_username(&username);
-        // Resolved before verification because the v2 message names it, and
-        // before the claim so a request naming a host this server does not serve
-        // is refused without spending the statement.
+        // Resolved before the claim, so a request naming a host this server
+        // does not serve is refused without spending the statement.
         let domain = sanitize_domain(&state, &host).await?;
 
         let (pubkey, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
             return Err(invalid_timestamp());
         }
-        let candidates = unregister_candidates(&domain, &username, timestamp);
-        let candidate = verify_candidates(&pubkey, &signature, &candidates, &domain)?;
+        let candidates = unregister_candidates(&actual_domain, &username, timestamp);
+        let candidate = verify_candidates(&pubkey, &signature, &candidates, &actual_domain)?;
         // Register claims the same bare statement, so a statement spent there
         // is already claimed here. The claim outlives that candidate: it also
         // keeps a spent statement from acting again after the name is
@@ -471,6 +493,7 @@ where
 
     pub async fn recover(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RecoverLnurlPayRequest>,
@@ -485,10 +508,10 @@ where
         if !timestamp_is_fresh(timestamp) {
             return Err(invalid_timestamp());
         }
-        let candidates = recover_candidates(&domain, &identity, &pubkey, timestamp);
+        let candidates = recover_candidates(&actual_domain, &identity, &pubkey, timestamp);
         // Claims nothing: this is a read, and claiming it would break a
         // legitimate client retry.
-        verify_candidates(&identity, &signature, &candidates, &domain)?;
+        verify_candidates(&identity, &signature, &candidates, &actual_domain)?;
 
         let user = state
             .db
@@ -505,11 +528,13 @@ where
         match user {
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
+                let description =
+                    shown_description(&user.name, &user.domain, user.description.as_deref());
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
-                    description: user.description,
+                    description,
                 }))
             }
             None => Err((
@@ -521,6 +546,7 @@ where
 
     pub async fn list_metadata(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(pubkey): Path<String>,
         headers: HeaderMap,
         Query(params): Query<ListMetadataRequest>,
@@ -534,15 +560,15 @@ where
             updated_after,
         } = params;
         let (signature, timestamp) = metadata_credentials(&headers, signature, timestamp)?;
-        let domain = sanitize_domain(&state, &host).await?;
+        sanitize_domain(&state, &host).await?;
 
         let (identity, signature) = parse_signed_request(&pubkey, &signature)?;
         if !timestamp_is_fresh(timestamp) {
             return Err(invalid_timestamp());
         }
-        let candidates = metadata_candidates(&domain, &identity, &pubkey, timestamp);
+        let candidates = metadata_candidates(&actual_domain, &identity, &pubkey, timestamp);
         // Claims nothing, for the same reason as `recover`.
-        verify_candidates(&identity, &signature, &candidates, &domain)?;
+        verify_candidates(&identity, &signature, &candidates, &actual_domain)?;
 
         // Rows are keyed by the identity pubkey, which is the same principal on
         // every domain a deployment serves, so they are not filtered by domain:
@@ -569,6 +595,8 @@ where
         // cache between here and the client.
         Ok((
             [(header::CACHE_CONTROL, "no-store, private")],
+            // Payers wrote the comments and signed the zap requests.
+            Extension(Verbatim),
             Json(ListMetadataResponse { metadata }),
         ))
     }
@@ -617,6 +645,7 @@ where
     #[allow(clippy::too_many_lines)]
     pub async fn handle_invoice(
         Host(host): Host,
+        Extension(ActualDomain(actual_domain)): Extension<ActualDomain>,
         Path(identifier): Path<String>,
         Query(params): Query<LnurlPayCallbackParams>,
         Extension(state): Extension<State<DB>>,
@@ -670,7 +699,7 @@ where
                     lnurl_error("invalid nostr event")
                 })?;
                 validate_nostr_zap_request(amount_msat, &event, receipt_pubkey)?;
-                log_lnurl_tag_mismatch(&event, &domain, &user.name);
+                log_lnurl_tag_mismatch(&event, &actual_domain, &user.name);
 
                 Some(event)
             }
@@ -680,7 +709,7 @@ where
         let desc_hash = if let Some(event) = &zap_request {
             sha256::Hash::hash(event.as_json().as_bytes())
         } else {
-            let metadata = get_metadata(&user.domain, &user);
+            let metadata = metadata_sent_to_payer(&user, &actual_domain);
             sha256::Hash::hash(metadata.as_bytes())
         };
 
@@ -692,6 +721,7 @@ where
                 Some(spark_wallet::InvoiceDescription::DescriptionHash(
                     desc_hash.to_byte_array(),
                 )),
+                spark_wallet::InvoicePreimage::FromSigner,
                 Some(pubkey),
                 params.expiry,
                 state.include_spark_address,
@@ -775,10 +805,10 @@ where
         if let Err(e) = create_invoice(
             &state.db,
             &payment_hash,
-            &user.pubkey,
+            &user,
             &res.invoice,
             invoice_expiry,
-            &domain,
+            &actual_domain,
             res.quote_fee
                 .and_then(|fee| i64::try_from(fee.flat_sats).ok()),
         )
@@ -804,10 +834,18 @@ where
     /// the name comes from here rather than from the path.
     pub async fn handle_verify_user_invoice(
         host: Host,
+        actual_domain: Extension<ActualDomain>,
         params: Query<LnurlPayCallbackParams>,
         state: Extension<State<DB>>,
     ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-        Self::handle_invoice(host, Path("verify".to_string()), params, state).await
+        Self::handle_invoice(
+            host,
+            actual_domain,
+            Path("verify".to_string()),
+            params,
+            state,
+        )
+        .await
     }
 
     /// LUD-21 verify endpoint
@@ -1290,8 +1328,8 @@ fn validate_amount_bounds(
     Ok(())
 }
 
-fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    if description.chars().take(256).count() > 255 {
+fn validate_description(description: Option<&str>) -> Result<(), (StatusCode, Json<Value>)> {
+    if description.is_some_and(|description| description.chars().take(256).count() > 255) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(Value::String("description too long".into())),
@@ -1412,7 +1450,7 @@ fn transfer_expired() -> (StatusCode, Json<Value>) {
     )
 }
 
-/// Naming the resolved domain separates "signed for another domain" from "not
+/// Naming the actual domain separates "signed for another domain" from "not
 /// signed by this key", which is the difference between diagnosing a proxy that
 /// rewrites `Host` in minutes or with a packet capture. The caller chose the
 /// header that resolved to this domain, so the response tells it nothing new.
@@ -1434,7 +1472,7 @@ fn legacy_timestamped(message: &str, timestamp: u64) -> String {
 fn register_candidates(
     domain: &str,
     username: &str,
-    description: &str,
+    description: Option<&str>,
     timestamp: u64,
 ) -> Vec<Candidate> {
     vec![
@@ -1568,7 +1606,7 @@ fn transfer_to_candidates(
     from_pubkey: &PublicKey,
     to_pubkey: &PublicKey,
     raw_to_pubkey: &str,
-    description: &str,
+    description: Option<&str>,
     timestamp: Option<u64>,
 ) -> Vec<Candidate> {
     match timestamp {
@@ -1923,10 +1961,23 @@ fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
 
 fn get_metadata(domain: &str, user: &User) -> String {
     json!(vec![
-        vec!["text/plain", &user.description],
+        vec![
+            "text/plain",
+            &shown_description(&user.name, domain, user.description.as_deref()),
+        ],
         vec!["text/identifier", &format!("{}@{}", user.name, domain)],
     ])
     .to_string()
+}
+
+/// The metadata the server sent a payer who asked `actual_domain` for `user`.
+/// The payer checks the invoice against it.
+fn metadata_sent_to_payer(user: &User, actual_domain: &str) -> String {
+    replace_domain(
+        &get_metadata(&user.domain, user),
+        &user.domain,
+        actual_domain,
+    )
 }
 
 fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
@@ -1963,6 +2014,11 @@ async fn sanitize_domain<DB>(
     domain: &str,
 ) -> Result<String, (StatusCode, Json<Value>)> {
     let domain = domain.trim().to_lowercase();
+    // The server serves an alias as its target or not at all.
+    if state.aliases.read().await.contains_key(&domain) {
+        warn!("domain alias not served: {domain}");
+        return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
+    }
     let domains = state.domains.read().await;
     if domains.contains_key(&domain) {
         return Ok(domain);
@@ -2122,6 +2178,11 @@ mod tests {
         }
         async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
             Ok(())
+        }
+        async fn list_domain_aliases(
+            &self,
+        ) -> Result<Vec<crate::repository::DomainAliasConfig>, LnurlRepositoryError> {
+            Ok(vec![])
         }
         async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
             self.invoices
@@ -2335,6 +2396,8 @@ mod tests {
                 created_at: 0,
                 updated_at: 0,
                 domain: None,
+                actual_domain: None,
+                username: None,
                 amount_received_sat: None,
                 fee_sat: None,
             },
@@ -2698,6 +2761,8 @@ mod tests {
                 created_at: 0,
                 updated_at: 0,
                 domain: None,
+                actual_domain: None,
+                username: None,
                 amount_received_sat: None,
                 fee_sat: None,
             },
@@ -2891,33 +2956,236 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A payer on an alias is sent metadata that names the alias.
+    /// `handle_invoice` hashes what `metadata_sent_to_payer` returns, which has
+    /// to be that string. No test creates an invoice.
+    #[tokio::test]
+    async fn a_payer_is_sent_the_metadata_an_invoice_is_hashed_from() {
+        use crate::domain_aliases::Alias;
+        use crate::test_support::{TestServer, test_db, test_state};
+        use axum::http::Method;
+
+        let (_pg, db) = test_db().await;
+        let user = User {
+            domain: "tips.example".to_string(),
+            pubkey: "02abc123".to_string(),
+            name: "alice".to_string(),
+            description: Some(
+                "Tips \"for\" alice@tips.example\n(https://tips.example/a)".to_string(),
+            ),
+        };
+        db.upsert_user(&user, None).await.unwrap();
+        let state = test_state(db).await;
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
+        state.aliases.write().await.insert(
+            "cash.example".to_string(),
+            Alias {
+                target: "tips.example".to_string(),
+                refusal: None,
+            },
+        );
+        let server = TestServer::start(crate::router(state)).await;
+
+        let pay: Value = server
+            .request(Method::GET, "cash.example", "/lnurlp/alice")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let sent = pay["metadata"].as_str().unwrap();
+        assert_eq!(sent, metadata_sent_to_payer(&user, "cash.example"));
+        let sent: Value = serde_json::from_str(sent).unwrap();
+        assert_eq!(
+            sent,
+            json!([
+                [
+                    "text/plain",
+                    "Tips \"for\" alice@cash.example\n(https://cash.example/a)"
+                ],
+                ["text/identifier", "alice@cash.example"],
+            ])
+        );
+    }
+
+    /// A wallet that sends no description leaves the description to the server,
+    /// which stores none and shows its default to payers and wallets.
+    #[tokio::test]
+    async fn an_address_without_a_description_shows_the_servers_default() {
+        use crate::test_support::{TestServer, test_db, test_state};
+        use axum::http::Method;
+
+        let (_pg, db) = test_db().await;
+        let state = test_state(db.clone()).await;
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
+        let server = TestServer::start(crate::router(state)).await;
+        let ((alice_secret, alice), (bob_secret, bob)) = (transfer_key(1), transfer_key(2));
+        let signed = |secret, message: &str| hex::encode(sign(secret, message).serialize_der());
+        let shown = "Pay to alice@tips.example";
+
+        let timestamp = now_u64();
+        let message = signed_message::register("tips.example", "alice", None, timestamp);
+        let registered: RegisterLnurlPayResponse = server
+            .request(Method::POST, "tips.example", &format!("/lnurlpay/{alice}"))
+            .json(&RegisterLnurlPayRequest {
+                username: "alice".to_string(),
+                signature: signed(&alice_secret, &message),
+                timestamp,
+                description: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(registered.description.as_deref(), Some(shown));
+        let stored = db.get_user_by_name("tips.example", "alice").await.unwrap();
+        assert_eq!(stored.map(|user| user.description), Some(None));
+
+        let message = signed_message::recover("tips.example", &alice.to_string(), timestamp);
+        let recovered: RecoverLnurlPayResponse = server
+            .request(
+                Method::POST,
+                "tips.example",
+                &format!("/lnurlpay/{alice}/recover"),
+            )
+            .json(&RecoverLnurlPayRequest {
+                signature: signed(&alice_secret, &message),
+                timestamp,
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(recovered.description, shown);
+
+        let pay: Value = server
+            .request(Method::GET, "tips.example", "/lnurlp/alice")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let metadata: Value = serde_json::from_str(pay["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata[0], json!(["text/plain", shown]));
+
+        let (alice, bob) = (alice.to_string(), bob.to_string());
+        let from_message =
+            signed_message::transfer_from("tips.example", "alice", &alice, &bob, timestamp);
+        let to_message =
+            signed_message::transfer_to("tips.example", "alice", &alice, &bob, None, timestamp);
+        let handed_over: TransferLnurlPayResponse = server
+            .request(
+                Method::POST,
+                "tips.example",
+                &format!("/lnurlpay/{bob}/transfer"),
+            )
+            .json(&TransferLnurlPayRequest {
+                username: "alice".to_string(),
+                description: None,
+                from_pubkey: alice,
+                from_signature: signed(&alice_secret, &from_message),
+                to_signature: signed(&bob_secret, &to_message),
+                timestamp: Some(timestamp),
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(handed_over.description.as_deref(), Some(shown));
+    }
+
+    /// A wallet that sends an empty description gets an empty description: the
+    /// server stores and shows it as it is.
+    #[tokio::test]
+    async fn an_empty_description_stays_empty() {
+        use crate::test_support::{TestServer, test_db, test_state};
+        use axum::http::Method;
+
+        let (_pg, db) = test_db().await;
+        let state = test_state(db.clone()).await;
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
+        let server = TestServer::start(crate::router(state)).await;
+        let (secret, alice) = transfer_key(1);
+
+        let timestamp = now_u64();
+        let message = signed_message::register("tips.example", "alice", Some(""), timestamp);
+        let registered: RegisterLnurlPayResponse = server
+            .request(Method::POST, "tips.example", &format!("/lnurlpay/{alice}"))
+            .json(&RegisterLnurlPayRequest {
+                username: "alice".to_string(),
+                signature: hex::encode(sign(&secret, &message).serialize_der()),
+                timestamp,
+                description: Some(String::new()),
+            })
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(registered.description.as_deref(), Some(""));
+        let stored = db.get_user_by_name("tips.example", "alice").await.unwrap();
+        assert_eq!(
+            stored.map(|user| user.description),
+            Some(Some(String::new()))
+        );
+
+        let pay: Value = server
+            .request(Method::GET, "tips.example", "/lnurlp/alice")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let metadata: Value = serde_json::from_str(pay["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata[0], json!(["text/plain", ""]));
+    }
+
     // -- Signed messages -------------------------------------------------------
     //
     // Routes verify via SparkWallet::verify_message, which delegates to
     // verify_signature_ecdsa. These exercise the candidate sets and that
     // verification directly, without constructing a wallet.
 
-    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use crate::test_support::{sign, transfer_key};
     use spark::utils::verify_signature::verify_signature_ecdsa;
 
     const TEST_DOMAIN: &str = "lnurl.example.com";
     const OTHER_DOMAIN: &str = "other.example.com";
     const TEST_DESCRIPTION: &str = "Pay to alice";
-
-    /// Deterministic keypair from a seed byte.
-    fn transfer_key(seed: u8) -> (SecretKey, PublicKey) {
-        let secp = Secp256k1::new();
-        let secret = SecretKey::from_slice(&[seed; 32]).expect("valid secret key");
-        let public = PublicKey::from_secret_key(&secp, &secret);
-        (secret, public)
-    }
-
-    /// Sign `message` the way the SDK does: ECDSA over `sha256(message)`.
-    fn sign(secret: &SecretKey, message: &str) -> Signature {
-        let secp = Secp256k1::new();
-        let digest = sha256::Hash::hash(message.as_bytes());
-        secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), secret)
-    }
 
     /// The candidate `signature` verifies against, mirroring what
     /// [`verify_candidates`] accepts.
@@ -2948,7 +3216,8 @@ mod tests {
         let desc_hash = signed_message::description_hash(TEST_DESCRIPTION);
 
         assert_eq!(
-            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
             format!(
                 "breez-lnurl:v2\nregister\n{TEST_DOMAIN}\nalice\n{desc_hash}\n{TEST_TIMESTAMP}"
             )
@@ -2986,7 +3255,7 @@ mod tests {
                 &alice,
                 &bob,
                 &bob.to_string(),
-                TEST_DESCRIPTION,
+                Some(TEST_DESCRIPTION),
                 Some(TEST_TIMESTAMP)
             )[0]
             .message,
@@ -3007,7 +3276,7 @@ mod tests {
         for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
             for name in ["alice", "bob"] {
                 messages.extend(
-                    register_candidates(domain, name, TEST_DESCRIPTION, TEST_TIMESTAMP)
+                    register_candidates(domain, name, Some(TEST_DESCRIPTION), TEST_TIMESTAMP)
                         .into_iter()
                         .chain(unregister_candidates(domain, name, TEST_TIMESTAMP))
                         .chain(transfer_from_candidates(
@@ -3024,7 +3293,7 @@ mod tests {
                             &alice,
                             &bob,
                             &hex_alice,
-                            TEST_DESCRIPTION,
+                            Some(TEST_DESCRIPTION),
                             Some(TEST_TIMESTAMP),
                         ))
                         .filter(|candidate| !candidate.legacy)
@@ -3067,17 +3336,23 @@ mod tests {
         let (secret, public) = transfer_key(0x11);
         let signature = sign(
             &secret,
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
         );
 
         assert!(verifies(
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
             &signature,
             &public
         ));
         assert!(
             !verifies(
-                &register_candidates(OTHER_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &register_candidates(
+                    OTHER_DOMAIN,
+                    "alice",
+                    Some(TEST_DESCRIPTION),
+                    TEST_TIMESTAMP
+                ),
                 &signature,
                 &public
             ),
@@ -3120,7 +3395,7 @@ mod tests {
             (
                 "register",
                 format!("alice-{TEST_TIMESTAMP}"),
-                register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
             ),
             (
                 "unregister, prefixed",
@@ -3183,7 +3458,7 @@ mod tests {
             &alice,
             &bob,
             &hex_bob,
-            TEST_DESCRIPTION,
+            Some(TEST_DESCRIPTION),
             None,
         );
 
@@ -3206,7 +3481,7 @@ mod tests {
     fn the_v2_candidate_is_matched_before_the_legacy_one() {
         let (secret, public) = transfer_key(0x11);
         let candidates =
-            register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP);
+            register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP);
         let signature = sign(&secret, &candidates[0].message);
 
         let matched = verify_candidates(&public, &signature, &candidates, TEST_DOMAIN)
@@ -3275,7 +3550,7 @@ mod tests {
 
         for domain in [TEST_DOMAIN, OTHER_DOMAIN] {
             assert!(verifies(
-                &register_candidates(domain, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP),
+                &register_candidates(domain, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP),
                 &signature,
                 &public
             ));
@@ -3289,12 +3564,13 @@ mod tests {
         let (secret, public) = transfer_key(0x11);
         let signature = sign(
             &secret,
-            &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0].message,
+            &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)[0]
+                .message,
         );
 
         assert!(
             !verifies(
-                &register_candidates(TEST_DOMAIN, "alice", "Pay to mallory", TEST_TIMESTAMP)
+                &register_candidates(TEST_DOMAIN, "alice", Some("Pay to mallory"), TEST_TIMESTAMP)
                     .into_iter()
                     .filter(|candidate| !candidate.legacy)
                     .collect::<Vec<_>>(),
@@ -3320,11 +3596,15 @@ mod tests {
                 Some(TEST_TIMESTAMP),
             )
         };
-        let signature = sign(&secret, &to_candidates(TEST_DESCRIPTION)[0].message);
+        let signature = sign(&secret, &to_candidates(Some(TEST_DESCRIPTION))[0].message);
 
-        assert!(verifies(&to_candidates(TEST_DESCRIPTION), &signature, &bob));
+        assert!(verifies(
+            &to_candidates(Some(TEST_DESCRIPTION)),
+            &signature,
+            &bob
+        ));
         assert!(!verifies(
-            &to_candidates("Pay to mallory"),
+            &to_candidates(Some("Pay to mallory")),
             &signature,
             &bob
         ));
@@ -3353,7 +3633,7 @@ mod tests {
             &alice,
             &bob,
             &hex_bob,
-            TEST_DESCRIPTION,
+            Some(TEST_DESCRIPTION),
             Some(TEST_TIMESTAMP),
         );
         let signature = sign(&alice_secret, &from[0].message);
@@ -3610,7 +3890,7 @@ mod tests {
             domain: "example.com".to_string(),
             pubkey: "02abc123".to_string(),
             name: name.to_string(),
-            description: String::new(),
+            description: None,
         }
     }
 
@@ -3686,8 +3966,9 @@ mod tests {
         assert_ne!(
             statement_hash(
                 &public_key,
-                &register_candidates(TEST_DOMAIN, "alice", TEST_DESCRIPTION, TEST_TIMESTAMP)[0]
-                    .message
+                &register_candidates(TEST_DOMAIN, "alice", Some(TEST_DESCRIPTION), TEST_TIMESTAMP)
+                    [0]
+                .message
             ),
             statement_hash(
                 &public_key,

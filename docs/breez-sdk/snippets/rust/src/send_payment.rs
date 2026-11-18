@@ -183,6 +183,18 @@ async fn send_payment_lightning_bolt11(
     Ok(())
 }
 
+async fn get_payment_preimage(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: get-payment-preimage
+    let payment_id = "<payment id>".to_string();
+    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    if let Some(PaymentDetails::Lightning { htlc_details, .. }) = response.payment.details {
+        info!("Payment hash: {}", htlc_details.payment_hash);
+        info!("Preimage: {:?}", htlc_details.preimage);
+    }
+    // ANCHOR_END: get-payment-preimage
+    Ok(())
+}
+
 async fn send_payment_onchain(
     sdk: &BreezSdk,
     prepare_response: PrepareSendPaymentResponse,
@@ -222,6 +234,22 @@ async fn send_payment_spark(
     let payment = send_response.payment;
     info!("Payment: {payment:?}");
     // ANCHOR_END: send-payment-spark
+    Ok(())
+}
+
+async fn fetch_lightning_send_status(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: fetch-lightning-send-status
+    let invoice = "<bolt11 invoice>".to_string();
+    let response = sdk
+        .fetch_lightning_send_status(FetchLightningSendStatusRequest { invoice })
+        .await?;
+    match response.status {
+        Some(PaymentStatus::Completed) => info!("Paid"),
+        Some(PaymentStatus::Pending) => info!("Payment in flight"),
+        Some(PaymentStatus::Failed) => info!("Payment failed"),
+        None => info!("No Lightning payment found"),
+    }
+    // ANCHOR_END: fetch-lightning-send-status
     Ok(())
 }
 

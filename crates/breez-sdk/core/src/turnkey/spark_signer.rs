@@ -16,8 +16,7 @@
 //!
 //! The pubkey maps are a performance memoization only. Each derivation's key is
 //! deterministic and immutable, so caching avoids repeat Turnkey round-trips
-//! (and re-issuing a `CREATE_WALLET_ACCOUNTS` activity for a path already
-//! materialized), and never needs invalidation. They are not persistence:
+//! and never needs invalidation. They are not persistence:
 //! in-memory, lost on restart, rebuilt from Turnkey on demand. Correctness does
 //! not depend on them.
 
@@ -115,6 +114,11 @@ fn transfer_leaf(leaf: &ExternalTransferLeafInput) -> Result<SparkTransferLeaf, 
 /// Converts a native FROST job into the request shape, hex-encoding the sighash,
 /// verifying key, per-operator commitments, and optional adaptor key.
 fn frost_job_to_request(job: &FrostJob) -> Result<SparkSignatureRequest, TurnkeyError> {
+    if job.adaptor.is_some_and(|a| a.v2) {
+        return Err(TurnkeyError::Serialize(
+            "Turnkey does not support version 2 adaptor signing".to_string(),
+        ));
+    }
     let mut operator_commitments = Vec::with_capacity(job.operator_commitments.len());
     for (identifier, commitment) in &job.operator_commitments {
         operator_commitments.push(SparkFrostCommitment {
@@ -138,7 +142,7 @@ fn frost_job_to_request(job: &FrostJob) -> Result<SparkSignatureRequest, Turnkey
         message: hex::encode(job.sighash),
         verifying_key: hex::encode(job.verifying_key.serialize()),
         operator_commitments,
-        adaptor_public_key: job.adaptor_public_key.map(|pk| hex::encode(pk.serialize())),
+        adaptor_public_key: job.adaptor.map(|a| hex::encode(a.public_key.serialize())),
     })
 }
 
@@ -628,6 +632,11 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         false
     }
 
+    // `SPARK_SIGN_FROST` takes no adaptor version, so Turnkey signs version 1.
+    fn supports_adaptor_v2(&self) -> bool {
+        false
+    }
+
     async fn get_static_deposit_public_key(
         &self,
         index: u32,
@@ -666,7 +675,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(&leaf_id));
         let sign_with = self
             .client
-            .create_account(path, bitcoin_p2tr_format(self.network))
+            .ensure_account(&path, bitcoin_p2tr_format(self.network))
             .await
             .map_err(to_spark_err)?;
         let result = self
@@ -909,7 +918,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 verifying_key: &verifying_key,
                 self_nonce_commitment: &nonce_commitment,
                 statechain_commitments: statechain_commitments.clone(),
-                adaptor_public_key: None,
+                adaptor: None,
             })
             .await
             .map_err(to_spark_err)?;
@@ -922,7 +931,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             self_commitment: &nonce_commitment,
             public_key: &aggregating_public_key,
             self_signature: &user_signature,
-            adaptor_public_key: None,
+            adaptor: None,
         })
         .map_err(to_spark_err)?;
         ExternalFrostSignature::from_frost_signature(&signature).map_err(to_spark_err)
@@ -1175,5 +1184,30 @@ mod tests {
                 "newLeafDerivation": { "signingLeaf": { "leafId": "new" } },
             })
         );
+    }
+
+    /// Turnkey takes an adaptor public key but no adaptor version, so it signs
+    /// version 1 adaptor signatures and a version 2 job never reaches it.
+    #[test]
+    fn turnkey_signs_only_version_1_adaptor_signatures() {
+        use spark_wallet::{FrostAdaptor, FrostDerivation, FrostJob};
+
+        let public_key = SecretKey::from_slice(&[3; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new());
+        let job = |v2| FrostJob {
+            derivation: FrostDerivation::Identity,
+            sighash: [7; 32],
+            verifying_key: public_key,
+            operator_commitments: std::collections::BTreeMap::new(),
+            adaptor: Some(FrostAdaptor { public_key, v2 }),
+        };
+
+        let request = super::frost_job_to_request(&job(false)).unwrap();
+        assert_eq!(
+            request.adaptor_public_key,
+            Some(hex::encode(public_key.serialize()))
+        );
+        assert!(super::frost_job_to_request(&job(true)).is_err());
     }
 }

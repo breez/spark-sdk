@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use deadpool_postgres::Pool;
 use spark::services::TransferId;
-use sqlx::PgPool;
+use tokio_postgres::Row;
 use uuid::Uuid;
 
+use super::{execute, query, query_one, query_opt, transfer_uuid};
 use crate::swap::SwapStore;
 use crate::swap::repository::{SwapDetail, SwapLeaf, SwapRecord};
 
@@ -14,39 +16,37 @@ const DIRECTION_OUTBOUND: &str = "outbound";
 const DIRECTION_INBOUND: &str = "inbound";
 
 pub struct SwapRepository {
-    pool: Arc<PgPool>,
+    pool: Arc<Pool>,
 }
 
 impl SwapRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<Pool>) -> Self {
         Self { pool }
     }
 }
 
-type SwapRow = (String, Vec<u8>, Uuid, Uuid, i64, i64, i64);
-
 const SWAP_COLUMNS: &str = "id, user_identity_public_key, user_transfer_id, counter_transfer_id, \
      total_amount_sats, target_amount_sats, fee_sats";
 
-fn swap_record(row: SwapRow) -> SwapRecord {
-    let (
-        id,
-        user_identity_public_key,
-        user_transfer_id,
-        counter_transfer_id,
-        total_amount_sats,
-        target_amount_sats,
-        fee_sats,
-    ) = row;
-    SwapRecord {
-        id,
-        user_identity_public_key,
+fn swap_record(row: &Row) -> Result<SwapRecord, tokio_postgres::Error> {
+    let user_transfer_id: Uuid = row.try_get(2)?;
+    let counter_transfer_id: Uuid = row.try_get(3)?;
+    Ok(SwapRecord {
+        id: row.try_get(0)?,
+        user_identity_public_key: row.try_get(1)?,
         user_transfer_id: TransferId::from_bytes(user_transfer_id.into_bytes()),
         counter_transfer_id: TransferId::from_bytes(counter_transfer_id.into_bytes()),
-        total_amount_sats,
-        target_amount_sats,
-        fee_sats,
-    }
+        total_amount_sats: row.try_get(4)?,
+        target_amount_sats: row.try_get(5)?,
+        fee_sats: row.try_get(6)?,
+    })
+}
+
+fn swap_records(rows: &[Row]) -> Result<Vec<SwapRecord>, String> {
+    rows.iter()
+        .map(swap_record)
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())
 }
 
 fn leaf_columns(leaves: &[SwapLeaf]) -> (Vec<&str>, Vec<i64>) {
@@ -59,14 +59,26 @@ fn leaf_columns(leaves: &[SwapLeaf]) -> (Vec<&str>, Vec<i64>) {
 impl SwapRepository {
     async fn with_leaves(&self, swaps: Vec<SwapRecord>) -> Result<Vec<SwapDetail>, String> {
         let ids: Vec<&str> = swaps.iter().map(|swap| swap.id.as_str()).collect();
-        let leaves: Vec<(String, String, String, i64)> = sqlx::query_as(
+        let leaves: Vec<(String, String, String, i64)> = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"SELECT swap_id, direction, leaf_id, value_sats FROM brz_ssp_swap_leaves
                WHERE swap_id = ANY($1)
                ORDER BY swap_id, direction, leaf_id"#,
+            &[&ids],
         )
-        .bind(&ids)
-        .fetch_all(self.pool.as_ref())
         .await
+        .and_then(|rows| {
+            rows.iter()
+                .map(|row| {
+                    Ok((
+                        row.try_get(0)?,
+                        row.try_get(1)?,
+                        row.try_get(2)?,
+                        row.try_get(3)?,
+                    ))
+                })
+                .collect()
+        })
         .map_err(|e| e.to_string())?;
         let mut by_swap: HashMap<String, (Vec<SwapLeaf>, Vec<SwapLeaf>)> = HashMap::new();
         for (swap_id, direction, leaf_id, value_sats) in leaves {
@@ -98,20 +110,22 @@ impl SwapRepository {
 #[async_trait::async_trait]
 impl SwapStore for SwapRepository {
     async fn insert_swap(&self, swap: &SwapRecord) -> Result<(), String> {
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"INSERT INTO brz_ssp_swaps
                (id, user_identity_public_key, user_transfer_id, counter_transfer_id,
                 total_amount_sats, target_amount_sats, fee_sats)
-               VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+            &[
+                &swap.id,
+                &swap.user_identity_public_key,
+                &transfer_uuid(&swap.user_transfer_id),
+                &transfer_uuid(&swap.counter_transfer_id),
+                &swap.total_amount_sats,
+                &swap.target_amount_sats,
+                &swap.fee_sats,
+            ],
         )
-        .bind(&swap.id)
-        .bind(&swap.user_identity_public_key)
-        .bind(swap.user_transfer_id.to_string())
-        .bind(swap.counter_transfer_id.to_string())
-        .bind(swap.total_amount_sats)
-        .bind(swap.target_amount_sats)
-        .bind(swap.fee_sats)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -121,67 +135,87 @@ impl SwapStore for SwapRepository {
         &self,
         user_transfer_id: &str,
     ) -> Result<Option<SwapRecord>, String> {
-        let row: Option<SwapRow> = sqlx::query_as(&format!(
-            "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE user_transfer_id = $1::uuid"
-        ))
-        .bind(user_transfer_id)
-        .fetch_optional(self.pool.as_ref())
+        let user_transfer_id = Uuid::parse_str(user_transfer_id).map_err(|e| e.to_string())?;
+        let row = query_opt(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            &format!("SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE user_transfer_id = $1"),
+            &[&user_transfer_id],
+        )
         .await
         .map_err(|e| e.to_string())?;
-        Ok(row.map(swap_record))
+        row.as_ref()
+            .map(swap_record)
+            .transpose()
+            .map_err(|e| e.to_string())
     }
 
     async fn delete_swap(&self, swap_id: &str) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM brz_ssp_swaps WHERE id = $1"#)
-            .bind(swap_id)
-            .execute(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())?;
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            r#"DELETE FROM brz_ssp_swaps WHERE id = $1"#,
+            &[&swap_id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     async fn get_unclaimed_swaps(&self) -> Result<Vec<SwapRecord>, String> {
-        let rows: Vec<SwapRow> = sqlx::query_as(&format!(
-            "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE NOT claimed ORDER BY created_at"
-        ))
-        .fetch_all(self.pool.as_ref())
+        let rows = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            &format!(
+                "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps WHERE NOT claimed ORDER BY created_at"
+            ),
+            &[],
+        )
         .await
         .map_err(|e| e.to_string())?;
-        Ok(rows.into_iter().map(swap_record).collect())
+        swap_records(&rows)
     }
 
     async fn has_unclaimed_swaps(&self) -> Result<bool, String> {
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM brz_ssp_swaps WHERE NOT claimed)")
-            .fetch_one(self.pool.as_ref())
-            .await
-            .map_err(|e| e.to_string())
+        query_one(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            "SELECT EXISTS (SELECT 1 FROM brz_ssp_swaps WHERE NOT claimed)",
+            &[],
+        )
+        .await
+        .and_then(|row| row.try_get(0))
+        .map_err(|e| e.to_string())
     }
 
     async fn list_swaps(&self, limit: u32) -> Result<Vec<SwapDetail>, String> {
-        let rows: Vec<SwapRow> = sqlx::query_as(&format!(
-            "SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps ORDER BY created_at DESC LIMIT $1"
-        ))
-        .bind(i64::from(limit))
-        .fetch_all(self.pool.as_ref())
+        let rows = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
+            &format!("SELECT {SWAP_COLUMNS} FROM brz_ssp_swaps ORDER BY created_at DESC LIMIT $1"),
+            &[&i64::from(limit)],
+        )
         .await
         .map_err(|e| e.to_string())?;
-        self.with_leaves(rows.into_iter().map(swap_record).collect())
-            .await
+        self.with_leaves(swap_records(&rows)?).await
     }
 
     async fn counter_transfers_among(
         &self,
         transfer_ids: &[String],
     ) -> Result<std::collections::HashSet<String>, String> {
-        let ids: Vec<(String,)> = sqlx::query_as(
+        let transfer_ids = transfer_ids
+            .iter()
+            .map(|id| Uuid::parse_str(id))
+            .collect::<Result<Vec<Uuid>, _>>()
+            .map_err(|e| e.to_string())?;
+        let ids = query(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             "SELECT counter_transfer_id::text FROM brz_ssp_swaps
-             WHERE counter_transfer_id = ANY($1::uuid[])",
+             WHERE counter_transfer_id = ANY($1)",
+            &[&transfer_ids],
         )
-        .bind(transfer_ids)
-        .fetch_all(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
-        Ok(ids.into_iter().map(|(id,)| id).collect())
+        ids.iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
     }
 
     async fn record_outbound_leaves(
@@ -190,17 +224,14 @@ impl SwapStore for SwapRepository {
         outbound_leaves: &[SwapLeaf],
     ) -> Result<(), String> {
         let (leaf_ids, values) = leaf_columns(outbound_leaves);
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"INSERT INTO brz_ssp_swap_leaves (swap_id, direction, leaf_id, value_sats)
                SELECT $1, $2, leaf.leaf_id, leaf.value_sats
                FROM UNNEST($3::text[], $4::bigint[]) AS leaf (leaf_id, value_sats)
                ON CONFLICT (swap_id, direction, leaf_id) DO NOTHING"#,
+            &[&swap_id, &DIRECTION_OUTBOUND, &leaf_ids, &values],
         )
-        .bind(swap_id)
-        .bind(DIRECTION_OUTBOUND)
-        .bind(&leaf_ids)
-        .bind(&values)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -214,7 +245,8 @@ impl SwapStore for SwapRepository {
         let (leaf_ids, values) = leaf_columns(inbound_leaves);
         // Postgres stores the leaves and marks the swap claimed in one
         // statement, so it does both or neither.
-        sqlx::query(
+        execute(
+            &self.pool.get().await.map_err(|e| e.to_string())?,
             r#"WITH stored AS (
                    INSERT INTO brz_ssp_swap_leaves (swap_id, direction, leaf_id, value_sats)
                    SELECT $1, $2, leaf.leaf_id, leaf.value_sats
@@ -222,12 +254,8 @@ impl SwapStore for SwapRepository {
                    ON CONFLICT (swap_id, direction, leaf_id) DO NOTHING
                )
                UPDATE brz_ssp_swaps SET claimed = TRUE WHERE id = $1"#,
+            &[&swap_id, &DIRECTION_INBOUND, &leaf_ids, &values],
         )
-        .bind(swap_id)
-        .bind(DIRECTION_INBOUND)
-        .bind(&leaf_ids)
-        .bind(&values)
-        .execute(self.pool.as_ref())
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -246,7 +274,7 @@ mod tests {
 
     struct Fixture {
         store: SwapRepository,
-        pool: Arc<PgPool>,
+        pool: Arc<Pool>,
         _database: TestDatabase,
     }
 
@@ -269,21 +297,22 @@ mod tests {
 
         async fn swap_created(&self, minutes_ago: i32) -> SwapRecord {
             let swap = self.swap().await;
-            sqlx::query(
+            let client = self.pool.get().await.unwrap();
+            execute(
+                &client,
                 "UPDATE brz_ssp_swaps
                  SET created_at = NOW() - make_interval(mins => $2) WHERE id = $1",
+                &[&swap.id, &minutes_ago],
             )
-            .bind(&swap.id)
-            .bind(minutes_ago)
-            .execute(&*self.pool)
             .await
             .unwrap();
             swap
         }
 
         async fn add_check(&self, table: &str, check: &str) {
-            sqlx::query(&format!("ALTER TABLE {table} ADD CHECK ({check})"))
-                .execute(&*self.pool)
+            let client = self.pool.get().await.unwrap();
+            client
+                .batch_execute(&format!("ALTER TABLE {table} ADD CHECK ({check})"))
                 .await
                 .unwrap();
         }
@@ -305,10 +334,11 @@ mod tests {
         }
 
         async fn stored_leaves(&self) -> i64 {
-            sqlx::query_scalar("SELECT COUNT(*) FROM brz_ssp_swap_leaves")
-                .fetch_one(&*self.pool)
+            let client = self.pool.get().await.unwrap();
+            query_one(&client, "SELECT COUNT(*) FROM brz_ssp_swap_leaves", &[])
                 .await
                 .unwrap()
+                .get(0)
         }
     }
 

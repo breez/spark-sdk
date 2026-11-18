@@ -1,7 +1,6 @@
-use bitcoin::Address;
 use thiserror::Error;
 
-use crate::services::TransferId;
+use crate::services::{TransferId, WithdrawalAddress};
 
 pub struct ReceiverTokenOutput {
     pub pay_request: String,
@@ -22,7 +21,7 @@ pub trait TransferObserver: Send + Sync {
     async fn before_coop_exit(
         &self,
         transfer_id: &TransferId,
-        withdrawal_address: &Address,
+        withdrawal_address: &WithdrawalAddress,
         amount_sats: u64,
     ) -> Result<(), TransferObserverError>;
     async fn before_send_lightning_payment(

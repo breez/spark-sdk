@@ -1,3 +1,4 @@
+pub mod bridging;
 pub mod chain_service;
 pub mod errors;
 pub mod events;

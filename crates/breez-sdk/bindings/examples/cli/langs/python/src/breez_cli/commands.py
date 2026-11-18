@@ -8,8 +8,6 @@ from breez_sdk_spark import (
     AssetFilter,
     AuthorizeTransferRequest,
     BatchRecipient,
-    BridgeFromCashAppRequest,
-    BridgeToCashAppRequest,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
     ClaimDepositRequest,
@@ -19,11 +17,11 @@ from breez_sdk_spark import (
     ConversionType,
     CrossChainFeeMode,
     CrossChainRouteFilter,
-    DeliveryMethod,
     Fee,
     FeePolicy,
     FetchClaimDepositQuoteRequest,
     FetchConversionLimitsRequest,
+    FetchLightningSendStatusRequest,
     GetInfoRequest,
     GetPaymentRequest,
     GetSparkStatusRequest,
@@ -81,6 +79,7 @@ def _service_fee_denomination(asset, decimals):
 COMMAND_NAMES = [
     "get-info",
     "get-payment",
+    "fetch-lightning-send-status",
     "sync",
     "list-payments",
     "receive",
@@ -97,8 +96,6 @@ COMMAND_NAMES = [
     "refund-deposit",
     "list-unclaimed-deposits",
     "buy-bitcoin",
-    "bridge-from-cash-app",
-    "bridge-to-cash-app",
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
@@ -158,6 +155,21 @@ def _build_get_payment_parser():
 
 async def _handle_get_payment(sdk, _token_issuer, _session, args):
     result = await sdk.get_payment(request=GetPaymentRequest(payment_id=args.payment_id))
+    print_value(result)
+
+
+# --- fetch-lightning-send-status ---
+
+def _build_fetch_lightning_send_status_parser():
+    p = _parser("fetch-lightning-send-status",
+                "Fetch the status of a Lightning payment of a Bolt11 invoice from the operators")
+    p.add_argument("invoice", help="The Bolt11 invoice to look up")
+    return p
+
+async def _handle_fetch_lightning_send_status(sdk, _token_issuer, _session, args):
+    result = await sdk.fetch_lightning_send_status(
+        request=FetchLightningSendStatusRequest(invoice=args.invoice)
+    )
     print_value(result)
 
 
@@ -284,6 +296,8 @@ def _build_receive_parser():
     p.add_argument("-s", "--sender-public-key", default=None)
     p.add_argument("--hodl", action="store_true", default=False,
                    help="Create a HODL invoice (bolt11 only)")
+    p.add_argument("--preimage", default=None,
+                   help="Preimage (hex) to create the bolt11 invoice for, instead of one the SDK generates")
     p.add_argument("--new-address", action="store_true", default=False,
                    help="Request a new bitcoin deposit address instead of reusing the current one")
     p.add_argument("--cross-chain-max-slippage-bps", type=int, default=None,
@@ -294,6 +308,8 @@ def _build_receive_parser():
                    help="Overpay buffer in basis points for fees-excluded mode (0..500)")
     p.add_argument("--cross-chain-to-bitcoin", action="store_true", default=False,
                    help="Deliver a cross-chain receive as Bitcoin (sats) instead of the active stable-balance token")
+    p.add_argument("--cross-chain-refund-address", default=None,
+                   help="Payer's address on the route's chain for refunds if delivery fails")
     return p
 
 async def _handle_receive(sdk, _token_issuer, session, args):
@@ -317,6 +333,10 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             new_address=args.new_address,
         )
     elif method == "bolt11":
+        if args.hodl and args.preimage:
+            print("--hodl and --preimage cannot be used together")
+            return
+
         payment_hash = None
         if args.hodl:
             preimage_bytes = os.urandom(32)
@@ -332,6 +352,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             expiry_secs=args.expiry_secs,
             payment_hash=payment_hash,
             receiver_identity_public_key=None,
+            preimage=args.preimage,
             fee_policy=None,
         )
     elif method == "crosschain":
@@ -360,6 +381,7 @@ async def _handle_receive(sdk, _token_issuer, session, args):
             fee_mode=fee_mode,
             max_slippage_bps=args.cross_chain_max_slippage_bps,
             target_overpay_bps=args.cross_chain_target_overpay_bps,
+            refund_address=args.cross_chain_refund_address,
         )
     else:
         print(f"Invalid payment method: {method}")
@@ -924,106 +946,8 @@ async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
     if result.cross_chain_info is not None:
-        print("Delivered as USDC on Solana. Quote:")
+        print("Conversion quote:")
         print_value(result.cross_chain_info)
-
-
-# --- bridge-from-cash-app ---
-
-def _build_bridge_from_cash_app_parser():
-    p = _parser("bridge-from-cash-app",
-                "Bridge from Cash App to USDC/USDT on an external chain")
-    p.add_argument("recipient", help="Recipient address on the destination chain (EVM/Solana/Tron)")
-    p.add_argument("--amount", type=int, required=True,
-                   help="Amount in the destination stablecoin's base units (6 decimals for USDC/USDT)")
-    p.add_argument("--fees-included", action="store_true", default=False,
-                   help="Deduct fees from the amount instead of adding them on top")
-    p.add_argument("--max-slippage-bps", type=int, default=None,
-                   help="Maximum slippage in basis points")
-    return p
-
-async def _handle_bridge_from_cash_app(sdk, _token_issuer, session, args):
-    parsed = await sdk.parse(input=args.recipient)
-    if not isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
-        print("Recipient must be a cross-chain (EVM/Solana/Tron) address")
-        return
-    address_details = parsed[0]
-    address = address_details.address
-    route_filter = CrossChainRouteFilter.SEND(
-        address_details=address_details,
-        delivery_method=DeliveryMethod.LIGHTNING,
-    )
-    route = await _select_cross_chain_route(sdk, session, route_filter)
-    fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
-    response = await sdk.bridge_from_cash_app(
-        request=BridgeFromCashAppRequest(
-            address=address,
-            route=route,
-            amount=args.amount,
-            fee_policy=fee_policy,
-            max_slippage_bps=args.max_slippage_bps,
-        )
-    )
-    print("Open this URL in a browser to complete the purchase:")
-    print(response.url)
-    service_fee_denom = _service_fee_denomination(
-        response.service_fee_asset, response.service_fee_asset_decimals,
-    )
-    print(
-        f"Deposit ~{response.amount_sats} sats; "
-        f"recipient receives ~{response.estimated_out} {response.asset}, "
-        f"service fee {response.service_fee_amount} {service_fee_denom}, "
-        f"expires {response.expires_at}"
-    )
-
-
-# --- bridge-to-cash-app ---
-
-def _build_bridge_to_cash_app_parser():
-    p = _parser("bridge-to-cash-app",
-                "Bridge USDC/USDT from an external chain to a Cash App user")
-    p.add_argument("recipient",
-                   help="Cash App username (alice or $alice) or Cash App Lightning address")
-    p.add_argument("--amount", type=int, required=True,
-                   help="Amount in the source stablecoin's base units (6 decimals for USDC/USDT)")
-    p.add_argument("--refund-address", required=True,
-                   help="The payer's address on the source chain, refunded if delivery fails")
-    p.add_argument("--fees-included", action="store_true", default=False,
-                   help="Deduct fees from the amount instead of adding them on top")
-    p.add_argument("--max-slippage-bps", type=int, default=None,
-                   help="Maximum slippage in basis points")
-    return p
-
-async def _handle_bridge_to_cash_app(sdk, _token_issuer, session, args):
-    route_filter = CrossChainRouteFilter.RECEIVE(
-        contract_address=None,
-        delivery_method=DeliveryMethod.LIGHTNING,
-    )
-    route = await _select_cross_chain_route(sdk, session, route_filter)
-    fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
-    response = await sdk.bridge_to_cash_app(
-        request=BridgeToCashAppRequest(
-            recipient=args.recipient,
-            route=route,
-            amount=args.amount,
-            fee_policy=fee_policy,
-            refund_address=args.refund_address,
-            max_slippage_bps=args.max_slippage_bps,
-        )
-    )
-    info = response.info
-    print("Ask the payer to pay:")
-    print(response.payment_request)
-    service_fee_denom = _service_fee_denomination(
-        info.service_fee_asset, info.service_fee_asset_decimals,
-    )
-    print(
-        f"Deposit {info.deposit_amount} {route.asset} on {route.chain} "
-        f"to {info.deposit_address}. "
-        f"Recipient receives ~{info.expected_received_amount} sats, "
-        f"service fee {info.service_fee_amount} {service_fee_denom}, "
-        f"expires at {info.expires_at}"
-    )
 
 
 # --- check-lightning-address-available ---
@@ -1382,6 +1306,7 @@ def build_command_registry():
     return {
         "get-info": (_build_get_info_parser(), _handle_get_info),
         "get-payment": (_build_get_payment_parser(), _handle_get_payment),
+        "fetch-lightning-send-status": (_build_fetch_lightning_send_status_parser(), _handle_fetch_lightning_send_status),
         "sync": (_build_sync_parser(), _handle_sync),
         "list-payments": (_build_list_payments_parser(), _handle_list_payments),
         "receive": (_build_receive_parser(), _handle_receive),
@@ -1398,8 +1323,6 @@ def build_command_registry():
         "refund-deposit": (_build_refund_deposit_parser(), _handle_refund_deposit),
         "list-unclaimed-deposits": (_build_list_unclaimed_deposits_parser(), _handle_list_unclaimed_deposits),
         "buy-bitcoin": (_build_buy_bitcoin_parser(), _handle_buy_bitcoin),
-        "bridge-from-cash-app": (_build_bridge_from_cash_app_parser(), _handle_bridge_from_cash_app),
-        "bridge-to-cash-app": (_build_bridge_to_cash_app_parser(), _handle_bridge_to_cash_app),
         "check-lightning-address-available": (_build_check_lightning_address_available_parser(), _handle_check_lightning_address_available),
         "get-lightning-address": (_build_get_lightning_address_parser(), _handle_get_lightning_address),
         "register-lightning-address": (_build_register_lightning_address_parser(), _handle_register_lightning_address),

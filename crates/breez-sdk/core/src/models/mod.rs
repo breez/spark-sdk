@@ -48,7 +48,7 @@ pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
 
 /// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
 /// passphrase or as raw entropy bytes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Seed {
     /// A BIP-39 mnemonic phrase with an optional passphrase.
@@ -60,6 +60,19 @@ pub enum Seed {
     },
     /// Raw entropy bytes.
     Entropy(Vec<u8>),
+}
+
+impl fmt::Debug for Seed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Seed::Mnemonic { passphrase, .. } => f
+                .debug_struct("Mnemonic")
+                .field("mnemonic", &"<redacted>")
+                .field("passphrase", &passphrase.as_ref().map(|_| "<redacted>"))
+                .finish(),
+            Seed::Entropy(_) => f.debug_tuple("Entropy").field(&"<redacted>").finish(),
+        }
+    }
 }
 
 impl Seed {
@@ -238,7 +251,8 @@ impl FromStr for PaymentMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Payment {
-    /// Unique identifier for the payment
+    /// Unique identifier for the payment. A second payment of the same invoice has a
+    /// different id.
     pub id: String,
     /// Type of payment (send or receive)
     pub payment_type: PaymentType,
@@ -402,7 +416,7 @@ pub enum PaymentDetails {
         conversion_info: Option<ConversionInfo>,
     },
     Token {
-        metadata: TokenMetadata,
+        metadata: PaymentTokenMetadata,
         tx_hash: String,
         tx_type: TokenTransactionType,
         /// The invoice details if the payment fulfilled a spark invoice
@@ -440,6 +454,10 @@ pub enum PaymentDetails {
     },
     Withdraw {
         tx_id: String,
+        /// The index of the withdrawal transaction's output that pays the
+        /// destination address.
+        vout: u32,
+        destination_address: String,
     },
     Deposit {
         tx_id: String,
@@ -883,6 +901,34 @@ pub struct CrossChainConfig {
     pub default_target_overpay_bps: Option<u32>,
 }
 
+impl CrossChainConfig {
+    pub(crate) fn validate(&self) -> Result<(), SdkError> {
+        if let Some(bps) = self.default_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
+        }
+        if let Some(bps) = self.default_target_overpay_bps
+            && !(crate::cross_chain::MIN_TARGET_OVERPAY_BPS
+                ..=crate::cross_chain::MAX_TARGET_OVERPAY_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "Default cross-chain target-overpay must be between {} and {} basis points, but got {bps}.",
+                crate::cross_chain::MIN_TARGET_OVERPAY_BPS,
+                crate::cross_chain::MAX_TARGET_OVERPAY_BPS,
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for leaf optimization.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1182,28 +1228,7 @@ impl Config {
                     self.network,
                 )));
             }
-            if let Some(bps) = cc.default_slippage_bps
-                && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
-                    ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
-                    .contains(&bps)
-            {
-                return Err(SdkError::InvalidInput(format!(
-                    "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
-                    crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
-                    crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-                )));
-            }
-            if let Some(bps) = cc.default_target_overpay_bps
-                && !(crate::cross_chain::MIN_TARGET_OVERPAY_BPS
-                    ..=crate::cross_chain::MAX_TARGET_OVERPAY_BPS)
-                    .contains(&bps)
-            {
-                return Err(SdkError::InvalidInput(format!(
-                    "Default cross-chain target-overpay must be between {} and {} basis points, but got {bps}.",
-                    crate::cross_chain::MIN_TARGET_OVERPAY_BPS,
-                    crate::cross_chain::MAX_TARGET_OVERPAY_BPS,
-                )));
-            }
+            cc.validate()?;
         }
 
         Ok(())
@@ -1636,15 +1661,16 @@ pub enum BuyBitcoinRequest {
         redirect_url: Option<String>,
     },
     /// `CashApp`: Pay via the Lightning Network.
-    /// Generates a bolt11 invoice for the given amount and returns a
-    /// `cash.app` deep link. Only available on mainnet.
+    /// Returns a `cash.app` deep link to a bolt11 invoice. A conversion
+    /// provider delivers the payment to the wallet over Spark, and the payer
+    /// pays its fee on top of the amount. Only available on mainnet.
     ///
     /// The amount is required. With an amountless invoice, Cash App only
     /// lets the payer fund from their existing Cash App BTC balance. With
     /// a fixed-amount invoice, Cash App opens up funding via fiat balance
     /// and debit card.
     CashApp {
-        /// Amount in satoshis for the Lightning invoice. Must be non-zero.
+        /// Amount in satoshis the wallet receives. Must be non-zero.
         amount_sats: u64,
     },
 }
@@ -1691,7 +1717,8 @@ impl Default for MoonpayDelivery {
 pub struct BuyBitcoinResponse {
     /// The URL to open in a browser to complete the purchase
     pub url: String,
-    /// The conversion quote, populated only for cross-chain delivery.
+    /// The conversion quote, populated for cross-chain delivery and for
+    /// `CashApp`, whose purchase is delivered through a conversion provider.
     pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
 }
 
@@ -1709,7 +1736,8 @@ pub struct RefundPendingConversionsResponse {
     pub failed: u32,
 }
 
-/// **Deprecated.** Use [`BridgeFromCashAppRequest`].
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_from_cash_app`.
 ///
 /// Request for a payment link that sends USDC/USDT to an external-chain
 /// recipient, funded by Cash App over Lightning.
@@ -1741,7 +1769,8 @@ pub struct PreparePaymentLinkRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
-/// **Deprecated.** Use [`BridgeFromCashAppResponse`].
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_from_cash_app`.
 ///
 /// Response to a [`PreparePaymentLinkRequest`]. Mirrors `BuyBitcoinResponse`
 /// (a payable `url`) plus the quote so the caller can display the expected
@@ -1771,6 +1800,9 @@ pub struct PreparePaymentLinkResponse {
     pub expires_at: String,
 }
 
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_from_cash_app`.
+///
 /// Request to bridge from Cash App to USDC/USDT on an external chain.
 ///
 /// The payer pays the returned URL in Cash App over Lightning, and the
@@ -1800,6 +1832,9 @@ pub struct BridgeFromCashAppRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_from_cash_app`.
+///
 /// Response to a [`BridgeFromCashAppRequest`]: the URL to pay plus the quote,
 /// so the caller can display the expected delivery and fees.
 #[derive(Debug, Clone, Serialize)]
@@ -1859,6 +1894,9 @@ impl From<BridgeFromCashAppResponse> for PreparePaymentLinkResponse {
     }
 }
 
+/// **Deprecated.** Use `CreateBridgeRequest` with the bridging client's
+/// `bridge_to_cash_app`.
+///
 /// Request to bridge USDC/USDT from an external chain to a Cash App user.
 ///
 /// The payer deposits the stablecoin to the returned address, and the
@@ -1892,6 +1930,9 @@ pub struct BridgeToCashAppRequest {
     pub max_slippage_bps: Option<u32>,
 }
 
+/// **Deprecated.** Use `CreateBridgeResponse`, from the bridging client's
+/// `bridge_to_cash_app`.
+///
 /// Response to a [`BridgeToCashAppRequest`].
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1999,6 +2040,39 @@ pub struct TokenMetadata {
     pub decimals: u32,
     pub max_supply: u128,
     pub is_freezable: bool,
+    /// Arbitrary data the issuer attached when creating the token, such as an icon or a JSON
+    /// description. Unset when the issuer attached none.
+    pub extra_metadata: Option<Vec<u8>>,
+}
+
+/// Metadata of the token a payment moved. The token's extra metadata is available from
+/// `get_tokens_metadata`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PaymentTokenMetadata {
+    pub identifier: String,
+    /// Hex representation of the issuer public key
+    pub issuer_public_key: String,
+    pub name: String,
+    pub ticker: String,
+    /// Number of decimals the token uses
+    pub decimals: u32,
+    pub max_supply: u128,
+    pub is_freezable: bool,
+}
+
+impl From<TokenMetadata> for PaymentTokenMetadata {
+    fn from(value: TokenMetadata) -> Self {
+        Self {
+            identifier: value.identifier,
+            issuer_public_key: value.issuer_public_key,
+            name: value.name,
+            ticker: value.ticker,
+            decimals: value.decimals,
+            max_supply: value.max_supply,
+            is_freezable: value.is_freezable,
+        }
+    }
 }
 
 /// Request to sync the wallet with the Spark network
@@ -2018,7 +2092,7 @@ pub struct SyncWalletResponse {
     pub last_synced_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
@@ -2055,6 +2129,13 @@ pub enum ReceivePaymentMethod {
         /// If absent, the connected wallet's identity public key is used.
         /// Another wallet's key cannot be combined with `payment_hash`.
         receiver_identity_public_key: Option<String>,
+        /// If set, creates an invoice for the hash of this preimage (hex-encoded)
+        /// instead of one the SDK generates. The SSP settles the payment without
+        /// the receiver, and the payer learns the preimage. Use a random value
+        /// below the secp256k1 group order, and a new one for each invoice. The
+        /// invoice never includes a Spark address. Set at most one of this and
+        /// `payment_hash`.
+        preimage: Option<String>,
         /// Who pays a partner fee on the invoice, when one applies.
         /// [`FeePolicy::FeesExcluded`] (the default) issues the invoice for
         /// `amount_sats` plus the fee, so the receiver keeps `amount_sats`.
@@ -2094,7 +2175,75 @@ pub enum ReceivePaymentMethod {
         /// then the built-in default (15 bps). Ignored when `fee_mode`
         /// is `FeesIncluded`.
         target_overpay_bps: Option<u32>,
+        /// The payer's address on the route's chain, where the provider returns
+        /// a deposit it can't deliver. Required when the payer sends from an
+        /// exchange, and advised for BSC and Tron: unset, the provider refunds
+        /// the sending address only when that is safe, and otherwise holds the
+        /// deposit for manual recovery. Must not be a token contract.
+        refund_address: Option<String>,
     },
+}
+
+impl fmt::Debug for ReceivePaymentMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReceivePaymentMethod::SparkAddress => f.write_str("SparkAddress"),
+            ReceivePaymentMethod::SparkInvoice {
+                amount,
+                token_identifier,
+                expiry_time,
+                description,
+                sender_public_key,
+            } => f
+                .debug_struct("SparkInvoice")
+                .field("amount", amount)
+                .field("token_identifier", token_identifier)
+                .field("expiry_time", expiry_time)
+                .field("description", description)
+                .field("sender_public_key", sender_public_key)
+                .finish(),
+            ReceivePaymentMethod::BitcoinAddress { new_address } => f
+                .debug_struct("BitcoinAddress")
+                .field("new_address", new_address)
+                .finish(),
+            ReceivePaymentMethod::Bolt11Invoice {
+                description,
+                amount_sats,
+                expiry_secs,
+                payment_hash,
+                receiver_identity_public_key,
+                preimage,
+                fee_policy,
+            } => f
+                .debug_struct("Bolt11Invoice")
+                .field("description", description)
+                .field("amount_sats", amount_sats)
+                .field("expiry_secs", expiry_secs)
+                .field("payment_hash", payment_hash)
+                .field("receiver_identity_public_key", receiver_identity_public_key)
+                .field("preimage", &preimage.as_ref().map(|_| "<redacted>"))
+                .field("fee_policy", fee_policy)
+                .finish(),
+            ReceivePaymentMethod::CrossChain {
+                route,
+                amount,
+                destination,
+                fee_mode,
+                max_slippage_bps,
+                target_overpay_bps,
+                refund_address,
+            } => f
+                .debug_struct("CrossChain")
+                .field("route", route)
+                .field("amount", amount)
+                .field("destination", destination)
+                .field("fee_mode", fee_mode)
+                .field("max_slippage_bps", max_slippage_bps)
+                .field("target_overpay_bps", target_overpay_bps)
+                .field("refund_address", refund_address)
+                .finish(),
+        }
+    }
 }
 
 /// A fee quote the Lightning service provider signed for paying a specific
@@ -2312,7 +2461,7 @@ pub struct LnurlPayRequest {
     pub prepare_response: PrepareLnurlPayResponse,
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
-    /// The idempotency key must be a valid UUID.
+    /// The idempotency key must be a valid UUID. The payment's id is the idempotency key.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
 }
@@ -2680,7 +2829,7 @@ pub struct SendPaymentRequest {
     /// and cross-chain sends).
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
-    /// The idempotency key must be a valid UUID.
+    /// The idempotency key must be a valid UUID. The payment's id is the idempotency key.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
 }
@@ -2901,6 +3050,33 @@ pub struct GetPaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetPaymentResponse {
     pub payment: Payment,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchLightningSendStatusRequest {
+    /// The Bolt11 invoice to look up
+    pub invoice: String,
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FetchLightningSendStatusResponse {
+    /// The status of this wallet's Lightning payments of the invoice: completed if one completed,
+    /// pending if one is in flight, failed if every one was returned. Unset when there is none.
+    /// A payment made by a direct Spark transfer to the invoice's Spark address is not found, so
+    /// unset does not mean the invoice is unpaid.
+    pub status: Option<PaymentStatus>,
+    /// The hex-encoded preimage that proves the payment, set when the status is completed
+    pub preimage: Option<String>,
+}
+
+impl fmt::Debug for FetchLightningSendStatusResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FetchLightningSendStatusResponse")
+            .field("status", &self.status)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
@@ -3162,6 +3338,9 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+    /// The Lightning address the payment was received on. Unset for some payments received
+    /// before the LNURL server recorded addresses.
+    pub lightning_address: Option<String>,
 }
 
 /// Mode of a manually-triggered optimization run.
@@ -3387,11 +3566,26 @@ pub enum CpfpFundingKind {
     },
 }
 
+/// How funding UTXOs pay a unilateral exit's CPFP children.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CpfpFundingStrategy {
+    /// One UTXO per branch. Each child after the first spends the change of the
+    /// one before it, so a child's inputs depend on the fee rate of every child
+    /// above it.
+    #[default]
+    PerBranch,
+    /// One UTXO per fee-bumped transaction. No child spends another's output,
+    /// so each can be signed at any fee rate without knowing the others. Each
+    /// child's change stays on the funding script rather than being swept.
+    PerNode,
+}
+
 /// Which leaves to recover. `All` and `RecoverableOnly` take a leaf only when
 /// what is left of its funds exceeds what recovering it costs. That cost leaves
-/// out the shared fan-out fee, so funding several unilateral exits from one UTXO
-/// adds `fanout_fee_sats` on top: compare `recoverable_value_sats` with
-/// `total_fee_sats`, or fund one UTXO per branch to avoid the fan-out.
+/// out the shared fan-out fee, which you also pay when you fund several
+/// `funding.per_branch` entries from one UTXO: compare `recoverable_value_sats`
+/// with `total_fee_sats`, or fund one UTXO per entry to avoid the fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ExitLeafSelection {
@@ -3439,13 +3633,14 @@ pub enum ExitTransactionStatus {
     Unverified,
 }
 
-/// How much to fund one branch of the exit to avoid a fan-out.
+/// How much one funding UTXO must hold to avoid a fan-out: for a branch of the
+/// exit, or under `CpfpFundingStrategy::PerNode` for one transaction of it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PerBranchFunding {
     /// The leaf whose branch this funds.
     pub leaf_id: String,
-    /// Fund a UTXO of at least this many satoshis for this branch.
+    /// Fund a UTXO of at least this many satoshis.
     pub funding_sats: u64,
 }
 
@@ -3572,6 +3767,10 @@ pub struct PrepareRecoverFundsRequest {
     /// transaction of a unilateral exit in the quote has a CPFP child.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub funding_kind: Option<CpfpFundingKind>,
+    /// How the funding UTXOs pay a unilateral exit's CPFP children. Unset funds
+    /// one UTXO per branch.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub funding_strategy: Option<CpfpFundingStrategy>,
     /// The Bitcoin address the recovered funds are sent to.
     pub destination: String,
     pub selection: ExitLeafSelection,
@@ -3597,8 +3796,8 @@ pub struct PrepareRecoverFundsResponse {
     pub cooperative_fee_sats: u64,
     /// Paid by the CPFP children, from your funding UTXOs.
     pub cpfp_fee_sats: u64,
-    /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per branch
-    /// (`funding.per_branch`) avoids it.
+    /// Paid by the fan-out, from your funding UTXO. Funding one UTXO per
+    /// `funding.per_branch` entry avoids it.
     pub fanout_fee_sats: u64,
     /// Paid from the unilateral leaves' own value before the sweep: each leaf's
     /// value less what its refund passes to the sweep. The output of a direct
@@ -3624,11 +3823,16 @@ pub struct PrepareRecoverFundsResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RecoveryFunding {
     /// Fund a single UTXO of at least this many satoshis, which a fan-out
-    /// splits over the branches.
+    /// splits over the `per_branch` entries.
     pub single_utxo_sats: u64,
-    /// To skip the fan-out, fund one UTXO per branch of at least the given
-    /// amount.
+    /// To skip the fan-out, fund one UTXO per entry of at least its amount, in
+    /// any order. An entry is a branch, or under `CpfpFundingStrategy::PerNode`
+    /// one transaction of a branch, so a leaf can have several.
     pub per_branch: Vec<PerBranchFunding>,
+    /// The strategy the amounts were computed for, which `recover_funds` builds
+    /// with.
+    #[serde(default)]
+    pub strategy: CpfpFundingStrategy,
 }
 
 /// A leaf the selection covers that `prepare_recover_funds` leaves out of the
@@ -3691,7 +3895,7 @@ pub enum RecoveryMethod {
 pub struct RecoverFundsRequest {
     pub prepared: PrepareRecoverFundsResponse,
     /// UTXOs that meet the quote's `funding`: one of at least `single_utxo_sats`,
-    /// or one per branch. Not needed when the quote has no `funding`.
+    /// or one per `per_branch` entry. Not needed when the quote has no `funding`.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub funding_inputs: Vec<CpfpInput>,
 }
@@ -3766,8 +3970,10 @@ pub enum RecoveryTxKind {
     /// operators. Pays its fee from the leaf's value: no CPFP child, no
     /// dependencies, no timelock.
     Cooperative,
-    /// Splits the caller's funding into one output per branch. Present only
-    /// when the funding couldn't be matched one-to-one to branches.
+    /// Splits the caller's funding into one output per `funding.per_branch`
+    /// entry: per branch, or under `CpfpFundingStrategy::PerNode` per
+    /// transaction. Present only when the funding couldn't be matched
+    /// one-to-one to the entries.
     FanOut,
     /// A tree node transaction (root, intermediate, or leaf node).
     Node,
@@ -3828,6 +4034,59 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn seed_debug_redacts_secrets() {
+        let mnemonic = Seed::Mnemonic {
+            mnemonic: "abandon ability able".to_string(),
+            passphrase: Some("hunter2".to_string()),
+        };
+        let rendered = format!("{mnemonic:?}");
+        assert!(!rendered.contains("abandon"), "{rendered}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+
+        let entropy = format!("{:?}", Seed::Entropy(vec![0xab; 16]));
+        assert!(!entropy.contains("171"), "{entropy}");
+    }
+
+    #[test_all]
+    fn debug_fmt_redacts_the_preimage_of_a_bolt11_receive() {
+        let preimage = "ab".repeat(32);
+        let method = ReceivePaymentMethod::Bolt11Invoice {
+            description: "test".to_string(),
+            amount_sats: Some(1_000),
+            expiry_secs: None,
+            payment_hash: None,
+            receiver_identity_public_key: None,
+            preimage: Some(preimage.clone()),
+            fee_policy: None,
+        };
+
+        let written = format!("{method:?}");
+
+        assert!(
+            written.contains(r#"preimage: Some("<redacted>")"#),
+            "{written}"
+        );
+        assert!(!written.contains(&preimage), "{written}");
+    }
+
+    #[test_all]
+    fn debug_fmt_redacts_the_preimage_of_a_lightning_send_status() {
+        let preimage = "ab".repeat(32);
+        let response = FetchLightningSendStatusResponse {
+            status: Some(PaymentStatus::Completed),
+            preimage: Some(preimage.clone()),
+        };
+
+        let written = format!("{response:?}");
+
+        assert!(
+            written.contains(r#"preimage: Some("<redacted>")"#),
+            "{written}"
+        );
+        assert!(!written.contains(&preimage), "{written}");
+    }
 
     #[test_all]
     fn payment_link_types_map_to_bridge_from_cash_app() {
@@ -3920,6 +4179,7 @@ mod tests {
             estimated_out: 990_000,
             delivered_amount: Some(990_000),
             external_tx_hash: None,
+            refund_tx_hash: None,
             status: ConversionStatus::Completed,
             fee_amount: Some(10_000),
             service_fee_amount: None,
@@ -4010,5 +4270,23 @@ mod tests {
             serde_json::to_string(&without_ppm).unwrap(),
             r#"{"Rate":{"sat_per_vbyte":2}}"#
         );
+    }
+
+    #[test_all]
+    fn recovery_funding_without_a_strategy_reads_as_per_branch() {
+        // A quote is held while its funding is gathered, so one stored before the
+        // field existed still has to read back, as the funding it always was.
+        let stored =
+            r#"{"single_utxo_sats":5000,"per_branch":[{"leaf_id":"a","funding_sats":5000}]}"#;
+        let funding: RecoveryFunding = serde_json::from_str(stored).unwrap();
+        assert_eq!(funding.strategy, CpfpFundingStrategy::PerBranch);
+
+        let per_node = RecoveryFunding {
+            strategy: CpfpFundingStrategy::PerNode,
+            ..funding
+        };
+        let round_trip: RecoveryFunding =
+            serde_json::from_str(&serde_json::to_string(&per_node).unwrap()).unwrap();
+        assert_eq!(round_trip.strategy, CpfpFundingStrategy::PerNode);
     }
 }

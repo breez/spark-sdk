@@ -383,7 +383,7 @@ class PostgresTokenStore {
           const metadata = _metadataFor(tokenOutputs.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;
@@ -424,7 +424,7 @@ class PostgresTokenStore {
       const result = await this.pool.query(
         `
         SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-               m.max_supply, m.is_freezable, m.creation_entity_public_key,
+               m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                COALESCE(SUM(
                  CASE
                    WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
@@ -439,7 +439,8 @@ class PostgresTokenStore {
           ON o.reservation_id = r.id AND o.user_id = r.user_id
         WHERE m.user_id = $1
         GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                 m.extra_metadata
       `,
         [this.identity]
       );
@@ -453,6 +454,9 @@ class PostgresTokenStore {
           maxSupply: row.max_supply,
           isFreezable: row.is_freezable,
           creationEntityPublicKey: row.creation_entity_public_key,
+          extraMetadata: row.extra_metadata
+            ? Array.from(row.extra_metadata)
+            : null,
         },
         balance: row.balance,
       }));
@@ -468,7 +472,7 @@ class PostgresTokenStore {
     try {
       const result = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                 o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
@@ -545,7 +549,7 @@ class PostgresTokenStore {
 
       const result = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key, m.extra_metadata,
                 o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
@@ -629,30 +633,25 @@ class PostgresTokenStore {
         }
 
         // 2. Insert new outputs, grouped by the token each one names.
-        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+        const spentOutpoints = await this._spentOutpointsAmong(
+          client,
           outputsToAdd?.outputs
+        );
+        const unspentOutputs = (outputsToAdd?.outputs ?? []).filter(
+          (o) => !spentOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+        );
+        for (const [tokenIdentifier, outputs] of _groupOutputsByToken(
+          unspentOutputs
         )) {
           const metadata = _metadataFor(outputsToAdd.metadata, tokenIdentifier);
           if (!metadata) {
             this._log(
-              "warn",
+              "WARN",
               `Skipping outputs of token ${tokenIdentifier}: no metadata provided`
             );
             continue;
           }
           await this._upsertMetadata(client, metadata);
-
-          // Clear spent status for outputs being (re-)added.
-          const txHashes = outputs.map((o) => o.prevTxHash);
-          const vouts = outputs.map((o) => o.prevTxVout);
-          await client.query(
-            `DELETE FROM brz_token_spent_outputs
-             WHERE user_id = $1
-               AND (prev_tx_hash, prev_tx_vout) IN (
-                 SELECT * FROM UNNEST($2::text[], $3::int[])
-               )`,
-            [this.identity, txHashes, vouts]
-          );
 
           for (const output of outputs) {
             await this._insertSingleOutput(client, tokenIdentifier, output);
@@ -1010,9 +1009,7 @@ class PostgresTokenStore {
   // ===== Private Helpers =====
 
   _log(level, message) {
-    if (this.logger && typeof this.logger.log === "function") {
-      this.logger.log({ line: message, level });
-    }
+    this.logger?.log({ line: message, level });
   }
 
   /**
@@ -1181,8 +1178,8 @@ class PostgresTokenStore {
     await client.query(
       `INSERT INTO brz_token_metadata
         (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
-         is_freezable, creation_entity_public_key)
-       VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
+         is_freezable, creation_entity_public_key, extra_metadata)
+       VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8, $10)
        ON CONFLICT (user_id, identifier) DO UPDATE SET
          issuer_public_key = EXCLUDED.issuer_public_key,
          name = EXCLUDED.name,
@@ -1190,7 +1187,8 @@ class PostgresTokenStore {
          decimals = EXCLUDED.decimals,
          max_supply = EXCLUDED.max_supply,
          is_freezable = EXCLUDED.is_freezable,
-         creation_entity_public_key = EXCLUDED.creation_entity_public_key`,
+         creation_entity_public_key = EXCLUDED.creation_entity_public_key,
+         extra_metadata = EXCLUDED.extra_metadata`,
       [
         metadata.identifier,
         metadata.issuerPublicKey,
@@ -1201,7 +1199,29 @@ class PostgresTokenStore {
         metadata.isFreezable,
         metadata.creationEntityPublicKey || null,
         this.identity,
+        metadata.extraMetadata ? Buffer.from(metadata.extraMetadata) : null,
       ]
+    );
+  }
+
+  async _spentOutpointsAmong(client, outputs) {
+    if (!outputs || outputs.length === 0) {
+      return new Set();
+    }
+    const result = await client.query(
+      `SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs
+       WHERE user_id = $1
+         AND (prev_tx_hash, prev_tx_vout) IN (
+           SELECT * FROM UNNEST($2::text[], $3::int[])
+         )`,
+      [
+        this.identity,
+        outputs.map((o) => o.prevTxHash),
+        outputs.map((o) => o.prevTxVout),
+      ]
+    );
+    return new Set(
+      result.rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
     );
   }
 
@@ -1244,6 +1264,7 @@ class PostgresTokenStore {
       maxSupply: row.max_supply,
       isFreezable: row.is_freezable,
       creationEntityPublicKey: row.creation_entity_public_key || null,
+      extraMetadata: row.extra_metadata ? Array.from(row.extra_metadata) : null,
     };
   }
 

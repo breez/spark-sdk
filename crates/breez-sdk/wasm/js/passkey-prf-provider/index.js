@@ -482,6 +482,7 @@ export class PasskeyProvider {
             } else {
                 // Surface the fallback: silently using standard mediation
                 // hides why a single-CTA probe still shows a sheet.
+                // eslint-disable-next-line no-console
                 console.debug('breez-sdk: preferImmediatelyAvailableCredentials set but immediate UI mode is unsupported by this browser; using standard mediation');
             }
         }

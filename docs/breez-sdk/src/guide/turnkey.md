@@ -22,7 +22,7 @@ A few notes on the configuration:
 
 Server deployments often build a fresh SDK instance per request. Setting {{#name identity_public_key}} makes the signer setup network-free. Obtain it once from a freshly built signer with {{#name get_identity_public_key}} (available right after {{#name create_turnkey_signer}}, no connect needed), or from {{#name identity_pubkey}} on {{#name get_info}} if you already have a connected SDK. Store it alongside the wallet and pass it in the config on later connects. It is a stable, non-secret value, but it must belong to the same wallet.
 
-Without it, every signer setup also asks Turnkey to create the wallet's identity accounts. Once they exist, Turnkey records these requests as failed activities (the path already exists in the wallet account). The failures are expected and harmless, and setting {{#name identity_public_key}} avoids them.
+Without it, every signer setup looks up the wallet's identity accounts in Turnkey and creates any that are missing.
 
 ### Wallets under a deny-export policy
 

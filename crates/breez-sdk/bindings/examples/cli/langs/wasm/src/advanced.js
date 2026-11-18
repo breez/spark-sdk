@@ -34,6 +34,17 @@ async function questionWithDefault(rl, prompt, defaultVal) {
 }
 
 /**
+ * Map CLI funding-strategy names to WASM enum variant types.
+ */
+function fundingStrategyType(strategy) {
+  switch (strategy) {
+    case 'per-branch': return 'perBranch'
+    case 'per-node': return 'perNode'
+    default: throw new Error(`Unknown funding strategy '${strategy}', expected per-branch or per-node`)
+  }
+}
+
+/**
  * Parse a `txid:vout:value:pubkey` funding UTXO string into a CpfpInput
  * of the given kind.
  *
@@ -173,6 +184,7 @@ function registerAdvancedCommands(program, getSdk, rl) {
     .description('Recover the funds that left the balance, or with --all every leaf. Quotes the recovery (which leaves, how each is recovered, the fees, how much to fund), asks for funding UTXOs and their key when a unilateral exit needs them, and signs it once you confirm. A cooperative recovery needs the operators online')
     .requiredOption('--fee-rate <rate>', 'Target fee rate in sat/vByte', parseInt)
     .option('--funding-kind <kind>', 'Funding UTXO kind (p2wpkh or p2tr)', 'p2tr')
+    .option('--funding-strategy <strategy>', 'Fund one UTXO per branch, or one per fee-bumped transaction (per-branch or per-node)', 'per-branch')
     .requiredOption('--destination <address>', 'Destination address for the recovered funds')
     .option('--all', 'Recover every leaf worth it, including the ones still in the balance. Only for when the operators are unreachable or refuse to serve the wallet')
     .option('--leaf <ids...>', 'Leaf id(s) to recover (omit to recover the leaves that left the balance)')
@@ -186,6 +198,7 @@ function registerAdvancedCommands(program, getSdk, rl) {
       const request = {
         feeRateSatPerVbyte: options.feeRate,
         fundingKind: { type: options.fundingKind },
+        fundingStrategy: { type: fundingStrategyType(options.fundingStrategy) },
         destination: options.destination,
         selection: recoverySelection(options.all, leafIds)
       }

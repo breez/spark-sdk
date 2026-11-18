@@ -5,6 +5,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'advanced.dart';
+import 'bridging.dart';
 import 'commands.dart';
 import 'contacts.dart';
 import 'issuer.dart';
@@ -13,6 +14,7 @@ import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
 import 'stable_balance.dart';
+import 'token_allowances.dart';
 import 'webhooks.dart';
 
 /// Parses `HOST:PORT` into a [ProxyConfig]. Splits from the right so an IPv6
@@ -46,6 +48,7 @@ Future<void> runCli({
   CliPasskeyConfig? passkeyConfig,
   bool serverMode = false,
   String? lnurlDomain,
+  String? realTimeSyncServerUrl,
   ProxyConfig? proxy,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
@@ -95,6 +98,10 @@ Future<void> runCli({
 
   if (lnurlDomain != null) {
     config = config.copyWith(lnurlDomain: lnurlDomain);
+  }
+
+  if (realTimeSyncServerUrl != null) {
+    config = config.copyWith(realTimeSyncServerUrl: realTimeSyncServerUrl);
   }
 
   if (proxy != null) {
@@ -188,10 +195,12 @@ Future<void> _runRepl(
   final allCommands = [
     ...commandNames,
     ...advancedCommandNames,
+    ...bridgingCommandNames,
     ...issuerCommandNames,
     ...contactsCommandNames,
     ...webhookCommandNames,
     ...stableBalanceCommandNames,
+    ...tokenAllowanceCommandNames,
     'exit',
     'quit',
     'help',
@@ -223,6 +232,8 @@ Future<void> _runRepl(
 
       if (cmdName == 'advanced') {
         await dispatchAdvancedCommand(cmdArgs, sdk);
+      } else if (cmdName == 'bridging') {
+        await dispatchBridgingCommand(cmdArgs, sdk);
       } else if (cmdName == 'issuer') {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer);
       } else if (cmdName == 'contacts') {
@@ -231,6 +242,8 @@ Future<void> _runRepl(
         await dispatchWebhookCommand(cmdArgs, sdk);
       } else if (cmdName == 'stable-balance') {
         await dispatchStableBalanceCommand(cmdArgs, sdk);
+      } else if (cmdName == 'token-allowances') {
+        await dispatchTokenAllowanceCommand(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -266,6 +279,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
     '  ${'advanced <subcommand>'.padRight(40)} Expert-only commands (use \'advanced help\' for details)',
   );
   stdout.writeln(
+    '  ${'bridging <subcommand>'.padRight(40)} Bridging commands (use \'bridging help\' for details)',
+  );
+  stdout.writeln(
     '  ${'issuer <subcommand>'.padRight(40)} Token issuer commands (use \'issuer help\' for details)',
   );
   stdout.writeln(
@@ -276,6 +292,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   );
   stdout.writeln(
     '  ${'stable-balance <subcommand>'.padRight(40)} Stable balance commands (use \'stable-balance help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'token-allowances <subcommand>'.padRight(40)} Token allowance commands (use \'token-allowances help\' for details)',
   );
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');

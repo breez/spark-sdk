@@ -37,6 +37,7 @@ async fn invoice(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: None,
+                preimage: None,
                 fee_policy,
             },
         })
@@ -547,6 +548,7 @@ async fn a_receive_quoted_for_another_wallet_completes_for_its_payee(
                 expiry_secs: None,
                 payment_hash: None,
                 receiver_identity_public_key: Some(payee_key),
+                preimage: None,
                 fee_policy: None,
             },
         })
@@ -579,6 +581,7 @@ async fn a_quoted_hodl_receive_is_claimed_by_its_payee(
                 expiry_secs: None,
                 payment_hash: Some(payment_hash),
                 receiver_identity_public_key: None,
+                preimage: None,
                 fee_policy: None,
             },
         })
@@ -657,6 +660,7 @@ async fn a_hodl_receive_for_another_wallet_is_rejected(dev: &DevEnv) -> Result<(
                 expiry_secs: None,
                 payment_hash: Some(payment_hash),
                 receiver_identity_public_key: Some(payee_key),
+                preimage: None,
                 fee_policy: None,
             },
         })

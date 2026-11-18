@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sqlx::PgPool;
+use deadpool_postgres::Pool;
 use testcontainers::{ContainerAsync, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 
@@ -12,7 +12,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 const ATTEMPTS: u32 = 3;
 
 pub(crate) struct TestDatabase {
-    pub(crate) pool: Arc<PgPool>,
+    pub(crate) pool: Arc<Pool>,
     _postgres: ContainerAsync<Postgres>,
 }
 
@@ -33,7 +33,7 @@ impl TestDatabase {
         let postgres = Postgres::default().start().await?;
         let port = postgres.get_host_port_ipv4(5432).await?;
         let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-        let pool = Arc::new(PgPool::connect(&url).await?);
+        let pool = Arc::new(super::connect(&url, 10).await?);
         super::migrate(&pool).await?;
         Ok(Self {
             pool,

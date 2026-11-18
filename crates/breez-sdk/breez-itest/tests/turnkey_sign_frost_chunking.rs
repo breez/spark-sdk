@@ -69,6 +69,7 @@ fn build_jobs(n: usize) -> Vec<ExternalFrostJob> {
             verifying_key: verifying_key.clone(),
             operator_commitments: operator_commitments.clone(),
             adaptor_public_key: None,
+            adaptor_v2: false,
         })
         .collect()
 }

@@ -1,6 +1,7 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
@@ -11,6 +12,8 @@ use crate::token::{
     TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
     select_token_outputs_from,
 };
+
+const SPENT_MARKER_CLEANUP_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Default)]
 pub struct InMemoryTokenOutputStore {
@@ -71,8 +74,6 @@ pub(crate) struct TokenOutputsState {
     /// Each value maps an `OutPoint` to its StoredTokenOutput for timestamp tracking.
     available_token_outputs: HashMap<String, AvailableTokenOutputs>,
     reservations: HashMap<TokenOutputsReservationId, TokenOutputsEntry>,
-    /// Outpoints that have been finalized (spent) with their spent timestamp.
-    /// Prevents re-adding during refresh. Cleaned up when entry is older than refresh_started_at.
     spent_outpoints: HashMap<OutPoint, SystemTime>,
     /// Timestamp of when the most recent swap finalization completed.
     /// Used to detect if a refresh started before a swap finished.
@@ -153,17 +154,24 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             return Ok(());
         }
 
-        // Remove spent entries that operators have had time to process
+        let cleanup_cutoff = refresh_started_at
+            .checked_sub(SPENT_MARKER_CLEANUP_THRESHOLD)
+            .unwrap_or(refresh_started_at);
         state
             .spent_outpoints
-            .retain(|_, spent_at| *spent_at >= refresh_started_at);
+            .retain(|_, spent_at| *spent_at >= cleanup_cutoff);
 
         // Save old pools before replacing
         let old_available = std::mem::take(&mut state.available_token_outputs);
 
         // Build new pools from refresh data, excluding spent outputs
         let now = SystemTime::now();
-        let spent_outpoints: HashSet<OutPoint> = state.spent_outpoints.keys().cloned().collect();
+        let spent_outpoints: HashSet<OutPoint> = state
+            .spent_outpoints
+            .iter()
+            .filter(|(_, spent_at)| **spent_at >= refresh_started_at)
+            .map(|(outpoint, _)| outpoint.clone())
+            .collect();
         for output in &token_outputs.outputs {
             let identifier = &output.output.token_identifier;
             let Some(metadata) = token_outputs.metadata_for(identifier) else {
@@ -377,13 +385,33 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         }
 
         // 2. Insert new outputs, each filed under its own token.
+        let state = &mut *state;
+        let reserved_outpoints: HashSet<(&str, u32)> = if outputs_to_add.outputs.is_empty() {
+            HashSet::new()
+        } else {
+            state
+                .reservations
+                .values()
+                .flat_map(|entry| entry.stored_outputs.iter())
+                .map(|stored| {
+                    (
+                        stored.output.prev_tx_hash.as_str(),
+                        stored.output.prev_tx_vout,
+                    )
+                })
+                .collect()
+        };
+        let mut inserted = 0usize;
         for output in &outputs_to_add.outputs {
             let outpoint = outpoint_of(output);
-            if state.spent_outpoints.remove(&outpoint).is_some() {
+            if reserved_outpoints.contains(&(output.prev_tx_hash.as_str(), output.prev_tx_vout))
+                || state.spent_outpoints.contains_key(&outpoint)
+            {
                 trace!(
-                    "Removed outpoint {}:{} from spent_outpoints (receiving it back)",
+                    "Skipping outpoint {}:{}: it is reserved or spent",
                     outpoint.0, outpoint.1
                 );
+                continue;
             }
 
             let identifier = &output.output.token_identifier;
@@ -391,26 +419,24 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 warn!("No metadata for token {identifier}; skipping output");
                 continue;
             };
-            state
+            let pool = state
                 .available_token_outputs
                 .entry(identifier.clone())
                 .or_insert_with(|| AvailableTokenOutputs {
                     metadata: metadata.clone(),
                     outputs: HashMap::new(),
-                })
-                .outputs
-                .entry(outpoint)
-                .or_insert_with(|| StoredTokenOutput {
+                });
+            if let Entry::Vacant(entry) = pool.outputs.entry(outpoint) {
+                entry.insert(StoredTokenOutput {
                     output: output.clone(),
                     added_at: now,
                 });
+                inserted += 1;
+            }
         }
 
-        if !outputs_to_add.outputs.is_empty() {
-            trace!(
-                "Inserted {} token outputs into the local state",
-                outputs_to_add.outputs.len()
-            );
+        if inserted > 0 {
+            trace!("Inserted {} token outputs into the local state", inserted);
         }
 
         if !outputs_to_remove.is_empty() {
