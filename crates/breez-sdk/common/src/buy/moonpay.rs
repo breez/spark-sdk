@@ -1,7 +1,13 @@
-use std::sync::Arc;
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+    sync::Arc,
+};
 
 use crate::{breez_server::BreezServer, grpc::SignUrlRequest};
 use anyhow::Result;
+use platform_utils::{HttpClient, time::Duration, tokio::time::timeout};
+use tracing::{debug, warn};
 use url::Url;
 
 #[derive(Clone)]
@@ -28,6 +34,10 @@ const CURRENCY_USDC_SOLANA: &str = "usdc_sol";
 
 /// Decimal places `MoonPay` quotes `usdc_sol` amounts in.
 pub const USDC_SOLANA_PRECISION: u32 = 2;
+
+const IPV4_LOOKUP_URL: &str = "https://wimi4.breez.technology";
+const IPV6_LOOKUP_URL: &str = "https://wimi6.breez.technology";
+const IP_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn create_moonpay_url(
     currency_code: &str,
@@ -65,6 +75,31 @@ fn create_moonpay_url(
 
 pub struct MoonpayProvider {
     breez_server: Arc<BreezServer>,
+    http_client: Arc<dyn HttpClient>,
+    identity_pubkey: String,
+}
+
+async fn lookup_ip<T: FromStr>(http_client: &dyn HttpClient, url: &str) -> Option<T> {
+    let response = match timeout(IP_LOOKUP_TIMEOUT, http_client.get(url.to_string(), None)).await {
+        Ok(Ok(response)) if response.is_success() => response,
+        Ok(Ok(response)) => {
+            debug!("IP lookup at {url} returned status {}", response.status);
+            return None;
+        }
+        Ok(Err(e)) => {
+            debug!("IP lookup at {url} failed: {e}");
+            return None;
+        }
+        Err(_) => {
+            debug!("IP lookup at {url} timed out");
+            return None;
+        }
+    };
+    let ip = response.body.trim().parse().ok();
+    if ip.is_none() {
+        debug!("IP lookup at {url} returned an invalid address");
+    }
+    ip
 }
 
 /// Formats `amount` (base units at `decimals`) as a decimal string with
@@ -89,8 +124,16 @@ fn format_decimal_amount(amount: u128, decimals: u32, precision: u32) -> String 
 }
 
 impl MoonpayProvider {
-    pub fn new(breez_server: Arc<BreezServer>) -> Self {
-        Self { breez_server }
+    pub fn new(
+        breez_server: Arc<BreezServer>,
+        http_client: Arc<dyn HttpClient>,
+        identity_pubkey: String,
+    ) -> Self {
+        Self {
+            breez_server,
+            http_client,
+            identity_pubkey,
+        }
     }
 
     pub async fn buy_bitcoin(
@@ -136,11 +179,22 @@ impl MoonpayProvider {
 
     async fn sign(&self, url: &Url) -> Result<String> {
         let config = moonpay_config();
-        let mut signer = self.breez_server.get_signer_client().await;
+        let (ipv4, ipv6) = futures::future::join(
+            lookup_ip::<Ipv4Addr>(self.http_client.as_ref(), IPV4_LOOKUP_URL),
+            lookup_ip::<Ipv6Addr>(self.http_client.as_ref(), IPV6_LOOKUP_URL),
+        )
+        .await;
+        if ipv4.is_none() && ipv6.is_none() {
+            warn!("Signing MoonPay URL without a client IP address");
+        }
+        let mut signer = self.breez_server.get_signer_client().await?;
         let signed_url = signer
             .sign_url(SignUrlRequest {
                 base_url: config.base_url.clone(),
                 query_string: format!("?{}", url.query().unwrap()),
+                ipv4: ipv4.map(|ip| ip.to_string()).unwrap_or_default(),
+                ipv6: ipv6.map(|ip| ip.to_string()).unwrap_or_default(),
+                pubkey: self.identity_pubkey.clone(),
             })
             .await?
             .into_inner()
@@ -152,11 +206,17 @@ impl MoonpayProvider {
 #[cfg(test)]
 pub(crate) mod tests {
     use macros::async_test_all;
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        net::{Ipv4Addr, Ipv6Addr},
+    };
 
-    use crate::buy::moonpay::{
-        CURRENCY_BTC, CURRENCY_USDC_SOLANA, create_moonpay_url, format_decimal_amount,
-        moonpay_config,
+    use crate::{
+        buy::moonpay::{
+            CURRENCY_BTC, CURRENCY_USDC_SOLANA, create_moonpay_url, format_decimal_amount,
+            lookup_ip, moonpay_config,
+        },
+        test_utils::mock_rest_client::{MockResponse, MockRestClient},
     };
 
     #[cfg(feature = "browser-tests")]
@@ -238,6 +298,49 @@ pub(crate) mod tests {
         assert_eq!(query_pairs.get("walletAddress"), Some(&wallet_address));
         assert_eq!(query_pairs.get("quoteCurrencyAmount"), Some(&quote_amount));
         Ok(())
+    }
+
+    async fn lookup_with<T: std::str::FromStr>(response: Option<MockResponse>) -> Option<T> {
+        let client = MockRestClient::new();
+        if let Some(response) = response {
+            client.add_response(response);
+        }
+        lookup_ip(&client, "https://ip.lookup").await
+    }
+
+    #[async_test_all]
+    async fn test_lookup_ip() {
+        assert_eq!(
+            lookup_with::<Ipv4Addr>(Some(MockResponse::new(200, "203.0.113.7\n".to_string())))
+                .await,
+            Some(Ipv4Addr::new(203, 0, 113, 7))
+        );
+        assert_eq!(
+            lookup_with::<Ipv6Addr>(Some(MockResponse::new(200, "2001:db8::1".to_string()))).await,
+            Some("2001:db8::1".parse().unwrap())
+        );
+    }
+
+    #[async_test_all]
+    async fn test_lookup_ip_unavailable() {
+        assert_eq!(lookup_with::<Ipv4Addr>(None).await, None);
+        assert_eq!(
+            lookup_with::<Ipv4Addr>(Some(MockResponse::new(503, "203.0.113.7".to_string()))).await,
+            None
+        );
+        assert_eq!(
+            lookup_with::<Ipv4Addr>(Some(MockResponse::new(200, "<html></html>".to_string())))
+                .await,
+            None
+        );
+        assert_eq!(
+            lookup_with::<Ipv4Addr>(Some(MockResponse::new(200, "2001:db8::1".to_string()))).await,
+            None
+        );
+        assert_eq!(
+            lookup_with::<Ipv6Addr>(Some(MockResponse::new(200, "203.0.113.7".to_string()))).await,
+            None
+        );
     }
 
     #[async_test_all]

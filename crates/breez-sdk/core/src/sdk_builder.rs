@@ -589,7 +589,11 @@ impl SdkBuilder {
         )
         .await?;
 
-        let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(context.breez_server.clone()));
+        let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(
+            context.breez_server.clone(),
+            context.http_client.clone(),
+            spark_wallet.get_identity_public_key().to_string(),
+        ));
         let token_converter =
             build_token_converter(&self.config, &storage, &spark_wallet, &context);
         let rewards_delegator =
