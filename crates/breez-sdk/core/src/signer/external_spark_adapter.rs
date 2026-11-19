@@ -33,11 +33,20 @@ use super::external_types::ExternalTreeNodeId;
 /// `spark_wallet::SparkSigner` over it.
 pub struct ExternalSparkSignerAdapter {
     inner: Arc<dyn ExternalSparkSigner>,
+    // Read once here. Neither method has an error type, so a failed call to a
+    // foreign signer aborts the process, and background tasks can outlive the
+    // foreign code behind it.
+    is_remote: bool,
+    supports_adaptor_v2: bool,
 }
 
 impl ExternalSparkSignerAdapter {
     pub fn new(inner: Arc<dyn ExternalSparkSigner>) -> Self {
-        Self { inner }
+        Self {
+            is_remote: inner.is_remote(),
+            supports_adaptor_v2: inner.supports_adaptor_v2(),
+            inner,
+        }
     }
 }
 
@@ -70,11 +79,11 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
     }
 
     fn is_remote(&self) -> bool {
-        self.inner.is_remote()
+        self.is_remote
     }
 
     fn supports_adaptor_v2(&self) -> bool {
-        self.inner.supports_adaptor_v2()
+        self.supports_adaptor_v2
     }
 
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
