@@ -8,7 +8,7 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
   // Set the amount you wish the pay the receiver
   BigInt? amountSats = BigInt.from(50000);
   final prepareRequest = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -17,7 +17,7 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
 
   // If the fees are acceptable, continue to create the HTLC Payment
   final paymentMethod = prepareResponse.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_SparkAddress) {
+  if (paymentMethod is SparkAddressSendPaymentMethod) {
     final fee = paymentMethod.fee;
     print("Fees: $fee sats");
   }
@@ -30,7 +30,7 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
   // Set the HTLC options
   final htlcOptions = SparkHtlcOptions(
       paymentHash: paymentHash, expiryDurationSecs: BigInt.from(1000));
-  final options = SendPaymentOptions.sparkAddress(htlcOptions: htlcOptions);
+  final options = SparkAddressSendPaymentOptions(htlcOptions);
 
   final request =
       SendPaymentRequest(prepareResponse: prepareResponse, options: options);
@@ -49,11 +49,13 @@ Future<void> receiveHodlInvoicePayment(BreezSdk sdk) async {
 
   final response = await sdk.receivePayment(
       request: ReceivePaymentRequest(
-          paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+          paymentMethod: Bolt11InvoiceReceivePaymentMethod(
               description: "HODL invoice",
               amountSats: BigInt.from(50000),
               expirySecs: null,
-              paymentHash: paymentHash)));
+              paymentHash: paymentHash,
+              receiverIdentityPublicKey: null,
+              preimage: null)));
 
   final invoice = response.paymentRequest;
   print("HODL invoice: $invoice");
@@ -66,12 +68,11 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
     typeFilter: [PaymentType.receive],
     statusFilter: [PaymentStatus.pending],
     paymentDetailsFilter: [
-      PaymentDetailsFilter.spark(
+      SparkPaymentDetailsFilter(
         htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+        conversionRefundNeeded: null,
       ),
-      PaymentDetailsFilter.lightning(
-        htlcStatus: [SparkHtlcStatus.waitingForPreimage],
-      ),
+      LightningPaymentDetailsFilter([SparkHtlcStatus.waitingForPreimage]),
     ],
   );
 
@@ -80,9 +81,9 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
 
   for (final payment in payments) {
     final details = payment.details;
-    if (details is PaymentDetails_Spark && details.htlcDetails != null) {
+    if (details is SparkPaymentDetails && details.htlcDetails != null) {
       print("Spark HTLC expiry time: ${details.htlcDetails!.expiryTime}");
-    } else if (details is PaymentDetails_Lightning) {
+    } else if (details is LightningPaymentDetails) {
       print("Lightning HTLC expiry time: ${details.htlcDetails.expiryTime}");
     }
   }

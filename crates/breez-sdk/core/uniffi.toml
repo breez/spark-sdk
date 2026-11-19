@@ -42,6 +42,16 @@ type_name = "BigInteger"
 into_custom = "BigInteger.Parse({})"
 from_custom = "{}.ToString()"
 
+# https://github.com/breez/uniffi-dart (fork of Uniffi-Dart/uniffi-dart)
+[bindings.dart]
+package_name = "breez_sdk_spark_flutter"
+cdylib_name = "breez_sdk_spark_bindings"
+
+[bindings.dart.custom_types.u128]
+type_name = "BigInt"
+into_custom = "BigInt.parse({})"
+from_custom = "{}.toString()"
+
 [bindings.typescript.customTypes.u128]
 typeName = "bigint"
 intoCustom = "BigInt({})"

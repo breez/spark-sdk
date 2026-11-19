@@ -2,28 +2,38 @@ import 'dart:typed_data';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 // ANCHOR: implement-prf-provider
-// Implement custom callbacks if the built-in PasskeyProvider doesn't
-// fit your needs. Pass them to PasskeyClient.fromCallbacks instead
-// of going through PasskeyClientBuilder.withPrfProvider.
-Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
-  // Return one 32-byte PRF output per salt, in input order.
-  throw UnimplementedError('Implement using platform passkey APIs');
-}
+// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed) when the built-in PasskeyProvider doesn't fit your needs.
+class CustomPrfProvider implements PrfProvider {
+  @override
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
+    // Return one 32-byte PRF output per salt, in input order.
+    throw UnimplementedError('Implement using platform passkey APIs');
+  }
 
-Future<CreatePasskeyOutput> createPasskey(
-  List<Uint8List> excludeCredentials,
-  List<String> salts,
-) async {
-  // Register a credential and return its ID plus attestation.
-  //
-  // Return `seeds` null unless the platform evaluated PRF during the create
-  // ceremony and gave one output per salt. Seeds returned here must equal
-  // what `deriveSeeds` returns for the same salts.
-  throw UnimplementedError('Implement registration via native passkey API');
-}
+  @override
+  Future<bool> isSupported() async {
+    throw UnimplementedError('Check platform passkey availability');
+  }
 
-Future<bool> isSupported() async {
-  throw UnimplementedError('Check platform passkey availability');
+  @override
+  Future<CreatePasskeyOutput> createPasskey(
+    List<Uint8List> excludeCredentials,
+    List<String> salts,
+  ) async {
+    // Register a credential and return its ID plus attestation.
+    //
+    // Return `seeds` null unless the platform evaluated PRF during the
+    // create ceremony and gave one output per salt. Seeds returned here
+    // must equal what `deriveSeeds` returns for the same salts.
+    throw UnimplementedError('Implement registration via native passkey API');
+  }
+
+  @override
+  Future<DomainAssociation> checkDomainAssociation() async {
+    return SkippedDomainAssociation(
+        'CustomPrfProvider does not verify domain association');
+  }
 }
 // ANCHOR_END: implement-prf-provider
 
@@ -32,19 +42,18 @@ Future<void> checkAvailability() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: check-availability
   final availability = await passkey.checkAvailability();
-  if (availability is PasskeyAvailability_Available) {
+  if (availability is AvailablePasskeyAvailability) {
     // Show passkey as primary option.
-  } else if (availability is PasskeyAvailability_PrfUnsupported) {
+  } else if (availability is PrfUnsupportedPasskeyAvailability) {
     // Fall back to mnemonic flow.
-  } else if (availability is PasskeyAvailability_NotAssociated) {
+  } else if (availability is NotAssociatedPasskeyAvailability) {
     print("Domain association failed (source=${availability.source}): ${availability.reason}");
-  } else if (availability is PasskeyAvailability_Skipped) {
+  } else if (availability is SkippedPasskeyAvailability) {
     // No verification source on this platform; proceed normally.
   }
   // ANCHOR_END: check-availability
@@ -53,10 +62,11 @@ Future<void> checkAvailability() async {
 PasskeyClient setupPasskeyClient() {
   // ANCHOR: setup-client
   final passkey = PasskeyClient(
-    breezApiKey: '<breez api key>',
-    config: PasskeyConfig(
-      providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'),
+    prfProvider: PasskeyProvider(
+      PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'),
     ),
+    breezApiKey: '<breez api key>',
+    config: null,
   );
   // ANCHOR_END: setup-client
   return passkey;
@@ -67,9 +77,8 @@ Future<BreezSdk> connectWithPasskey() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.
@@ -97,9 +106,8 @@ Future<SignInResponse> signInExistingUser() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: sign-in
   // Returning-user sign-in. No fall-through to register.
@@ -112,9 +120,8 @@ Future<BreezSdk> registerNewPasskey() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: register-passkey
   final config = defaultConfig(network: Network.mainnet)
@@ -135,9 +142,8 @@ Future<void> credentialMetadata() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: credential-metadata
   final response = await passkey.register(
@@ -156,7 +162,7 @@ Future<void> credentialMetadata() async {
 
   // Pin the stored credential ID so the OS can't substitute a sibling.
   final signInResponse = await passkey.signIn(
-    request: SignInRequest(label: 'personal', allowCredentials: const [
+    request: SignInRequest(label: 'personal', allowCredentials: [
       // stored credentialId bytes
     ]),
   );
@@ -176,9 +182,8 @@ Future<List<String>> listLabels() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
   // ANCHOR: list-labels
   final labels = await passkey.labels().list();
   for (final label in labels) {
@@ -193,9 +198,8 @@ Future<void> storeLabel() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
   // ANCHOR: store-label
   await passkey.labels().store(label: "personal");
   // ANCHOR_END: store-label
@@ -210,12 +214,12 @@ Future<void> checkDomain() async {
   ));
   final result = await prfProvider.checkDomainAssociation();
 
-  if (result is DomainAssociationAssociated) {
+  if (result is AssociatedDomainAssociation) {
     // Safe to proceed.
-  } else if (result is DomainAssociationNotAssociated) {
+  } else if (result is NotAssociatedDomainAssociation) {
     print("Domain association failed (source=${result.source}): ${result.reason}");
     return;
-  } else if (result is DomainAssociationSkipped) {
+  } else if (result is SkippedDomainAssociation) {
     // Verification could not be performed; proceed normally.
   }
   // ANCHOR_END: domain-association
@@ -226,9 +230,8 @@ Future<Wallet?> recoverFromAlreadyExists() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: recover-already-exists
   try {
@@ -241,8 +244,8 @@ Future<Wallet?> recoverFromAlreadyExists() async {
       ),
     );
     return response.wallet;
-  } on PasskeyPrfException catch (e) {
-    if (e.code != 'credentialAlreadyExists') rethrow;
+  } on PrfPasskeyException catch (e) {
+    if (e.v0 is! CredentialAlreadyExistsPrfProviderException) rethrow;
     // A matching credential already exists; sign in instead.
     final response = await passkey.signIn(
       request: SignInRequest(label: 'personal'),
@@ -257,9 +260,8 @@ Future<SignInResponse> handleTimeout() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+      prfProvider: prfProvider, breezApiKey: '<breez api key>', config: null);
 
   // ANCHOR: handle-timeout
   // Timeout is distinct from a cancel: surface a re-prompt UI.
@@ -267,8 +269,8 @@ Future<SignInResponse> handleTimeout() async {
     return await passkey.signIn(
       request: SignInRequest(label: 'personal'),
     );
-  } on PasskeyPrfException catch (e) {
-    if (e.code == 'userTimedOut') {
+  } on PrfPasskeyException catch (e) {
+    if (e.v0 is UserTimedOutPrfProviderException) {
       // Show a retry UI. Do NOT auto-retry without user input.
       print("Sign-in timed out: show \"Try Again\" UI.");
     }

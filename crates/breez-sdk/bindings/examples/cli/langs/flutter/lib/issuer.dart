@@ -1,9 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'serialization.dart';
+import 'u128.dart';
 
 /// Issuer subcommand names (used for help text).
 const issuerCommandNames = [
@@ -79,10 +80,9 @@ Future<void> _handleTokenMetadata(TokenIssuer tokenIssuer, List<String> args) as
 // --- create-token ---
 
 Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      ArgParser()
-        ..addFlag('is-freezable', abbr: 'f', defaultsTo: false)
-        ..addOption('extra-metadata', abbr: 'e', help: 'Text to attach to the token (at most 1024 bytes)');
+  final parser = ArgParser()
+    ..addFlag('is-freezable', abbr: 'f', defaultsTo: false)
+    ..addOption('extra-metadata', abbr: 'e', help: 'Text to attach to the token (at most 1024 bytes)');
   if (args.contains('help') || args.contains('--help')) {
     print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f] [-e <metadata>]');
     print(parser.usage);
@@ -97,7 +97,7 @@ Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) asyn
   final name = results.rest[0];
   final ticker = results.rest[1];
   final decimals = int.parse(results.rest[2]);
-  final maxSupply = BigInt.parse(results.rest[3]);
+  final maxSupply = parseU128(results.rest[3]);
   final isFreezable = results.flag('is-freezable');
   final extraMetadataStr = results.option('extra-metadata');
 
@@ -121,7 +121,7 @@ Future<void> _handleMintToken(TokenIssuer tokenIssuer, List<String> args) async 
     print('Usage: issuer mint-token <amount>');
     return;
   }
-  final amount = BigInt.parse(args[0]);
+  final amount = parseU128(args[0]);
   final result = await tokenIssuer.mintIssuerToken(request: MintIssuerTokenRequest(amount: amount));
   printValue(result);
 }
@@ -133,7 +133,7 @@ Future<void> _handleBurnToken(TokenIssuer tokenIssuer, List<String> args) async 
     print('Usage: issuer burn-token <amount>');
     return;
   }
-  final amount = BigInt.parse(args[0]);
+  final amount = parseU128(args[0]);
   final result = await tokenIssuer.burnIssuerToken(request: BurnIssuerTokenRequest(amount: amount));
   printValue(result);
 }

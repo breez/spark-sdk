@@ -12,6 +12,7 @@
     - [React Native/Expo](guide/install_react_native.md)
     - [Rust](guide/install_rust.md)
     - [Flutter](guide/install_flutter.md)
+        - [Migrating to uniffi-dart](guide/flutter_migration.md)
     - [Go](guide/install_go.md)
     - [Python](guide/install_python.md)
     - [C#](guide/install_csharp.md)

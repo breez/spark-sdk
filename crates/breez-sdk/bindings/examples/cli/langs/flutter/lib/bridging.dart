@@ -1,8 +1,9 @@
 import 'package:args/args.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'cli.dart';
 import 'serialization.dart';
+import 'u128.dart';
 
 /// Bridging subcommand names (used for tab completion).
 const bridgingCommandNames = [
@@ -91,12 +92,11 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
 // --- bridging create ---
 
 Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('amount', mandatory: true, help: 'Amount in stablecoin base units')
-        ..addOption('refund-address', help: "Payer's address on the source chain for refunds")
-        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('amount', mandatory: true, help: 'Amount in stablecoin base units')
+    ..addOption('refund-address', help: "Payer's address on the source chain for refunds")
+    ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+    ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
   final results = _parseArgs(parser, args, 'bridging create <recipient> --amount <amount> [options]');
   if (results == null) return;
 
@@ -105,7 +105,7 @@ Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
     return;
   }
   final recipient = results.rest.first;
-  final amount = BigInt.parse(results.option('amount')!);
+  final amount = parseU128(results.option('amount')!);
   final refundAddress = results.option('refund-address');
   final feesIncluded = results.flag('fees-included');
   final maxSlippageBpsStr = results.option('max-slippage-bps');
@@ -113,7 +113,7 @@ Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
 
   final client = sdk.getBridgingClient();
   final routesResponse = await client.getRoutes(request: GetBridgeRoutesRequest(recipient: recipient));
-  final route = _chooseBridgeRoute(routesResponse.routes);
+  final route = await _chooseBridgeRoute(routesResponse.routes);
   if (route == null) return;
 
   final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
@@ -137,19 +137,14 @@ Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
 // --- bridging from-cash-app ---
 
 Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption(
-          'amount',
-          mandatory: true,
-          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
-        )
-        ..addOption(
-          'refund-address',
-          help: 'Lightning address, \$cashtag or amountless BOLT11 invoice refunded if the payment fails',
-        )
-        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('amount', mandatory: true, help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)')
+    ..addOption(
+      'refund-address',
+      help: 'Lightning address, \$cashtag or amountless BOLT11 invoice refunded if the payment fails',
+    )
+    ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+    ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
   final results = _parseArgs(parser, args, 'bridging from-cash-app <recipient> --amount <amount> [options]');
   if (results == null) return;
 
@@ -158,7 +153,7 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
     return;
   }
   final recipient = results.rest.first;
-  final amount = BigInt.parse(results.option('amount')!);
+  final amount = parseU128(results.option('amount')!);
   final refundAddress = results.option('refund-address');
   final feesIncluded = results.flag('fees-included');
   final maxSlippageBpsStr = results.option('max-slippage-bps');
@@ -167,7 +162,7 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
   final client = sdk.getBridgingClient();
   final routesResponse = await client.getRoutes(request: GetBridgeRoutesRequest(recipient: recipient));
   final lightningRoutes = routesResponse.routes.where((r) => r.source.chain == 'lightning').toList();
-  final route = _chooseBridgeRoute(lightningRoutes);
+  final route = await _chooseBridgeRoute(lightningRoutes);
   if (route == null) return;
 
   final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
@@ -197,16 +192,11 @@ Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
 // --- bridging to-cash-app ---
 
 Future<void> _handleToCashApp(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption(
-          'amount',
-          mandatory: true,
-          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
-        )
-        ..addOption('refund-address', mandatory: true, help: 'Payer address on the source chain for refunds')
-        ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('amount', mandatory: true, help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)')
+    ..addOption('refund-address', mandatory: true, help: 'Payer address on the source chain for refunds')
+    ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+    ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
   final results = _parseArgs(
     parser,
     args,
@@ -219,7 +209,7 @@ Future<void> _handleToCashApp(BreezSdk sdk, List<String> args) async {
     return;
   }
   final recipient = results.rest.first;
-  final amount = BigInt.parse(results.option('amount')!);
+  final amount = parseU128(results.option('amount')!);
   final refundAddress = results.option('refund-address')!;
   final feesIncluded = results.flag('fees-included');
   final maxSlippageBpsStr = results.option('max-slippage-bps');
@@ -227,7 +217,7 @@ Future<void> _handleToCashApp(BreezSdk sdk, List<String> args) async {
 
   final client = sdk.getBridgingClient();
   final routesResponse = await client.getRoutes(request: GetBridgeRoutesRequest(recipient: recipient));
-  final route = _chooseBridgeRoute(routesResponse.routes);
+  final route = await _chooseBridgeRoute(routesResponse.routes);
   if (route == null) return;
 
   final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
@@ -281,7 +271,7 @@ Future<void> _handleStatus(BreezSdk sdk, List<String> args) async {
 // Helpers
 // ---------------------------------------------------------------------------
 
-BridgeRoutePair? _chooseBridgeRoute(List<BridgeRoutePair> routes) {
+Future<BridgeRoutePair?> _chooseBridgeRoute(List<BridgeRoutePair> routes) async {
   if (routes.isEmpty) {
     print('No bridge routes available');
     return null;
@@ -298,7 +288,7 @@ BridgeRoutePair? _chooseBridgeRoute(List<BridgeRoutePair> routes) {
     print('  ${i + 1}. ${_routeLabel(routes[i])}');
   }
 
-  final line = prompt('Select route: ');
+  final line = await prompt('Select route: ');
   final choice = int.tryParse(line.trim());
   if (choice == null || choice < 1 || choice > routes.length) {
     print('Invalid selection');

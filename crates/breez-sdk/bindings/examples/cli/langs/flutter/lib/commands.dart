@@ -2,12 +2,13 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 import 'package:crypto/crypto.dart';
 
 import 'cli.dart';
 import 'serialization.dart';
 import 'token_allowances.dart';
+import 'u128.dart';
 
 /// All top-level command names (used for help text).
 const commandNames = [
@@ -249,19 +250,18 @@ TokenTransactionType? _parseTxType(String s) {
 }
 
 Future<void> _handleListPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('list-payments')
-        ..addMultiOption('type-filter', abbr: 't')
-        ..addMultiOption('status-filter', abbr: 's')
-        ..addOption('asset-filter', abbr: 'a')
-        ..addMultiOption('spark-htlc-status-filter')
-        ..addOption('tx-hash')
-        ..addOption('tx-type')
-        ..addOption('from-timestamp')
-        ..addOption('to-timestamp')
-        ..addOption('limit', abbr: 'l', defaultsTo: '10')
-        ..addOption('offset', abbr: 'o', defaultsTo: '0')
-        ..addOption('sort-ascending');
+  final parser = _parser('list-payments')
+    ..addMultiOption('type-filter', abbr: 't')
+    ..addMultiOption('status-filter', abbr: 's')
+    ..addOption('asset-filter', abbr: 'a')
+    ..addMultiOption('spark-htlc-status-filter')
+    ..addOption('tx-hash')
+    ..addOption('tx-type')
+    ..addOption('from-timestamp')
+    ..addOption('to-timestamp')
+    ..addOption('limit', abbr: 'l', defaultsTo: '10')
+    ..addOption('offset', abbr: 'o', defaultsTo: '0')
+    ..addOption('sort-ascending');
   final results = _parseArgs(parser, args, 'list-payments [options]');
   if (results == null) return;
 
@@ -281,9 +281,9 @@ Future<void> _handleListPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   final assetFilterStr = results.option('asset-filter');
   if (assetFilterStr != null) {
     if (assetFilterStr.toLowerCase() == 'bitcoin') {
-      assetFilter = AssetFilter.bitcoin();
+      assetFilter = BitcoinAssetFilter();
     } else {
-      assetFilter = AssetFilter.token(tokenIdentifier: assetFilterStr);
+      assetFilter = TokenAssetFilter(assetFilterStr);
     }
   }
 
@@ -292,18 +292,22 @@ Future<void> _handleListPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
   if (htlcStatusValues.isNotEmpty) {
     final statuses = htlcStatusValues.map(_parseHtlcStatus).whereType<SparkHtlcStatus>().toList();
     if (statuses.isNotEmpty) {
-      paymentDetailsFilter.add(PaymentDetailsFilter.spark(htlcStatus: statuses));
+      paymentDetailsFilter.add(SparkPaymentDetailsFilter(htlcStatus: statuses, conversionRefundNeeded: null));
     }
   }
   final txHash = results.option('tx-hash');
   if (txHash != null) {
-    paymentDetailsFilter.add(PaymentDetailsFilter.token(txHash: txHash));
+    paymentDetailsFilter.add(
+      TokenPaymentDetailsFilter(conversionRefundNeeded: null, txHash: txHash, txType: null),
+    );
   }
   final txTypeStr = results.option('tx-type');
   if (txTypeStr != null) {
     final txType = _parseTxType(txTypeStr);
     if (txType != null) {
-      paymentDetailsFilter.add(PaymentDetailsFilter.token(txType: txType));
+      paymentDetailsFilter.add(
+        TokenPaymentDetailsFilter(conversionRefundNeeded: null, txHash: null, txType: txType),
+      );
     }
   }
 
@@ -329,30 +333,29 @@ Future<void> _handleListPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
 // --- receive ---
 
 Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('receive')
-        ..addOption(
-          'method',
-          abbr: 'm',
-          mandatory: true,
-          help: 'sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain',
-        )
-        ..addOption('description', abbr: 'd')
-        ..addOption('amount', abbr: 'a')
-        ..addOption('token-identifier', abbr: 't')
-        ..addOption('expiry-secs', abbr: 'e')
-        ..addOption('sender-public-key', abbr: 's')
-        ..addFlag('hodl', defaultsTo: false)
-        ..addOption('preimage', help: 'Preimage (hex) for the bolt11 invoice (conflicts with --hodl)')
-        ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address')
-        ..addOption(
-          'cross-chain-max-slippage-bps',
-          help: 'Max slippage in bps for cross-chain receives (10..500)',
-        )
-        ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
-        ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)')
-        ..addFlag('cross-chain-to-bitcoin', defaultsTo: false, help: 'Deliver cross-chain receive as Bitcoin')
-        ..addOption('cross-chain-refund-address', help: "Payer's address on the route's chain for refunds");
+  final parser = _parser('receive')
+    ..addOption(
+      'method',
+      abbr: 'm',
+      mandatory: true,
+      help: 'sparkaddress, sparkinvoice, bitcoin, bolt11, crosschain',
+    )
+    ..addOption('description', abbr: 'd')
+    ..addOption('amount', abbr: 'a')
+    ..addOption('token-identifier', abbr: 't')
+    ..addOption('expiry-secs', abbr: 'e')
+    ..addOption('sender-public-key', abbr: 's')
+    ..addFlag('hodl', defaultsTo: false)
+    ..addOption('preimage', help: 'Preimage (hex) for the bolt11 invoice (conflicts with --hodl)')
+    ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address')
+    ..addOption(
+      'cross-chain-max-slippage-bps',
+      help: 'Max slippage in bps for cross-chain receives (10..500)',
+    )
+    ..addFlag('cross-chain-fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
+    ..addOption('cross-chain-target-overpay-bps', help: 'Overpay buffer in bps (0..500)')
+    ..addFlag('cross-chain-to-bitcoin', defaultsTo: false, help: 'Deliver cross-chain receive as Bitcoin')
+    ..addOption('cross-chain-refund-address', help: "Payer's address on the route's chain for refunds");
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -375,21 +378,21 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
   ReceivePaymentMethod paymentMethod;
   switch (method) {
     case 'sparkaddress':
-      paymentMethod = ReceivePaymentMethod.sparkAddress();
+      paymentMethod = SparkAddressReceivePaymentMethod();
     case 'sparkinvoice':
       BigInt? expiryTime;
       if (expirySecs != null) {
         expiryTime = BigInt.from(DateTime.now().millisecondsSinceEpoch ~/ 1000 + expirySecs);
       }
-      paymentMethod = ReceivePaymentMethod.sparkInvoice(
-        amount: amount,
+      paymentMethod = SparkInvoiceReceivePaymentMethod(
+        amount: amountStr != null ? parseU128(amountStr) : null,
         tokenIdentifier: tokenIdentifier,
         expiryTime: expiryTime,
         description: description,
         senderPublicKey: senderPublicKey,
       );
     case 'bitcoin':
-      paymentMethod = ReceivePaymentMethod.bitcoinAddress(newAddress: newAddress);
+      paymentMethod = BitcoinAddressReceivePaymentMethod(newAddress);
     case 'bolt11':
       String? paymentHash;
       if (hodl) {
@@ -404,7 +407,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         print('Payment hash: $paymentHash');
         print('Save the preimage! Use `claim-htlc-payment` with it to settle.');
       }
-      paymentMethod = ReceivePaymentMethod.bolt11Invoice(
+      paymentMethod = Bolt11InvoiceReceivePaymentMethod(
         description: description ?? '',
         amountSats: amount,
         expirySecs: expirySecs,
@@ -424,7 +427,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
       }
       final route = await _selectCrossChainRoute(
         sdk,
-        CrossChainRouteFilter.receive(contractAddress: null, deliveryMethod: null),
+        ReceiveCrossChainRouteFilter(contractAddress: null, deliveryMethod: null),
       );
       if (route == null) return;
       final crossChainFeesIncluded = results.flag('cross-chain-fees-included');
@@ -436,13 +439,13 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
       final crossChainRefundAddress = results.option('cross-chain-refund-address');
       SparkAsset? destination;
       if (crossChainToBitcoin) {
-        destination = SparkAsset.bitcoin();
+        destination = BitcoinSparkAsset();
       } else if (tokenIdentifier != null) {
-        destination = SparkAsset.token(tokenIdentifier: tokenIdentifier);
+        destination = TokenSparkAsset(tokenIdentifier);
       }
-      paymentMethod = ReceivePaymentMethod.crossChain(
+      paymentMethod = CrossChainReceivePaymentMethod(
         route: route,
-        amount: amount,
+        amount: parseU128(amountStr!),
         destination: destination,
         feeMode: feeMode,
         maxSlippageBps: maxSlippageBps,
@@ -456,7 +459,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
 
   final result = await sdk.receivePayment(request: ReceivePaymentRequest(paymentMethod: paymentMethod));
 
-  if (result.fee > BigInt.zero) {
+  if (u128ToBigInt(result.fee) > BigInt.zero) {
     print('Prepared payment requires fee of ${result.fee} sats/token base units\n');
   }
 
@@ -466,23 +469,22 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
 // --- pay ---
 
 Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('pay')
-        ..addOption('payment-request', abbr: 'r', mandatory: true, help: 'Invoice, address, or LNURL to pay')
-        ..addOption('amount', abbr: 'a')
-        ..addOption('token-identifier', abbr: 't')
-        ..addOption('idempotency-key', abbr: 'i')
-        ..addFlag('from-bitcoin', defaultsTo: false)
-        ..addOption('from-token')
-        ..addOption('convert-max-slippage-bps', abbr: 's')
-        ..addOption('cross-chain-max-slippage-bps')
-        ..addFlag('fees-included', defaultsTo: false);
+  final parser = _parser('pay')
+    ..addOption('payment-request', abbr: 'r', mandatory: true, help: 'Invoice, address, or LNURL to pay')
+    ..addOption('amount', abbr: 'a')
+    ..addOption('token-identifier', abbr: 't')
+    ..addOption('idempotency-key', abbr: 'i')
+    ..addFlag('from-bitcoin', defaultsTo: false)
+    ..addOption('from-token')
+    ..addOption('convert-max-slippage-bps', abbr: 's')
+    ..addOption('cross-chain-max-slippage-bps')
+    ..addFlag('fees-included', defaultsTo: false);
   final results = _parseArgs(parser, args, 'pay -r <request> [options]');
   if (results == null) return;
 
   final paymentRequestInput = results.option('payment-request')!;
   final amountStr = results.option('amount');
-  final amount = amountStr != null ? BigInt.parse(amountStr) : null;
+  final amount = amountStr != null ? parseU128(amountStr) : null;
   final tokenIdentifier = results.option('token-identifier');
   final idempotencyKey = results.option('idempotency-key');
   final fromBitcoin = results.flag('from-bitcoin');
@@ -496,13 +498,13 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
   ConversionOptions? conversionOptions;
   if (fromBitcoin) {
     conversionOptions = ConversionOptions(
-      conversionType: ConversionType.fromBitcoin(),
+      conversionType: FromBitcoinConversionType(),
       maxSlippageBps: slippage,
       completionTimeoutSecs: null,
     );
   } else if (fromToken != null) {
     conversionOptions = ConversionOptions(
-      conversionType: ConversionType.toBitcoin(fromTokenIdentifier: fromToken),
+      conversionType: ToBitcoinConversionType(fromToken),
       maxSlippageBps: slippage,
       completionTimeoutSecs: null,
     );
@@ -512,22 +514,22 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   PaymentRequest paymentRequest;
   final parsed = await sdk.parse(input: paymentRequestInput);
-  if (parsed is InputType_CrossChainAddress) {
-    final addressDetails = parsed.field0;
+  if (parsed is CrossChainAddressInputType) {
+    final addressDetails = parsed.v0;
     final address = addressDetails.address;
     final route = await _selectCrossChainRoute(
       sdk,
-      CrossChainRouteFilter.send(addressDetails: addressDetails, deliveryMethod: null),
+      SendCrossChainRouteFilter(addressDetails: addressDetails, deliveryMethod: null),
     );
     if (route == null) return;
-    paymentRequest = PaymentRequest.crossChain(
+    paymentRequest = CrossChainPaymentRequest(
       address: address,
       route: route,
       maxSlippageBps: crossChainSlippage,
       targetOverpayBps: null,
     );
   } else {
-    paymentRequest = PaymentRequest.input(input: paymentRequestInput);
+    paymentRequest = InputPaymentRequest(paymentRequestInput);
   }
 
   final prepareResponse = await sdk.prepareSendPayment(
@@ -542,21 +544,22 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   if (prepareResponse.conversionEstimate != null) {
     final est = prepareResponse.conversionEstimate!;
-    final inUnits = est.options.conversionType is ConversionType_FromBitcoin ? 'sats' : 'token base units';
-    final outUnits = est.options.conversionType is ConversionType_FromBitcoin ? 'token base units' : 'sats';
+    final inUnits = est.options.conversionType is FromBitcoinConversionType ? 'sats' : 'token base units';
+    final outUnits = est.options.conversionType is FromBitcoinConversionType ? 'token base units' : 'sats';
     print(
       'Estimated conversion from ${est.amountIn} $inUnits to ${est.amountOut} $outUnits '
       'with a ${est.fee} token base units fee',
     );
-    final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+    final answer = await prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');
       return;
     }
   }
 
-  if (prepareResponse.paymentMethod is SendPaymentMethod_CrossChainAddress) {
-    final cc = prepareResponse.paymentMethod as SendPaymentMethod_CrossChainAddress;
+  final paymentMethod = prepareResponse.paymentMethod;
+  if (paymentMethod is CrossChainAddressSendPaymentMethod) {
+    final cc = paymentMethod;
     final serviceFeeDenom = _serviceFeeDenomination(cc.serviceFeeAsset, cc.serviceFeeAssetDecimals);
     final denomination = tokenIdentifier != null ? 'token base units' : 'sats';
     print(
@@ -568,14 +571,14 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
     print('Fee (total, in ${cc.route.asset}): ${cc.feeAmount}');
     print('Service fee: ${cc.serviceFeeAmount} $serviceFeeDenom');
     print('Source transfer fee: ${cc.sourceTransferFeeSats} sats');
-    final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+    final answer = await prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');
       return;
     }
   }
 
-  final paymentOptions = _readPaymentOptions(prepareResponse.paymentMethod);
+  final paymentOptions = await _readPaymentOptions(paymentMethod);
 
   final sendResponse = await sdk.sendPayment(
     request: SendPaymentRequest(
@@ -597,9 +600,9 @@ BatchRecipient? _parseBatchRecipient(String s) {
     return null;
   }
 
-  BigInt? amount;
+  U128? amount;
   if (parts.length > 1 && parts[1].isNotEmpty) {
-    final parsed = BigInt.tryParse(parts[1]);
+    final parsed = tryParseU128(parts[1]);
     if (parsed == null) {
       print("Invalid amount '${parts[1]}': must be a valid number");
       return null;
@@ -647,7 +650,7 @@ Future<void> _handlePayBatch(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
     final asset = total.tokenIdentifier ?? 'sats';
     print('Sending ${total.amount} base units of $asset');
   }
-  final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+  final answer = await prompt('Do you want to continue (y/n): ', defaultValue: 'y');
   if (answer.toLowerCase() != 'y') {
     print('Payment cancelled');
     return;
@@ -662,7 +665,7 @@ Future<void> _handlePayBatch(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
 PullReceiver? _parsePullReceiver(String s) {
   final colonIdx = s.lastIndexOf(':');
   if (colonIdx < 0) {
-    final amount = BigInt.tryParse(s);
+    final amount = tryParseU128(s);
     if (amount == null) {
       print("Invalid receiver '$s': expected an amount or 'address:amount'");
       return null;
@@ -671,7 +674,7 @@ PullReceiver? _parsePullReceiver(String s) {
   }
   final address = s.substring(0, colonIdx);
   final amountStr = s.substring(colonIdx + 1);
-  final amount = BigInt.tryParse(amountStr);
+  final amount = tryParseU128(amountStr);
   if (amount == null) {
     print("Invalid amount in receiver '$s'");
     return null;
@@ -724,7 +727,7 @@ Future<void> _handlePullPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<Stri
   for (final receiver in prepareResponse.receivers) {
     print('  ${receiver.amount} to ${receiver.receiverAddress ?? ''}');
   }
-  final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+  final answer = await prompt('Do you want to continue (y/n): ', defaultValue: 'y');
   if (answer.toLowerCase() != 'y') {
     print('Pull cancelled');
     return;
@@ -737,15 +740,14 @@ Future<void> _handlePullPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<Stri
 // --- lnurl-pay ---
 
 Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('lnurl-pay')
-        ..addOption('comment', abbr: 'c')
-        ..addOption('validate', abbr: 'v')
-        ..addOption('idempotency-key', abbr: 'i')
-        ..addOption('token-identifier', abbr: 't')
-        ..addOption('from-token')
-        ..addOption('convert-max-slippage-bps', abbr: 's')
-        ..addFlag('fees-included', defaultsTo: false);
+  final parser = _parser('lnurl-pay')
+    ..addOption('comment', abbr: 'c')
+    ..addOption('validate', abbr: 'v')
+    ..addOption('idempotency-key', abbr: 'i')
+    ..addOption('token-identifier', abbr: 't')
+    ..addOption('from-token')
+    ..addOption('convert-max-slippage-bps', abbr: 's')
+    ..addFlag('fees-included', defaultsTo: false);
   final results = _parseArgs(parser, args, 'lnurl-pay <lnurl-or-address> [options]');
   if (results == null) return;
 
@@ -765,7 +767,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   ConversionOptions? conversionOptions;
   if (fromToken != null) {
     conversionOptions = ConversionOptions(
-      conversionType: ConversionType.toBitcoin(fromTokenIdentifier: fromToken),
+      conversionType: ToBitcoinConversionType(fromToken),
       maxSlippageBps: slippage,
       completionTimeoutSecs: null,
     );
@@ -776,10 +778,10 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   final parsed = await sdk.parse(input: lnurl);
 
   LnurlPayRequestDetails payRequest;
-  if (parsed is InputType_LightningAddress) {
-    payRequest = parsed.field0.payRequest;
-  } else if (parsed is InputType_LnurlPay) {
-    payRequest = parsed.field0;
+  if (parsed is LightningAddressInputType) {
+    payRequest = parsed.v0.payRequest;
+  } else if (parsed is LnurlPayInputType) {
+    payRequest = parsed.v0;
   } else {
     print('Invalid input: expected LNURL-pay or Lightning address');
     return;
@@ -788,16 +790,13 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   final k = BigInt.from(1000);
   final minSendable = (payRequest.minSendable + k - BigInt.one) ~/ k;
   final maxSendable = payRequest.maxSendable ~/ k;
-  final promptText =
-      tokenIdentifier == null
-          ? 'Amount to pay (min $minSendable sat, max $maxSendable sat): '
-          : 'Amount to pay (min $minSendable sat, max $maxSendable sat) in token base units: ';
-  final amountStr = prompt(promptText);
-  final amountSats = BigInt.parse(amountStr);
-
+  final promptText = tokenIdentifier == null
+      ? 'Amount to pay (min $minSendable sat, max $maxSendable sat): '
+      : 'Amount to pay (min $minSendable sat, max $maxSendable sat) in token base units: ';
+  final amountStr = await prompt(promptText);
   final prepareResponse = await sdk.prepareLnurlPay(
     request: PrepareLnurlPayRequest(
-      amount: amountSats,
+      amount: parseU128(amountStr),
       comment: results.option('comment'),
       payRequest: payRequest,
       validateSuccessActionUrl: _parseBool(results.option('validate')),
@@ -812,7 +811,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
     print(
       'Estimated conversion of ${est.amountIn} token base units → ${est.amountOut} sats with a ${est.fee} token base units fee',
     );
-    final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+    final answer = await prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');
       return;
@@ -820,7 +819,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   }
 
   printValue(prepareResponse);
-  final answer = prompt('Do you want to continue? (y/n): ', defaultValue: 'y');
+  final answer = await prompt('Do you want to continue? (y/n): ', defaultValue: 'y');
   if (answer.toLowerCase() != 'y') return;
 
   final result = await sdk.lnurlPay(
@@ -849,16 +848,16 @@ Future<void> _handleLnurlWithdraw(BreezSdk sdk, TokenIssuer tokenIssuer, List<St
 
   final parsed = await sdk.parse(input: lnurl);
 
-  if (parsed is! InputType_LnurlWithdraw) {
+  if (parsed is! LnurlWithdrawInputType) {
     print('Invalid input: expected LNURL-withdraw');
     return;
   }
 
-  final withdrawRequest = parsed.field0;
+  final withdrawRequest = parsed.v0;
   final k = BigInt.from(1000);
   final minWithdrawable = (withdrawRequest.minWithdrawable + k - BigInt.one) ~/ k;
   final maxWithdrawable = withdrawRequest.maxWithdrawable ~/ k;
-  final amountStr = prompt('Amount to withdraw (min $minWithdrawable sat, max $maxWithdrawable sat): ');
+  final amountStr = await prompt('Amount to withdraw (min $minWithdrawable sat, max $maxWithdrawable sat): ');
   final amountSats = BigInt.parse(amountStr);
 
   final result = await sdk.lnurlWithdraw(
@@ -882,14 +881,14 @@ Future<void> _handleLnurlAuth(BreezSdk sdk, TokenIssuer tokenIssuer, List<String
 
   final parsed = await sdk.parse(input: lnurl);
 
-  if (parsed is! InputType_LnurlAuth) {
+  if (parsed is! LnurlAuthInputType) {
     print('Invalid input: expected LNURL-auth');
     return;
   }
 
-  final authRequest = parsed.field0;
+  final authRequest = parsed.v0;
   final action = authRequest.action ?? 'auth';
-  final answer = prompt(
+  final answer = await prompt(
     'Authenticate with ${authRequest.domain} (action: $action)? (y/n): ',
     defaultValue: 'y',
   );
@@ -914,12 +913,11 @@ Future<void> _handleClaimHtlcPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List
 // --- claim-deposit ---
 
 Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('claim-deposit')
-        ..addOption('fee-sat')
-        ..addOption('sat-per-vbyte')
-        ..addOption('recommended-fee-leeway')
-        ..addOption('proportional-ppm');
+  final parser = _parser('claim-deposit')
+    ..addOption('fee-sat')
+    ..addOption('sat-per-vbyte')
+    ..addOption('recommended-fee-leeway')
+    ..addOption('proportional-ppm');
   final results = _parseArgs(parser, args, 'claim-deposit <txid> <vout> [options]');
   if (results == null) return;
 
@@ -942,14 +940,14 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
       print('Cannot specify fee_sat or sat_per_vbyte when using recommended fee');
       return;
     }
-    onchain = MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.parse(leewayStr));
+    onchain = NetworkRecommendedMaxOnchainFee(BigInt.parse(leewayStr));
   } else if (feeSatStr != null && satPerVbyteStr != null) {
     print('Cannot specify both fee_sat and sat_per_vbyte');
     return;
   } else if (feeSatStr != null) {
-    onchain = MaxOnchainFee.fixed(amount: BigInt.parse(feeSatStr));
+    onchain = FixedMaxOnchainFee(BigInt.parse(feeSatStr));
   } else if (satPerVbyteStr != null) {
-    onchain = MaxOnchainFee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr));
+    onchain = RateMaxOnchainFee(BigInt.parse(satPerVbyteStr));
   }
 
   if (onchain == null && proportionalPpm != null) {
@@ -962,7 +960,9 @@ Future<void> _handleClaimDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<Str
     maxFee = MaxFee(onchain: onchain, proportionalPpm: proportionalPpm);
   }
 
-  final result = await sdk.claimDeposit(request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee));
+  final result = await sdk.claimDeposit(
+    request: ClaimDepositRequest(txid: txid, vout: vout, maxFee: maxFee),
+  );
   printValue(result);
 }
 
@@ -1001,10 +1001,9 @@ Future<void> _handleParse(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> ar
 // --- refund-deposit ---
 
 Future<void> _handleRefundDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('refund-deposit')
-        ..addOption('fee-sat')
-        ..addOption('sat-per-vbyte');
+  final parser = _parser('refund-deposit')
+    ..addOption('fee-sat')
+    ..addOption('sat-per-vbyte');
   final results = _parseArgs(parser, args, 'refund-deposit <txid> <vout> <address> [options]');
   if (results == null) return;
 
@@ -1026,9 +1025,9 @@ Future<void> _handleRefundDeposit(BreezSdk sdk, TokenIssuer tokenIssuer, List<St
 
   Fee fee;
   if (feeSatStr != null) {
-    fee = Fee.fixed(amount: BigInt.parse(feeSatStr));
+    fee = FixedFee(BigInt.parse(feeSatStr));
   } else if (satPerVbyteStr != null) {
-    fee = Fee.rate(satPerVbyte: BigInt.parse(satPerVbyteStr));
+    fee = RateFee(BigInt.parse(satPerVbyteStr));
   } else {
     print('Must specify either --fee-sat or --sat-per-vbyte');
     return;
@@ -1050,17 +1049,12 @@ Future<void> _handleListUnclaimedDeposits(BreezSdk sdk, TokenIssuer tokenIssuer,
 // --- buy-bitcoin ---
 
 Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('buy-bitcoin')
-        ..addOption('provider', defaultsTo: 'moonpay', help: 'Provider: moonpay (default) or cashapp')
-        ..addOption('amount-sat', help: 'Amount in satoshis')
-        ..addOption('amount', help: 'USDC amount in 6-decimal base units (MoonPay cross-chain)')
-        ..addFlag(
-          'fees-included',
-          defaultsTo: false,
-          help: 'Deduct fee from --amount instead of adding on top',
-        )
-        ..addOption('redirect-url', help: 'Redirect URL after purchase (MoonPay only)');
+  final parser = _parser('buy-bitcoin')
+    ..addOption('provider', defaultsTo: 'moonpay', help: 'Provider: moonpay (default) or cashapp')
+    ..addOption('amount-sat', help: 'Amount in satoshis')
+    ..addOption('amount', help: 'USDC amount in 6-decimal base units (MoonPay cross-chain)')
+    ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fee from --amount instead of adding on top')
+    ..addOption('redirect-url', help: 'Redirect URL after purchase (MoonPay only)');
   final results = _parseArgs(parser, args, 'buy-bitcoin [options]');
   if (results == null) return;
 
@@ -1068,7 +1062,7 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   final amountSatStr = results.option('amount-sat');
   final amountSat = amountSatStr != null ? BigInt.parse(amountSatStr) : null;
   final amountStr = results.option('amount');
-  final amount = amountStr != null ? BigInt.parse(amountStr) : null;
+  final amount = amountStr != null ? parseU128(amountStr) : null;
   final feesIncluded = results.flag('fees-included');
   final redirectUrl = results.option('redirect-url');
 
@@ -1088,18 +1082,18 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
         print('--amount-sat is required when --provider is cashapp');
         return;
       }
-      request = BuyBitcoinRequest_CashApp(amountSats: amountSat);
+      request = CashAppBuyBitcoinRequest(amountSat);
     default:
       MoonpayDelivery? delivery;
       if (amount != null) {
-        delivery = MoonpayDelivery_CrossChain(
+        delivery = CrossChainMoonpayDelivery(
           amount: amount,
           feeMode: feesIncluded ? CrossChainFeeMode.feesIncluded : null,
         );
       } else if (amountSat != null) {
-        delivery = MoonpayDelivery_Bitcoin(amountSat: amountSat);
+        delivery = BitcoinMoonpayDelivery(amountSat);
       }
-      request = BuyBitcoinRequest_Moonpay(delivery: delivery, redirectUrl: redirectUrl);
+      request = MoonpayBuyBitcoinRequest(delivery: delivery, redirectUrl: redirectUrl);
   }
 
   final result = await sdk.buyBitcoin(request: request);
@@ -1125,7 +1119,7 @@ Future<void> _handleCheckLightningAddressAvailable(
   }
   final username = args.first;
   final result = await sdk.checkLightningAddressAvailable(
-    request: CheckLightningAddressRequest(username: username),
+    req: CheckLightningAddressRequest(username: username),
   );
   printValue(result);
 }
@@ -1177,16 +1171,15 @@ Future<void> _handleClaimLightningAddressTransfer(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser =
-      _parser('claim-lightning-address-transfer')
-        ..addOption('from-pubkey', mandatory: true, help: 'Current owner identity pubkey (hex)')
-        ..addOption('from-signature', mandatory: true, help: 'Current owner authorization signature (hex)')
-        ..addOption('from-domain', mandatory: true, help: 'Lightning address domain the authorization is for')
-        ..addOption(
-          'from-timestamp',
-          mandatory: true,
-          help: 'When the authorization was produced (seconds since the Unix epoch)',
-        );
+  final parser = _parser('claim-lightning-address-transfer')
+    ..addOption('from-pubkey', mandatory: true, help: 'Current owner identity pubkey (hex)')
+    ..addOption('from-signature', mandatory: true, help: 'Current owner authorization signature (hex)')
+    ..addOption('from-domain', mandatory: true, help: 'Lightning address domain the authorization is for')
+    ..addOption(
+      'from-timestamp',
+      mandatory: true,
+      help: 'When the authorization was produced (seconds since the Unix epoch)',
+    );
   final results = _parseArgs(
     parser,
     args,
@@ -1280,12 +1273,12 @@ Future<void> _handleFetchConversionLimits(BreezSdk sdk, TokenIssuer tokenIssuer,
   FetchConversionLimitsRequest request;
   if (fromBitcoin) {
     request = FetchConversionLimitsRequest(
-      conversionType: ConversionType.fromBitcoin(),
+      conversionType: FromBitcoinConversionType(),
       tokenIdentifier: tokenIdentifier,
     );
   } else {
     request = FetchConversionLimitsRequest(
-      conversionType: ConversionType.toBitcoin(fromTokenIdentifier: tokenIdentifier),
+      conversionType: ToBitcoinConversionType(tokenIdentifier),
       tokenIdentifier: null,
     );
   }
@@ -1304,11 +1297,10 @@ Future<void> _handleGetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<
 // --- set-user-settings ---
 
 Future<void> _handleSetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final parser =
-      _parser('set-user-settings')
-        ..addOption('private', abbr: 'p')
-        ..addOption('master-key', abbr: 'm', help: 'Hex encoded public key for master identity')
-        ..addFlag('clear-master-key', defaultsTo: false, help: 'Remove the master identity');
+  final parser = _parser('set-user-settings')
+    ..addOption('private', abbr: 'p')
+    ..addOption('master-key', abbr: 'm', help: 'Hex encoded public key for master identity')
+    ..addFlag('clear-master-key', defaultsTo: false, help: 'Remove the master identity');
   final results = _parseArgs(parser, args, 'set-user-settings [options]');
   if (results == null) return;
 
@@ -1323,9 +1315,9 @@ Future<void> _handleSetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<
 
   SparkMasterIdentityPublicKey? sparkMasterIdentityPublicKey;
   if (masterKey != null) {
-    sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey_Set(publicKey: masterKey);
+    sparkMasterIdentityPublicKey = SetSparkMasterIdentityPublicKey(masterKey);
   } else if (clearMasterKey) {
-    sparkMasterIdentityPublicKey = SparkMasterIdentityPublicKey_Unset();
+    sparkMasterIdentityPublicKey = UnsetSparkMasterIdentityPublicKey();
   }
 
   await sdk.updateUserSettings(
@@ -1340,7 +1332,7 @@ Future<void> _handleSetUserSettings(BreezSdk sdk, TokenIssuer tokenIssuer, List<
 // --- get-spark-status ---
 
 Future<void> _handleGetSparkStatus(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  final result = await getSparkStatus(request: const GetSparkStatusRequest());
+  final result = await getSparkStatus(request: GetSparkStatusRequest());
   printValue(result);
 }
 
@@ -1348,8 +1340,8 @@ Future<void> _handleGetSparkStatus(BreezSdk sdk, TokenIssuer tokenIssuer, List<S
 // read_payment_options — interactive fee/option selection
 // ---------------------------------------------------------------------------
 
-SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
-  if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
+Future<SendPaymentOptions?> _readPaymentOptions(SendPaymentMethod paymentMethod) async {
+  if (paymentMethod is BitcoinAddressSendPaymentMethod) {
     final feeQuote = paymentMethod.feeQuote;
     final fastFee = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
     final mediumFee = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
@@ -1358,7 +1350,7 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
     print('1. Fast: $fastFee');
     print('2. Medium: $mediumFee');
     print('3. Slow: $slowFee');
-    final line = prompt('', defaultValue: '1');
+    final line = await prompt('', defaultValue: '1');
     OnchainConfirmationSpeed speed;
     switch (line) {
       case '2':
@@ -1368,30 +1360,32 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
       default:
         speed = OnchainConfirmationSpeed.fast;
     }
-    return SendPaymentOptions.bitcoinAddress(confirmationSpeed: speed);
+    return BitcoinAddressSendPaymentOptions(speed);
   }
 
-  if (paymentMethod is SendPaymentMethod_Bolt11Invoice) {
+  if (paymentMethod is Bolt11InvoiceSendPaymentMethod) {
     if (paymentMethod.sparkTransferFeeSats != null) {
       print('Choose payment option:');
       print('1. Spark transfer fee: ${paymentMethod.sparkTransferFeeSats} sats');
       print('2. Lightning fee: ${paymentMethod.lightningFeeSats} sats');
-      final line = prompt('', defaultValue: '1');
+      final line = await prompt('', defaultValue: '1');
       if (line == '1') {
-        return SendPaymentOptions.bolt11Invoice(preferSpark: true, completionTimeoutSecs: 0);
+        return Bolt11InvoiceSendPaymentOptions(preferSpark: true, completionTimeoutSecs: 0);
       }
     }
-    return SendPaymentOptions.bolt11Invoice(preferSpark: false, completionTimeoutSecs: 0);
+    return Bolt11InvoiceSendPaymentOptions(preferSpark: false, completionTimeoutSecs: 0);
   }
 
-  if (paymentMethod is SendPaymentMethod_SparkAddress) {
+  if (paymentMethod is SparkAddressSendPaymentMethod) {
     // HTLC options are only valid for Bitcoin payments, not token payments
     if (paymentMethod.tokenIdentifier != null) return null;
 
-    final answer = prompt('Do you want to create an HTLC transfer? (y/n)', defaultValue: 'n');
+    final answer = await prompt('Do you want to create an HTLC transfer? (y/n)', defaultValue: 'n');
     if (answer.toLowerCase() != 'y') return null;
 
-    var paymentHash = prompt('Please enter the HTLC payment hash (hex string) or leave empty to generate: ');
+    var paymentHash = await prompt(
+      'Please enter the HTLC payment hash (hex string) or leave empty to generate: ',
+    );
     if (paymentHash.isEmpty) {
       final random = Random.secure();
       final preimageBytes = Uint8List(32);
@@ -1404,15 +1398,15 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
       print('Associated payment hash: $paymentHash');
     }
 
-    final expiryStr = prompt('Please enter the HTLC expiry duration in seconds: ');
+    final expiryStr = await prompt('Please enter the HTLC expiry duration in seconds: ');
     final expiryDurationSecs = BigInt.parse(expiryStr);
 
-    return SendPaymentOptions.sparkAddress(
-      htlcOptions: SparkHtlcOptions(paymentHash: paymentHash, expiryDurationSecs: expiryDurationSecs),
+    return SparkAddressSendPaymentOptions(
+      SparkHtlcOptions(paymentHash: paymentHash, expiryDurationSecs: expiryDurationSecs),
     );
   }
 
-  // SendPaymentMethod_SparkInvoice, SendPaymentMethod_CrossChainAddress
+  // SparkInvoiceSendPaymentMethod, CrossChainAddressSendPaymentMethod
   return null;
 }
 
@@ -1445,7 +1439,7 @@ Future<CrossChainRoutePair?> _selectCrossChainRoute(BreezSdk sdk, CrossChainRout
     );
   }
 
-  final line = prompt('Select route: ');
+  final line = await prompt('Select route: ');
   final choice = int.tryParse(line.trim());
   if (choice == null || choice < 1 || choice > routes.length) {
     print('Invalid selection');

@@ -1,4 +1,43 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+
+/// Reads stdin asynchronously, so SDK events still print while the CLI waits
+/// for input. Every read goes through [input]: a stdin stream can only be
+/// listened to once.
+class StdinReader {
+  final StreamIterator<List<int>> _chunks = StreamIterator(stdin);
+  List<int> _pending = const [];
+  int _offset = 0;
+
+  /// The next byte, or -1 at end of input.
+  Future<int> readByte() async {
+    while (_offset >= _pending.length) {
+      if (!await _chunks.moveNext()) return -1;
+      _pending = _chunks.current;
+      _offset = 0;
+    }
+    return _pending[_offset++];
+  }
+
+  /// The next line without its line ending, or `null` at end of input.
+  Future<String?> readLine() async {
+    final bytes = <int>[];
+    while (true) {
+      final byte = await readByte();
+      if (byte == -1) {
+        if (bytes.isEmpty) return null;
+        break;
+      }
+      if (byte == 10) break;
+      bytes.add(byte);
+    }
+    if (bytes.isNotEmpty && bytes.last == 13) bytes.removeLast();
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+}
+
+final input = StdinReader();
 
 /// Lightweight readline with tab completion and persistent history.
 ///
@@ -23,7 +62,9 @@ class Readline {
   ///
   /// Returns `null` on EOF (Ctrl-D on empty line).
   /// Throws [StdinException] on Ctrl-C.
-  String? readLine(String prompt) {
+  /// Piped (non-TTY) stdin is read as plain lines, with no prompt or raw mode.
+  Future<String?> readLine(String prompt) async {
+    if (!stdin.hasTerminal) return input.readLine();
     stdout.write(prompt);
     stdin.echoMode = false;
     stdin.lineMode = false;
@@ -33,7 +74,7 @@ class Readline {
 
     try {
       while (true) {
-        final byte = stdin.readByteSync();
+        final byte = await input.readByte();
         if (byte == -1) return null;
 
         // Ctrl-D — EOF on empty line, delete-char otherwise
@@ -137,10 +178,10 @@ class Readline {
 
         // Escape sequence
         if (byte == 27) {
-          final next = stdin.readByteSync();
+          final next = await input.readByte();
           if (next == 91) {
             // CSI sequence
-            final seq = stdin.readByteSync();
+            final seq = await input.readByte();
             switch (seq) {
               case 65: // Up arrow
                 if (_history.isNotEmpty) {
@@ -181,7 +222,7 @@ class Readline {
                 _moveCursorTo(prompt, buf, cursor, buf.length);
                 cursor = buf.length;
               case 51: // Delete (ESC [ 3 ~)
-                final tilde = stdin.readByteSync();
+                final tilde = await input.readByte();
                 if (tilde == 126 && cursor < buf.length) {
                   buf.removeAt(cursor);
                   _redrawFrom(prompt, buf, cursor);

@@ -17,10 +17,10 @@ Future<PrepareRecoverFundsResponse> prepareRecovery(BreezSdk sdk) async {
   // ANCHOR: prepare-recover-funds
   PrepareRecoverFundsRequest request = PrepareRecoverFundsRequest(
     feeRateSatPerVbyte: BigInt.from(2),
-    fundingKind: const CpfpFundingKind.p2Wpkh(),
+    fundingKind: P2wpkhCpfpFundingKind(),
     fundingStrategy: null,
     destination: "bc1q...your-destination-address",
-    selection: const ExitLeafSelection.recoverableOnly(),
+    selection: RecoverableOnlyExitLeafSelection(),
   );
 
   PrepareRecoverFundsResponse quote = await sdk.prepareRecoverFunds(request: request);
@@ -61,13 +61,13 @@ Future<void> recoverCooperatively(BreezSdk sdk, PrepareRecoverFundsResponse quot
         fundingKind: null,
         fundingStrategy: null,
         destination: quote.destination,
-        selection: ExitLeafSelection.specific(leafIds: leafIds),
+        selection: SpecificExitLeafSelection(leafIds),
       ),
     );
   }
   RecoverFundsResponse response = await sdk.recoverFunds(
     request: RecoverFundsRequest(prepared: quote, fundingInputs: []),
-    signerSecretKey: null,
+    signer: null,
   );
 
   // Keep the whole response: checkRecoverFunds follows the recovery from it.
@@ -86,12 +86,14 @@ Future<RecoverFundsResponse> recoverWithFunding(
 ) async {
   // ANCHOR: recover-funds
   List<int> secretKeyBytes = hex.decode("your-secret-key-hex");
+  CpfpSigner signer =
+      singleKeyCpfpSigner(secretKeyBytes: Uint8List.fromList(secretKeyBytes));
 
   RecoverFundsResponse response = await sdk.recoverFunds(
     request: RecoverFundsRequest(
       prepared: quote,
       fundingInputs: [
-        CpfpInput.p2Wpkh(
+        P2wpkhCpfpInput(
           txid: "your-utxo-txid",
           vout: 0,
           valueSats: BigInt.from(50000),
@@ -99,7 +101,7 @@ Future<RecoverFundsResponse> recoverWithFunding(
         ),
       ],
     ),
-    signerSecretKey: Uint8List.fromList(secretKeyBytes),
+    signer: signer,
   );
 
   // Keep the whole response: checkRecoverFunds follows the recovery from it.
@@ -123,15 +125,15 @@ Future<void> checkRecovery(BreezSdk sdk, RecoverFundsResponse stored) async {
   RecoverFundsResponse recovery = checked.recovery;
 
   RecoveryVerdict verdict = checked.verdict;
-  if (verdict is RecoveryVerdict_Valid) {
+  if (verdict is ValidRecoveryVerdict) {
     for (RecoveryTransaction tx in recovery.transactions) {
-      if (tx.status is ExitTransactionStatus_Ready) {
+      if (tx.status is ReadyExitTransactionStatus) {
         print("ready to broadcast: ${tx.txid}");
       }
     }
-  } else if (verdict is RecoveryVerdict_Done) {
+  } else if (verdict is DoneRecoveryVerdict) {
     print("Every transaction confirmed: the recovery is done");
-  } else if (verdict is RecoveryVerdict_Redo) {
+  } else if (verdict is RedoRecoveryVerdict) {
     // Prepare and build again, naming the same leaves. Pass
     // recovery.fundingInputs back and the SDK follows them to whatever they
     // have become.
@@ -173,32 +175,15 @@ Future<void> collectExitData(BreezSdk sdk) async {
 }
 
 // ANCHOR: custom-cpfp-signer
-Future<RecoverFundsResponse> recoverWithFundingSigner(
-  BreezSdk sdk,
-  PrepareRecoverFundsResponse quote,
-) async {
-  RecoverFundsResponse response = await sdk.recoverFundsWithSigner(
-    request: RecoverFundsRequest(
-      prepared: quote,
-      fundingInputs: [
-        CpfpInput.p2Wpkh(
-          txid: "your-utxo-txid",
-          vout: 0,
-          valueSats: BigInt.from(50000),
-          pubkey: "your-compressed-pubkey-hex",
-        ),
-      ],
-    ),
-    signPsbt: (Uint8List psbtBytes) async {
-      Uint8List signedPsbtBytes = await signWithFundingKeys(psbtBytes);
-      return signedPsbtBytes;
-    },
-  );
+class MyFundingSigner implements CpfpSigner {
+  @override
+  Future<Uint8List> signPsbt(Uint8List psbtBytes) async {
+    Uint8List signedPsbtBytes = await signWithFundingKeys(psbtBytes);
+    return signedPsbtBytes;
+  }
 
-  return response;
-}
-
-Future<Uint8List> signWithFundingKeys(Uint8List psbtBytes) async {
-  return psbtBytes;
+  Future<Uint8List> signWithFundingKeys(Uint8List psbtBytes) async {
+    return psbtBytes;
+  }
 }
 // ANCHOR_END: custom-cpfp-signer

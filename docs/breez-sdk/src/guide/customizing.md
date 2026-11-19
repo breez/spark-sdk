@@ -22,8 +22,6 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 
 When using the SDK Builder, you either have to provide a Storage implementation or use the default storage from the SDK.
 
-**Note:** Flutter currently only supports using the default storage.
-
 <h2 id="with-postgres-backend">
     <a class="header" href="#with-postgres-backend">With PostgreSQL Backend</a>
 </h2>
@@ -32,7 +30,7 @@ The SDK includes a PostgreSQL backend as an alternative to file-based storage. B
 
 If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
-**Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+**Note:** Not available on iOS, Android or Flutter, where calling it returns an error, or for React Native. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
 {{#tabs sdk_building:init-sdk-postgres}}
 
@@ -53,7 +51,7 @@ The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based st
 
 If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
-**Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+**Note:** Not available on iOS, Android or Flutter, where calling it returns an error, or for React Native. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
 {{#tabs sdk_building:init-sdk-mysql}}
 
@@ -104,8 +102,6 @@ The SDK derives all wallet keys from the seed at the derivation path `m/8797555'
 
 By implementing the Payment Observer interface you can be notified before a payment is sent. It includes information about the provisional payment including the payment ID, amount to be sent (in satoshis or token base units) and payment details based on the payment method.
 
-**Note:** Flutter currently does not support this.
-
 {{#tabs sdk_building:with-payment-observer}}
 
 ## With Session Store
@@ -122,8 +118,6 @@ At-rest encryption is one such transform (the SDK does not encrypt tokens itself
 <h4>Developer note</h4>
 
 When wrapping the backend's store, pass the same storage backend to both {{#name with_storage_backend}} and {{#name default_session_store}} so the session store shares the SDK's persistence. On the WASM binding {{#name default_session_store}} takes the storage config and the wallet identity public key (hex) instead of a backend.
-
-**Note:** Not supported in Flutter.
 
 </div>
 
