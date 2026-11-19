@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 use platform_utils::time::Duration;
 use platform_utils::tokio;
 use spark_wallet::{
-    IssuedQuote, PayLightningInvoiceResult, SendQuoteAmount, SparkWallet, TransferId,
+    IssuedQuote, PayLightningInvoiceResult, QuotedLightningSend, SendQuoteAmount, SparkWallet,
+    TransferId,
 };
 use tokio::select;
 use tokio::sync::{oneshot, watch};
@@ -224,18 +225,18 @@ impl LightningSender {
             .await
     }
 
-    /// [`pay_and_persist_lightning_invoice`](Self::pay_and_persist_lightning_invoice)
-    /// under a fee quote, which also fixes the send's transfer id. The quote is
-    /// checked again first: it may have expired, or been altered, since prepare.
-    pub(crate) async fn pay_and_persist_quoted_lightning_invoice(
+    /// The quote to commit a send under: the prepared `fee_quote` while it is
+    /// still committable, otherwise a new one on the same terms. With
+    /// `transfer_id`, the caller's idempotency key, a new quote commits that
+    /// transfer. A new quote must price the payment exactly as prepared, since
+    /// the prepare response is what the user approved.
+    pub(crate) async fn committable_send_quote(
         &self,
         invoice: &str,
         fee_quote: &LightningFeeQuote,
         amount: SendQuoteAmount,
-        transfer_id: Option<TransferId>,
-        displayed_amount: u128,
-        completion_timeout_secs: u64,
-    ) -> Result<Payment, SdkError> {
+        transfer_id: Option<&TransferId>,
+    ) -> Result<QuotedLightningSend, SdkError> {
         let prepared = self
             .spark_wallet
             .verify_lightning_send_quote(
@@ -245,25 +246,37 @@ impl LightningSender {
                 amount,
             )
             .await?;
-        // The caller's idempotency key is the transfer an unquoted send would
-        // make, so the send is quoted again to commit that transfer. A retry
-        // under the same terms and transfer gets the committed quote back.
-        let quote = match transfer_id {
-            Some(transfer_id) if transfer_id != prepared.transfer_id => {
-                let quote = self
-                    .spark_wallet
-                    .fetch_lightning_send_quote(invoice, amount, Some(&transfer_id))
-                    .await?;
-                if quote.total_sats > prepared.total_sats {
-                    return Err(SdkError::InvalidInput(
-                        "The fees rose since the payment was prepared: prepare it again"
-                            .to_string(),
-                    ));
-                }
-                quote
-            }
-            _ => prepared,
-        };
+        let reusable = prepared.check_unexpired().is_ok()
+            && transfer_id.is_none_or(|id| *id == prepared.transfer_id);
+        if reusable {
+            return Ok(prepared);
+        }
+        let quote = self
+            .spark_wallet
+            .fetch_lightning_send_quote(invoice, amount, transfer_id)
+            .await?;
+        if quote.amount_sats != prepared.amount_sats || quote.total_sats != prepared.total_sats {
+            return Err(SdkError::InvalidInput(
+                "The fees changed since the payment was prepared: prepare it again".to_string(),
+            ));
+        }
+        Ok(quote)
+    }
+
+    /// [`pay_and_persist_lightning_invoice`](Self::pay_and_persist_lightning_invoice)
+    /// under a fee quote, which also fixes the send's transfer id.
+    pub(crate) async fn pay_and_persist_quoted_lightning_invoice(
+        &self,
+        invoice: &str,
+        fee_quote: &LightningFeeQuote,
+        amount: SendQuoteAmount,
+        transfer_id: Option<TransferId>,
+        displayed_amount: u128,
+        completion_timeout_secs: u64,
+    ) -> Result<Payment, SdkError> {
+        let quote = self
+            .committable_send_quote(invoice, fee_quote, amount, transfer_id.as_ref())
+            .await?;
         let _in_flight = self
             .record_pending_send(&PendingLightningSend {
                 transfer_id: quote.transfer_id.to_string(),

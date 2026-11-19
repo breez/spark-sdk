@@ -981,16 +981,15 @@ pub struct _ExternalPrepareTokenTransactionRequest {
     pub digest: Vec<u8>,
 }
 
-#[frb(mirror(ExternalQuoteSignatureKind))]
-pub enum _ExternalQuoteSignatureKind {
-    TransferManifest,
-    ReceiveAttestation,
-}
-
 #[frb(mirror(ExternalSignQuoteRequest))]
-pub struct _ExternalSignQuoteRequest {
-    pub kind: ExternalQuoteSignatureKind,
-    pub digest: Vec<u8>,
+pub enum _ExternalSignQuoteRequest {
+    TransferManifest {
+        serialized_manifest: Vec<u8>,
+    },
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: Vec<u8>,
+    },
 }
 
 #[frb(mirror(ExternalSignedQuote))]

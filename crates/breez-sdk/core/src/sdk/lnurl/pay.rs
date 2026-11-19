@@ -3,7 +3,7 @@ use breez_sdk_common::lnurl::{
     pay::{CallbackResponse, ValidatedCallbackResponse, validate_lnurl_pay},
 };
 use spark_wallet::SendQuoteAmount;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     ConversionEstimate, ConversionType, FeePolicy, InputType, LightningFeeQuote, LnurlPayContext,
@@ -173,7 +173,8 @@ async fn prepare_fees_included(
 
     if sdk.quote_lightning_sends && conversion_estimate.is_none() {
         match prepare_quoted_fees_included(sdk, &request, amount_sats, min_sendable_sats).await {
-            Ok(response) => return Ok(response),
+            Ok(Some(response)) => return Ok(response),
+            Ok(None) => debug!("Sending without a fee quote: it carries no partner fee"),
             Err(e) => warn!("Sending without a fee quote: {e}"),
         }
     }
@@ -244,18 +245,22 @@ async fn prepare_fees_included(
 /// A `FeesIncluded` LNURL pay priced by a send quote. The invoice is sized by
 /// the fees quoted on paying the full amount, and the quote spends exactly
 /// that amount on it: whatever the fees leave beyond the invoice goes to them.
+/// `None` when the quote carries no partner fee.
 async fn prepare_quoted_fees_included(
     sdk: &BreezSdk,
     request: &PrepareLnurlPayRequest,
     amount_sats: u64,
     min_sendable_sats: u64,
-) -> Result<PrepareLnurlPayResponse, SdkError> {
+) -> Result<Option<PrepareLnurlPayResponse>, SdkError> {
     let sizing_invoice =
         query_lnurl_invoice(sdk, request, amount_sats.saturating_mul(1_000)).await?;
     let sizing_quote = sdk
         .spark_wallet
         .fetch_lightning_send_quote(&sizing_invoice.pr, SendQuoteAmount::Invoice, None)
         .await?;
+    if !sizing_quote.carries_partner_fee() {
+        return Ok(None);
+    }
     let actual_amount = amount_sats.saturating_sub(
         sizing_quote
             .total_sats
@@ -284,7 +289,7 @@ async fn prepare_quoted_fees_included(
         quote.amount_sats
     );
 
-    Ok(PrepareLnurlPayResponse {
+    Ok(Some(PrepareLnurlPayResponse {
         amount_sats,
         comment: request.comment.clone(),
         pay_request: request.pay_request.clone(),
@@ -294,7 +299,7 @@ async fn prepare_quoted_fees_included(
         conversion_estimate: None,
         fee_policy: FeePolicy::FeesIncluded,
         fee_quote: Some(LightningFeeQuote::from(&quote)),
-    })
+    }))
 }
 
 #[allow(clippy::too_many_lines)]

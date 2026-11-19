@@ -13,6 +13,7 @@ use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
 use super::{FrostAdaptor, SignerError};
+use crate::quote::{QuoteError, receive_attestation_digest, serialized_transfer_manifest_hash};
 use crate::services::TransferId;
 use crate::tree::{TreeNode, TreeNodeId};
 
@@ -370,24 +371,34 @@ pub struct PreparedTokenTransaction {
 
 // ─── sign_quote ───────────────────────────────────────────────────────────
 
-/// Which signature over a fee-bearing (quoted) payment is requested. Lets
-/// policy-enforcing signers gate a sender's consent separately from a receive
-/// attestation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuoteSignatureKind {
-    /// A sender's consent to the transfer manifest it funds: the digest is the
-    /// manifest hash.
-    TransferManifest,
-    /// The attestor's endorsement of a receive quote: the digest is the quote
-    /// envelope bound to the invoice's payment hash.
-    ReceiveAttestation,
+/// A signature over a fee-bearing (quoted) payment. The signer derives the
+/// digest from the quote itself, so it signs only quote digests, never bytes a
+/// caller chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignQuoteRequest {
+    /// A sender's consent to the transfer manifest it funds.
+    TransferManifest { serialized_manifest: Vec<u8> },
+    /// The attestor's endorsement of a receive quote, bound to the invoice
+    /// paid under it.
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: [u8; 32],
+    },
 }
 
-#[derive(Debug, Clone)]
-pub struct SignQuoteRequest {
-    pub kind: QuoteSignatureKind,
-    /// 32-byte digest to ECDSA-sign with the identity key, as is.
-    pub digest: [u8; 32],
+impl SignQuoteRequest {
+    /// The 32-byte digest the identity key signs.
+    pub fn digest(&self) -> Result<[u8; 32], QuoteError> {
+        match self {
+            Self::TransferManifest {
+                serialized_manifest,
+            } => serialized_transfer_manifest_hash(serialized_manifest),
+            Self::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => receive_attestation_digest(serialized_manifest, payment_hash),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -555,9 +566,8 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError>;
 
-    /// ECDSA-sign the digest of a quoted payment of any [`QuoteSignatureKind`]
-    /// with the identity key. The digest is signed as is, unlike
-    /// [`sign_message`](Self::sign_message), which hashes its input first.
+    /// ECDSA-sign the digest of a quoted payment (see
+    /// [`SignQuoteRequest::digest`]) with the identity key.
     async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError>;
 }
 

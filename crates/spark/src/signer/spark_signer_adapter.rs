@@ -714,9 +714,12 @@ impl SparkSigner for SparkSignerAdapter {
     }
 
     async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError> {
+        let digest = request
+            .digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
         let signature = self
             .signer
-            .sign_digest_ecdsa(&identity_path()?, &request.digest)
+            .sign_digest_ecdsa(&identity_path()?, &digest)
             .await?;
         Ok(SignedQuote { signature })
     }
@@ -735,8 +738,8 @@ mod tests {
     use crate::operator::rpc::spark as proto;
     use crate::services::TransferId;
     use crate::signer::{
-        LeafSigningKey, OperatorRecipient, PrepareTransferRequest, QuoteSignatureKind,
-        SignQuoteRequest, SparkSigner, TransferLeafInput, create_test_signer,
+        LeafSigningKey, OperatorRecipient, PrepareTransferRequest, SignQuoteRequest, SparkSigner,
+        TransferLeafInput, create_test_signer,
     };
     use crate::tree::TreeNodeId;
     use crate::tree::tests::create_test_tree_node;
@@ -846,23 +849,48 @@ mod tests {
         }
     }
 
-    /// A quote digest is signed as is with the identity key, low-S, so it
-    /// verifies the way the operators and the SSP check it.
+    fn test_manifest() -> Vec<u8> {
+        let key = |seed: u8| {
+            SecretKey::from_slice(&[seed; 32])
+                .unwrap()
+                .public_key(&Secp256k1::new())
+                .serialize()
+                .to_vec()
+        };
+        proto::TransferManifest {
+            version: 1,
+            transfer_id: "0197f9a0-0000-7000-8000-000000000001".to_string(),
+            network: proto::Network::Regtest.into(),
+            edges: vec![proto::ManifestEdge {
+                sender_identity_public_key: key(0x51),
+                receiver_identity_public_key: key(0x52),
+                amount: Some(proto::ManifestAmount {
+                    amount: Some(proto::manifest_amount::Amount::Sats(1_000)),
+                }),
+            }],
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    /// The signer signs the digest it derives from the quote, low-S and
+    /// unhashed, so it verifies the way the operators and the SSP check it.
     #[async_test_all]
-    async fn a_quote_digest_is_signed_unhashed_with_the_identity_key() {
+    async fn a_quote_is_signed_over_the_digest_derived_from_it() {
         let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
-        let digest = [0x5au8; 32];
-        for kind in [
-            QuoteSignatureKind::TransferManifest,
-            QuoteSignatureKind::ReceiveAttestation,
+        let identity = adapter.get_identity_public_key().await.unwrap();
+        for request in [
+            SignQuoteRequest::TransferManifest {
+                serialized_manifest: test_manifest(),
+            },
+            SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest: test_manifest(),
+                payment_hash: [7; 32],
+            },
         ] {
-            let signed = adapter
-                .sign_quote(SignQuoteRequest { kind, digest })
-                .await
-                .unwrap();
-            let identity = adapter.get_identity_public_key().await.unwrap();
+            let signed = adapter.sign_quote(request.clone()).await.unwrap();
             crate::quote::verify_identity_signature(
-                &digest,
+                &request.digest().unwrap(),
                 &signed.signature.serialize_der(),
                 &identity,
             )
@@ -871,18 +899,18 @@ mod tests {
             let mut normalized = signed.signature;
             normalized.normalize_s();
             assert_eq!(normalized, signed.signature, "the signature is low-S");
-
-            let hashed = adapter.sign_message(&digest).await.unwrap();
-            assert!(
-                crate::quote::verify_identity_signature(
-                    &digest,
-                    &hashed.serialize_der(),
-                    &identity
-                )
-                .is_err(),
-                "sign_message hashes its input, so it cannot stand in"
-            );
         }
+    }
+
+    #[async_test_all]
+    async fn a_quote_that_is_not_a_manifest_is_refused() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let result = adapter
+            .sign_quote(SignQuoteRequest::TransferManifest {
+                serialized_manifest: vec![0x5a; 32],
+            })
+            .await;
+        assert!(result.is_err());
     }
 
     /// One transfer can pay several receivers: each leaf's new key is encrypted

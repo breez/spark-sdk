@@ -10,6 +10,9 @@ pub enum QuoteError {
     InvalidManifest(String),
     #[error("invalid quote signature: {0}")]
     InvalidSignature(String),
+    /// The quote is past its expiry, so the SSP no longer commits it.
+    #[error("quote has expired")]
+    Expired,
 }
 
 impl QuoteError {

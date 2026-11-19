@@ -913,40 +913,57 @@ impl ExternalPreparedTokenTransaction {
 
 // ─── quote signing ──────────────────────────────────────────────────────────
 
-/// FFI-safe representation of `spark_wallet::QuoteSignatureKind`.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+/// FFI-safe representation of `spark_wallet::SignQuoteRequest`: a signature
+/// over a fee-bearing (quoted) payment. The signer computes the digest it signs
+/// from the quote, with [`quote_signing_digest`](crate::quote_signing_digest).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ExternalQuoteSignatureKind {
-    /// A sender's consent to the transfer manifest it funds.
-    TransferManifest,
-    /// The attestor's endorsement of a receive quote, bound to the invoice.
-    ReceiveAttestation,
-}
-
-impl ExternalQuoteSignatureKind {
-    pub fn from_kind(kind: spark_wallet::QuoteSignatureKind) -> Self {
-        match kind {
-            spark_wallet::QuoteSignatureKind::TransferManifest => Self::TransferManifest,
-            spark_wallet::QuoteSignatureKind::ReceiveAttestation => Self::ReceiveAttestation,
-        }
-    }
-}
-
-/// FFI-safe representation of `spark_wallet::SignQuoteRequest`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ExternalSignQuoteRequest {
-    pub kind: ExternalQuoteSignatureKind,
-    /// 32-byte digest to sign as is, with no further hashing.
-    pub digest: Vec<u8>,
+pub enum ExternalSignQuoteRequest {
+    /// A sender's consent to how the payment it funds is split.
+    TransferManifest { serialized_manifest: Vec<u8> },
+    /// The attestor's endorsement of a receive quote, bound to the invoice
+    /// paid under it.
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: Vec<u8>,
+    },
 }
 
 impl ExternalSignQuoteRequest {
     pub fn from_sign_quote_request(r: &spark_wallet::SignQuoteRequest) -> Self {
-        Self {
-            kind: ExternalQuoteSignatureKind::from_kind(r.kind),
-            digest: r.digest.to_vec(),
+        match r {
+            spark_wallet::SignQuoteRequest::TransferManifest {
+                serialized_manifest,
+            } => Self::TransferManifest {
+                serialized_manifest: serialized_manifest.clone(),
+            },
+            spark_wallet::SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => Self::ReceiveAttestation {
+                serialized_manifest: serialized_manifest.clone(),
+                payment_hash: payment_hash.to_vec(),
+            },
         }
+    }
+
+    pub fn to_sign_quote_request(&self) -> Result<spark_wallet::SignQuoteRequest, SdkError> {
+        Ok(match self {
+            Self::TransferManifest {
+                serialized_manifest,
+            } => spark_wallet::SignQuoteRequest::TransferManifest {
+                serialized_manifest: serialized_manifest.clone(),
+            },
+            Self::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => spark_wallet::SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest: serialized_manifest.clone(),
+                payment_hash: payment_hash.as_slice().try_into().map_err(|_| {
+                    SdkError::InvalidInput("payment hash must be 32 bytes".to_string())
+                })?,
+            },
+        })
     }
 }
 

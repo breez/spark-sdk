@@ -13,14 +13,13 @@ use crate::{
         TransferSignature, TransferTarget, UnsignedTransferPackage,
     },
     sdk::BreezSdk,
-    sdk::issued_quote,
     sdk::payments::{send, validation},
     sdk::token_allowances::{
         address_of, decode_prepare_response, decode_pull_context, describes_pull, pull_receivers,
     },
     signer::{
         ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest,
-        ExternalQuoteSignatureKind, ExternalSignQuoteRequest, ExternalTokenTransactionKind,
+        ExternalSignQuoteRequest, ExternalTokenTransactionKind,
     },
 };
 
@@ -285,7 +284,7 @@ async fn build_lightning_package(
 
 /// A Lightning package priced by `fee_quote`: its leaves fund each of the
 /// quote's receivers exactly, and the signer also signs the quote's split. The
-/// quote is checked first, so an expired or altered one fails here.
+/// quote is checked first, and quoted again on the same terms once expired.
 pub(in crate::sdk) async fn build_quoted_lightning_package(
     sdk: &BreezSdk,
     invoice_details: &crate::Bolt11InvoiceDetails,
@@ -295,26 +294,17 @@ pub(in crate::sdk) async fn build_quoted_lightning_package(
 ) -> Result<UnsignedTransferPackage, SdkError> {
     let bolt11 = &invoice_details.invoice.bolt11;
     let quote = sdk
-        .spark_wallet
-        .verify_lightning_send_quote(
-            bolt11,
-            &issued_quote(fee_quote)?,
-            fee_quote.payment_msats,
-            amount,
-        )
+        .lightning_sender
+        .committable_send_quote(bolt11, fee_quote, amount, None)
         .await?;
     let prep = sdk
         .spark_wallet
         .prepare_quoted_lightning_send_package(&quote)
         .await?;
     let sign_quote = match prep {
-        SendPackagePreparation::Ready(_) => Some(ExternalSignQuoteRequest {
-            kind: ExternalQuoteSignatureKind::TransferManifest,
-            digest: quote
-                .manifest_hash()
-                .map_err(|e| SdkError::Generic(e.to_string()))?
-                .to_vec(),
-        }),
+        SendPackagePreparation::Ready(_) => Some(
+            ExternalSignQuoteRequest::from_sign_quote_request(&quote.sign_quote_request()),
+        ),
         SendPackagePreparation::SwapRequired { .. } => None,
     };
     to_unsigned_quoted_package(
@@ -326,7 +316,7 @@ pub(in crate::sdk) async fn build_quoted_lightning_package(
             lnurl_pay: None,
             fee_policy: FeePolicy::FeesExcluded,
             completion_timeout_secs,
-            fee_quote: Some(fee_quote.clone()),
+            fee_quote: Some(LightningFeeQuote::from(&quote)),
         },
         sign_quote,
     )

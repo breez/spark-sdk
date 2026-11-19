@@ -965,19 +965,16 @@ pub struct ExternalPreparedTokenTransaction {
 }
 
 #[macros::extern_wasm_bindgen(
-    breez_sdk_spark::signer::external_spark_types::ExternalQuoteSignatureKind
-)]
-pub enum ExternalQuoteSignatureKind {
-    TransferManifest,
-    ReceiveAttestation,
-}
-
-#[macros::extern_wasm_bindgen(
     breez_sdk_spark::signer::external_spark_types::ExternalSignQuoteRequest
 )]
-pub struct ExternalSignQuoteRequest {
-    pub kind: ExternalQuoteSignatureKind,
-    pub digest: Vec<u8>,
+pub enum ExternalSignQuoteRequest {
+    TransferManifest {
+        serialized_manifest: Vec<u8>,
+    },
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: Vec<u8>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSignedQuote)]

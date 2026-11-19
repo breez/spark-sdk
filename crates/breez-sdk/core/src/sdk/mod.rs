@@ -472,6 +472,21 @@ pub fn default_external_signers(
     })
 }
 
+/// The 32-byte digest an [`ExternalSparkSigner`](crate::signer::ExternalSparkSigner)
+/// signs for `request`, with the identity key, as is. Computed from the quote
+/// itself, so a signer never signs bytes the requester chose.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn quote_signing_digest(
+    request: crate::signer::ExternalSignQuoteRequest,
+) -> Result<Vec<u8>, SdkError> {
+    Ok(request
+        .to_sign_quote_request()?
+        .digest()
+        .map_err(|e| SdkError::InvalidInput(e.to_string()))?
+        .to_vec())
+}
+
 /// Options for [`get_spark_status`].
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

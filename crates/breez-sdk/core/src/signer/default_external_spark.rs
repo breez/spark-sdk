@@ -20,7 +20,7 @@ use crate::signer::external_spark_types::{
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalQuoteSignatureKind, ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
+    ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
     ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
     ExternalSignedQuote, ExternalSignedSparkInvoice, ExternalSparkInvoiceKind,
     ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
@@ -36,11 +36,10 @@ use crate::{Network, SdkError, Seed};
 use spark_wallet::{
     ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
-    PrepareTransferRequest, QuoteSignatureKind, SignQuoteRequest, SignSparkInvoiceRequest,
-    SignStaticDepositRefundRequest, SignWatchtowerExitRecoveryRequest, SigningKeyshare,
-    SparkInvoiceKind, SparkSigner, SparkSignerAdapter, StartStaticDepositRefundRequest,
-    StartWatchtowerExitRecoveryRequest, TokenTransactionKind, TransferLeafInput, TreeNode,
-    TreeNodeId, TreeNodeStatus,
+    PrepareTransferRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
+    SignWatchtowerExitRecoveryRequest, SigningKeyshare, SparkInvoiceKind, SparkSigner,
+    SparkSignerAdapter, StartStaticDepositRefundRequest, StartWatchtowerExitRecoveryRequest,
+    TokenTransactionKind, TransferLeafInput, TreeNode, TreeNodeId, TreeNodeStatus,
 };
 
 /// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
@@ -557,20 +556,9 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
         &self,
         request: ExternalSignQuoteRequest,
     ) -> Result<ExternalSignedQuote, SignerError> {
-        let digest = hash_32(&request.digest, "quote digest")?;
         let signed = self
             .inner
-            .sign_quote(SignQuoteRequest {
-                kind: match request.kind {
-                    ExternalQuoteSignatureKind::TransferManifest => {
-                        QuoteSignatureKind::TransferManifest
-                    }
-                    ExternalQuoteSignatureKind::ReceiveAttestation => {
-                        QuoteSignatureKind::ReceiveAttestation
-                    }
-                },
-                digest,
-            })
+            .sign_quote(request.to_sign_quote_request().map_err(err)?)
             .await
             .map_err(err)?;
         Ok(ExternalSignedQuote {
@@ -591,17 +579,17 @@ mod tests {
     use frost_secp256k1_tr::keys::{KeyPackage, SigningShare, VerifyingShare};
     use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
     use spark_wallet::{
-        DefaultSigner, LeafSigningKey, QuoteSignatureKind, SignQuoteRequest,
-        SignWatchtowerExitRecoveryRequest, SparkSigner, SparkSignerAdapter,
-        StartWatchtowerExitRecoveryRequest, TransferLeafInput, TreeNodeId,
+        DefaultSigner, LeafSigningKey, SignQuoteRequest, SignWatchtowerExitRecoveryRequest,
+        SparkSigner, SparkSignerAdapter, StartWatchtowerExitRecoveryRequest, TransferLeafInput,
+        TreeNodeId,
     };
 
     use super::{DefaultExternalSparkSigner, node_with_id};
-    use crate::signer::ExternalSparkSignerAdapter;
     use crate::signer::external_spark_types::{
         ExternalLeafSigningKey, ExternalSignedQuote, ExternalTransferLeafInput,
     };
     use crate::signer::external_types::EcdsaSignatureBytes;
+    use crate::signer::{ExternalSparkSigner, ExternalSparkSignerAdapter};
     use crate::{Network, Seed};
 
     const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -776,6 +764,72 @@ mod tests {
         assert_eq!(back.signing_key, native.signing_key);
     }
 
+    /// A one-edge regtest manifest, protobuf-encoded by hand: this crate does
+    /// not depend on the generated types.
+    fn test_manifest() -> Vec<u8> {
+        let key = |seed: u8| {
+            SecretKey::from_slice(&[seed; 32])
+                .unwrap()
+                .public_key(&Secp256k1::new())
+                .serialize()
+        };
+        // sender (1), receiver (2), amount (3) of 1_000 sats.
+        let mut edge = vec![0x0a, 33];
+        edge.extend(key(0x51));
+        edge.extend([0x12, 33]);
+        edge.extend(key(0x52));
+        edge.extend([0x1a, 0x03, 0x08, 0xe8, 0x07]);
+        // version (1), transfer id (2), network (3) regtest, edge (5).
+        let transfer_id = b"0197f9a0-0000-7000-8000-000000000001";
+        let mut manifest = vec![0x08, 0x01, 0x12, 36];
+        manifest.extend(transfer_id);
+        manifest.extend([0x18, 0x02, 0x2a, 75]);
+        manifest.extend(edge);
+        manifest
+    }
+
+    /// A custom signer that signs `quote_signing_digest` makes the signature
+    /// the SDK's own signer makes.
+    #[macros::async_test_all]
+    async fn quote_signing_digest_is_what_the_signer_signs() {
+        let external_signer =
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap();
+        let request = crate::signer::ExternalSignQuoteRequest::TransferManifest {
+            serialized_manifest: test_manifest(),
+        };
+        let signed = external_signer
+            .sign_quote(request.clone())
+            .await
+            .unwrap()
+            .to_signed_quote()
+            .unwrap();
+        let digest: [u8; 32] = crate::quote_signing_digest(request)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let identity = PublicKey::from_slice(
+            &external_signer
+                .get_identity_public_key()
+                .await
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        Secp256k1::verification_only()
+            .verify_ecdsa(&Message::from_digest(digest), &signed.signature, &identity)
+            .unwrap();
+        assert!(
+            crate::quote_signing_digest(
+                crate::signer::ExternalSignQuoteRequest::TransferManifest {
+                    serialized_manifest: vec![0x5a; 32],
+                }
+            )
+            .is_err(),
+            "only a manifest has a quote digest"
+        );
+    }
+
     /// The seed signer and the same seed behind the FFI produce the same quote
     /// signature: ECDSA here is deterministic (RFC 6979), so any difference is
     /// a digest hashed again or a different key.
@@ -794,9 +848,9 @@ mod tests {
             DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
                 .unwrap(),
         ));
-        let request = SignQuoteRequest {
-            kind: QuoteSignatureKind::ReceiveAttestation,
-            digest: [0x5a; 32],
+        let request = SignQuoteRequest::ReceiveAttestation {
+            serialized_manifest: test_manifest(),
+            payment_hash: [7; 32],
         };
 
         assert_eq!(

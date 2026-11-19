@@ -20,9 +20,9 @@ pub use hashing::{
 pub use resolution::{ResolvedEdge, allocate_manifest_edges, resolve_manifest_edges};
 pub use validation::{
     ManifestDenomination, ReceiveAmountBasis, ReceiveQuoteFee, SendManifestBucket,
-    manifest_denomination, manifest_fee_sats, manifest_gross_sats, manifest_net_sats_for,
-    manifest_send_buckets, receive_quote_fee, validate_quoted_receive_manifest,
-    validate_quoted_send_manifest,
+    manifest_denomination, manifest_fee_sats, manifest_gross_sats, manifest_has_partner_markup,
+    manifest_net_sats_for, manifest_send_buckets, receive_quote_fee,
+    validate_quoted_receive_manifest, validate_quoted_send_manifest,
 };
 
 #[cfg(test)]

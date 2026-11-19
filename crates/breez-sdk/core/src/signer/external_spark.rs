@@ -174,9 +174,10 @@ pub trait ExternalSparkSigner: Send + Sync {
         request: ExternalPrepareStaticDepositClaimRequest,
     ) -> Result<ExternalPreparedStaticDepositClaim, SignerError>;
 
-    /// ECDSA-sign the 32-byte digest of a fee-bearing payment with the identity
-    /// key, as is: unlike [`sign_message`](Self::sign_message), the digest is
-    /// not hashed again. The signature must be low-S.
+    /// ECDSA-sign a fee-bearing payment's quote with the identity key. Sign the
+    /// digest [`quote_signing_digest`](crate::quote_signing_digest) computes
+    /// from `request`, as is: unlike [`sign_message`](Self::sign_message), it
+    /// is not hashed again.
     async fn sign_quote(
         &self,
         request: ExternalSignQuoteRequest,

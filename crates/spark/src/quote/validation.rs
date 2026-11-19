@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::QuoteError;
 use crate::operator::rpc::spark::manifest_amount::Amount;
-use crate::operator::rpc::spark::{ManifestAmount, TransferManifest};
+use crate::operator::rpc::spark::{FeeSource, ManifestAmount, TransferManifest};
 
 const BPS_DENOMINATOR: u64 = 10_000;
 
@@ -91,6 +91,19 @@ pub fn manifest_net_sats_for(
     credited
         .checked_sub(fees_to_receiver)
         .ok_or_else(|| QuoteError::invalid("manifest leaves the receiver nothing"))
+}
+
+/// Whether the manifest carries a partner markup. Without one, quoting the
+/// payment adds nothing an unquoted one lacks.
+pub fn manifest_has_partner_markup(manifest: &TransferManifest) -> bool {
+    manifest.fees.iter().any(|fee| {
+        fee.source() == FeeSource::PartnerMarkup
+            && match amount_of(fee.amount.as_ref()) {
+                Some(Amount::Sats(sats)) => *sats > 0,
+                Some(Amount::Bps(bps)) => *bps > 0,
+                None => false,
+            }
+    })
 }
 
 /// The markup a receive quote carries on top of what the receiver keeps.

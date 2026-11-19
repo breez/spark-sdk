@@ -995,13 +995,9 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         &self,
         request: ExternalSignQuoteRequest,
     ) -> Result<ExternalSignedQuote, SignerError> {
-        if request.digest.len() != 32 {
-            return Err(SignerError::InvalidInput(format!(
-                "quote digest must be 32 bytes, got {}",
-                request.digest.len()
-            )));
-        }
-        let signature = self.sign_identity_ecdsa_digest(&request.digest).await?;
+        let digest = crate::quote_signing_digest(request)
+            .map_err(|e| SignerError::InvalidInput(e.to_string()))?;
+        let signature = self.sign_identity_ecdsa_digest(&digest).await?;
         Ok(ExternalSignedQuote {
             signature: EcdsaSignatureBytes::from_signature(&signature),
         })

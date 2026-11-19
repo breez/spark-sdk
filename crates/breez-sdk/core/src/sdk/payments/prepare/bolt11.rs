@@ -1,5 +1,5 @@
 use spark_wallet::{QuotedLightningSend, SendQuoteAmount, SparkAddress};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, LightningFeeQuote,
@@ -136,18 +136,24 @@ pub(super) async fn prepare(
 }
 
 /// A partner fee quote for paying `invoice` for `amount`. `None`, logged, when
-/// there is none to be had: attribution must never block a send, which then
-/// goes unquoted.
+/// there is none to be had or it carries no partner fee: attribution must never
+/// block a send, which then goes unquoted.
 async fn send_fee_quote(
     sdk: &BreezSdk,
     invoice: &str,
     amount: SendQuoteAmount,
 ) -> Option<QuotedLightningSend> {
-    sdk.spark_wallet
+    let quote = sdk
+        .spark_wallet
         .fetch_lightning_send_quote(invoice, amount, None)
         .await
         .inspect_err(|e| warn!("Sending without a fee quote: {e}"))
-        .ok()
+        .ok()?;
+    if !quote.carries_partner_fee() {
+        debug!("Sending without a fee quote: it carries no partner fee");
+        return None;
+    }
+    Some(quote)
 }
 
 fn invoice_amount_sats(amount_msat: u64) -> u64 {
