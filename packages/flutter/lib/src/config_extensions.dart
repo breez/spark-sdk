@@ -1,10 +1,7 @@
-import '../breez_sdk_spark.dart';
+import 'generated/breez_sdk_spark.dart';
 
-/// Extension to add copyWith to the FRB-generated Config class.
-///
-/// FRB does not generate copyWith for regular (non-sealed) classes.
-/// This extension provides it so consumers can modify individual fields
-/// without reconstructing the entire Config object.
+/// Copies a [Config], replacing the given fields, so callers can adjust a
+/// default config without listing every field.
 extension ConfigCopyWith on Config {
   Config copyWith({
     String? apiKey,

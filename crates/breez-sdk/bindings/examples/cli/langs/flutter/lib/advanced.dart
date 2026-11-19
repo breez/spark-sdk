@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'cli.dart';
 import 'serialization.dart';
@@ -76,9 +76,9 @@ Future<void> dispatchAdvancedCommand(List<String> args, BreezSdk sdk) async {
 CpfpFundingKind? _parseFundingKind(String s) {
   switch (s.toLowerCase()) {
     case 'p2wpkh':
-      return const CpfpFundingKind.p2Wpkh();
+      return P2wpkhCpfpFundingKind();
     case 'p2tr':
-      return const CpfpFundingKind.p2Tr();
+      return P2trCpfpFundingKind();
     default:
       return null;
   }
@@ -143,26 +143,25 @@ Future<void> _handleRecoverFunds(BreezSdk sdk, List<String> args) async {
   const usage =
       'advanced recover-funds --fee-rate <rate> --destination <addr> [--funding-kind p2tr] '
       '[--all | --leaf <id>...] [--output-file <path>]';
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
-        ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
-        ..addOption('destination', mandatory: true, help: 'Destination address for the recovered funds')
-        ..addFlag(
-          'all',
-          negatable: false,
-          help:
-              'Recover every leaf worth it, including the ones still in the balance. '
-              'Only for when the operators are unreachable or refuse to serve the wallet.',
-        )
-        ..addMultiOption(
-          'leaf',
-          help: 'Leaf id to recover (repeatable). Omit to recover the leaves that left the balance.',
-        )
-        ..addOption(
-          'output-file',
-          help: 'File to write the signed recovery to, for check-recover-funds to read back',
-        );
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('fee-rate', mandatory: true, help: 'Target fee rate in sat/vByte')
+    ..addOption('funding-kind', defaultsTo: 'p2tr', help: 'Funding UTXO kind: p2wpkh or p2tr')
+    ..addOption('destination', mandatory: true, help: 'Destination address for the recovered funds')
+    ..addFlag(
+      'all',
+      negatable: false,
+      help:
+          'Recover every leaf worth it, including the ones still in the balance. '
+          'Only for when the operators are unreachable or refuse to serve the wallet.',
+    )
+    ..addMultiOption(
+      'leaf',
+      help: 'Leaf id to recover (repeatable). Omit to recover the leaves that left the balance.',
+    )
+    ..addOption(
+      'output-file',
+      help: 'File to write the signed recovery to, for check-recover-funds to read back',
+    );
   final results = _parseArgs(parser, args, usage);
   if (results == null) return;
 
@@ -208,10 +207,10 @@ Future<void> _recoverFunds(
   }
 
   final fundingInputs = <CpfpInput>[];
-  Uint8List? signerSecretKey;
+  CpfpSigner? signer;
   final singleUtxoSats = prepared.funding?.singleUtxoSats;
   if (singleUtxoSats != null) {
-    final utxoLine = prompt(
+    final utxoLine = await prompt(
       'Funding UTXO(s) of at least $singleUtxoSats sats, as txid:vout:value:pubkey '
       '(space-separated; for P2TR the internal key; blank to skip the unilateral exit): ',
     );
@@ -230,7 +229,7 @@ Future<void> _recoverFunds(
           feeRateSatPerVbyte: request.feeRateSatPerVbyte,
           fundingKind: request.fundingKind,
           destination: request.destination,
-          selection: ExitLeafSelection.specific(leafIds: cooperative),
+          selection: SpecificExitLeafSelection(cooperative),
         ),
       );
       _printQuote(prepared);
@@ -241,17 +240,17 @@ Future<void> _recoverFunds(
         if (input == null) return;
         fundingInputs.add(input);
       }
-      final keyLine = prompt('Hex secret key for the funding UTXO(s): ');
-      signerSecretKey = _hexDecode(keyLine.trim());
+      final keyLine = await prompt('Hex secret key for the funding UTXO(s): ');
+      signer = singleKeyCpfpSigner(secretKeyBytes: _hexDecode(keyLine.trim()));
     }
   }
 
-  final answer = prompt('Sign this recovery? (y/n): ', defaultValue: 'y');
+  final answer = await prompt('Sign this recovery? (y/n): ', defaultValue: 'y');
   if (answer.toLowerCase() != 'y') return;
 
   final response = await sdk.recoverFunds(
     request: RecoverFundsRequest(prepared: prepared, fundingInputs: fundingInputs),
-    signerSecretKey: signerSecretKey,
+    signer: signer,
   );
   _printRecovery(response);
   if (outputFile != null) {
@@ -280,15 +279,15 @@ void _printSkipped(List<SkippedLeaf> skipped) {
   for (final leaf in skipped) {
     final String reason;
     final r = leaf.reason;
-    if (r is SkippedLeafReason_FeeExceedsValue) {
+    if (r is FeeExceedsValueSkippedLeafReason) {
       reason = 'recovering it costs too much at this fee rate';
-    } else if (r is SkippedLeafReason_FundsNotFound) {
+    } else if (r is FundsNotFoundSkippedLeafReason) {
       reason = 'its funds were not found on-chain';
-    } else if (r is SkippedLeafReason_Unverified) {
+    } else if (r is UnverifiedSkippedLeafReason) {
       reason = 'its funds could not be looked up';
-    } else if (r is SkippedLeafReason_OperatorsUnavailable) {
+    } else if (r is OperatorsUnavailableSkippedLeafReason) {
       reason = 'the Spark operators were unavailable';
-    } else if (r is SkippedLeafReason_NotRecoverable) {
+    } else if (r is NotRecoverableSkippedLeafReason) {
       reason = r.message;
     } else {
       reason = '${leaf.reason}';
@@ -298,18 +297,17 @@ void _printSkipped(List<SkippedLeaf> skipped) {
 }
 
 ExitLeafSelection _recoverySelection(bool all, List<String> leafIds) {
-  if (all) return const ExitLeafSelection.all();
-  if (leafIds.isEmpty) return const ExitLeafSelection.recoverableOnly();
-  return ExitLeafSelection.specific(leafIds: leafIds);
+  if (all) return AllExitLeafSelection();
+  if (leafIds.isEmpty) return RecoverableOnlyExitLeafSelection();
+  return SpecificExitLeafSelection(leafIds);
 }
 
 // --- check-recover-funds ---
 
 Future<void> _handleCheckRecoverFunds(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('input-file', mandatory: true, help: 'File the recovery was written to')
-        ..addOption('output-file', help: 'File to write the updated recovery to. Defaults to --input-file.');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('input-file', mandatory: true, help: 'File the recovery was written to')
+    ..addOption('output-file', help: 'File to write the updated recovery to. Defaults to --input-file.');
   final results = _parseArgs(
     parser,
     args,
@@ -325,11 +323,10 @@ Future<void> _checkRecoverFunds(BreezSdk sdk, String inputFile, String? outputFi
   final checked = await sdk.checkRecoverFunds(request: CheckRecoverFundsRequest(recovery: recovery));
 
   final verdict = checked.verdict;
-  if (verdict is RecoveryVerdict_Redo) {
-    final reason = verdict.reason.name;
-    print('Verdict: Redo { reason: ${reason[0].toUpperCase()}${reason.substring(1)} }');
+  if (verdict is RedoRecoveryVerdict) {
+    print('Verdict: Redo { reason: ${_pascalCase(verdict.reason.name)} }');
     print('  (this recovery cannot finish: run ${_redoCommand(checked.recovery)})');
-  } else if (verdict is RecoveryVerdict_Done) {
+  } else if (verdict is DoneRecoveryVerdict) {
     print('Verdict: Done');
   } else {
     print('Verdict: Valid');
@@ -384,20 +381,21 @@ RecoverFundsResponse _recoveryFromJson(Map<String, dynamic> j) {
     fanoutFeeSats: BigInt.parse(j['fanoutFeeSats'] as String),
     refundFeeSats: BigInt.parse(j['refundFeeSats'] as String),
     sweepFeeSats: BigInt.parse(j['sweepFeeSats'] as String),
-    leaves:
-        (j['leaves'] as List).map((e) {
-          final l = e as Map<String, dynamic>;
-          return RecoverFundsLeaf(
-            leafId: l['leafId'] as String,
-            valueSats: BigInt.parse(l['valueSats'] as String),
-            method: RecoveryMethod.values.byName(l['method'] as String),
-          );
-        }).toList(),
+    leaves: (j['leaves'] as List).map((e) {
+      final l = e as Map<String, dynamic>;
+      return RecoverFundsLeaf(
+        leafId: l['leafId'] as String,
+        valueSats: BigInt.parse(l['valueSats'] as String),
+        method: RecoveryMethod.values.byName(l['method'] as String),
+      );
+    }).toList(),
     failed: (j['failed'] as List).map((e) => _failureFromJson(e as Map<String, dynamic>)).toList(),
-    transactions:
-        (j['transactions'] as List).map((e) => _recoveryTxFromJson(e as Map<String, dynamic>)).toList(),
-    fundingInputs:
-        (j['fundingInputs'] as List).map((e) => _cpfpInputFromJson(e as Map<String, dynamic>)).toList(),
+    transactions: (j['transactions'] as List)
+        .map((e) => _recoveryTxFromJson(e as Map<String, dynamic>))
+        .toList(),
+    fundingInputs: (j['fundingInputs'] as List)
+        .map((e) => _cpfpInputFromJson(e as Map<String, dynamic>))
+        .toList(),
     feeRateSatPerVbyte: BigInt.parse(j['feeRateSatPerVbyte'] as String),
     destination: j['destination'] as String,
   );
@@ -439,47 +437,47 @@ CooperativeRecoveryFailure _failureFromJson(Map<String, dynamic> j) => Cooperati
   error: _cooperativeRecoveryErrorFromJson(j['error'] as Map<String, dynamic>),
 );
 
-Map<String, dynamic> _cooperativeRecoveryErrorToJson(CooperativeRecoveryError error) {
-  if (error is CooperativeRecoveryError_ReplacementFeeTooLow) {
+Map<String, dynamic> _cooperativeRecoveryErrorToJson(CooperativeRecoveryException error) {
+  if (error is ReplacementFeeTooLowCooperativeRecoveryException) {
     return {
       'type': 'ReplacementFeeTooLow',
       'requiredFeeSats': error.requiredFeeSats.toString(),
       'requiredFeeRateSatPerVbyte': error.requiredFeeRateSatPerVbyte.toString(),
     };
-  } else if (error is CooperativeRecoveryError_OperatorsUnavailable) {
+  } else if (error is OperatorsUnavailableCooperativeRecoveryException) {
     return {'type': 'OperatorsUnavailable', 'message': error.message};
-  } else if (error is CooperativeRecoveryError_Generic) {
+  } else if (error is GenericCooperativeRecoveryException) {
     return {'type': 'Generic', 'message': error.message};
   }
-  throw StateError('Unknown CooperativeRecoveryError variant: ${error.runtimeType}');
+  throw StateError('Unknown CooperativeRecoveryException variant: ${error.runtimeType}');
 }
 
-CooperativeRecoveryError _cooperativeRecoveryErrorFromJson(Map<String, dynamic> j) {
+CooperativeRecoveryException _cooperativeRecoveryErrorFromJson(Map<String, dynamic> j) {
   switch (j['type'] as String) {
     case 'ReplacementFeeTooLow':
-      return CooperativeRecoveryError.replacementFeeTooLow(
+      return ReplacementFeeTooLowCooperativeRecoveryException(
         requiredFeeSats: BigInt.parse(j['requiredFeeSats'] as String),
         requiredFeeRateSatPerVbyte: BigInt.parse(j['requiredFeeRateSatPerVbyte'] as String),
       );
     case 'OperatorsUnavailable':
-      return CooperativeRecoveryError.operatorsUnavailable(message: j['message'] as String);
+      return OperatorsUnavailableCooperativeRecoveryException(j['message'] as String);
     case 'Generic':
-      return CooperativeRecoveryError.generic(message: j['message'] as String);
+      return GenericCooperativeRecoveryException(j['message'] as String);
     default:
-      throw StateError("Unknown CooperativeRecoveryError type: ${j['type']}");
+      throw StateError("Unknown CooperativeRecoveryException type: ${j['type']}");
   }
 }
 
-String _cooperativeRecoveryErrorMessage(CooperativeRecoveryError error) {
-  if (error is CooperativeRecoveryError_ReplacementFeeTooLow) {
+String _cooperativeRecoveryErrorMessage(CooperativeRecoveryException error) {
+  if (error is ReplacementFeeTooLowCooperativeRecoveryException) {
     return 'A recovery of this output is already on the network: replacing it takes at least '
         '${error.requiredFeeSats} sats or ${error.requiredFeeRateSatPerVbyte} sats/vbyte';
-  } else if (error is CooperativeRecoveryError_OperatorsUnavailable) {
+  } else if (error is OperatorsUnavailableCooperativeRecoveryException) {
     return 'Operators unavailable: ${error.message}';
-  } else if (error is CooperativeRecoveryError_Generic) {
+  } else if (error is GenericCooperativeRecoveryException) {
     return 'Generic error: ${error.message}';
   }
-  throw StateError('Unknown CooperativeRecoveryError variant: ${error.runtimeType}');
+  throw StateError('Unknown CooperativeRecoveryException variant: ${error.runtimeType}');
 }
 
 void _printRecovery(RecoverFundsResponse response) {
@@ -496,9 +494,11 @@ void _printRecovery(RecoverFundsResponse response) {
     final after = tx.dependsOn.isEmpty ? '' : ', after ${tx.dependsOn.join(",")}';
     final csv = tx.csvTimelockBlocks != null ? ', csv ${tx.csvTimelockBlocks} blocks' : '';
     final node = tx.nodeId != null ? ' node=${tx.nodeId}' : '';
-    print('  [$i] ${tx.kind}$node status=${tx.status} txid=${tx.txid}$after$csv');
+    print(
+      '  [$i] ${_pascalCase(tx.kind.name)}$node status=${_statusLabel(tx.status)} txid=${tx.txid}$after$csv',
+    );
     final status = tx.status;
-    if (status is ExitTransactionStatus_Confirmed) {
+    if (status is ConfirmedExitTransactionStatus) {
       final height = status.blockHeight;
       if (height != null) {
         print('      (confirmed in block $height, nothing to broadcast)');
@@ -506,9 +506,9 @@ void _printRecovery(RecoverFundsResponse response) {
         print('      (already confirmed, nothing to broadcast)');
       }
       continue;
-    } else if (status is ExitTransactionStatus_WaitingForDependencies) {
+    } else if (status is WaitingForDependenciesExitTransactionStatus) {
       print('      (waiting on the transactions it depends on)');
-    } else if (status is ExitTransactionStatus_WaitingForTimelock) {
+    } else if (status is WaitingForTimelockExitTransactionStatus) {
       final height = status.spendableAtHeight;
       if (height != null) {
         print('      (waiting for its timelock, until block $height)');
@@ -533,14 +533,28 @@ void _printRecovery(RecoverFundsResponse response) {
 
 // --- helpers ---
 
+String _pascalCase(String name) => name[0].toUpperCase() + name.substring(1);
+
+/// The status as the Rust CLI prints it (its `Debug` form).
+String _statusLabel(ExitTransactionStatus s) {
+  String option(int? value) => value != null ? 'Some($value)' : 'None';
+  if (s is ConfirmedExitTransactionStatus) return 'Confirmed { block_height: ${option(s.blockHeight)} }';
+  if (s is WaitingForTimelockExitTransactionStatus) {
+    return 'WaitingForTimelock { spendable_at_height: ${option(s.spendableAtHeight)} }';
+  }
+  if (s is ReadyExitTransactionStatus) return 'Ready';
+  if (s is WaitingForDependenciesExitTransactionStatus) return 'WaitingForDependencies';
+  return 'Unverified';
+}
+
 Map<String, dynamic> _statusToJson(ExitTransactionStatus s) {
-  if (s is ExitTransactionStatus_Confirmed) {
+  if (s is ConfirmedExitTransactionStatus) {
     return {'type': 'Confirmed', 'blockHeight': s.blockHeight};
-  } else if (s is ExitTransactionStatus_WaitingForTimelock) {
+  } else if (s is WaitingForTimelockExitTransactionStatus) {
     return {'type': 'WaitingForTimelock', 'spendableAtHeight': s.spendableAtHeight};
-  } else if (s is ExitTransactionStatus_WaitingForDependencies) {
+  } else if (s is WaitingForDependenciesExitTransactionStatus) {
     return {'type': 'WaitingForDependencies'};
-  } else if (s is ExitTransactionStatus_Ready) {
+  } else if (s is ReadyExitTransactionStatus) {
     return {'type': 'Ready'};
   } else {
     return {'type': 'Unverified'};
@@ -550,20 +564,20 @@ Map<String, dynamic> _statusToJson(ExitTransactionStatus s) {
 ExitTransactionStatus _statusFromJson(Map<String, dynamic> j) {
   switch (j['type'] as String) {
     case 'Confirmed':
-      return ExitTransactionStatus.confirmed(blockHeight: j['blockHeight'] as int?);
+      return ConfirmedExitTransactionStatus(j['blockHeight'] as int?);
     case 'WaitingForTimelock':
-      return ExitTransactionStatus.waitingForTimelock(spendableAtHeight: j['spendableAtHeight'] as int?);
+      return WaitingForTimelockExitTransactionStatus(j['spendableAtHeight'] as int?);
     case 'WaitingForDependencies':
-      return const ExitTransactionStatus.waitingForDependencies();
+      return WaitingForDependenciesExitTransactionStatus();
     case 'Ready':
-      return const ExitTransactionStatus.ready();
+      return ReadyExitTransactionStatus();
     default:
-      return const ExitTransactionStatus.unverified();
+      return UnverifiedExitTransactionStatus();
   }
 }
 
 Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
-  if (input is CpfpInput_P2tr) {
+  if (input is P2trCpfpInput) {
     return {
       'type': 'P2tr',
       'txid': input.txid,
@@ -571,7 +585,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
-  } else if (input is CpfpInput_P2wpkh) {
+  } else if (input is P2wpkhCpfpInput) {
     return {
       'type': 'P2wpkh',
       'txid': input.txid,
@@ -579,7 +593,7 @@ Map<String, dynamic> _cpfpInputToJson(CpfpInput input) {
       'valueSats': input.valueSats.toString(),
       'pubkey': input.pubkey,
     };
-  } else if (input is CpfpInput_Custom) {
+  } else if (input is CustomCpfpInput) {
     return {
       'type': 'Custom',
       'txid': input.txid,
@@ -596,21 +610,21 @@ CpfpInput _cpfpInputFromJson(Map<String, dynamic> j) {
   final valueSats = BigInt.parse(j['valueSats'] as String);
   switch (j['type'] as String) {
     case 'P2tr':
-      return CpfpInput.p2Tr(
+      return P2trCpfpInput(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
         valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'P2wpkh':
-      return CpfpInput.p2Wpkh(
+      return P2wpkhCpfpInput(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
         valueSats: valueSats,
         pubkey: j['pubkey'] as String,
       );
     case 'Custom':
-      return CpfpInput.custom(
+      return CustomCpfpInput(
         txid: j['txid'] as String,
         vout: j['vout'] as int,
         valueSats: valueSats,
@@ -638,9 +652,9 @@ CpfpInput? _parseCpfpInput(String s, String kindStr) {
   }
   switch (kindStr.toLowerCase()) {
     case 'p2wpkh':
-      return CpfpInput.p2Wpkh(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
+      return P2wpkhCpfpInput(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     case 'p2tr':
-      return CpfpInput.p2Tr(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
+      return P2trCpfpInput(txid: txid, vout: vout, valueSats: value, pubkey: pubkey);
     default:
       print('Invalid funding kind: $kindStr');
       return null;

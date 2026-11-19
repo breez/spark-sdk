@@ -48,7 +48,7 @@ Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) asy
   String optionalSenderPublicKey = "<sender public key>"; 
 
   ReceivePaymentRequest request =
-      ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkInvoice(
+      ReceivePaymentRequest(paymentMethod: SparkInvoiceReceivePaymentMethod(
         tokenIdentifier: tokenIdentifier,
         description: optionalDescription,
         amount: optionalAmount,
@@ -77,7 +77,7 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amount,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: null,
@@ -86,13 +86,13 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   );
   
   // If the fees are acceptable, continue to send the token payment
-  if (prepareResponse.paymentMethod is SendPaymentMethod_SparkAddress) {
-    final method = prepareResponse.paymentMethod as SendPaymentMethod_SparkAddress;
+  if (prepareResponse.paymentMethod is SparkAddressSendPaymentMethod) {
+    final method = prepareResponse.paymentMethod as SparkAddressSendPaymentMethod;
     print('Token ID: ${method.tokenIdentifier}');
     print('Fees: ${method.fee} token base units');
   }
-  if (prepareResponse.paymentMethod is SendPaymentMethod_SparkInvoice) {
-    final method = prepareResponse.paymentMethod as SendPaymentMethod_SparkInvoice;
+  if (prepareResponse.paymentMethod is SparkInvoiceSendPaymentMethod) {
+    final method = prepareResponse.paymentMethod as SparkInvoiceSendPaymentMethod;
     print('Token ID: ${method.tokenIdentifier}');
     print('Fees: ${method.fee} token base units');
   }
@@ -154,7 +154,7 @@ Future<void> fetchConversionLimits(BreezSdk sdk) async {
   // Fetch limits for converting Bitcoin to a token
   final fromBitcoinResponse = await sdk.fetchConversionLimits(
     request: FetchConversionLimitsRequest(
-      conversionType: ConversionType.fromBitcoin(),
+      conversionType: FromBitcoinConversionType(),
       tokenIdentifier: '<token identifier>',
     ),
   );
@@ -169,9 +169,7 @@ Future<void> fetchConversionLimits(BreezSdk sdk) async {
   // Fetch limits for converting a token to Bitcoin
   final toBitcoinResponse = await sdk.fetchConversionLimits(
     request: FetchConversionLimitsRequest(
-      conversionType: ConversionType.toBitcoin(
-        fromTokenIdentifier: '<token identifier>',
-      ),
+      conversionType: ToBitcoinConversionType('<token identifier>'),
       tokenIdentifier: null,
     ),
   );
@@ -196,14 +194,14 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
   final conversionOptions = ConversionOptions(
-    conversionType: ConversionType.fromBitcoin(),
+    conversionType: FromBitcoinConversionType(),
     maxSlippageBps: optionalMaxSlippageBps,
     completionTimeoutSecs: optionalCompletionTimeoutSecs,
   );
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amount,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,

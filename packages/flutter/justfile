@@ -1,21 +1,21 @@
-frb_bin := "flutter_rust_bridge_codegen generate"
-
 export CARGO_TERM_COLOR := "always"
+
+repo_root := justfile_directory() / ".." / ".."
+mobile_features := "db-storage-api,secp-lowmemory,release-max-level-debug"
 
 # Lists available recipes
 default:
   just --list --unsorted
 
 # Initializes the workspace (run this first)
-setup: frb
+setup: install-bindgen
 	flutter pub get
 	just check-deps
-	@echo "🎉 Setup complete! You can now run 'just build' to build the project."
+	@echo "🎉 Setup complete! You can now run 'just codegen' to generate the bindings."
 
-# Install flutter_rust_bridge_codegen dependencies
-frb:
-	cargo install cargo-expand --locked
-	cargo install flutter_rust_bridge_codegen --version 2.13.0
+# Installs the uniffi-dart binding generator (UNIFFI_DART_GIT=file://... for a local checkout)
+install-bindgen:
+	make -C {{repo_root}}/crates/breez-sdk/bindings install-uniffi-bindgen-dart
 
 # Check system dependencies
 check-deps:
@@ -40,11 +40,11 @@ check-deps:
 		MISSING=1
 	fi
 
-	# Check Dart
-	if command -v dart &> /dev/null; then
-		echo "✅ $(dart --version)"
+	# Check the binding generator
+	if command -v uniffi_bindgen_dart &> /dev/null; then
+		echo "✅ $(uniffi_bindgen_dart --version)"
 	else
-		echo "❌ dart not found (should come with Flutter)."
+		echo "❌ uniffi_bindgen_dart not found. Run 'just install-bindgen'."
 		MISSING=1
 	fi
 
@@ -55,38 +55,34 @@ check-deps:
 		echo "🎉 All dependencies are installed."
 	fi
 
-# Builds the Rust library & Generates Dart/Flutter bindings
-build: setup
-	just build-release
-	just gen
+# Builds the bindings library for this host. The generator reads its metadata.
+build-host:
+	cd {{repo_root}} && cargo build -p breez-sdk-spark-bindings --no-default-features --features {{mobile_features}}
 
-# Builds the Rust library in release mode
-build-release: setup
-	cd rust && cargo build --release
+# Generates the Dart bindings and the callback relay crate
+codegen: build-host
+	#!/usr/bin/env bash
+	set -euo pipefail
+	root="{{repo_root}}"
+	out="$root/target/dart-gen"
+	ext=$([ "$(uname)" = Darwin ] && echo dylib || echo so)
+	rm -rf "$out"
+	(cd "$root" && uniffi_bindgen_dart --library "target/debug/libbreez_sdk_spark_bindings.$ext" \
+		--crate breez_sdk_spark --out-dir "$out")
+	rm -rf lib/src/generated native/dispatch
+	mkdir -p lib/src/generated native
+	mv "$out"/*.dart lib/src/generated/
+	mv "$out/uniffi_dispatch" native/dispatch
 
-# Generate Dart/Flutter bindings // & Softlinks C headers
-gen:
-	just codegen
-
-# Generate Dart/Flutter bindings
-codegen: setup
-	mkdir -p lib/src/rust
-	{{frb_bin}}
-
-# Run Flutter tests
-test: build
+# Runs the package tests. The build hook builds the native libraries for this host.
+test: codegen
 	flutter test
 
-# Update version number on pubspec.yaml, podspec files & Gradle scripts
+# Update version number on pubspec.yaml, podspec & Gradle script
 version:
 	bash scripts/version.sh
 
 # Clean all build artifacts
 clean:
 	flutter clean
-	cd rust && cargo clean
-	rm -rf lib/src/rust
-	rm -rf rust/target/
-	find . -name "*.so" -delete
-	find . -name "*.dylib" -delete
-	find . -name "*.a" -delete
+	rm -rf lib/src/generated native/dispatch

@@ -6,7 +6,7 @@ Initialize the {{#name PasskeyClient}}, then run the onboarding flow that fits y
 
 {{#name PasskeyClient}} is the entry point for every passkey wallet operation. Construct one per app session and reuse it.
 
-On web, iOS, Android, Flutter, and React Native it wires the built-in {{#name PasskeyProvider}} for you, defaulting to the Breez shared RP (`keys.breez.technology`): a Breez-registered app needs only its Breez API key. Set {{#name provider_options}} on the config to use your own RP or customize the picker identity. On other platforms, or for a custom PRF backend (hardware key, file-backed), implement {{#name PrfProvider}} and inject it:
+On web, iOS, Android, and React Native it wires the built-in {{#name PasskeyProvider}} for you, defaulting to the Breez shared RP (`keys.breez.technology`): a Breez-registered app needs only its Breez API key. Set {{#name provider_options}} on the config to use your own RP or customize the picker identity. In Flutter, pass the built-in {{#name PasskeyProvider}} to the client yourself, with the provider options as its argument. On other platforms, or for a custom PRF backend (hardware key, file-backed), implement {{#name PrfProvider}} and inject it:
 
 {{#tabs passkey:setup-client}}
 

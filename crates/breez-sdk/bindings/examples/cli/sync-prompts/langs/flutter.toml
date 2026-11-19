@@ -27,17 +27,18 @@ extra_subgroup_components = "and handler functions."
 doc_build_instructions = "setup commands (`make run` instead of `cargo run --`), and Dart-specific configuration"
 
 # Documentation: what language-specific content to preserve
-doc_preserve_items = "Flutter pub get instructions, or Dart/FRB-specific notes"
+doc_preserve_items = "setup instructions (`make setup`, the build hook), the Scenario Tests section, or Dart-specific notes"
 
 # Build check command (syntax validation without SDK installed).
 # pub get first: package resolution pins the language version the formatter
 # applies. dart format also rejects unparsable Dart, so this is the syntax
 # gate. Full analysis (make check-flutter) cannot run in the sync
-# environment: it needs the FRB-generated SDK bindings, which only CI builds.
+# environment: it needs the uniffi-dart generated SDK bindings, which are
+# not committed (`just codegen` in packages/flutter generates them).
 build_check = "dart pub get -C crates/breez-sdk/bindings/examples/cli/langs/flutter && dart format -l 110 crates/breez-sdk/bindings/examples/cli/langs/flutter/lib crates/breez-sdk/bindings/examples/cli/langs/flutter/bin"
 
 # Format instructions appended to the build check step
-format_instructions = "The Dart project uses a 110-character line length; the build check formats the files in place. Run it from the repo root exactly as written: a leading `cd` does not match the allowed-tools rules and gets denied. Do NOT run `dart analyze` or `make check-flutter` here: the generated SDK bindings are absent in this environment, so the analyzer reports hundreds of false undefined-symbol errors. CI runs the full analysis after binding codegen."
+format_instructions = "The Dart project uses a 110-character line length; the build check formats the files in place. Run it from the repo root exactly as written: a leading `cd` does not match the allowed-tools rules and gets denied. Do NOT run `dart analyze` or `make check-flutter` here: the generated SDK bindings are absent in this environment, so the analyzer reports hundreds of false undefined-symbol errors. Look names up in the Flutter snippets instead. CI runs the full analysis after binding codegen."
 
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
@@ -70,52 +71,57 @@ content = """
 **SDK calls:**
 - `sdk.method(Request { field1, field2 })` → `await sdk.methodName(request: RequestType(field1: val, field2: val))`
 - Method names are camelCase: `get_info` → `getInfo`, `prepare_send_payment` → `prepareSendPayment`
+- Function and method arguments are all `required`, nullable ones included: pass `null` explicitly (`withRestChainService(url: url, apiType: type, credentials: null)`).
+- Record (struct) constructors take named arguments. Nullable record fields are optional and can be left out.
 
 **Enums:**
-- `EnumType::Variant { field }` → `EnumType.variant(field: field)` (factory constructor)
-- `EnumType::Variant` (unit) → `EnumType.variant` or `EnumType.variant()` (depends on variant)
-- Pattern match → `if (val is EnumType_Variant)` or `switch (val) { case EnumType_Variant(): ... }`
+- Unit-only Rust enums are Dart enums: `PaymentStatus::Completed` → `PaymentStatus.completed`.
+- Other enums are an abstract class with one class per variant, named variant first then enum: `InputType::LnurlPay` → `LnurlPayInputType`, `SdkEvent::PaymentSucceeded` → `PaymentSucceededSdkEvent`, `SendPaymentMethod::Bolt11Invoice` → `Bolt11InvoiceSendPaymentMethod`.
+- Construct variants with their class constructor, never `const`: a variant with one field takes it positionally (`TokenAssetFilter(id)`, `BitcoinAddressReceivePaymentMethod(newAddress)`, `WaitingForTimelockExitTransactionStatus(height)`). A variant with several fields takes named arguments, all `required`, nullable ones included: `SparkPaymentDetailsFilter(htlcStatus: statuses, conversionRefundNeeded: null)`. A variant without fields takes none: `SparkAddressReceivePaymentMethod()`.
+- Pattern match with `is` checks: `if (parsed is LnurlPayInputType) { final details = parsed.v0; }`. Unnamed (tuple) fields are `.v0`, `.v1`.
+- Error enums are exceptions with "Error" renamed to "Exception" in every name: `SdkError::NetworkError` → `NetworkExceptionSdkException`, `PrfProviderError::Generic` → `GenericPrfProviderException`. Test for a variant with `is`, not by matching `toString()`.
 
 **Interactive prompts:**
-- `rl.readline(prompt)` → `prompt(message)` or `prompt(message, defaultValue: 'y')` (uses stdin.readLineSync)
+- `rl.readline(prompt)` → `await prompt(message)` or `await prompt(message, defaultValue: 'y')`. `prompt` is async: a function that prompts must be `async` and its callers must `await` it.
+- Never read stdin synchronously (`stdin.readLineSync`, `readByteSync`): it blocks the event loop, so SDK events stop printing. All input goes through the shared `input` reader in `lib/readline.dart`.
 
 **REPL / Readline:**
-- The Dart CLI has a custom `Readline` class in `lib/readline.dart` (raw stdin mode) providing tab completion and persistent command history. No Dart packages exist for interactive REPL completion — `cli_completion` and `very_good_cli` are for non-interactive CLIs only.
-- The REPL loop in `cli.dart` uses `rl.readLine(promptStr)` instead of `stdin.readLineSync()`.
-- Completion list is assembled from `commandNames + issuerCommandNames + ['exit', 'quit', 'help']`. When adding a new command group, add its command names to this list.
+- The Dart CLI has a custom `Readline` class in `lib/readline.dart` (raw stdin mode) providing tab completion and persistent command history. No Dart packages exist for interactive REPL completion: `cli_completion` and `very_good_cli` are for non-interactive CLIs only.
+- The REPL loop in `cli.dart` uses `await rl.readLine(promptStr)`. On piped (non-TTY) stdin both `readLine` and `prompt` read plain lines and print no prompt text, like the Rust CLI. The shared scenario tests drive the CLI this way: keep it.
+- Completion list is assembled from `commandNames` plus each subcommand group's names and `['exit', 'quit', 'help']`. When adding a new command group, add its command names to this list.
 - History is saved to a file via `rl.close()` after the REPL loop exits.
 
 **Per-command help:**
-- Commands using `ArgParser` should parse via `_parseArgs(parser, args, usageString)` — it intercepts `help`/`--help`/`-h` before parsing and catches `ArgParserException` to show usage when mandatory args are missing.
+- Commands using `ArgParser` should parse via `_parseArgs(parser, args, usageString)`: it intercepts `help`/`--help`/`-h` before parsing and catches `ArgParserException` to show usage when mandatory args are missing.
 - Simple positional-arg commands should check `args.first == 'help' || args.first == '--help'` before proceeding.
 - Use the `help:` parameter on `addOption()` for important options (e.g., `--method` lists available values like "sparkaddress, sparkinvoice, bitcoin, bolt11").
 
 **Process exit:**
-- `bin/breez_cli.dart` must call `exit(0)` after `runCli()` returns. The native FFI library (flutter_rust_bridge) keeps background threads alive after `sdk.disconnect()`, preventing the Dart VM from exiting cleanly.
+- `bin/breez_cli.dart` must call `exit(0)` after `runCli()` returns: the native library keeps background threads alive after `sdk.disconnect()`, which would keep the Dart VM running.
 
 **Output / Serialization:**
 - `print_value(&v)?` → `printValue(v)`
-- `serialization.dart` uses `dart:mirrors` to reflectively serialize any FRB-generated class to JSON. Do NOT add manual `toJson()` extensions — all public fields are discovered automatically via reflection. Keep the `objToSerializable` function generic and type-agnostic.
+- `serialization.dart` uses `dart:mirrors` to serialize any generated class to the JSON shape the Rust CLI prints with serde: snake_case keys, enum variants externally tagged by their Rust name (`{"Bolt11Invoice": {...}}`). The shared scenario tests assert on that shape. Do NOT add manual `toJson()` extensions: keep `objToSerializable` generic and type-agnostic.
+- `dart:mirrors` needs the JIT: run the CLI with `dart run`, never as a compiled executable.
 
 **Errors:**
 - `return Err(anyhow!("msg"))` → `print("msg"); return;`
 
 **SDK version:**
-The Dart CLI uses the Flutter/FRB SDK bindings (breez_sdk_spark_flutter). Reference the Flutter snippets in `docs/breez-sdk/snippets/flutter/lib/` for exact API patterns. All commands should be fully implemented — do not use stub handlers.
+The Dart CLI uses the uniffi-dart generated bindings in `breez_sdk_spark_flutter`, imported as `package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart` (the API without the Flutter passkey provider, so it runs under plain `dart`). Never import `breez_sdk_spark.dart`: it pulls in Flutter. Reference the Flutter snippets in `docs/breez-sdk/snippets/flutter/lib/` for exact API patterns. All commands should be fully implemented: do not use stub handlers.
 
 **Subcommand groups (like Issuer, Contacts):**
 - Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
 - Dart: main REPL checks `cmdName == 'group'` and calls `dispatchGroupCommand(args, ...)`
 - Each group has its own file with `commandNames`, registry, dispatch function, handlers
 
-**Dart/FRB-specific quirks:**
-- `await BreezSdkSparkLib.init()` must be called once before any SDK usage.
-- FRB enum variants use sealed class pattern: `InputType_LnurlPay`, `SdkEvent_Synced`, etc.
-- Unnamed fields use `.field0` accessor (e.g., `InputType_LnurlPay.field0` is the `LnurlPayRequestDetails`).
-- `u128`/`u64` maps to Dart `BigInt` — use `BigInt.parse(str)` and `BigInt.from(int)`. **All arithmetic on BigInt must use BigInt operands**: `value ~/ BigInt.from(1000)`, NOT `value ~/ 1000`. For ceiling division: `(value + BigInt.from(divisor - 1)) ~/ BigInt.from(divisor)`.
-- FRB `Config` is immutable. The `breez_sdk_spark_flutter` package provides a `ConfigCopyWith` extension (in `lib/src/config_extensions.dart`) that adds `copyWith`. If Config fields change upstream, update the extension to match.
+**Dart-specific quirks:**
+- No library initialization: the package's build hook bundles the native library, and the bindings load it on first use.
+- `u64` maps to `BigInt` (constructors also accept an `int`). `u128` maps to `U128`, a typedef of `BigInt`: parse user input with the helpers in `lib/u128.dart` (`parseU128`, `tryParseU128`). **All arithmetic on BigInt must use BigInt operands**: `value ~/ BigInt.from(1000)`, NOT `value ~/ 1000`. For ceiling division: `(value + BigInt.from(divisor - 1)) ~/ BigInt.from(divisor)`.
+- `Config` is immutable. The `breez_sdk_spark_flutter` package provides a `ConfigCopyWith` extension (in `lib/src/config_extensions.dart`) that adds `copyWith`. If Config fields change upstream, update the extension to match.
 - When parsing enum strings from user input, match the Rust `Display`/`FromStr` impl (PascalCase, e.g., `WaitingForPreimage`, `PreimageShared`), not snake_case.
-- Events come from `sdk.addEventListener()` which returns a `Stream<SdkEvent>`, not callbacks.
-- `SdkBuilder` methods that take `self` in Rust (like `withDefaultStorage`, `withAccountNumber`) **consume** the builder. You MUST capture the return value: `builder = builder.withDefaultStorage(storageDir: dir)`. Ignoring the return value causes a `DroppableDisposedException` at runtime.
-- `BreezSdkSparkLib.init()` requires `externalLibrary: ExternalLibrary.open(path)` when running as a pure Dart CLI (not a Flutter app), because FRB can't find the native library via the Flutter framework loader.
+- Events: implement `EventListener` (`Future<void> onEvent(SdkEvent event)`) and register it with `await sdk.addEventListener(listener: ...)`, which returns the listener id.
+- `SdkBuilder` `with*` methods are async and change the builder in place: `await builder.withDefaultStorage(storageDir: dir)`. Do not reassign the builder.
+- Callback interfaces (`PrfProvider`, `EventListener`) are Dart classes that `implement` the generated abstract class and override every method. A callback reports failure by throwing a variant of its exception type, e.g. `GenericPrfProviderException('...')`.
+- `PasskeyClient(prfProvider: ..., breezApiKey: ..., config: ...)` constructs the passkey client directly.
 """

@@ -5,9 +5,9 @@ Future<void> handleErrors(BreezSdk sdk, PrepareSendPaymentRequest request) async
   try {
     final prepareResponse = await sdk.prepareSendPayment(request: request);
     print('Payment prepared: ${prepareResponse.paymentMethod}');
-  } on SdkError_InsufficientFunds {
+  } on InsufficientFundsSdkException {
     print('Not enough funds for this payment');
-  } on SdkError_CrossChainDisabled catch (e) {
+  } on CrossChainDisabledSdkException catch (e) {
     print('Cross-chain payments are not enabled, see ${e.docsUrl}');
   } catch (e) {
     print('Failed to prepare the payment: $e');

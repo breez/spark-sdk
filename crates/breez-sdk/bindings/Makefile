@@ -48,6 +48,13 @@ install-uniffi-bindgen-gobley:
 install-uniffi-bindgen-golang:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
 
+# Pinned to a commit of the v0.29.4-with-fixes branch, which still moves. Override
+# UNIFFI_DART_GIT with a file:// URL to install from a local checkout.
+UNIFFI_DART_GIT ?= https://github.com/breez/uniffi-dart
+UNIFFI_DART_REV ?= 12bc359c6164f27458ede9a5c4aa11080e0cee70
+install-uniffi-bindgen-dart:
+	$(INSTALL_PREFIX) cargo install uniffi-dart --git $(UNIFFI_DART_GIT) --rev $(UNIFFI_DART_REV) --features binary --bin uniffi_bindgen_dart
+
 install-target-%:
 	$(CLANG_PREFIX) rustup target add $*
 

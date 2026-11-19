@@ -13,8 +13,8 @@ Future<void> updateUserSettings(BreezSdk sdk) async {
       request: UpdateUserSettingsRequest(
           sparkPrivateModeEnabled: true,
           stableBalanceActiveLabel: null,
-          sparkMasterIdentityPublicKey: SparkMasterIdentityPublicKey_Set(
-              publicKey: "<hex encoded public key>")));
+          sparkMasterIdentityPublicKey:
+              SetSparkMasterIdentityPublicKey("<hex encoded public key>")));
   // ANCHOR_END: update-user-settings
 }
 
@@ -22,7 +22,7 @@ Future<void> activateStableBalance(BreezSdk sdk) async {
   // ANCHOR: activate-stable-balance
   await sdk.updateUserSettings(
       request: UpdateUserSettingsRequest(
-          stableBalanceActiveLabel: StableBalanceActiveLabel_Set(label: "USDB")));
+          stableBalanceActiveLabel: SetStableBalanceActiveLabel("USDB")));
   // ANCHOR_END: activate-stable-balance
 }
 
@@ -30,6 +30,6 @@ Future<void> deactivateStableBalance(BreezSdk sdk) async {
   // ANCHOR: deactivate-stable-balance
   await sdk.updateUserSettings(
       request: UpdateUserSettingsRequest(
-          stableBalanceActiveLabel: StableBalanceActiveLabel_Unset()));
+          stableBalanceActiveLabel: UnsetStableBalanceActiveLabel()));
   // ANCHOR_END: deactivate-stable-balance
 }

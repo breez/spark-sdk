@@ -8,10 +8,10 @@ Future<void> lnurlWithdraw(BreezSdk sdk) async {
       "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4exctthd96xserjv9mn7um9wdekjmmw843xxwpexdnxzen9vgunsvfexq6rvdecx93rgdmyxcuxverrvcursenpxvukzv3c8qunsdecx33nzwpnvg6ryc3hv93nzvecxgcxgwp3h33lxk";
 
   InputType inputType = await sdk.parse(input: lnurlWithdrawUrl);
-  if (inputType is InputType_LnurlWithdraw) {
+  if (inputType is LnurlWithdrawInputType) {
     // Amount to withdraw in sats between min/max withdrawable amounts
     BigInt amountSats = BigInt.from(5000);
-    LnurlWithdrawRequestDetails withdrawRequest = inputType.field0;
+    LnurlWithdrawRequestDetails withdrawRequest = inputType.v0;
     int optionalCompletionTimeoutSecs = 30;
     
     LnurlWithdrawRequest request = LnurlWithdrawRequest(

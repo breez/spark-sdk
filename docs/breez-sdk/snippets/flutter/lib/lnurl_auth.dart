@@ -9,8 +9,8 @@ Future<void> parseLnurlAuth(BreezSdk sdk) async {
   String lnurlAuthUrl = "lnurl1...";
 
   InputType inputType = await sdk.parse(input: lnurlAuthUrl);
-  if (inputType is InputType_LnurlAuth) {
-    LnurlAuthRequestDetails requestData = inputType.field0;
+  if (inputType is LnurlAuthInputType) {
+    LnurlAuthRequestDetails requestData = inputType.v0;
     print("Domain: ${requestData.domain}");
     print("Action: ${requestData.action}");
 
@@ -25,9 +25,9 @@ Future<void> authenticate(BreezSdk sdk, LnurlAuthRequestDetails requestData) asy
   // Perform LNURL authentication
   LnurlCallbackStatus result = await sdk.lnurlAuth(requestData: requestData);
 
-  if (result is LnurlCallbackStatus_Ok) {
+  if (result is OkLnurlCallbackStatus) {
     print("Authentication successful");
-  } else if (result is LnurlCallbackStatus_ErrorStatus) {
+  } else if (result is ErrorStatusLnurlCallbackStatus) {
     print("Authentication failed: ${result.errorDetails.reason}");
   }
   // ANCHOR_END: lnurl-auth

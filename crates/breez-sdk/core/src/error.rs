@@ -719,6 +719,37 @@ impl From<&str> for SignerError {
     }
 }
 
+// Maps an exception that an app's implementation of an SDK interface throws
+// but doesn't declare. UniFFI uses this conversion when the interface's error
+// type has it, and panics otherwise.
+#[cfg(feature = "uniffi")]
+macro_rules! from_unexpected_callback_error {
+    ($($error:ty => $variant:path),* $(,)?) => {
+        $(
+            impl From<uniffi::UnexpectedUniFFICallbackError> for $error {
+                fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
+                    $variant(e.reason)
+                }
+            }
+        )*
+    };
+}
+
+#[cfg(feature = "uniffi")]
+from_unexpected_callback_error! {
+    SignerError => SignerError::Generic,
+    crate::ChainServiceError => crate::ChainServiceError::Generic,
+    crate::PaymentObserverError => crate::PaymentObserverError::Generic,
+    crate::ServiceConnectivityError => crate::ServiceConnectivityError::Other,
+    crate::SessionStoreError => crate::SessionStoreError::Generic,
+    crate::StorageError => crate::StorageError::Implementation,
+}
+
+#[cfg(all(feature = "uniffi", feature = "passkey"))]
+from_unexpected_callback_error! {
+    crate::passkey::PrfProviderError => crate::passkey::PrfProviderError::Generic,
+}
+
 /// Renders the bound an amount rejection ran into, for the error message.
 /// Empty when the provider publishes nothing in that direction.
 ///

@@ -22,9 +22,9 @@ Future<List<Payment>> listPayments(BreezSdk sdk) async {
 Future<List<Payment>> listPaymentsFiltered(BreezSdk sdk) async {
   // ANCHOR: list-payments-filtered
   // Filter by asset (Bitcoin or Token)
-  AssetFilter assetFilter = AssetFilter.token(tokenIdentifier: "token_identifier_here");
+  AssetFilter assetFilter = TokenAssetFilter("token_identifier_here");
   // To filter by Bitcoin instead:
-  // AssetFilter assetFilter = AssetFilter.bitcoin();
+  // AssetFilter assetFilter = BitcoinAssetFilter();
 
   ListPaymentsRequest request = ListPaymentsRequest(
     // Filter by payment type

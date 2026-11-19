@@ -4,77 +4,65 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:breez_cli/cli.dart';
 import 'package:breez_cli/passkey.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 Future<void> main(List<String> arguments) async {
-  final parser =
-      ArgParser()
-        ..addOption('data-dir', abbr: 'd', defaultsTo: './.data', help: 'Path to the data directory')
-        ..addOption(
-          'network',
-          defaultsTo: 'regtest',
-          allowed: ['regtest', 'signet', 'mainnet'],
-          help: 'Network to use',
-        )
-        ..addOption(
-          'spark-config',
-          help: 'JSON file with Spark operators and SSP configuration',
-          valueHelp: 'FILE',
-        )
-        ..addOption('chain-api-url', help: 'Chain API base URL (required for signet)', valueHelp: 'URL')
-        ..addOption(
-          'chain-api-type',
-          help: 'Chain API type: esplora (default) or mempool-space',
-          allowed: ['esplora', 'mempool-space'],
-        )
-        ..addOption('account-number', help: 'Account number for the Spark signer')
-        ..addOption(
-          'postgres-connection-string',
-          help: 'PostgreSQL connection string (uses SQLite by default)',
-        )
-        ..addOption('mysql-connection-string', help: 'MySQL connection string (uses SQLite by default)')
-        ..addMultiOption(
-          'stable-balance-token',
-          help: 'Stable balance token in TICKER:token_identifier format (repeatable)',
-        )
-        ..addOption('stable-balance-default-active-label', help: 'Default active label for stable balance')
-        ..addOption('stable-balance-threshold', help: 'Stable balance threshold in sats')
-        ..addOption(
-          'passkey',
-          help: 'Use passkey with PRF provider (file, yubikey, or fido2)',
-          valueHelp: 'PROVIDER',
-        )
-        ..addOption('label', help: 'Label for seed derivation (requires --passkey)')
-        ..addFlag(
-          'list-labels',
-          negatable: false,
-          help: 'List and select labels from Nostr (requires --passkey)',
-        )
-        ..addFlag(
-          'store-label',
-          negatable: false,
-          help: 'Publish label to Nostr (requires --passkey and --label)',
-        )
-        ..addOption('rpid', help: 'Relying party ID for FIDO2 provider (requires --passkey)')
-        ..addFlag(
-          'server-mode',
-          negatable: false,
-          help: 'Run in server mode (background_tasks_enabled=false)',
-        )
-        ..addOption('lnurl-domain', help: 'LNURL server domain for lightning address registration')
-        ..addOption(
-          'real-time-sync-server-url',
-          help: 'Real-time sync server URL. Overrides the network default.',
-          valueHelp: 'URL',
-        )
-        ..addOption(
-          'proxy',
-          help: 'Route every connection through a SOCKS5 proxy, as HOST:PORT',
-          valueHelp: 'HOST:PORT',
-        )
-        ..addOption('proxy-user', help: 'Username for SOCKS5 authentication (requires --proxy-password)')
-        ..addOption('proxy-password', help: 'Password for SOCKS5 authentication (requires --proxy-user)')
-        ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
+  final parser = ArgParser()
+    ..addOption('data-dir', abbr: 'd', defaultsTo: './.data', help: 'Path to the data directory')
+    ..addOption(
+      'network',
+      defaultsTo: 'regtest',
+      allowed: ['regtest', 'signet', 'mainnet'],
+      help: 'Network to use',
+    )
+    ..addOption(
+      'spark-config',
+      help: 'JSON file with Spark operators and SSP configuration',
+      valueHelp: 'FILE',
+    )
+    ..addOption('chain-api-url', help: 'Chain API base URL (required for signet)', valueHelp: 'URL')
+    ..addOption(
+      'chain-api-type',
+      help: 'Chain API type: esplora (default) or mempool-space',
+      allowed: ['esplora', 'mempool-space'],
+    )
+    ..addOption('account-number', help: 'Account number for the Spark signer')
+    ..addOption('postgres-connection-string', help: 'PostgreSQL connection string (uses SQLite by default)')
+    ..addOption('mysql-connection-string', help: 'MySQL connection string (uses SQLite by default)')
+    ..addMultiOption(
+      'stable-balance-token',
+      help: 'Stable balance token in TICKER:token_identifier format (repeatable)',
+    )
+    ..addOption('stable-balance-default-active-label', help: 'Default active label for stable balance')
+    ..addOption('stable-balance-threshold', help: 'Stable balance threshold in sats')
+    ..addOption(
+      'passkey',
+      help: 'Use passkey with PRF provider (file, yubikey, or fido2)',
+      valueHelp: 'PROVIDER',
+    )
+    ..addOption('label', help: 'Label for seed derivation (requires --passkey)')
+    ..addFlag('list-labels', negatable: false, help: 'List and select labels from Nostr (requires --passkey)')
+    ..addFlag(
+      'store-label',
+      negatable: false,
+      help: 'Publish label to Nostr (requires --passkey and --label)',
+    )
+    ..addOption('rpid', help: 'Relying party ID for FIDO2 provider (requires --passkey)')
+    ..addFlag('server-mode', negatable: false, help: 'Run in server mode (background_tasks_enabled=false)')
+    ..addOption('lnurl-domain', help: 'LNURL server domain for lightning address registration')
+    ..addOption(
+      'real-time-sync-server-url',
+      help: 'Real-time sync server URL. Overrides the network default.',
+      valueHelp: 'URL',
+    )
+    ..addOption(
+      'proxy',
+      help: 'Route every connection through a SOCKS5 proxy, as HOST:PORT',
+      valueHelp: 'HOST:PORT',
+    )
+    ..addOption('proxy-user', help: 'Username for SOCKS5 authentication (requires --proxy-password)')
+    ..addOption('proxy-password', help: 'Password for SOCKS5 authentication (requires --proxy-user)')
+    ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
   try {
@@ -122,8 +110,9 @@ Future<void> main(List<String> arguments) async {
   }
   final stableBalanceDefaultActiveLabel = results.option('stable-balance-default-active-label');
   final stableBalanceThresholdStr = results.option('stable-balance-threshold');
-  final stableBalanceThreshold =
-      stableBalanceThresholdStr != null ? BigInt.parse(stableBalanceThresholdStr) : null;
+  final stableBalanceThreshold = stableBalanceThresholdStr != null
+      ? BigInt.parse(stableBalanceThresholdStr)
+      : null;
 
   final passkeyProvider = results.option('passkey');
   final label = results.option('label');
@@ -224,8 +213,9 @@ Future<void> main(List<String> arguments) async {
     proxy: proxy,
   );
 
-  // Force exit — the native FFI library may keep background threads alive
-  // after sdk.disconnect(), preventing the Dart VM from exiting cleanly.
+  // Force exit: the native library may keep background threads alive after
+  // sdk.disconnect(), preventing the Dart VM from exiting cleanly.
+  await stdout.flush();
   exit(0);
 }
 
@@ -237,17 +227,16 @@ SparkConfig _loadSparkConfig(String path) {
   }
   try {
     final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
-    final operators =
-        (json['signing_operators'] as List).map((op) {
-          final o = op as Map<String, dynamic>;
-          return SparkSigningOperator(
-            id: o['id'] as int,
-            identifier: o['identifier'] as String,
-            address: o['address'] as String,
-            identityPublicKey: o['identity_public_key'] as String,
-            caCertPem: o['ca_cert_pem'] as String?,
-          );
-        }).toList();
+    final operators = (json['signing_operators'] as List).map((op) {
+      final o = op as Map<String, dynamic>;
+      return SparkSigningOperator(
+        id: o['id'] as int,
+        identifier: o['identifier'] as String,
+        address: o['address'] as String,
+        identityPublicKey: o['identity_public_key'] as String,
+        caCertPem: o['ca_cert_pem'] as String?,
+      );
+    }).toList();
     final ssp = json['ssp_config'] as Map<String, dynamic>;
     return SparkConfig(
       coordinatorIdentifier: json['coordinator_identifier'] as String,

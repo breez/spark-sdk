@@ -3,14 +3,9 @@ import 'dart:async';
 
 Future<void> initSdk() async {
   // ANCHOR: init-sdk
-  // Call once on your Dart entrypoint file, e.g.; `lib/main.dart`
-  // or singleton SDK service. It is recommended to use a single instance
-  // of the SDK across your Flutter app.
-  await BreezSdkSparkLib.init();
-
   // Construct the seed using a mnemonic, entropy or passkey
   String mnemonic = "<mnemonic words>";
-  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+  final seed = MnemonicSeed(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
   final config = defaultConfig(network: Network.mainnet)
@@ -62,138 +57,113 @@ Future<void> gettingStartedSparkStatus() async {
 }
 // ANCHOR_END: spark-status
 
-class BreezSdkSpark {
-  // ANCHOR: logging
-  StreamSubscription<LogEntry>? _logSubscription;
-  Stream<LogEntry>? _logStream;
-
-  // Initializes SDK log stream.
-  //
-  // Call once on your Dart entrypoint file, e.g.; `lib/main.dart`
-  // or singleton SDK service. It is recommended to use a single instance
-  // of the SDK across your Flutter app.
-  void initializeLogStream() {
-    _logStream ??= initLogging().asBroadcastStream();
-  }
-
+// ANCHOR: logging
+class SdkLogger implements Logger {
   final _logStreamController = StreamController<LogEntry>.broadcast();
   Stream<LogEntry> get logStream => _logStreamController.stream;
 
-  // Subscribe to the log stream
-  void subscribeToLogStream() {
-    _logSubscription = _logStream?.listen((logEntry) {
-      _logStreamController.add(logEntry);
-    }, onError: (e) {
-      _logStreamController.addError(e);
-    });
+  @override
+  void log(LogEntry l) {
+    _logStreamController.add(l);
   }
+}
 
-  // Unsubscribe from the log stream
-  void unsubscribeFromLogStream() {
-    _logSubscription?.cancel();
-  }
-  // ANCHOR_END: logging
+// Call once, before connecting, e.g. in `lib/main.dart`.
+void setLogger(SdkLogger logger) {
+  initLogging(logDir: null, appLogger: logger, logFilter: null);
+}
+// ANCHOR_END: logging
 
-  // ANCHOR: add-event-listener
-  StreamSubscription<SdkEvent>? _eventSubscription;
-  Stream<SdkEvent>? _eventStream;
-
-  // Initializes SDK event stream.
-  //
-  // Call once on your Dart entrypoint file, e.g.; `lib/main.dart`
-  // or singleton SDK service. It is recommended to use a single instance
-  // of the SDK across your Flutter app.
-  void initializeEventsStream(BreezSdk sdk) {
-    _eventStream ??= sdk.addEventListener().asBroadcastStream();
-  }
-
+// ANCHOR: add-event-listener
+class SdkListener implements EventListener {
   final _eventStreamController = StreamController<SdkEvent>.broadcast();
   Stream<SdkEvent> get eventStream => _eventStreamController.stream;
 
-  // Subscribe to the event stream
-  void subscribeToEventStream() {
-    _eventSubscription = _eventStream?.listen((sdkEvent) {
-      switch (sdkEvent) {
-        case SdkEvent_Synced():
-          // Data has been synchronized with the network. When this event is received,
-          // it is recommended to refresh the payment list and wallet balance.
-          break;
-        case SdkEvent_NewDeposits(:final newDeposits):
-          // Detected deposits, as DepositInfo. Only those with isMature set
-          // have enough confirmations to be claimed. Show the rest as pending.
-          final _ = newDeposits;
-          break;
-        case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
-          // Deposits the SDK could not claim. Each claimError says why,
-          // most often the fee exceeded the configured maximum.
-          final _ = unclaimedDeposits;
-          break;
-        case SdkEvent_ClaimedDeposits(:final claimedDeposits):
-          // Deposits claimed into the wallet. An instant (0-conf) claim is
-          // reported here on submission and settles shortly after.
-          final _ = claimedDeposits;
-          break;
-        case SdkEvent_PaymentSucceeded(:final payment):
-          // A payment completed. The cached balance is already refreshed,
-          // so getInfo returns the new value.
-          final _ = payment;
-          break;
-        case SdkEvent_PaymentPending(:final payment):
-          // A payment is awaiting confirmation. It arrives again as
-          // succeeded or failed once it settles.
-          final _ = payment;
-          break;
-        case SdkEvent_PaymentFailed(:final payment):
-          // A payment failed. payment.details carries the method-specific
-          // context to show the user.
-          final _ = payment;
-          break;
-        case SdkEvent_PaymentMetadataUpdated(:final payment):
-          // Details of a payment already reported changed, such as the
-          // conversion info of a cross-chain receive.
-          final _ = payment;
-          break;
-        case SdkEvent_AutoOptimization(:final optimizationEvent):
-          // Background optimizer progress: started, round completed, or a
-          // terminal outcome. Manual optimizeLeaves calls do not emit these.
-          final _ = optimizationEvent;
-          break;
-        case SdkEvent_LightningAddressChanged(:final lightningAddress):
-          // The lightning address changed on another device. Unset when the
-          // address was deleted.
-          final _ = lightningAddress;
-          break;
-        case SdkEvent_UnilateralExitStateChanged():
-          // The unilateral exit state changed, so a previously exported
-          // one is now out of date. Export it again.
-          break;
-        case SdkEvent_StableBalanceConversionFailed(:final retryInSecs):
-          // A stable balance conversion failed. When retryInSecs is set,
-          // the SDK retries after it.
-          final _ = retryInSecs;
-          break;
-        case SdkEvent_RecoverableFunds(:final recoverableFundsSats):
-          // Funds left the balance and wait to be recovered on-chain.
-          // Quote their recovery with prepareRecoverFunds.
-          final _ = recoverableFundsSats;
-          break;
-      }
-      _eventStreamController.add(sdkEvent);
-    }, onError: (e) {
-      _eventStreamController.addError(e);
-    });
+  @override
+  Future<void> onEvent(SdkEvent event) async {
+    switch (event) {
+      case SyncedSdkEvent():
+        // Data has been synchronized with the network. When this event is received,
+        // it is recommended to refresh the payment list and wallet balance.
+        break;
+      case NewDepositsSdkEvent(:final newDeposits):
+        // Detected deposits, as DepositInfo. Only those with isMature set
+        // have enough confirmations to be claimed. Show the rest as pending.
+        final _ = newDeposits;
+        break;
+      case UnclaimedDepositsSdkEvent(:final unclaimedDeposits):
+        // Deposits the SDK could not claim. Each claimError says why,
+        // most often the fee exceeded the configured maximum.
+        final _ = unclaimedDeposits;
+        break;
+      case ClaimedDepositsSdkEvent(:final claimedDeposits):
+        // Deposits claimed into the wallet. An instant (0-conf) claim is
+        // reported here on submission and settles shortly after.
+        final _ = claimedDeposits;
+        break;
+      case PaymentSucceededSdkEvent(:final payment):
+        // A payment completed. The cached balance is already refreshed,
+        // so getInfo returns the new value.
+        final _ = payment;
+        break;
+      case PaymentPendingSdkEvent(:final payment):
+        // A payment is awaiting confirmation. It arrives again as
+        // succeeded or failed once it settles.
+        final _ = payment;
+        break;
+      case PaymentFailedSdkEvent(:final payment):
+        // A payment failed. payment.details carries the method-specific
+        // context to show the user.
+        final _ = payment;
+        break;
+      case PaymentMetadataUpdatedSdkEvent(:final payment):
+        // Details of a payment already reported changed, such as the
+        // conversion info of a cross-chain receive.
+        final _ = payment;
+        break;
+      case AutoOptimizationSdkEvent(:final optimizationEvent):
+        // Background optimizer progress: started, round completed, or a
+        // terminal outcome. Manual optimizeLeaves calls do not emit these.
+        final _ = optimizationEvent;
+        break;
+      case LightningAddressChangedSdkEvent(:final lightningAddress):
+        // The lightning address changed on another device. Unset when the
+        // address was deleted.
+        final _ = lightningAddress;
+        break;
+      case UnilateralExitStateChangedSdkEvent():
+        // The unilateral exit state changed, so a previously exported
+        // one is now out of date. Export it again.
+        break;
+      case StableBalanceConversionFailedSdkEvent(:final retryInSecs):
+        // A stable balance conversion failed. When retryInSecs is set,
+        // the SDK retries after it.
+        final _ = retryInSecs;
+        break;
+      case RecoverableFundsSdkEvent(:final recoverableFundsSats):
+        // Funds left the balance and wait to be recovered on-chain.
+        // Quote their recovery with prepareRecoverFunds.
+        final _ = recoverableFundsSats;
+        break;
+    }
+    _eventStreamController.add(event);
   }
-  // ANCHOR_END: add-event-listener
-
-  // ANCHOR: remove-event-listener
-  void unsubscribeFromEventStream() {
-    _eventSubscription?.cancel();
-  }
-  // ANCHOR_END: remove-event-listener
-
-  // ANCHOR: disconnect
-  Future<void> disconnect(BreezSdk sdk) async {
-    await sdk.disconnect();
-  }
-  // ANCHOR_END: disconnect
 }
+
+Future<String> addEventListener(BreezSdk sdk, SdkListener listener) async {
+  String listenerId = await sdk.addEventListener(listener: listener);
+  return listenerId;
+}
+// ANCHOR_END: add-event-listener
+
+// ANCHOR: remove-event-listener
+Future<void> removeEventListener(BreezSdk sdk, String listenerId) async {
+  await sdk.removeEventListener(id: listenerId);
+}
+// ANCHOR_END: remove-event-listener
+
+// ANCHOR: disconnect
+Future<void> disconnect(BreezSdk sdk) async {
+  await sdk.disconnect();
+}
+// ANCHOR_END: disconnect
