@@ -3,22 +3,7 @@ use tonic_types::StatusExt;
 
 use crate::operator::rpc::OperatorRpcError;
 use crate::services::ServiceError;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenAllowanceFailure {
-    NotEnabled,
-    NotFound,
-    Revoked,
-    Expired,
-    NotSpendable,
-    OverPerPaymentLimit,
-    OverTotalLimit,
-    RecipientNotAllowed,
-    PayerInsufficientFunds,
-    AlreadyActive,
-    QuotaExceeded,
-    PreparedPullStale,
-}
+use crate::token::TokenAllowanceFailure;
 
 impl TokenAllowanceFailure {
     pub(crate) fn into_error(self, message: impl Into<String>) -> ServiceError {
@@ -62,7 +47,7 @@ const OPERATOR_MESSAGES: [(&str, TokenAllowanceFailure); 9] = [
     ("the per-owner cap is", TokenAllowanceFailure::QuotaExceeded),
 ];
 
-fn operator_status(error: &ServiceError) -> Option<&Status> {
+pub(super) fn operator_status(error: &ServiceError) -> Option<&Status> {
     match error {
         ServiceError::ServiceConnectionError(rpc_error) => match rpc_error.as_ref() {
             OperatorRpcError::Connection(status) => Some(status),
@@ -90,28 +75,6 @@ pub(crate) fn classify_allowance_error(error: ServiceError) -> ServiceError {
     match classified {
         Some((failure, message)) => failure.into_error(message),
         None => error,
-    }
-}
-
-const TRANSACTION_PREEMPTED: &str = "TRANSACTION_PREEMPTED";
-const OUT_OF_RANGE: &str = "OUT_OF_RANGE";
-
-fn pull_never_accepted(status: &Status, window_passed: bool) -> bool {
-    let reason = status.get_details_error_info().map(|info| info.reason);
-    match (status.code(), reason.as_deref()) {
-        (Code::Aborted, Some(TRANSACTION_PREEMPTED)) => true,
-        (Code::InvalidArgument, Some(OUT_OF_RANGE)) => window_passed,
-        _ => false,
-    }
-}
-
-pub(crate) fn classify_pull_error(error: ServiceError, window_passed: bool) -> ServiceError {
-    let stale = operator_status(&error)
-        .filter(|status| pull_never_accepted(status, window_passed))
-        .map(|status| status.message().to_string());
-    match stale {
-        Some(message) => TokenAllowanceFailure::PreparedPullStale.into_error(message),
-        None => classify_allowance_error(error),
     }
 }
 
@@ -143,9 +106,7 @@ mod tests {
     use tonic::{Code, Status};
     use tonic_types::{ErrorDetails, StatusExt};
 
-    use super::{
-        TokenAllowanceFailure, classify_allowance_error, classify_pull_error, classify_revoke_error,
-    };
+    use super::{TokenAllowanceFailure, classify_allowance_error, classify_revoke_error};
     use crate::{operator::rpc::OperatorRpcError, services::ServiceError};
 
     #[cfg(feature = "browser-tests")]
@@ -239,49 +200,6 @@ mod tests {
         for (code, message) in unrelated {
             assert!(matches!(
                 classify_allowance_error(rpc_error(code, message)),
-                ServiceError::ServiceConnectionError(_)
-            ));
-        }
-    }
-
-    #[test_all]
-    fn a_pull_the_operators_never_accepted_is_stale() {
-        let stale = [
-            (Code::Aborted, "TRANSACTION_PREEMPTED", false),
-            (Code::InvalidArgument, "OUT_OF_RANGE", true),
-        ];
-        for (code, reason, window_passed) in stale {
-            assert_eq!(
-                failure(classify_pull_error(
-                    error_with_reason(code, reason),
-                    window_passed
-                )),
-                Some(TokenAllowanceFailure::PreparedPullStale)
-            );
-        }
-    }
-
-    #[test_all]
-    fn other_pull_errors_are_not_stale() {
-        let others = [
-            (
-                error_with_reason(Code::InvalidArgument, "OUT_OF_RANGE"),
-                false,
-            ),
-            (error_with_reason(Code::Aborted, "LOCK_CONFLICT"), true),
-            (
-                error_with_reason(Code::AlreadyExists, "EXPIRED_TRANSACTION"),
-                true,
-            ),
-            (
-                error_with_reason(Code::AlreadyExists, "DUPLICATE_OPERATION"),
-                true,
-            ),
-            (rpc_error(Code::Aborted, "inputs cannot be spent"), true),
-        ];
-        for (error, window_passed) in others {
-            assert!(matches!(
-                classify_pull_error(error, window_passed),
                 ServiceError::ServiceConnectionError(_)
             ));
         }

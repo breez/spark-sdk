@@ -5,6 +5,8 @@ edition = "2024"
 rust-version.workspace = true
 
 [features]
+default = ["tokens"]
+tokens = ["spark/tokens"]             # Token transactions and token allowances
 browser-tests = []                    # Enable browser wasm-pack tests
 test-utils = ["spark/test-utils"]     # Expose shared test helpers for downstream crates
 

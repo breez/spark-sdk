@@ -63,6 +63,9 @@ const FEATURE_CLIPPY_PASSES: &[(&str, ClippyFeatures)] = &[
     ("breez-sdk-itest", ClippyFeatures::All),
     // `dev`, which adds the flag for including the spark address in invoices.
     ("lnurl", ClippyFeatures::All),
+    // Bitcoin and Lightning only: no token transactions.
+    ("spark", ClippyFeatures::NoDefault(&[])),
+    ("spark-wallet", ClippyFeatures::NoDefault(&[])),
 ];
 
 /// Features no clippy pass builds, as `(package, feature)`. Each is compiled by

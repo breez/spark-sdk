@@ -1,24 +1,34 @@
 use bitcoin::secp256k1::schnorr;
 use spark::token::{
     NewTokenAllowance, PreparedTokenPull, PullReceiver, TokenAllowance, TokenAllowanceQuery,
+    operations::TokenAllowanceService,
 };
 
-use super::*;
+use crate::wallet::*;
 
 impl SparkWallet {
+    fn token_allowance_service(&self) -> TokenAllowanceService {
+        TokenAllowanceService::new(
+            Arc::clone(&self.spark_signer),
+            Arc::clone(&self.operator_pool),
+            self.config.network,
+            self.config.tokens_config.clone(),
+        )
+    }
+
     pub async fn create_token_allowance(
         &self,
         request: NewTokenAllowance,
     ) -> Result<TokenAllowance, SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .create_token_allowance(request)
             .await?)
     }
 
     pub async fn revoke_token_allowance(&self, allowance_id: &str) -> Result<(), SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .revoke_token_allowance(allowance_id)
             .await?)
     }
@@ -28,7 +38,7 @@ impl SparkWallet {
         query: TokenAllowanceQuery,
     ) -> Result<Vec<TokenAllowance>, SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .query_token_allowances(query)
             .await?)
     }
@@ -40,7 +50,7 @@ impl SparkWallet {
         receivers: Vec<PullReceiver>,
     ) -> Result<PreparedTokenPull, SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .prepare_token_pull(payer, token_identifier, receivers)
             .await?)
     }
@@ -50,7 +60,7 @@ impl SparkWallet {
         prepared: &PreparedTokenPull,
     ) -> Result<TokenTransaction, SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .sign_and_broadcast_token_pull(prepared)
             .await?)
     }
@@ -61,7 +71,7 @@ impl SparkWallet {
         signature: schnorr::Signature,
     ) -> Result<TokenTransaction, SparkWalletError> {
         Ok(self
-            .token_allowance_service
+            .token_allowance_service()
             .broadcast_token_pull(prepared, &signature)
             .await?)
     }
