@@ -70,6 +70,9 @@ impl BreezSdk {
     /// It also unregisters all event listeners, so listeners that reference
     /// the SDK no longer keep it alive after this call.
     ///
+    /// When the app releases its last reference to the SDK without calling this,
+    /// the SDK stops its background tasks on its own.
+    ///
     /// # Returns
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
