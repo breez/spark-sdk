@@ -595,7 +595,7 @@ impl From<LnurlServerError> for SdkError {
 
 impl From<TryInitError> for SdkError {
     fn from(_value: TryInitError) -> Self {
-        SdkError::Generic("Logging can only be initialized once".to_string())
+        SdkError::Generic("Another global tracing subscriber is already installed".to_string())
     }
 }
 

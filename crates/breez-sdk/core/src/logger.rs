@@ -1,4 +1,9 @@
-use std::{fmt::Debug, fs::OpenOptions};
+use std::{
+    fmt::Debug,
+    fs::{File, OpenOptions},
+    io::{self, Write},
+    sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock},
+};
 use tracing::{
     Event, Span, Subscriber,
     field::{Field, Visit},
@@ -7,9 +12,10 @@ use tracing::{
 use tracing_subscriber::{
     Layer,
     filter::{LevelFilter, Targets},
-    fmt::{FormatFields, format::Writer},
+    fmt::{FormatFields, MakeWriter, format::Writer},
     layer::{Context, SubscriberExt},
     registry::LookupSpan,
+    reload,
     util::SubscriberInitExt,
 };
 
@@ -197,40 +203,126 @@ where
     }
 }
 
+// A process can install a global subscriber only once, so `init_logging`
+// installs one that reads the app logger and log file from here and keeps
+// handles to reload its filters. Later calls replace all three in place.
+static APP_LOGGER: RwLock<Option<Arc<dyn Logger>>> = RwLock::new(None);
+static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+type ReloadFilters = Box<dyn Fn(Targets, Targets) -> Result<(), reload::Error> + Send>;
+static RELOAD_FILTERS: Mutex<Option<ReloadFilters>> = Mutex::new(None);
+
+/// Forwards each entry to the app logger `init_logging` last set.
+struct CurrentAppLogger;
+
+impl Logger for CurrentAppLogger {
+    fn log(&self, l: LogEntry) {
+        // Cloned out of the lock, so a slow logger never holds up its replacement.
+        let logger = APP_LOGGER
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(logger) = logger {
+            logger.log(l);
+        }
+    }
+}
+
+/// Writes to the log file `init_logging` last set, or nowhere.
+struct CurrentLogFile;
+
+impl<'a> MakeWriter<'a> for CurrentLogFile {
+    type Writer = LogFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LogFileWriter(LOG_FILE.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+/// Holds the log file for one entry, so concurrent entries don't interleave.
+struct LogFileWriter(MutexGuard<'static, Option<File>>);
+
+impl Write for LogFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.0.as_mut() {
+            Some(file) => file.write(buf),
+            None => Ok(buf.len()),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.as_mut().map_or(Ok(()), Write::flush)
+    }
+}
+
 pub(super) fn init_logging(
     log_dir: Option<&str>,
     app_logger: Option<Box<dyn Logger>>,
     log_filter: Option<&str>,
 ) -> Result<(), SdkError> {
-    let registry = tracing_subscriber::registry().with(
-        GlobalSdkLogger {
-            log_listener: app_logger,
-        }
-        .with_filter(sdk_log_filter(log_filter)),
-    );
+    let log_file = log_dir
+        .map(|log_dir| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!("{log_dir}/sdk.log"))
+        })
+        .transpose()
+        .map_err(|e| SdkError::Generic(e.to_string()))?;
+    // An empty `Targets` enables nothing, so a missing logger or file costs
+    // no formatting.
+    let app_filter = if app_logger.is_some() {
+        sdk_log_filter(log_filter)
+    } else {
+        Targets::new()
+    };
+    let file_filter = if log_file.is_some() {
+        file_log_filter(log_filter)
+    } else {
+        Targets::new()
+    };
 
-    if let Some(log_dir) = log_dir {
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{log_dir}/sdk.log"))
-            .map_err(|e| SdkError::Generic(e.to_string()))?;
+    let mut reload_filters = RELOAD_FILTERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(reload_filters) = reload_filters.as_ref() {
+        reload_filters(app_filter, file_filter).map_err(|e| SdkError::Generic(e.to_string()))?;
+    } else {
+        let (app_filter, app_filter_handle) = reload::Layer::new(app_filter);
+        let (file_filter, file_filter_handle) = reload::Layer::new(file_filter);
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_line_number(true)
-            .with_writer(log_file);
+            .with_writer(CurrentLogFile);
         // Bench-only: render span CLOSE lines (`time.busy` / `time.idle`)
         // so the breez-bench aggregator can attribute per-RPC latency.
         // The user's filter (`spark::operator_rpc=info`, etc.) controls
         // which spans actually emit.
         #[cfg(feature = "span-trace")]
         let fmt_layer = fmt_layer.with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
-        let fmt_layer = fmt_layer.with_filter(file_log_filter(log_filter));
-        registry.with(fmt_layer).try_init()?;
-    } else {
-        registry.try_init()?;
+        tracing_subscriber::registry()
+            .with(
+                GlobalSdkLogger {
+                    log_listener: Some(Box::new(CurrentAppLogger)),
+                }
+                .with_filter(app_filter),
+            )
+            .with(fmt_layer.with_filter(file_filter))
+            .try_init()?;
+        *reload_filters = Some(Box::new(move |app_filter, file_filter| {
+            app_filter_handle.reload(app_filter)?;
+            file_filter_handle.reload(file_filter)
+        }));
     }
 
+    // The replaced logger and file are dropped outside their locks.
+    let _previous_logger = std::mem::replace(
+        &mut *APP_LOGGER.write().unwrap_or_else(PoisonError::into_inner),
+        app_logger.map(Arc::from),
+    );
+    let _previous_file = std::mem::replace(
+        &mut *LOG_FILE.lock().unwrap_or_else(PoisonError::into_inner),
+        log_file,
+    );
     Ok(())
 }
 

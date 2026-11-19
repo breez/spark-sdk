@@ -171,6 +171,9 @@ pub(crate) struct BreezSdkParams {
     pub lightning_sender: Arc<LightningSender>,
 }
 
+/// Sets up the SDK's logging: a log file in `log_dir`, an `app_logger` that
+/// receives each entry, and `log_filter` in `RUST_LOG` syntax. Calling it again
+/// replaces all three.
 #[allow(clippy::needless_pass_by_value)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(
