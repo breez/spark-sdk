@@ -150,16 +150,25 @@ impl TokenAllowanceService {
             .await?
             .serialize()
             .to_vec();
-        self.operator_pool
-            .get_coordinator()
-            .client
-            .revoke_token_allowance(RevokeTokenAllowanceRequest {
-                revoke_allowance_payload: Some(payload),
-                owner_signature,
-            })
-            .await
-            .map_err(|e| classify_revoke_error(e.into()))?;
-        Ok(())
+        let request = RevokeTokenAllowanceRequest {
+            revoke_allowance_payload: Some(payload),
+            owner_signature,
+        };
+        // Each operator enforces the allowance from its own copy, so each one gets
+        // the signed revoke directly instead of trusting the coordinator to pass it
+        // on. Operators treat a repeat of the same signed revoke as a no-op.
+        send_to_every_operator(self.operator_pool.get_all_operators(), |operator| {
+            let request = request.clone();
+            async move {
+                operator
+                    .client
+                    .revoke_token_allowance(request)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| classify_revoke_error(e.into()))
+            }
+        })
+        .await
     }
 
     pub async fn query_token_allowances(
@@ -225,6 +234,23 @@ impl TokenAllowanceService {
     }
 }
 
+/// Waits for every send to finish, then returns the first error. Stopping at
+/// the first error would drop the sends still in flight, so one operator could
+/// keep the request from reaching the others by refusing it.
+async fn send_to_every_operator<O, F, Fut>(
+    operators: impl IntoIterator<Item = O>,
+    send: F,
+) -> Result<(), ServiceError>
+where
+    F: FnMut(O) -> Fut,
+    Fut: Future<Output = Result<(), ServiceError>>,
+{
+    futures::future::join_all(operators.into_iter().map(send))
+        .await
+        .into_iter()
+        .collect()
+}
+
 async fn read_pages<F, Fut>(
     request: &QueryTokenAllowancesRequest,
     row_cap: usize,
@@ -266,17 +292,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, future::ready};
+    use std::{cell::RefCell, future::ready, task::Poll};
 
+    use futures::future::poll_fn;
     use macros::async_test_all;
 
-    use super::read_pages;
+    use super::{read_pages, send_to_every_operator};
     use crate::{
         operator::rpc::spark_token::{
             QueryTokenAllowancesRequest, QueryTokenAllowancesResponse, TokenAllowanceInfo,
             TokenAllowancePayload, TokenAllowanceStatus as Proto,
         },
         services::ServiceError,
+        token::TokenAllowanceFailure,
     };
 
     #[cfg(feature = "browser-tests")]
@@ -389,5 +417,55 @@ mod tests {
 
         let (records, _) = paged(0, 2_000, full_pages()).await;
         assert_eq!(records.unwrap().len(), 2_000);
+    }
+
+    async fn yield_once() {
+        let mut yielded = false;
+        poll_fn(|cx| {
+            if yielded {
+                return Poll::Ready(());
+            }
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        })
+        .await;
+    }
+
+    #[async_test_all]
+    async fn the_revoke_reaches_every_operator() {
+        let reached = RefCell::new(Vec::new());
+        let result = send_to_every_operator([0, 1, 2], |operator| {
+            reached.borrow_mut().push(operator);
+            ready(Ok(()))
+        })
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(reached.into_inner(), vec![0, 1, 2]);
+    }
+
+    #[async_test_all]
+    async fn one_refusal_fails_the_revoke_but_the_others_still_get_it() {
+        let reached = RefCell::new(Vec::new());
+        let result = send_to_every_operator([0, 1, 2], |operator| {
+            let reached = &reached;
+            async move {
+                if operator == 0 {
+                    return Err(TokenAllowanceFailure::NotFound.into_error("refused"));
+                }
+                yield_once().await;
+                reached.borrow_mut().push(operator);
+                Ok(())
+            }
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(ServiceError::TokenAllowance {
+                failure: TokenAllowanceFailure::NotFound,
+                ..
+            })
+        ));
+        assert_eq!(reached.into_inner(), vec![1, 2]);
     }
 }

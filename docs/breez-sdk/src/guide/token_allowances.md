@@ -37,6 +37,8 @@ The spent amount counts a pull as soon as it is sent, including pulls that later
 
 A revocation takes effect within seconds. A pull that hasn't completed can still fail after a revocation, so treat a pull as paid only once it completes.
 
+If {{#name revoke_token_allowance}} fails with {{#enum SdkError::SparkError}} or {{#enum SdkError::NetworkError}}, call it again. Revoking an allowance that is already revoked succeeds.
+
 ## Pulling a payment
 
 A spender pulls in two steps. {{#name prepare_pull_payment}} finds the allowance, checks its limits and builds the transfer from the payer's tokens. {{#name pull_payment}} signs it and sends it.
