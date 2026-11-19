@@ -2229,6 +2229,27 @@ mod tests {
         assert_sdk_graph_freed(event_emitter, spark_wallet).await;
     }
 
+    /// An SDK the app releases without calling `disconnect` stops its
+    /// background tasks, which then release the object graph.
+    #[tokio::test]
+    async fn client_mode_sdk_graph_is_freed_when_dropped_without_disconnect() {
+        let mut config = default_config(Network::Regtest);
+        config.real_time_sync_server_url = None;
+        config.private_enabled_default = false;
+
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("drop-client"))
+            .build()
+            .await
+            .expect("client-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
     /// Variant of the client-mode leak regression test with real-time sync
     /// and stable balance enabled: the sync record handler and the conversion
     /// worker hold the emitter strongly, so their tasks must release it on

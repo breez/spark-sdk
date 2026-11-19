@@ -129,7 +129,7 @@ impl RuntimeProfile for ClientRuntime {
 }
 
 fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
-    let sdk = sdk.clone();
+    let sdk = sdk.background_clone();
     let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
     let mut wallet_events = sdk.spark_wallet.subscribe_events();
     let mut sync_requests = sdk.sync_coordinator.subscribe();
@@ -256,7 +256,7 @@ async fn on_sync_request(
         return false;
     };
     info!("Sync trigger changed: {:?}", &sync_request);
-    let cloned_sdk = sdk.clone();
+    let cloned_sdk = sdk.background_clone();
     let initial_synced_sender = initial_synced_sender.clone();
     let delegation_shutdown = shutdown_receiver.clone();
     matches!(
