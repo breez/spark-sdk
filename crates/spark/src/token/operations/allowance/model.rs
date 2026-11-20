@@ -1,4 +1,5 @@
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::time::UNIX_EPOCH;
 use prost_types::Timestamp;
 use uuid::Uuid;
 
@@ -9,63 +10,19 @@ use crate::{
         TokenAllowanceStatus as ProtoStatus,
     },
     services::ServiceError,
-    token::{bech32m_decode_token_id, bech32m_encode_token_id},
+    token::{
+        NewTokenAllowance, PreparedTokenPull, TokenAllowance, TokenAllowanceStatus,
+        bech32m_decode_token_id, bech32m_encode_token_id,
+    },
     utils::byte_padding::BytePadding,
 };
+
+use super::hash::hash_delegated_spend;
 
 const STATEMENT_VERSION: u32 = 1;
 const MAX_ALLOWED_RECIPIENTS: usize = 256;
 const MAX_EXPIRY_SECONDS: u64 = 100_000_000_000;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenAllowanceStatus {
-    Active,
-    Exhausted,
-    Expired,
-    Revoked,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenAllowanceRole {
-    Owner,
-    Spender,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenAllowance {
-    pub id: String,
-    pub owner_public_key: PublicKey,
-    pub spender_public_key: PublicKey,
-    pub token_identifier: String,
-    pub max_per_payment: Option<u128>,
-    pub max_total: Option<u128>,
-    pub spent_amount: u128,
-    pub allowed_recipients: Vec<PublicKey>,
-    pub expiry_time: u64,
-    pub created_at: u64,
-    pub revoked_at: Option<u64>,
-    pub status: TokenAllowanceStatus,
-}
-
-#[derive(Clone, Debug)]
-pub struct NewTokenAllowance {
-    pub spender_public_key: PublicKey,
-    pub token_identifier: String,
-    pub max_per_payment: Option<u128>,
-    pub max_total: Option<u128>,
-    pub expiry_time: u64,
-    pub allowed_recipients: Vec<PublicKey>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TokenAllowanceQuery {
-    pub role: TokenAllowanceRole,
-    pub counterparty_public_key: Option<PublicKey>,
-    pub token_identifier: Option<String>,
-    pub include_inactive: bool,
-    pub offset: u32,
-    pub limit: u32,
-}
+pub(super) const PULL_VALIDITY_SECONDS: u64 = 300;
 
 fn invalid(message: &str) -> ServiceError {
     ServiceError::InvalidInput(message.to_string())
@@ -220,6 +177,34 @@ impl TokenAllowance {
                 .then_some(info.owner_provided_revoke_timestamp / 1000),
             status,
         })
+    }
+}
+
+impl PreparedTokenPull {
+    pub fn total(&self) -> u128 {
+        self.receivers
+            .iter()
+            .fold(0, |total, r| total.saturating_add(r.amount))
+    }
+
+    pub fn expiry_time(&self) -> u64 {
+        self.window_end().min(self.allowance_expiry_time)
+    }
+
+    pub(crate) fn window_end(&self) -> u64 {
+        self.created_timestamp
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+            + PULL_VALIDITY_SECONDS
+    }
+
+    pub fn spend_digest(&self) -> Result<[u8; 32], ServiceError> {
+        let allowance_id = Uuid::parse_str(&self.allowance_id)
+            .map_err(|e| ServiceError::InvalidInput(format!("invalid allowance id: {e}")))?;
+        hash_delegated_spend(
+            &self.partial_token_transaction_hash,
+            allowance_id.as_bytes(),
+        )
     }
 }
 

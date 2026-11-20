@@ -6,7 +6,7 @@ use crate::{
         TokenAllowancePayload, TokenAllowanceStatus,
     },
     services::ServiceError,
-    token::allowance::hash::{hash_create_statement, hash_revoke_statement},
+    token::operations::allowance::hash::{hash_create_statement, hash_revoke_statement},
 };
 
 pub(crate) fn verify_created_record(
@@ -118,11 +118,11 @@ mod tests {
             TokenAllowanceStatus,
         },
         token::{
-            allowance::{
+            NewTokenAllowance, bech32m_encode_token_id,
+            operations::allowance::{
                 hash::{hash_create_statement, hash_revoke_statement},
-                model::{NewTokenAllowance, revoke_payload},
+                model::revoke_payload,
             },
-            bech32m_encode_token_id,
         },
     };
 

@@ -5,6 +5,9 @@ edition = "2024"
 rust-version.workspace = true
 
 [features]
+default = ["tokens", "quotes"]
+tokens = ["spark/tokens"]             # Token transactions and token allowances
+quotes = ["spark/quotes"]             # Quoted (partner-fee) Lightning payments
 browser-tests = []                    # Enable browser wasm-pack tests
 test-utils = ["spark/test-utils"]     # Expose shared test helpers for downstream crates
 

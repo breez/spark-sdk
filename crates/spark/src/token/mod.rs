@@ -1,5 +1,32 @@
 mod allowance;
 mod error;
+#[cfg(feature = "tokens")]
+pub mod operations;
+#[cfg(not(feature = "tokens"))]
+pub mod operations {
+    pub(crate) mod invoice {
+        use crate::{
+            address::{SparkAddress, TokensPayment, error::AddressError},
+            signer::SparkSigner,
+        };
+
+        fn tokens_disabled() -> AddressError {
+            AddressError::Other("Token invoices require the `tokens` feature".to_string())
+        }
+
+        pub(crate) fn hash(_: &SparkAddress, _: &TokensPayment) -> Result<Vec<u8>, AddressError> {
+            Err(tokens_disabled())
+        }
+
+        pub(crate) async fn encode(
+            _: &SparkAddress,
+            _: &TokensPayment,
+            _: &dyn SparkSigner,
+        ) -> Result<String, AddressError> {
+            Err(tokens_disabled())
+        }
+    }
+}
 mod service;
 mod store;
 mod token_service;
@@ -12,7 +39,7 @@ use std::collections::HashSet;
 
 pub use allowance::{
     NewTokenAllowance, PreparedTokenPull, PullReceiver, TokenAllowance, TokenAllowanceFailure,
-    TokenAllowanceQuery, TokenAllowanceRole, TokenAllowanceService, TokenAllowanceStatus,
+    TokenAllowanceQuery, TokenAllowanceRole, TokenAllowanceStatus,
 };
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;

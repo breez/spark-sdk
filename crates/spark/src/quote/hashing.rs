@@ -4,6 +4,44 @@ use prost::Message as _;
 use super::QuoteError;
 use crate::operator::rpc::spark::{Network, TransferManifest};
 
+#[cfg(feature = "quotes")]
+use spark_primitives as primitives;
+
+// Without `spark-primitives` nothing can be hashed, so every quote is refused
+// and receives fall back to unquoted invoices.
+#[cfg(not(feature = "quotes"))]
+mod primitives {
+    use super::QuoteError;
+
+    fn unavailable() -> Result<Vec<u8>, QuoteError> {
+        Err(QuoteError::NotHashable(
+            "quoted payments require the `quotes` feature".to_string(),
+        ))
+    }
+
+    pub(super) fn hash_transfer_manifest(_: Vec<u8>) -> Result<Vec<u8>, QuoteError> {
+        unavailable()
+    }
+
+    pub(super) fn quote_envelope_digest(
+        _: u32,
+        _: Vec<u8>,
+        _: u32,
+        _: u32,
+        _: Vec<u8>,
+    ) -> Result<Vec<u8>, QuoteError> {
+        unavailable()
+    }
+
+    pub(super) fn receive_attestor_target(_: Vec<u8>) -> Result<Vec<u8>, QuoteError> {
+        unavailable()
+    }
+
+    pub(super) fn send_target_v2(_: Vec<u8>, _: u64) -> Result<Vec<u8>, QuoteError> {
+        unavailable()
+    }
+}
+
 /// Which flow a quote was issued for, so a quote for one flow cannot be
 /// replayed into another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +70,7 @@ pub fn transfer_manifest_hash(manifest: &TransferManifest) -> Result<[u8; 32], Q
 /// [`transfer_manifest_hash`] over a manifest received as bytes, so a peer's
 /// copy is hashed exactly as the operators will bind it.
 pub fn serialized_transfer_manifest_hash(manifest_bytes: &[u8]) -> Result<[u8; 32], QuoteError> {
-    to_digest(spark_primitives::hash_transfer_manifest(
-        manifest_bytes.to_vec(),
-    )?)
+    to_digest(primitives::hash_transfer_manifest(manifest_bytes.to_vec())?)
 }
 
 /// The digest a quote signature is taken over:
@@ -73,7 +109,7 @@ pub(super) fn envelope_digest(
         u32::try_from(value)
             .map_err(|_| QuoteError::NotHashable(format!("unsupported {name} {value}")))
     };
-    to_digest(spark_primitives::quote_envelope_digest(
+    to_digest(primitives::quote_envelope_digest(
         narrow(network, "network")?,
         manifest_hash.to_vec(),
         narrow(reason, "quote reason")?,
@@ -85,16 +121,14 @@ pub(super) fn envelope_digest(
 /// Binds a receive attestation to the invoice it covers, so one attestation
 /// cannot cover another invoice of the same gross from the same attestor.
 pub fn receive_attestor_target(payment_hash: &[u8; 32]) -> Result<[u8; 32], QuoteError> {
-    to_digest(spark_primitives::receive_attestor_target(
-        payment_hash.to_vec(),
-    )?)
+    to_digest(primitives::receive_attestor_target(payment_hash.to_vec())?)
 }
 
 /// Binds a send quote to the invoice and to the amount paid for it: a
 /// zero-amount invoice takes its amount from the request, so the hash alone
 /// would let a quote priced for one amount commit against another.
 pub fn send_target_v2(payment_hash: &[u8; 32], payment_msats: u64) -> Result<[u8; 32], QuoteError> {
-    to_digest(spark_primitives::send_target_v2(
+    to_digest(primitives::send_target_v2(
         payment_hash.to_vec(),
         payment_msats,
     )?)

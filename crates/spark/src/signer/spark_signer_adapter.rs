@@ -849,6 +849,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "quotes")]
     fn test_manifest() -> Vec<u8> {
         let key = |seed: u8| {
             SecretKey::from_slice(&[seed; 32])
@@ -875,6 +876,7 @@ mod tests {
 
     /// The signer signs the digest it derives from the quote, low-S and
     /// unhashed, so it verifies the way the operators and the SSP check it.
+    #[cfg(feature = "quotes")]
     #[async_test_all]
     async fn a_quote_is_signed_over_the_digest_derived_from_it() {
         let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));

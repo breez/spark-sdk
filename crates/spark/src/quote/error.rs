@@ -21,6 +21,7 @@ impl QuoteError {
     }
 }
 
+#[cfg(feature = "quotes")]
 impl From<spark_primitives::SparkPrimitivesError> for QuoteError {
     fn from(err: spark_primitives::SparkPrimitivesError) -> Self {
         let spark_primitives::SparkPrimitivesError::Spark(message) = err;

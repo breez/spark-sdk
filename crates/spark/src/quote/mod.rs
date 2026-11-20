@@ -25,5 +25,6 @@ pub use validation::{
     validate_quoted_receive_manifest, validate_quoted_send_manifest,
 };
 
-#[cfg(test)]
+#[cfg(all(test, feature = "quotes"))]
+#[allow(clippy::indexing_slicing)] // Test suites: a panic there is a failed assertion.
 mod tests;

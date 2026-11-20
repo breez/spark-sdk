@@ -1998,7 +1998,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "quotes"))]
+#[allow(clippy::indexing_slicing)] // Test suites: a panic there is a failed assertion.
 mod quoted_payment_tests {
     use std::collections::HashMap;
     use std::sync::Mutex;

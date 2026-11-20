@@ -1,77 +1,296 @@
 use std::collections::HashSet;
 
 use bitcoin::secp256k1::{PublicKey, schnorr};
-use platform_utils::time::{SystemTime, UNIX_EPOCH};
+use platform_utils::time::SystemTime;
 use prost::Message as _;
-use serde::{Deserialize, Serialize};
+use tonic::{Code, Status};
+use tonic_types::StatusExt;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
     Network,
     address::SparkAddress,
     operator::rpc::{
+        QueryAllTokenOutputsRequest,
         multisig::KeyedSignature,
         spark_token::{
-            AllowanceSignature, BroadcastTransactionRequest, PartialTokenTransaction,
-            SignatureWithIndex, partial_token_transaction::TokenInputs,
-            signature_with_index::AuthoritySignatures,
+            AllowanceSignature, BroadcastTransactionRequest, BroadcastTransactionResponse,
+            CommitStatus, OutputWithPreviousTransactionData, PartialTokenTransaction,
+            QueryTokenAllowancesRequest, SignatureWithIndex, TokenAllowanceInfo,
+            TokenAllowanceStatus as ProtoAllowanceStatus, TokenOutputStatus,
+            partial_token_transaction::TokenInputs, signature_with_index::AuthoritySignatures,
         },
     },
-    services::ServiceError,
+    services::{ServiceError, TokenTransaction, TokenTransactionStatus},
+    signer::TokenTransactionKind,
     token::{
-        MAX_TOKEN_TX_OUTPUTS, TokenAllowance, TokenAllowanceFailure, TokenAllowanceStatus,
-        TokenOutputWithPrevOut, TokensConfig, bech32m_decode_token_id, token_service::unix_micros,
+        MAX_TOKEN_TX_OUTPUTS, PreparedTokenPull, PullReceiver, ReservationTarget, TokenAllowance,
+        TokenAllowanceFailure, TokenAllowanceStatus, TokenOutput, TokenOutputServiceError,
+        TokenOutputWithPrevOut, TokensConfig, bech32m_decode_token_id,
+        operations::transactions::unix_micros, select_token_outputs_from,
     },
 };
 
-use super::hash::hash_delegated_spend;
+use super::{
+    error::{classify_allowance_error, operator_status},
+    model::PULL_VALIDITY_SECONDS,
+    service::{TokenAllowanceService, now_millis},
+};
 
-const PULL_VALIDITY_SECONDS: u64 = 300;
 const MAX_PULL_RECEIVERS: usize = MAX_TOKEN_TX_OUTPUTS - 1;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PullReceiver {
-    pub receiver_public_key: PublicKey,
-    pub amount: u128,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PreparedTokenPull {
-    pub allowance_id: String,
-    pub payer_public_key: PublicKey,
-    pub token_identifier: String,
-    pub receivers: Vec<PullReceiver>,
-    pub partial_token_transaction_bytes: Vec<u8>,
-    pub partial_token_transaction_hash: Vec<u8>,
-    pub created_timestamp: SystemTime,
-    pub allowance_expiry_time: u64,
-}
-
-impl PreparedTokenPull {
-    pub fn total(&self) -> u128 {
-        self.receivers
-            .iter()
-            .fold(0, |total, r| total.saturating_add(r.amount))
-    }
-
-    pub fn expiry_time(&self) -> u64 {
-        self.window_end().min(self.allowance_expiry_time)
-    }
-
-    pub(crate) fn window_end(&self) -> u64 {
-        self.created_timestamp
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-            + PULL_VALIDITY_SECONDS
-    }
-
-    pub fn spend_digest(&self) -> Result<[u8; 32], ServiceError> {
-        let allowance_id = Uuid::parse_str(&self.allowance_id)
-            .map_err(|e| ServiceError::InvalidInput(format!("invalid allowance id: {e}")))?;
-        hash_delegated_spend(
-            &self.partial_token_transaction_hash,
-            allowance_id.as_bytes(),
+impl TokenAllowanceService {
+    pub async fn prepare_token_pull(
+        &self,
+        payer: PublicKey,
+        token_identifier: &str,
+        receivers: Vec<PullReceiver>,
+    ) -> Result<PreparedTokenPull, ServiceError> {
+        let spender = self.spark_signer.get_identity_public_key().await?;
+        if payer == spender {
+            return Err(ServiceError::InvalidInput(
+                "the payer must differ from this wallet".to_string(),
+            ));
+        }
+        let total = validate_pull_receivers(&receivers, payer)?;
+        let raw_token_id = bech32m_decode_token_id(token_identifier, Some(self.network))?;
+        let info = self
+            .find_pull_allowance(payer, spender, &raw_token_id)
+            .await?;
+        let now_secs = now_millis()? / 1000;
+        let allowance = TokenAllowance::from_info(&info, self.network, now_secs)?;
+        check_pull_against_allowance(&allowance, &receivers, now_secs)?;
+        let (free, pending) = self.fetch_payer_outputs(payer, &raw_token_id).await?;
+        let selected = select_token_outputs_from(
+            token_identifier,
+            pull_candidates(free, pending, total),
+            ReservationTarget::MinTotalValue(total),
+            None,
         )
+        .map_err(|e| match e {
+            TokenOutputServiceError::InsufficientFunds { .. } => {
+                TokenAllowanceFailure::PayerInsufficientFunds
+                    .into_error("the payer's balance can't cover the pull")
+            }
+            other => other.into(),
+        })?;
+        build_pull(PullBuildParams {
+            allowance_id: allowance.id,
+            allowance_expiry_time: allowance.expiry_time,
+            payer,
+            token_identifier,
+            receivers,
+            selected,
+            network: self.network,
+            operator_identity_public_keys: self
+                .operator_pool
+                .get_all_operators()
+                .map(|o| o.identity_public_key.serialize().to_vec())
+                .collect(),
+            tokens_config: &self.tokens_config,
+            now: SystemTime::now(),
+        })
+    }
+
+    pub async fn sign_and_broadcast_token_pull(
+        &self,
+        prepared: &PreparedTokenPull,
+    ) -> Result<TokenTransaction, ServiceError> {
+        let signature = self
+            .sign(
+                TokenTransactionKind::AllowanceSpend,
+                prepared.spend_digest()?,
+            )
+            .await?;
+        self.broadcast_token_pull(prepared, &signature).await
+    }
+
+    pub async fn broadcast_token_pull(
+        &self,
+        prepared: &PreparedTokenPull,
+        signature: &schnorr::Signature,
+    ) -> Result<TokenTransaction, ServiceError> {
+        let spender = self.spark_signer.get_identity_public_key().await?;
+        let request = build_pull_broadcast_request(prepared, spender, signature)?;
+        let window_passed = now_millis()? / 1000 >= prepared.window_end();
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .broadcast_transaction(request)
+            .await
+            .map_err(|e| classify_pull_error(e.into(), window_passed))?;
+        if response.commit_status() != CommitStatus::CommitFinalized {
+            warn!(
+                "Pull {} broadcast returned {:?}; committed operators: {:?}, \
+                 uncommitted operators: {:?}",
+                hex::encode(&prepared.partial_token_transaction_hash),
+                response.commit_status(),
+                response
+                    .commit_progress
+                    .as_ref()
+                    .map(|p| &p.committed_operator_public_keys),
+                response
+                    .commit_progress
+                    .as_ref()
+                    .map(|p| &p.uncommitted_operator_public_keys),
+            );
+        }
+        pull_transaction(response, prepared.created_timestamp, self.network)
+    }
+
+    async fn find_pull_allowance(
+        &self,
+        payer: PublicKey,
+        spender: PublicKey,
+        raw_token_id: &[u8],
+    ) -> Result<TokenAllowanceInfo, ServiceError> {
+        let active = self.query_pair(payer, spender, raw_token_id, false).await?;
+        let records = if active.is_empty() {
+            self.query_pair(payer, spender, raw_token_id, true).await?
+        } else {
+            active
+        };
+        choose_pull_allowance(records)
+    }
+
+    async fn fetch_payer_outputs(
+        &self,
+        payer: PublicKey,
+        raw_token_id: &[u8],
+    ) -> Result<(Vec<TokenOutputWithPrevOut>, Vec<TokenOutputWithPrevOut>), ServiceError> {
+        let outputs = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_all_token_outputs(QueryAllTokenOutputsRequest {
+                owner_public_keys: vec![payer.serialize().to_vec()],
+                token_identifiers: vec![raw_token_id.to_vec()],
+                network: self.network.to_proto_network() as i32,
+                ..Default::default()
+            })
+            .await?;
+        let (pending, free): (Vec<_>, Vec<_>) = outputs.into_iter().partition(is_pending_outbound);
+        let network = self.network;
+        let convert = |outputs: Vec<OutputWithPreviousTransactionData>| {
+            outputs
+                .into_iter()
+                .map(|o| (o, network).try_into())
+                .collect::<Result<Vec<TokenOutputWithPrevOut>, ServiceError>>()
+        };
+        Ok((convert(free)?, convert(pending)?))
+    }
+
+    pub(super) async fn query_pair(
+        &self,
+        owner: PublicKey,
+        spender: PublicKey,
+        raw_token_id: &[u8],
+        include_inactive: bool,
+    ) -> Result<Vec<TokenAllowanceInfo>, ServiceError> {
+        self.query(
+            QueryTokenAllowancesRequest {
+                owner_public_key: Some(owner.serialize().to_vec()),
+                spender_public_key: Some(spender.serialize().to_vec()),
+                token_identifier: Some(raw_token_id.to_vec()),
+                include_inactive,
+                ..Default::default()
+            },
+            usize::MAX,
+        )
+        .await
+    }
+}
+
+fn choose_pull_allowance(
+    records: Vec<TokenAllowanceInfo>,
+) -> Result<TokenAllowanceInfo, ServiceError> {
+    let latest_active_first = records.into_iter().max_by_key(|info| {
+        (
+            info.status() == ProtoAllowanceStatus::Active,
+            info.allowance_payload
+                .as_ref()
+                .map_or(0, |p| p.owner_provided_timestamp),
+        )
+    });
+    let Some(info) = latest_active_first else {
+        return Err(TokenAllowanceFailure::NotFound
+            .into_error("no token allowance from this payer for this token"));
+    };
+    match info.status() {
+        ProtoAllowanceStatus::Active | ProtoAllowanceStatus::Exhausted => Ok(info),
+        ProtoAllowanceStatus::Revoked => {
+            Err(TokenAllowanceFailure::Revoked.into_error("the token allowance was revoked"))
+        }
+        ProtoAllowanceStatus::Expired => {
+            Err(TokenAllowanceFailure::Expired.into_error("the token allowance has expired"))
+        }
+        ProtoAllowanceStatus::Unspecified => Err(TokenAllowanceFailure::NotFound
+            .into_error("no token allowance from this payer for this token")),
+    }
+}
+
+fn is_pending_outbound(output: &OutputWithPreviousTransactionData) -> bool {
+    output.output.as_ref().and_then(|o| o.status) == Some(TokenOutputStatus::PendingOutbound as i32)
+}
+
+fn pull_transaction(
+    response: BroadcastTransactionResponse,
+    created_timestamp: SystemTime,
+    network: Network,
+) -> Result<TokenTransaction, ServiceError> {
+    let status = match response.commit_status() {
+        CommitStatus::CommitFinalized => TokenTransactionStatus::Finalized,
+        CommitStatus::CommitProcessing | CommitStatus::CommitUnspecified => {
+            TokenTransactionStatus::Unknown
+        }
+    };
+    let final_tx = response.final_token_transaction.ok_or_else(|| {
+        ServiceError::Generic("broadcast response missing final_token_transaction".to_string())
+    })?;
+    let hash = hex::encode(
+        spark_primitives::hash_final_token_transaction(final_tx.encode_to_vec())
+            .map_err(|e| ServiceError::Generic(e.to_string()))?,
+    );
+    let inputs = final_tx
+        .token_inputs
+        .ok_or_else(|| ServiceError::Generic("final pull transaction missing inputs".to_string()))?
+        .try_into()?;
+    let outputs = final_tx
+        .final_token_outputs
+        .into_iter()
+        .map(|output| (output, network).try_into())
+        .collect::<Result<Vec<TokenOutput>, ServiceError>>()?;
+    Ok(TokenTransaction {
+        hash,
+        inputs,
+        outputs,
+        status,
+        created_timestamp,
+        fulfilled_invoices: Vec::new(),
+    })
+}
+
+const TRANSACTION_PREEMPTED: &str = "TRANSACTION_PREEMPTED";
+const OUT_OF_RANGE: &str = "OUT_OF_RANGE";
+
+fn pull_never_accepted(status: &Status, window_passed: bool) -> bool {
+    let reason = status.get_details_error_info().map(|info| info.reason);
+    match (status.code(), reason.as_deref()) {
+        (Code::Aborted, Some(TRANSACTION_PREEMPTED)) => true,
+        (Code::InvalidArgument, Some(OUT_OF_RANGE)) => window_passed,
+        _ => false,
+    }
+}
+
+fn classify_pull_error(error: ServiceError, window_passed: bool) -> ServiceError {
+    let stale = operator_status(&error)
+        .filter(|status| pull_never_accepted(status, window_passed))
+        .map(|status| status.message().to_string());
+    match stale {
+        Some(message) => TokenAllowanceFailure::PreparedPullStale.into_error(message),
+        None => classify_allowance_error(error),
     }
 }
 
@@ -305,22 +524,33 @@ pub(crate) fn build_pull_broadcast_request(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::HashMap, time::Duration};
 
     use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use macros::test_all;
     use platform_utils::time::{SystemTime, UNIX_EPOCH};
     use prost::Message as _;
+    use tonic::{Code, Status};
+    use tonic_types::{ErrorDetails, StatusExt};
     use uuid::Uuid;
 
     use super::{
         PULL_VALIDITY_SECONDS, PreparedTokenPull, PullBuildParams, PullReceiver, build_pull,
-        check_pull_against_allowance, pull_candidates, validate_pull_receivers,
+        check_pull_against_allowance, choose_pull_allowance, classify_pull_error, pull_candidates,
+        pull_transaction, validate_pull_receivers,
     };
     use crate::{
         Network,
-        operator::rpc::spark_token::PartialTokenTransaction,
-        services::ServiceError,
+        operator::rpc::{
+            OperatorRpcError,
+            spark_token::{
+                BroadcastTransactionResponse, CommitStatus, FinalTokenOutput,
+                FinalTokenTransaction, PartialTokenOutput, PartialTokenTransaction,
+                TokenAllowanceInfo, TokenAllowancePayload, TokenAllowanceStatus as Proto,
+                TokenOutputToSpend, TokenTransferInput, final_token_transaction,
+            },
+        },
+        services::{ServiceError, TokenInputs, TokenTransaction, TokenTransactionStatus},
         token::{
             DEFAULT_MAX_TOKEN_TX_INPUTS, MAX_TOKEN_TX_OUTPUTS, TokenAllowance,
             TokenAllowanceFailure, TokenAllowanceStatus, TokenOutput, TokenOutputWithPrevOut,
@@ -600,6 +830,244 @@ mod tests {
             let keyed = allowance_signature.spender_signature.as_ref().unwrap();
             assert_eq!(keyed.public_key, spender.serialize().to_vec());
             assert_eq!(keyed.signature, signature.serialize().to_vec());
+        }
+    }
+
+    fn rpc_error(code: Code, message: &str) -> ServiceError {
+        ServiceError::ServiceConnectionError(Box::new(OperatorRpcError::Connection(Box::new(
+            Status::new(code, message),
+        ))))
+    }
+
+    fn error_with_reason(code: Code, reason: &str) -> ServiceError {
+        let details = ErrorDetails::with_error_info(reason, "spark", HashMap::new());
+        ServiceError::ServiceConnectionError(Box::new(OperatorRpcError::Connection(Box::new(
+            Status::with_error_details(code, "operator rejected", details),
+        ))))
+    }
+
+    #[test_all]
+    fn a_pull_the_operators_never_accepted_is_stale() {
+        let stale = [
+            (Code::Aborted, "TRANSACTION_PREEMPTED", false),
+            (Code::InvalidArgument, "OUT_OF_RANGE", true),
+        ];
+        for (code, reason, window_passed) in stale {
+            assert_eq!(
+                failure(classify_pull_error(
+                    error_with_reason(code, reason),
+                    window_passed
+                )),
+                Some(TokenAllowanceFailure::PreparedPullStale)
+            );
+        }
+    }
+
+    #[test_all]
+    fn other_pull_errors_are_not_stale() {
+        let others = [
+            (
+                error_with_reason(Code::InvalidArgument, "OUT_OF_RANGE"),
+                false,
+            ),
+            (error_with_reason(Code::Aborted, "LOCK_CONFLICT"), true),
+            (
+                error_with_reason(Code::AlreadyExists, "EXPIRED_TRANSACTION"),
+                true,
+            ),
+            (
+                error_with_reason(Code::AlreadyExists, "DUPLICATE_OPERATION"),
+                true,
+            ),
+            (rpc_error(Code::Aborted, "inputs cannot be spent"), true),
+        ];
+        for (error, window_passed) in others {
+            assert!(matches!(
+                classify_pull_error(error, window_passed),
+                ServiceError::ServiceConnectionError(_)
+            ));
+        }
+    }
+
+    fn record(tag: u8, status: Proto, owner_provided_timestamp: u64) -> TokenAllowanceInfo {
+        TokenAllowanceInfo {
+            allowance_payload: Some(TokenAllowancePayload {
+                allowance_id: vec![tag; 16],
+                owner_provided_timestamp,
+                ..Default::default()
+            }),
+            status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    fn chosen(records: Vec<TokenAllowanceInfo>) -> u8 {
+        choose_pull_allowance(records)
+            .unwrap()
+            .allowance_payload
+            .unwrap()
+            .allowance_id[0]
+    }
+
+    fn refusal(records: Vec<TokenAllowanceInfo>) -> Option<TokenAllowanceFailure> {
+        match choose_pull_allowance(records) {
+            Err(ServiceError::TokenAllowance { failure, .. }) => Some(failure),
+            _ => None,
+        }
+    }
+
+    #[test_all]
+    fn an_active_grant_wins() {
+        assert_eq!(
+            chosen(vec![
+                record(1, Proto::Exhausted, 3),
+                record(2, Proto::Active, 1),
+                record(3, Proto::Revoked, 5),
+            ]),
+            2
+        );
+    }
+
+    #[test_all]
+    fn no_records_is_not_found() {
+        assert_eq!(refusal(vec![]), Some(TokenAllowanceFailure::NotFound));
+    }
+
+    #[test_all]
+    fn the_latest_revoked_grant_refuses() {
+        assert_eq!(
+            refusal(vec![
+                record(1, Proto::Expired, 1),
+                record(2, Proto::Revoked, 2)
+            ]),
+            Some(TokenAllowanceFailure::Revoked)
+        );
+    }
+
+    #[test_all]
+    fn the_latest_expired_grant_refuses() {
+        assert_eq!(
+            refusal(vec![
+                record(1, Proto::Revoked, 1),
+                record(2, Proto::Expired, 2)
+            ]),
+            Some(TokenAllowanceFailure::Expired)
+        );
+    }
+
+    #[test_all]
+    fn the_latest_exhausted_grant_is_used() {
+        assert_eq!(
+            chosen(vec![
+                record(1, Proto::Revoked, 1),
+                record(2, Proto::Exhausted, 2)
+            ]),
+            2
+        );
+    }
+
+    #[test_all]
+    fn a_newer_revoked_grant_beats_an_older_exhausted_one() {
+        assert_eq!(
+            refusal(vec![
+                record(1, Proto::Exhausted, 1),
+                record(2, Proto::Revoked, 2)
+            ]),
+            Some(TokenAllowanceFailure::Revoked)
+        );
+    }
+
+    fn broadcast_response(status: CommitStatus) -> BroadcastTransactionResponse {
+        let receiver = PublicKey::from_secret_key(
+            &Secp256k1::new(),
+            &SecretKey::from_slice(&[1; 32]).unwrap(),
+        );
+        BroadcastTransactionResponse {
+            final_token_transaction: Some(FinalTokenTransaction {
+                version: 3,
+                token_inputs: Some(final_token_transaction::TokenInputs::TransferInput(
+                    TokenTransferInput {
+                        outputs_to_spend: vec![TokenOutputToSpend {
+                            prev_token_transaction_hash: vec![4; 32],
+                            prev_token_transaction_vout: 2,
+                        }],
+                    },
+                )),
+                final_token_outputs: vec![FinalTokenOutput {
+                    partial_token_output: Some(PartialTokenOutput {
+                        owner_public_key: receiver.serialize().to_vec(),
+                        withdraw_bond_sats: 10_000,
+                        withdraw_relative_block_locktime: 1_000,
+                        token_identifier: vec![7; 32],
+                        token_amount: 42u128.to_be_bytes().to_vec(),
+                    }),
+                    revocation_commitment: vec![2; 33],
+                }],
+                ..Default::default()
+            }),
+            commit_status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    fn mapped(status: CommitStatus) -> (Result<TokenTransaction, ServiceError>, String) {
+        let response = broadcast_response(status);
+        let final_hash = hex::encode(
+            spark_primitives::hash_final_token_transaction(
+                response
+                    .final_token_transaction
+                    .as_ref()
+                    .unwrap()
+                    .encode_to_vec(),
+            )
+            .unwrap(),
+        );
+        (
+            pull_transaction(response, SystemTime::UNIX_EPOCH, Network::Regtest),
+            final_hash,
+        )
+    }
+
+    fn assert_carries_final_transaction(transaction: &TokenTransaction, final_hash: &str) {
+        assert_eq!(transaction.hash, final_hash);
+        let TokenInputs::Transfer(input) = &transaction.inputs else {
+            panic!("expected transfer inputs");
+        };
+        assert_eq!(input.outputs_to_spend.len(), 1);
+        assert_eq!(
+            input.outputs_to_spend[0].prev_token_tx_hash,
+            "04".repeat(32)
+        );
+        assert_eq!(input.outputs_to_spend[0].prev_token_tx_vout, 2);
+        assert_eq!(transaction.outputs.len(), 1);
+        assert_eq!(transaction.outputs[0].token_amount, 42);
+        assert_eq!(transaction.created_timestamp, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test_all]
+    fn a_finalized_broadcast_returns_the_final_pull() {
+        let (transaction, final_hash) = mapped(CommitStatus::CommitFinalized);
+        let transaction = transaction.unwrap();
+        assert!(matches!(
+            transaction.status,
+            TokenTransactionStatus::Finalized
+        ));
+        assert_carries_final_transaction(&transaction, &final_hash);
+    }
+
+    #[test_all]
+    fn a_broadcast_that_is_not_final_returns_the_pending_pull() {
+        for status in [
+            CommitStatus::CommitProcessing,
+            CommitStatus::CommitUnspecified,
+        ] {
+            let (transaction, final_hash) = mapped(status);
+            let transaction = transaction.unwrap();
+            assert!(matches!(
+                transaction.status,
+                TokenTransactionStatus::Unknown
+            ));
+            assert_carries_final_transaction(&transaction, &final_hash);
         }
     }
 }
