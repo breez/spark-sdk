@@ -168,7 +168,6 @@ pub(super) async fn send_signed(
             amount_sats: Some(amount_to_send),
             displayed_amount: u128::from(amount_to_send),
             fee_quote: None,
-            recorded_at: 0,
         })
         .await;
 
@@ -239,7 +238,6 @@ pub(super) async fn send_signed_quoted(
             amount_sats: quote.amount_to_send,
             displayed_amount,
             fee_quote: Some(fee_quote.clone()),
-            recorded_at: 0,
         })
         .await;
 

@@ -818,9 +818,8 @@ async fn a_commit_after_the_quote_expires_on_dev() -> Result<()> {
 }
 
 /// A commit the SSP keeps refusing strands the leaves until the operators
-/// release them, about an hour later. The SDK backs off between commits, stops
-/// once the SSP's retry window has passed, and records the payment failed when
-/// the leaves come back. Runs for over an hour, so only when asked for.
+/// release them, about an hour later. The SDK backs off between commits and
+/// records the payment failed when the leaves come back. Runs for over an hour, so only when asked for.
 #[test_log::test(tokio::test)]
 #[ignore = "waits about an hour for stranded leaves to return"]
 async fn a_refused_commit_fails_once_the_leaves_return_on_dev() -> Result<()> {
@@ -893,8 +892,8 @@ async fn a_refused_commit_fails_once_the_leaves_return_on_dev() -> Result<()> {
         started.elapsed().as_secs()
     );
     outcome?;
-    // Backing off from 30s doubling to 15 minutes, then stopping at the
-    // 45-minute window, keeps the commits to about a dozen.
+    // Backing off from 30s doubling to 15 minutes keeps the commits to about
+    // a dozen before the leaves return.
     assert!(commits <= 15, "{commits} commits");
     Ok(())
 }

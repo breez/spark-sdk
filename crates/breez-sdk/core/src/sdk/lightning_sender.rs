@@ -44,14 +44,8 @@ pub(crate) struct PendingLightningSend {
     /// asked to pay it under the same quote.
     #[serde(default)]
     pub fee_quote: Option<LightningFeeQuote>,
-    /// When the send was recorded, in seconds since the epoch, which bounds how
-    /// long the SSP takes it. Zero on a record from before this was kept.
-    #[serde(default)]
-    pub recorded_at: u64,
 }
 
-/// How long after a send the SSP still takes it, whatever its quote's expiry.
-const SEND_RETRY_WINDOW_SECS: u64 = 45 * 60;
 /// The wait after a failed resume, doubled on each further failure.
 const RESUME_BACKOFF_SECS: u64 = 30;
 const RESUME_BACKOFF_MAX_SECS: u64 = 15 * 60;
@@ -68,18 +62,6 @@ fn now_secs() -> u64 {
     platform_utils::time::SystemTime::now()
         .duration_since(platform_utils::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
-}
-
-/// Whether the SSP answered and refused, rather than being out of reach.
-fn is_refusal(error: &spark_wallet::SparkWalletError) -> bool {
-    matches!(
-        error,
-        spark_wallet::SparkWalletError::ServiceError(
-            spark_wallet::ServiceError::ServiceProviderError(
-                spark_wallet::ServiceProviderError::GraphQL(_)
-            )
-        )
-    )
 }
 
 /// Marks a send as running in this process for as long as it is held.
@@ -208,7 +190,6 @@ impl LightningSender {
                 amount_sats,
                 displayed_amount,
                 fee_quote: None,
-                recorded_at: 0,
             })
             .await;
 
@@ -284,7 +265,6 @@ impl LightningSender {
                 amount_sats: quote.amount_to_send,
                 displayed_amount,
                 fee_quote: Some(LightningFeeQuote::from(&quote)),
-                recorded_at: 0,
             })
             .await;
 
@@ -376,22 +356,6 @@ impl LightningSender {
                     self.forget_resume_backoff(&entry.transfer_id);
                     self.forget_pending_send(&entry.transfer_id).await;
                 }
-                // Past the SSP's retry window a refusal is final. The leaves
-                // come back when the operators release the transfer, which
-                // sync records as a failed payment.
-                Err(e)
-                    if is_refusal(&e)
-                        && entry.recorded_at > 0
-                        && now_secs().saturating_sub(entry.recorded_at)
-                            > SEND_RETRY_WINDOW_SECS =>
-                {
-                    warn!(
-                        "Giving up on lightning send {}, refused past the retry window: {e:?}",
-                        entry.transfer_id
-                    );
-                    self.forget_resume_backoff(&entry.transfer_id);
-                    self.forget_pending_send(&entry.transfer_id).await;
-                }
                 // Keep the entry so a later sync tries again, once its backoff
                 // has passed.
                 Err(e) => {
@@ -431,12 +395,8 @@ impl LightningSender {
     /// failed before reaching the SSP be resumed later.
     pub(crate) async fn record_pending_send(&self, entry: &PendingLightningSend) -> InFlightSend {
         let guard = InFlightSend::mark(&self.in_flight, &entry.transfer_id);
-        let entry = PendingLightningSend {
-            recorded_at: now_secs(),
-            ..entry.clone()
-        };
         let _lock = self.pending_lock.lock().await;
-        record_pending(&ObjectCacheRepository::new(self.storage.clone()), &entry).await;
+        record_pending(&ObjectCacheRepository::new(self.storage.clone()), entry).await;
         guard
     }
 
@@ -680,7 +640,6 @@ mod storage_tests {
             amount_sats: Some(1_000),
             displayed_amount: 1_000,
             fee_quote: None,
-            recorded_at: 0,
         }
     }
 
@@ -691,15 +650,6 @@ mod storage_tests {
         assert_eq!(resume_backoff_secs(4), 480);
         assert_eq!(resume_backoff_secs(5), 900);
         assert_eq!(resume_backoff_secs(40), 900);
-    }
-
-    #[test]
-    fn a_record_from_before_the_timestamp_loads_without_one() {
-        let entry: PendingLightningSend = serde_json::from_str(
-            r#"{"transfer_id":"t","invoice":"lnbc1","amount_sats":null,"displayed_amount":1000}"#,
-        )
-        .unwrap();
-        assert_eq!(entry.recorded_at, 0);
     }
 
     // Records written before quoted sends existed carry no quote field.
