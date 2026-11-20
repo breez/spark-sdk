@@ -753,8 +753,7 @@ impl LightningService {
                 (payee != attestor).then_some(payee),
             )
             .await?;
-        let manifest = TransferManifest::decode(quote.issued_quote.serialized_manifest.as_slice())
-            .map_err(|e| QuoteError::invalid(format!("undecodable manifest: {e}")))?;
+        let manifest = decode_manifest(&quote.issued_quote)?;
         // A quote with no partner fee adds nothing to an unquoted receive, and
         // one paying its payee the whole transfer leaves the payee's wallet no
         // share to tell its receive apart from a plain one.
@@ -1460,9 +1459,32 @@ fn is_resumable_send(transfer_type: TransferType, status: TransferStatus) -> boo
         )
 }
 
+/// The manifest format this wallet validates.
+const MANIFEST_VERSION: u32 = 1;
+
 fn decode_manifest(issued_quote: &IssuedQuote) -> Result<TransferManifest, QuoteError> {
-    TransferManifest::decode(issued_quote.serialized_manifest.as_slice())
-        .map_err(|e| QuoteError::invalid(format!("undecodable manifest: {e}")))
+    decode_manifest_bytes(&issued_quote.serialized_manifest)
+}
+
+/// Decodes a manifest the SSP serialized, refusing any that holds more than
+/// this wallet reads. What is signed is hashed from these bytes, while the
+/// operators are sent the decoded copy, so a field it doesn't know would be
+/// signed unchecked and dropped from what the operators see.
+fn decode_manifest_bytes(serialized: &[u8]) -> Result<TransferManifest, QuoteError> {
+    let manifest = TransferManifest::decode(serialized)
+        .map_err(|e| QuoteError::invalid(format!("undecodable manifest: {e}")))?;
+    if manifest.version != MANIFEST_VERSION {
+        return Err(QuoteError::invalid(format!(
+            "unsupported manifest version {}",
+            manifest.version
+        )));
+    }
+    if manifest.encode_to_vec() != serialized {
+        return Err(QuoteError::invalid(
+            "manifest holds fields this wallet does not read",
+        ));
+    }
+    Ok(manifest)
 }
 
 fn check_unexpired(expires_at: u64) -> Result<(), QuoteError> {
@@ -2006,7 +2028,7 @@ mod quoted_payment_tests {
 
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use lightning_invoice::{Currency, InvoiceBuilder, PaymentSecret};
-    use macros::async_test_all;
+    use macros::{async_test_all, test_all};
     use platform_utils::{HttpClient, HttpError, HttpResponse};
     use serde_json::{Value, json};
 
@@ -2097,6 +2119,25 @@ mod quoted_payment_tests {
     }
 
     /// A 2_000 sat markup on a 100_000 sat net receive for `receiver`.
+    #[test_all]
+    fn a_manifest_is_read_only_in_the_format_it_was_written() {
+        let bytes = quote_paying(key(0x11), ProtoNetwork::Regtest, 10_000);
+        assert!(decode_manifest_bytes(&bytes).is_ok());
+
+        let mut future = TransferManifest::decode(bytes.as_slice()).unwrap();
+        future.version = 2;
+        assert!(decode_manifest_bytes(&future.encode_to_vec()).is_err());
+    }
+
+    #[test_all]
+    fn a_manifest_holding_an_unknown_field_is_refused() {
+        let mut bytes = quote_paying(key(0x11), ProtoNetwork::Regtest, 10_000);
+        // Field 15, varint 1: a field this wallet's proto doesn't have.
+        bytes.extend_from_slice(&[0x78, 0x01]);
+        assert!(TransferManifest::decode(bytes.as_slice()).is_ok());
+        assert!(decode_manifest_bytes(&bytes).is_err());
+    }
+
     fn net_quote(receiver: PublicKey, network: ProtoNetwork) -> Vec<u8> {
         quote_paying(receiver, network, 100_000)
     }
