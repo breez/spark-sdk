@@ -75,6 +75,7 @@ async fn create_invoice(sdk: &BreezSdk, description: &str) -> Result<String> {
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?

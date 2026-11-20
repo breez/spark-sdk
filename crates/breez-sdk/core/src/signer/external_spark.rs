@@ -14,11 +14,11 @@ use super::external_spark_types::{
     ExternalPrepareStaticDepositRequest, ExternalPrepareTokenTransactionRequest,
     ExternalPrepareTransferRequest, ExternalPreparedClaim, ExternalPreparedLightningReceive,
     ExternalPreparedStaticDeposit, ExternalPreparedStaticDepositClaim,
-    ExternalPreparedTokenTransaction, ExternalPreparedTransfer, ExternalSignSparkInvoiceRequest,
-    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
-    ExternalSignedSparkInvoice, ExternalStartStaticDepositRefundRequest,
-    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
-    ExternalStartedWatchtowerExitRecovery,
+    ExternalPreparedTokenTransaction, ExternalPreparedTransfer, ExternalSignQuoteRequest,
+    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
+    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedQuote, ExternalSignedSparkInvoice,
+    ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
+    ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
 };
 use super::external_types::{
     EcdsaSignatureBytes, ExternalFrostSignature, ExternalTreeNodeId, PublicKeyBytes,
@@ -48,6 +48,14 @@ pub trait ExternalSparkSigner: Send + Sync {
     /// verified, and does not support the watchtower fee ladder.
     fn is_remote(&self) -> bool {
         false
+    }
+
+    /// Whether `prepare_transfer` can send the leaves of one transfer to
+    /// different receivers, honouring each leaf's `receiver_public_key`. A
+    /// signer that cannot is never asked to: fee-bearing Lightning sends are
+    /// not priced for it. Defaults to true.
+    fn supports_split_transfers(&self) -> bool {
+        true
     }
 
     /// Whether [`sign_frost`](Self::sign_frost) can sign jobs whose
@@ -165,4 +173,13 @@ pub trait ExternalSparkSigner: Send + Sync {
         &self,
         request: ExternalPrepareStaticDepositClaimRequest,
     ) -> Result<ExternalPreparedStaticDepositClaim, SignerError>;
+
+    /// ECDSA-sign a fee-bearing payment's quote with the identity key. Sign the
+    /// digest [`quote_signing_digest`](crate::quote_signing_digest) computes
+    /// from `request`, as is: unlike [`sign_message`](Self::sign_message), it
+    /// is not hashed again.
+    async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, SignerError>;
 }

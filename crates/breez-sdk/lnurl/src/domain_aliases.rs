@@ -728,8 +728,14 @@ mod tests {
 
         let state = test_state(PostgresRepository::new(pool.clone())).await;
         *state.domains.write().await = crate::domains::DomainMap::from([
-            (TARGET.to_string(), None),
-            ("own.example".to_string(), None),
+            (
+                TARGET.to_string(),
+                crate::domains::DomainSettings::default(),
+            ),
+            (
+                "own.example".to_string(),
+                crate::domains::DomainSettings::default(),
+            ),
         ]);
         refresh_once(&state.db, &state.aliases).await;
         let server = TestServer::start(crate::router(state.clone())).await;

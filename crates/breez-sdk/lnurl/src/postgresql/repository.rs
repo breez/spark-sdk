@@ -637,7 +637,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT d.domain, a.api_key, a.jwt \
+                "SELECT d.domain, a.api_key, a.jwt, COALESCE(a.quote_receives, FALSE) \
                  FROM allowed_domains d \
                  LEFT JOIN domain_attribution a ON a.domain = d.domain",
             )
@@ -651,6 +651,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     domain: row.try_get(0)?,
                     api_key: row.try_get(1)?,
                     jwt: row.try_get(2)?,
+                    quote_receives: row.try_get(3)?,
                 })
             })
             .collect::<Result<Vec<DomainConfig>, tokio_postgres::Error>>()?;
@@ -716,8 +717,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username, fee_sat)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT(payment_hash) DO UPDATE
                  SET user_pubkey = excluded.user_pubkey
                  ,   invoice = excluded.invoice
@@ -727,7 +728,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,   domain = excluded.domain
                  ,   amount_received_sat = excluded.amount_received_sat
                  ,   actual_domain = excluded.actual_domain
-                 ,   username = excluded.username",
+                 ,   username = excluded.username
+                 ,   fee_sat = excluded.fee_sat",
             )
             .await?;
         client
@@ -745,6 +747,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     &invoice.amount_received_sat,
                     &invoice.actual_domain,
                     &invoice.username,
+                    &invoice.fee_sat,
                 ],
             )
             .await?;
@@ -758,7 +761,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         let client = self.pool.get().await?;
         let stmt = client
             .prepare_cached(
-                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username
+                "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat, actual_domain, username, fee_sat
                  FROM invoices
                  WHERE payment_hash = $1",
             )
@@ -779,6 +782,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     actual_domain: row.try_get(9)?,
                     username: row.try_get(10)?,
                     amount_received_sat: row.try_get(8)?,
+                    fee_sat: row.try_get(11)?,
                 })
             })
             .transpose()?;
@@ -810,6 +814,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  ,      i.amount_received_sat AS i_amount_received_sat
                  ,      i.actual_domain  AS i_actual_domain
                  ,      i.username       AS i_username
+                 ,      i.fee_sat        AS i_fee_sat
                  FROM (SELECT $1::text AS payment_hash) ph
                  LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
                  LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -847,6 +852,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     actual_domain: row.try_get("i_actual_domain")?,
                     username: row.try_get("i_username")?,
                     amount_received_sat: row.try_get("i_amount_received_sat")?,
+                    fee_sat: row.try_get("i_fee_sat")?,
                 })
             })
             .transpose()?;
@@ -982,7 +988,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                         COALESCE(i.username, u.name), COALESCE(i.actual_domain, i.domain),
                         sc.sender_comment,
                         i.domain,
-                        z.zap_request
+                        z.zap_request,
+                        i.fee_sat
                  FROM invoices i
                  LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
                  LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
@@ -1012,6 +1019,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     sender_comment: row.try_get(7)?,
                     domain: row.try_get(8)?,
                     nostr_zap_request: row.try_get(9)?,
+                    fee_sat: row.try_get(10)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1237,6 +1245,23 @@ mod postgres_tests {
         seed_domain_with_api_key(&pool).await;
         let db = super::LnurlRepository::new(pool);
         shared_tests::list_domains_surfaces_api_keys(&db).await;
+    }
+
+    #[tokio::test]
+    async fn list_domains_surfaces_fee_quoting() {
+        let (_pg, pool) = test_pool().await;
+        seed_domain_with_api_key(&pool).await;
+        pool.get()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE domain_attribution SET quote_receives = TRUE WHERE domain = 'a.com'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let db = super::LnurlRepository::new(pool);
+        shared_tests::list_domains_surfaces_fee_quoting(&db).await;
     }
 
     #[tokio::test]

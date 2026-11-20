@@ -437,6 +437,17 @@ fn migrations() -> Vec<Vec<String>> {
                                AND users.domain = invoices.domain)"
                 .to_string(),
         ],
+        vec![
+            // Whether the domain's lightning-address invoices carry its
+            // partner fee. Off until the partner ships a client that expects
+            // to receive less than the invoice amount.
+            "ALTER TABLE domain_attribution
+                 ADD COLUMN quote_receives BOOLEAN NOT NULL DEFAULT FALSE"
+                .to_string(),
+            // The partner fee an invoice was priced with, which the user does
+            // not receive. NULL for an invoice priced without one.
+            "ALTER TABLE invoices ADD COLUMN fee_sat BIGINT".to_string(),
+        ],
     ]
 }
 
@@ -713,7 +724,14 @@ mod tests {
     #[tokio::test]
     async fn existing_invoices_get_the_address_of_their_user() {
         let (_pg, pool) = empty_test_pool().await;
-        let before_addresses = migrations().len() - 1;
+        let before_addresses = migrations()
+            .iter()
+            .position(|statements| {
+                statements
+                    .iter()
+                    .any(|s| s.contains("ADD COLUMN actual_domain"))
+            })
+            .unwrap();
         spark_postgres::run_migrations(
             &pool,
             MIGRATIONS_TABLE,

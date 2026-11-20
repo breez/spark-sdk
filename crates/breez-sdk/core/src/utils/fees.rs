@@ -9,9 +9,7 @@ use crate::error::SdkError;
 /// `current_fee.max(1)` (allow up to 100% of the actual fee, minimum 1 sat).
 pub(crate) fn fee_overpayment(stored_fee: u64, current_fee: u64) -> Result<u64, SdkError> {
     if current_fee > stored_fee {
-        return Err(SdkError::Generic(
-            "Fee increased since prepare. Please retry.".to_string(),
-        ));
+        return Err(SdkError::fees_changed());
     }
 
     let overpayment = stored_fee.saturating_sub(current_fee);
@@ -25,9 +23,38 @@ pub(crate) fn fee_overpayment(stored_fee: u64, current_fee: u64) -> Result<u64, 
     Ok(overpayment)
 }
 
+/// Whether `fee`, charged on `basis` sats, stays within the fee prepared on
+/// `prepared_basis`. A fee can grow with the amount, so the prepared fee is
+/// scaled up when the amount grew, never down: fixed parts don't shrink with
+/// it. `rounding_sats` allows for each fee being rounded on its own.
+pub(crate) fn fee_within_prepared(
+    prepared_fee: u64,
+    prepared_basis: u64,
+    fee: u64,
+    basis: u64,
+    rounding_sats: u64,
+) -> bool {
+    let allowed = if prepared_basis == 0 {
+        u128::from(prepared_fee)
+    } else {
+        u128::from(prepared_fee)
+            .saturating_mul(u128::from(basis.max(prepared_basis)))
+            .div_ceil(u128::from(prepared_basis))
+    };
+    u128::from(fee) <= allowed.saturating_add(u128::from(rounding_sats))
+}
+
+/// The sats a conversion estimated to deliver `amount_out` may fall short by.
+pub(crate) fn slippage_margin_sats(amount_out: u128, max_slippage_bps: u32) -> u64 {
+    let margin = amount_out
+        .saturating_mul(u128::from(max_slippage_bps))
+        .div_ceil(10_000);
+    u64::try_from(margin).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::fee_overpayment;
+    use super::{fee_overpayment, fee_within_prepared, slippage_margin_sats};
     use crate::error::SdkError;
     use macros::test_all;
 
@@ -49,15 +76,10 @@ mod tests {
     #[test_all]
     fn test_fee_overpayment_fee_increased_fails() {
         let result = fee_overpayment(100, 101);
-        assert!(result.is_err(), "Should fail when fee increased");
-        if let Err(SdkError::Generic(msg)) = result {
-            assert!(
-                msg.contains("Fee increased since prepare"),
-                "Error should mention fee increase"
-            );
-        } else {
-            panic!("Expected Generic error");
-        }
+        assert!(
+            matches!(result, Err(SdkError::FeesChanged { .. })),
+            "Should fail when fee increased"
+        );
     }
 
     #[test_all]
@@ -87,5 +109,41 @@ mod tests {
         assert_eq!(fee_overpayment(1, 0).unwrap(), 1);
         // stored_fee = 2, current = 0 → overpayment 2 > cap 1 → fails.
         assert!(fee_overpayment(2, 0).is_err());
+    }
+
+    #[test_all]
+    fn a_fee_on_a_smaller_amount_may_not_exceed_the_prepared_fee() {
+        // 10 fixed + 1%: 1,010 on 100,000 prepared, 1,000 on 99,000 actual.
+        assert!(fee_within_prepared(1_010, 100_000, 1_000, 99_000, 0));
+        assert!(fee_within_prepared(1_010, 100_000, 1_010, 99_000, 0));
+        assert!(!fee_within_prepared(1_010, 100_000, 1_011, 99_000, 0));
+    }
+
+    #[test_all]
+    fn a_fee_on_a_larger_amount_may_grow_in_proportion() {
+        // 1,010 on 100,000 scales to 1,020.1 on 101,000, rounded up.
+        assert!(fee_within_prepared(1_010, 100_000, 1_020, 101_000, 0));
+        assert!(fee_within_prepared(1_010, 100_000, 1_021, 101_000, 0));
+        assert!(!fee_within_prepared(1_010, 100_000, 1_022, 101_000, 0));
+    }
+
+    #[test_all]
+    fn rounding_allows_a_sat_per_fee() {
+        assert!(!fee_within_prepared(100, 10_000, 103, 10_000, 2));
+        assert!(fee_within_prepared(100, 10_000, 102, 10_000, 2));
+    }
+
+    #[test_all]
+    fn a_fee_prepared_on_nothing_stays_capped() {
+        assert!(fee_within_prepared(5, 0, 5, 1_000, 0));
+        assert!(!fee_within_prepared(5, 0, 6, 1_000, 0));
+    }
+
+    #[test_all]
+    fn the_slippage_margin_rounds_up() {
+        assert_eq!(slippage_margin_sats(100_000, 10), 100);
+        assert_eq!(slippage_margin_sats(100_001, 10), 101);
+        assert_eq!(slippage_margin_sats(100_000, 0), 0);
+        assert_eq!(slippage_margin_sats(u128::MAX, 10_000), u64::MAX);
     }
 }

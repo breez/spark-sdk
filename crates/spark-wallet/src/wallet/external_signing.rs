@@ -264,6 +264,94 @@ impl SparkWallet {
         self.finalize_pay_lightning(lightning_payment).await
     }
 
+    /// [`prepare_lightning_send_package`](Self::prepare_lightning_send_package)
+    /// for a send priced by `quote`: the leaves must fund each of the quote's
+    /// receivers exactly, so a selection that cannot be split that way is
+    /// swapped first, for the quote's amounts.
+    pub async fn prepare_quoted_lightning_send_package(
+        &self,
+        quote: &QuotedLightningSend,
+    ) -> Result<SendPackagePreparation, SparkWalletError> {
+        let amounts: Vec<u64> = quote.buckets.iter().map(|b| b.amount_sats).collect();
+        let target_amounts = TargetAmounts::new_amount_and_fee(quote.total_sats, None);
+        let leaves = match self
+            .select_leaves_for_package_with_optimization_retry(&target_amounts)
+            .await?
+        {
+            LeafSelection::Exact(leaves) => match bucket_leaves(&leaves, quote) {
+                Ok(pairs) => {
+                    return Ok(SendPackagePreparation::Ready(
+                        self.lightning_service
+                            .prepare_quoted_lightning_send(quote, &pairs),
+                    ));
+                }
+                Err(_) => leaves,
+            },
+            LeafSelection::SwapNeeded(leaves) => leaves,
+        };
+        let prepare_transfer = self
+            .swap_service
+            .prepare_swap(&with_node_id_keys(leaves), Some(amounts.clone()))?;
+        Ok(SendPackagePreparation::SwapRequired {
+            prepare_transfer,
+            target_amounts: amounts,
+        })
+    }
+
+    /// Publishes a quoted send whose key tweaks and manifest signature an
+    /// external signer approved. `leaves` names each leaf with the receiver its
+    /// key tweak went to.
+    pub async fn publish_quoted_lightning_send_package(
+        &self,
+        invoice: String,
+        quote: &QuotedLightningSend,
+        leaves: Vec<(TreeNodeId, PublicKey)>,
+        approved_transfer: PreparedTransfer,
+        manifest_hash_signature: bitcoin::secp256k1::ecdsa::Signature,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let leaf_ids: Vec<TreeNodeId> = leaves.iter().map(|(id, _)| id.clone()).collect();
+        let reservation = self
+            .tree_service
+            .reserve_leaves_by_ids(&leaf_ids, ReservationPurpose::Payment)
+            .await?;
+        let pairs = with_node_id_keys(reservation.leaves.clone())
+            .into_iter()
+            .map(|leaf| {
+                let receiver = leaves
+                    .iter()
+                    .find(|(id, _)| *id == leaf.node.id)
+                    .map(|(_, receiver)| *receiver)
+                    .ok_or_else(|| {
+                        SparkWalletError::Generic(format!("no receiver for leaf {}", leaf.node.id))
+                    })?;
+                Ok((leaf, receiver))
+            })
+            .collect::<Result<Vec<_>, SparkWalletError>>();
+        let pairs = match pairs {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                if let Err(cancel_err) = self.tree_service.cancel_reservation(reservation).await {
+                    error!("Failed to cancel reservation: {cancel_err:?}");
+                }
+                return Err(e);
+            }
+        };
+        let lightning_payment = with_reserved_leaves(
+            self.tree_service.as_ref(),
+            self.lightning_service.submit_quoted_lightning_send(
+                &invoice,
+                quote,
+                &pairs,
+                approved_transfer,
+                &manifest_hash_signature,
+            ),
+            &reservation,
+        )
+        .await?;
+
+        self.finalize_pay_lightning(lightning_payment).await
+    }
+
     pub async fn prepare_coop_exit_package(
         &self,
         withdrawal_address: &str,

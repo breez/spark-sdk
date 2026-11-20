@@ -336,7 +336,6 @@ impl SparkSigner for SparkSignerAdapter {
     ) -> Result<PreparedTransfer, SignerError> {
         let PrepareTransferRequest {
             transfer_id,
-            receiver_public_key,
             leaves,
             operator_recipients,
             threshold,
@@ -373,7 +372,7 @@ impl SparkSigner for SparkSignerAdapter {
             // The new leaf key, encrypted for the receiver to claim with.
             let secret_cipher = self
                 .signer
-                .encrypt_secret_for_receiver(&new_signing_key, &receiver_public_key)
+                .encrypt_secret_for_receiver(&new_signing_key, &leaf.receiver_public_key)
                 .await?;
 
             // Per-leaf signature: leaf_id || transfer_id || secret_cipher.
@@ -713,6 +712,17 @@ impl SparkSigner for SparkSignerAdapter {
             .await?;
         Ok(PreparedTokenTransaction { signature })
     }
+
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError> {
+        let digest = request
+            .digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let signature = self
+            .signer
+            .sign_digest_ecdsa(&identity_path()?, &digest)
+            .await?;
+        Ok(SignedQuote { signature })
+    }
 }
 
 #[cfg(test)]
@@ -728,8 +738,8 @@ mod tests {
     use crate::operator::rpc::spark as proto;
     use crate::services::TransferId;
     use crate::signer::{
-        LeafSigningKey, OperatorRecipient, PrepareTransferRequest, SparkSigner, TransferLeafInput,
-        create_test_signer,
+        LeafSigningKey, OperatorRecipient, PrepareTransferRequest, SignQuoteRequest, SparkSigner,
+        TransferLeafInput, create_test_signer,
     };
     use crate::tree::TreeNodeId;
     use crate::tree::tests::create_test_tree_node;
@@ -763,13 +773,13 @@ mod tests {
         let prepared = adapter
             .prepare_transfer(PrepareTransferRequest {
                 transfer_id: TransferId::generate(),
-                receiver_public_key: adapter.get_identity_public_key().await.unwrap(),
                 leaves: vec![TransferLeafInput {
                     node: create_test_tree_node(node_id, 1_000),
                     new_leaf_id: TreeNodeId::generate(),
                     signing_key: LeafSigningKey {
                         derived_from: held_under.clone(),
                     },
+                    receiver_public_key: adapter.get_identity_public_key().await.unwrap(),
                 }],
                 operator_recipients: operators.iter().map(|(r, _)| r.clone()).collect(),
                 threshold: 2,
@@ -836,6 +846,140 @@ mod tests {
 
         for tweak in tweaks {
             assert_eq!(tweak.combine(&new_key).unwrap(), node_key);
+        }
+    }
+
+    #[cfg(feature = "quotes")]
+    fn test_manifest() -> Vec<u8> {
+        let key = |seed: u8| {
+            SecretKey::from_slice(&[seed; 32])
+                .unwrap()
+                .public_key(&Secp256k1::new())
+                .serialize()
+                .to_vec()
+        };
+        proto::TransferManifest {
+            version: 1,
+            transfer_id: "0197f9a0-0000-7000-8000-000000000001".to_string(),
+            network: proto::Network::Regtest.into(),
+            edges: vec![proto::ManifestEdge {
+                sender_identity_public_key: key(0x51),
+                receiver_identity_public_key: key(0x52),
+                amount: Some(proto::ManifestAmount {
+                    amount: Some(proto::manifest_amount::Amount::Sats(1_000)),
+                }),
+            }],
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    /// The signer signs the digest it derives from the quote, low-S and
+    /// unhashed, so it verifies the way the operators and the SSP check it.
+    #[cfg(feature = "quotes")]
+    #[async_test_all]
+    async fn a_quote_is_signed_over_the_digest_derived_from_it() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let identity = adapter.get_identity_public_key().await.unwrap();
+        for request in [
+            SignQuoteRequest::TransferManifest {
+                serialized_manifest: test_manifest(),
+            },
+            SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest: test_manifest(),
+                payment_hash: [7; 32],
+            },
+        ] {
+            let signed = adapter.sign_quote(request.clone()).await.unwrap();
+            crate::quote::verify_identity_signature(
+                &request.digest().unwrap(),
+                &signed.signature.serialize_der(),
+                &identity,
+            )
+            .unwrap();
+
+            let mut normalized = signed.signature;
+            normalized.normalize_s();
+            assert_eq!(normalized, signed.signature, "the signature is low-S");
+        }
+    }
+
+    #[async_test_all]
+    async fn a_quote_that_is_not_a_manifest_is_refused() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let result = adapter
+            .sign_quote(SignQuoteRequest::TransferManifest {
+                serialized_manifest: vec![0x5a; 32],
+            })
+            .await;
+        assert!(result.is_err());
+    }
+
+    /// One transfer can pay several receivers: each leaf's new key is encrypted
+    /// for its own receiver, so each of them, and only it, can claim the leaf.
+    #[async_test_all]
+    async fn each_leaf_is_encrypted_for_its_own_receiver() {
+        let adapter = SparkSignerAdapter::new(Arc::new(create_test_signer()));
+        let operators = operators();
+        let secp = Secp256k1::new();
+        let receivers: Vec<SecretKey> = [0x41u8, 0x42]
+            .iter()
+            .map(|seed| SecretKey::from_slice(&[*seed; 32]).unwrap())
+            .collect();
+        let leaves: Vec<TransferLeafInput> = ["leaf-a", "leaf-b"]
+            .iter()
+            .zip(&receivers)
+            .map(|(node_id, receiver)| TransferLeafInput {
+                node: create_test_tree_node(node_id, 1_000),
+                new_leaf_id: TreeNodeId::generate(),
+                signing_key: LeafSigningKey {
+                    derived_from: TreeNodeId::generate(),
+                },
+                receiver_public_key: receiver.public_key(&secp),
+            })
+            .collect();
+
+        let prepared = adapter
+            .prepare_transfer(PrepareTransferRequest {
+                transfer_id: TransferId::generate(),
+                leaves: leaves.clone(),
+                operator_recipients: operators.iter().map(|(r, _)| r.clone()).collect(),
+                threshold: 2,
+            })
+            .await
+            .unwrap();
+
+        let (recipient, operator_secret) = &operators[0];
+        let package = prepared
+            .operator_packages
+            .iter()
+            .find(|p| p.operator_identifier == recipient.identifier)
+            .unwrap();
+        let plain =
+            ::utils::ecies::decrypt(&operator_secret.secret_bytes(), &package.encrypted_package)
+                .unwrap();
+        let tweaks = proto::SendLeafKeyTweaks::decode(plain.as_slice())
+            .unwrap()
+            .leaves_to_send;
+        for (leaf, receiver) in leaves.iter().zip(&receivers) {
+            let tweak = tweaks
+                .iter()
+                .find(|t| t.leaf_id == leaf.node.id.to_string())
+                .unwrap();
+            let new_key = ::utils::ecies::decrypt(&receiver.secret_bytes(), &tweak.secret_cipher)
+                .expect("the leaf's own receiver opens its key");
+            let expected = prepared
+                .new_leaf_keys
+                .iter()
+                .find(|k| k.node_id == leaf.node.id)
+                .unwrap()
+                .new_signing_public_key;
+            assert_eq!(
+                SecretKey::from_slice(&new_key).unwrap().public_key(&secp),
+                expected
+            );
+            let other = receivers.iter().find(|r| *r != receiver).unwrap();
+            assert!(::utils::ecies::decrypt(&other.secret_bytes(), &tweak.secret_cipher).is_err());
         }
     }
 }

@@ -127,6 +127,7 @@ async fn test_send_orphaned_before_the_ssp_resumes_on_sync() -> Result<()> {
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -247,6 +248,7 @@ async fn test_repeated_send_requests_resolve_to_one() -> Result<()> {
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?

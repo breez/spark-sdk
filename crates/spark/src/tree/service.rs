@@ -359,6 +359,33 @@ impl TreeService for SynchronousTreeService {
             .await
     }
 
+    async fn split_reservation(
+        &self,
+        reservation: LeavesReservation,
+        amounts: &[u64],
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if reservation.sum() != amounts.iter().copied().fold(0u64, u64::saturating_add) {
+            if let Err(e) = self.cancel_reservation(reservation).await {
+                error!("Failed to cancel reservation: {e:?}");
+            }
+            return Err(TreeServiceError::Generic(
+                "amounts do not add up to the reservation".to_string(),
+            ));
+        }
+        if select_helper::partition_by_exact_amounts(&reservation.leaves, amounts).is_some() {
+            return Ok(reservation);
+        }
+        // The swap is asked for exactly the amounts, which add up to everything
+        // reserved, so every leaf it returns stays in the reservation.
+        let targets = TargetAmounts::new_exact_denominations(amounts.to_vec());
+        self.swap_into_reservation(reservation, Some(&targets), |leaves| {
+            select_helper::partition_by_exact_amounts(leaves, amounts)
+                .map(|groups| groups.concat())
+                .ok_or(TreeServiceError::UnselectableAmount)
+        })
+        .await
+    }
+
     async fn select_leaves_for_package(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -709,6 +736,27 @@ impl SynchronousTreeService {
         reservation: LeavesReservation,
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        self.swap_into_reservation(reservation, target_amounts, |leaves| {
+            let target_leaves =
+                select_helper::select_leaves_by_target_amounts(leaves, target_amounts)?;
+            Ok([
+                target_leaves.amount_leaves,
+                target_leaves.fee_leaves.unwrap_or_default(),
+            ]
+            .concat())
+        })
+        .await
+    }
+
+    /// Swaps the leaves of `reservation` for `target_amounts`, keeps the swap
+    /// outputs `select` picks in the reservation and returns the rest to the
+    /// pool as change.
+    async fn swap_into_reservation(
+        &self,
+        reservation: LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+        select: impl FnOnce(&[TreeNode]) -> Result<Vec<TreeNode>, TreeServiceError>,
+    ) -> Result<LeavesReservation, TreeServiceError> {
         trace!("Swapping leaves to match target amount");
 
         let swap_result = self
@@ -744,13 +792,15 @@ impl SynchronousTreeService {
 
         // Select the exact leaves that match the target amounts
         let new_leaf_nodes: Vec<TreeNode> = new_leaves.iter().map(|p| p.leaf.clone()).collect();
-        let target_leaves =
-            select_helper::select_leaves_by_target_amounts(&new_leaf_nodes, target_amounts)?;
-        let reserved_leaves = [
-            target_leaves.amount_leaves,
-            target_leaves.fee_leaves.unwrap_or_default(),
-        ]
-        .concat();
+        let reserved_leaves = match select(&new_leaf_nodes) {
+            Ok(leaves) => leaves,
+            Err(e) => {
+                error!("Failed to select from the swapped leaves: {e:?}, finalizing");
+                self.release_swap_outputs(&reservation, new_leaves, any_renewal_landed)
+                    .await;
+                return Err(e);
+            }
+        };
 
         let reserved_ids: HashSet<_> = reserved_leaves.iter().map(|l| l.id.clone()).collect();
         let (reserved_pedigrees, change_pedigrees): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
@@ -789,30 +839,38 @@ impl SynchronousTreeService {
                 Ok(final_reservation)
             }
             Err(e) => {
-                // Update failed - finalize the reservation to release the permit.
-                // We use finalize (not cancel) because the OLD leaves were
-                // consumed by the swap and no longer exist.
-                // Preserve the new swap output in the pool.
                 error!("Failed to update reservation after swap: {e:?}, finalizing");
-                let leaves: Vec<TreeNode> =
-                    reserved_nodes.into_iter().chain(change_nodes).collect();
-                if let Err(finalize_err) = self
-                    .state
-                    .finalize_reservation(&reservation.id, Some(&leaves))
-                    .await
-                {
-                    error!("Failed to finalize reservation after update error: {finalize_err:?}");
-                } else {
-                    let renewed: Vec<LeafPedigree> = reserved_pedigrees
-                        .into_iter()
-                        .chain(change_pedigrees)
-                        .collect();
-                    self.store_renewed_chains(&renewed, any_renewal_landed)
-                        .await;
-                }
+                let swapped = reserved_pedigrees
+                    .into_iter()
+                    .chain(change_pedigrees)
+                    .collect();
+                self.release_swap_outputs(&reservation, swapped, any_renewal_landed)
+                    .await;
                 Err(e)
             }
         }
+    }
+
+    /// Ends `reservation` after its swap, putting the swap outputs in the pool.
+    /// It is finalized rather than cancelled: the swap consumed the leaves it
+    /// held, which no longer exist.
+    async fn release_swap_outputs(
+        &self,
+        reservation: &LeavesReservation,
+        swapped: Vec<LeafPedigree>,
+        any_renewal_landed: bool,
+    ) {
+        let leaves: Vec<TreeNode> = swapped.iter().map(|p| p.leaf.clone()).collect();
+        if let Err(e) = self
+            .state
+            .finalize_reservation(&reservation.id, Some(&leaves))
+            .await
+        {
+            error!("Failed to finalize reservation after swap: {e:?}");
+            return;
+        }
+        self.store_renewed_chains(&swapped, any_renewal_landed)
+            .await;
     }
 
     async fn verify_leaves_against_coordinator(

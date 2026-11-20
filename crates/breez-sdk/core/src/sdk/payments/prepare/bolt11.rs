@@ -1,14 +1,16 @@
-use spark_wallet::SparkAddress;
+use spark_wallet::{QuotedLightningSend, SendQuoteAmount, SparkAddress};
+use tracing::{debug, warn};
 
 use crate::{
-    Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod,
+    Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, LightningFeeQuote,
+    SendPaymentMethod,
     error::SdkError,
     models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
     token_conversion::ConversionAmount,
 };
 
-use super::super::{conversion, validation};
+use super::super::{conversion, send_quote_amount, validation};
 
 /// Validates a Bolt11 invoice request.
 fn validate_request(
@@ -133,6 +135,27 @@ pub(super) async fn prepare(
     .await
 }
 
+/// A partner fee quote for paying `invoice` for `amount`. `None`, logged, when
+/// there is none to be had or it carries no partner fee: attribution must never
+/// block a send, which then goes unquoted.
+async fn send_fee_quote(
+    sdk: &BreezSdk,
+    invoice: &str,
+    amount: SendQuoteAmount,
+) -> Option<QuotedLightningSend> {
+    let quote = sdk
+        .spark_wallet
+        .fetch_lightning_send_quote(invoice, amount, None)
+        .await
+        .inspect_err(|e| warn!("Sending without a fee quote: {e}"))
+        .ok()?;
+    if !quote.carries_partner_fee() {
+        debug!("Sending without a fee quote: it carries no partner fee");
+        return None;
+    }
+    Some(quote)
+}
+
 fn invoice_amount_sats(amount_msat: u64) -> u64 {
     amount_msat.div_ceil(1000)
 }
@@ -157,11 +180,20 @@ async fn prepare_sats_denominated(
             .map(|msat| u128::from(invoice_amount_sats(msat))))
         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-    // For FeesIncluded, estimate fee for user's full amount
-    let lightning_fee_sats = sdk
-        .spark_wallet
-        .fetch_lightning_send_fee_estimate(input, Some(amount.try_into()?))
-        .await?;
+    let fee_quote = if sdk.quote_lightning_sends {
+        send_fee_quote(sdk, input, send_quote_amount(invoice, fee_policy, amount)?).await
+    } else {
+        None
+    };
+    let lightning_fee_sats = match &fee_quote {
+        Some(quote) => quote.total_sats.saturating_sub(quote.amount_sats),
+        // For FeesIncluded, estimate fee for user's full amount
+        None => {
+            sdk.spark_wallet
+                .fetch_lightning_send_fee_estimate(input, Some(amount.try_into()?))
+                .await?
+        }
+    };
 
     // Validate receiver amount is positive for FeesIncluded
     if fee_policy == FeePolicy::FeesIncluded && invoice.amount_msat.is_none() {
@@ -186,6 +218,7 @@ async fn prepare_sats_denominated(
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
             lightning_fee_sats,
+            fee_quote: fee_quote.as_ref().map(LightningFeeQuote::from),
         },
         amount,
         token_identifier,
@@ -234,10 +267,26 @@ async fn prepare_token_denominated(
         ));
     }
 
-    let lightning_fee_sats = sdk
-        .spark_wallet
-        .fetch_lightning_send_fee_estimate(input, Some(estimated_sats.try_into()?))
-        .await?;
+    // The sats are only known once the conversion lands, so this quote prices
+    // the estimate for the fee shown and the send is quoted again on them.
+    let fee_quote = if sdk.quote_lightning_sends {
+        send_fee_quote(
+            sdk,
+            input,
+            send_quote_amount(invoice, fee_policy, estimated_sats)?,
+        )
+        .await
+    } else {
+        None
+    };
+    let lightning_fee_sats = match &fee_quote {
+        Some(quote) => quote.total_sats.saturating_sub(quote.amount_sats),
+        None => {
+            sdk.spark_wallet
+                .fetch_lightning_send_fee_estimate(input, Some(estimated_sats.try_into()?))
+                .await?
+        }
+    };
 
     let total_u64: u64 = estimated_sats.try_into()?;
     // For fixed-amount invoices, the converted sats must cover invoice amount + fees.
@@ -259,6 +308,7 @@ async fn prepare_token_denominated(
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
             lightning_fee_sats,
+            fee_quote: fee_quote.as_ref().map(LightningFeeQuote::from),
         },
         amount: estimated_sats,
         // ToBitcoin conversion outputs sats — token_identifier is None

@@ -1,6 +1,7 @@
 import {
   PaymentRequest,
   ReceivePaymentMethod,
+  ReceiveFee_Tags,
   SendPaymentMethod_Tags,
   ConversionType,
   type BreezSdk,
@@ -66,8 +67,9 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
 
   const paymentRequest = response.paymentRequest
   console.log(`Payment request: ${paymentRequest}`)
-  const receiveFee = response.fee
-  console.log(`Fees: ${receiveFee} token base units`)
+  if (response.fee.tag === ReceiveFee_Tags.Fixed) {
+    console.log(`Fees: ${response.fee.inner.amount} token base units`)
+  }
   // ANCHOR_END: receive-token-payment-spark-invoice
 }
 

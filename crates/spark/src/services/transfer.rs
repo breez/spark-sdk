@@ -46,8 +46,8 @@ use crate::{
 
 use super::ServiceError;
 use super::models::{
-    LeafRefundJobs, PreparedTransferRequest, SignedTx, build_refund_signing_job,
-    into_user_signed_job_groups, sign_leaf_refunds,
+    LeafRefundJobs, PreparedTransferRequest, PreparedTransferV3Request, SignedTx,
+    build_refund_signing_job, into_user_signed_job_groups, sign_leaf_refunds,
 };
 
 /// Result of preparing a transfer package, containing both the package and the signed transaction data
@@ -241,7 +241,13 @@ impl TransferService {
             }
         };
         let prepared_package = self
-            .assemble_transfer_package(leaves, receiver_id, None, None, prepared)
+            .assemble_transfer_package(
+                leaves,
+                &vec![*receiver_id; leaves.len()],
+                None,
+                None,
+                prepared,
+            )
             .await?;
 
         match self
@@ -305,6 +311,7 @@ impl TransferService {
             .query_all_transfers(TransferFilter {
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 participant: Some(Participant::SenderIdentityPublicKey(
                     self.spark_signer
                         .get_identity_public_key()
@@ -414,13 +421,13 @@ impl TransferService {
     ) -> PrepareTransferRequest {
         PrepareTransferRequest {
             transfer_id: transfer_id.clone(),
-            receiver_public_key: *receiver_public_key,
             leaves: leaf_key_tweaks
                 .iter()
                 .map(|l| TransferLeafInput {
                     node: l.node.clone(),
                     new_leaf_id: TreeNodeId::generate(),
                     signing_key: l.signing_key.clone(),
+                    receiver_public_key: *receiver_public_key,
                 })
                 .collect(),
             operator_recipients: self.operator_recipients(),
@@ -428,10 +435,12 @@ impl TransferService {
         }
     }
 
+    /// Signs the refunds of `leaf_key_tweaks`, each to its receiver in
+    /// `receiver_public_keys`, and packages them with the signer's key tweaks.
     pub(crate) async fn assemble_transfer_package(
         &self,
         leaf_key_tweaks: &[LeafKeyTweak],
-        receiver_public_key: &PublicKey,
+        receiver_public_keys: &[PublicKey],
         payment_hash: Option<&sha256::Hash>,
         cpfp_adaptor: Option<FrostAdaptor>,
         prepared: PreparedTransfer,
@@ -477,7 +486,7 @@ impl TransferService {
             cpfp_signing_commitments,
             direct_signing_commitments,
             direct_from_cpfp_signing_commitments,
-            receiver_pubkey: receiver_public_key,
+            receiver_pubkeys: receiver_public_keys,
             payment_hash,
             network: self.network,
             cpfp_adaptor,
@@ -515,6 +524,90 @@ impl TransferService {
         Ok(PreparedTransferPackage {
             transfer_package,
             cpfp_signed_txs: cpfp_signed_tx,
+        })
+    }
+
+    /// The signer request for a transfer that sends each leaf to the receiver
+    /// paired with it.
+    pub fn build_split_prepare_transfer_request(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+    ) -> PrepareTransferRequest {
+        PrepareTransferRequest {
+            transfer_id: transfer_id.clone(),
+            leaves: leaves
+                .iter()
+                .map(|(leaf, receiver)| TransferLeafInput {
+                    node: leaf.node.clone(),
+                    new_leaf_id: TreeNodeId::generate(),
+                    signing_key: leaf.signing_key.clone(),
+                    receiver_public_key: *receiver,
+                })
+                .collect(),
+            operator_recipients: self.operator_recipients(),
+            threshold: self.split_secret_threshold,
+        }
+    }
+
+    /// Packages a Lightning send that pays each leaf to the receiver paired
+    /// with it, under the manifest that describes the split.
+    /// `manifest_hash_signature` is this wallet's consent to that manifest, as
+    /// its sole sender.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn assemble_split_lightning_transfer(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+        payment_hash: &sha256::Hash,
+        expiry_time: SystemTime,
+        transfer_manifest: operator_rpc::spark::TransferManifest,
+        manifest_hash_signature: &bitcoin::secp256k1::ecdsa::Signature,
+        prepared: PreparedTransfer,
+    ) -> Result<PreparedTransferV3Request, ServiceError> {
+        let (leaf_key_tweaks, receivers): (Vec<LeafKeyTweak>, Vec<PublicKey>) = leaves
+            .iter()
+            .map(|(leaf, receiver)| {
+                (
+                    LeafKeyTweak {
+                        node: leaf.node.clone(),
+                        signing_key: leaf.signing_key.clone(),
+                    },
+                    *receiver,
+                )
+            })
+            .unzip();
+        let prepared_package = self
+            .assemble_transfer_package(
+                &leaf_key_tweaks,
+                &receivers,
+                Some(payment_hash),
+                None,
+                prepared,
+            )
+            .await?;
+        let owner = self.spark_signer.get_identity_public_key().await?;
+        Ok(PreparedTransferV3Request {
+            transfer_request: operator_rpc::spark::StartTransferV3Request {
+                transfer_id: transfer_id.to_string(),
+                sender_packages: vec![operator_rpc::spark::SenderTransferPackage {
+                    owner_identity_public_key: owner.serialize().to_vec(),
+                    transfer_package: Some(prepared_package.transfer_package),
+                    receiver_identity_public_keys: leaves
+                        .iter()
+                        .map(|(leaf, receiver)| {
+                            (leaf.node.id.to_string(), receiver.serialize().to_vec())
+                        })
+                        .collect(),
+                    manifest_hash_signature: manifest_hash_signature.serialize_der().to_vec(),
+                }],
+                expiry_time: Some(
+                    web_time_to_prost_timestamp(&expiry_time)
+                        .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
+                ),
+                transfer_manifest: Some(transfer_manifest),
+            },
+            cpfp_signed_txs: prepared_package.cpfp_signed_txs,
         })
     }
 
@@ -572,7 +665,7 @@ impl TransferService {
         let prepared_package = self
             .assemble_transfer_package(
                 leaves,
-                receiver_public_key,
+                &vec![*receiver_public_key; leaves.len()],
                 payment_hash,
                 cpfp_adaptor,
                 prepared,
@@ -611,6 +704,8 @@ impl TransferService {
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let own = self.spark_signer.get_identity_public_key().await?;
+        let transfer = &transfer.scoped_to(&own);
         let claim_lock = self.claim_locks.acquire(&transfer.id);
         self.claim_transfer_locked(&claim_lock, transfer, config)
             .await
@@ -1249,6 +1344,8 @@ impl TransferService {
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
+                // A payment's amount and fees read every receiver's part.
+                include_all_participants: true,
                 order: order.into(),
                 transfer_ids: transfer_ids.iter().map(|id| id.to_string()).collect(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
@@ -1420,6 +1517,7 @@ impl TransferService {
                 )),
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;

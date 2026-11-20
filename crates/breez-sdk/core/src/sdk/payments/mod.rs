@@ -322,6 +322,8 @@ impl BreezSdk {
         receiver_identity_public_key: Option<String>,
         preimage: Option<String>,
     ) -> Result<LightningReceivePayment, SdkError> {
+        // Unquoted: callers of this path need an invoice for exactly the
+        // amount they name.
         receive::receive_bolt11_invoice_inner(
             self,
             description,
@@ -330,6 +332,7 @@ impl BreezSdk {
             payment_hash,
             receiver_identity_public_key,
             preimage,
+            None,
         )
         .await
     }
@@ -345,4 +348,23 @@ impl BreezSdk {
     pub(crate) async fn finalize_payment(&self, payment: Payment) -> bool {
         polling::finalize_payment(self, payment).await
     }
+}
+
+/// What a send quote prices for a Lightning payment of `amount`: the total
+/// spent when fees are included, otherwise the invoice's own amount or, on an
+/// amountless invoice, the payment with the fees on top.
+pub(in crate::sdk) fn send_quote_amount(
+    invoice: &crate::Bolt11InvoiceDetails,
+    fee_policy: crate::FeePolicy,
+    amount: u128,
+) -> Result<spark_wallet::SendQuoteAmount, crate::error::SdkError> {
+    Ok(match (invoice.amount_msat, fee_policy) {
+        (_, crate::FeePolicy::FeesIncluded) => {
+            spark_wallet::SendQuoteAmount::Total(amount.try_into()?)
+        }
+        (Some(_), crate::FeePolicy::FeesExcluded) => spark_wallet::SendQuoteAmount::Invoice,
+        (None, crate::FeePolicy::FeesExcluded) => {
+            spark_wallet::SendQuoteAmount::Payment(amount.try_into()?)
+        }
+    })
 }

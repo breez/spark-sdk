@@ -876,6 +876,7 @@ pub struct _PrepareLnurlPayResponse {
     pub success_action: Option<SuccessAction>,
     pub conversion_estimate: Option<ConversionEstimate>,
     pub fee_policy: FeePolicy,
+    pub fee_quote: Option<LightningFeeQuote>,
 }
 
 #[frb(mirror(PaymentRequest))]
@@ -922,6 +923,7 @@ pub struct _ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
     pub signing_key: ExternalLeafSigningKey,
+    pub receiver_public_key: Vec<u8>,
 }
 
 #[frb(mirror(ExternalOperatorRecipient))]
@@ -946,7 +948,6 @@ pub struct _ExternalNewLeafKey {
 #[frb(mirror(ExternalPrepareTransferRequest))]
 pub struct _ExternalPrepareTransferRequest {
     pub transfer_id: String,
-    pub receiver_public_key: Vec<u8>,
     pub leaves: Vec<ExternalTransferLeafInput>,
     pub operator_recipients: Vec<ExternalOperatorRecipient>,
     pub threshold: u32,
@@ -980,6 +981,22 @@ pub struct _ExternalPrepareTokenTransactionRequest {
     pub digest: Vec<u8>,
 }
 
+#[frb(mirror(ExternalSignQuoteRequest))]
+pub enum _ExternalSignQuoteRequest {
+    TransferManifest {
+        serialized_manifest: Vec<u8>,
+    },
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: Vec<u8>,
+    },
+}
+
+#[frb(mirror(ExternalSignedQuote))]
+pub struct _ExternalSignedQuote {
+    pub signature: EcdsaSignatureBytes,
+}
+
 #[frb(mirror(ExternalPreparedTokenTransaction))]
 pub struct _ExternalPreparedTokenTransaction {
     pub signature: SchnorrSignatureBytes,
@@ -998,6 +1015,7 @@ pub enum _UnsignedTransferPackage {
         amount_sat: u64,
         fee_sat: u64,
         target: TransferTarget,
+        sign_quote: Option<ExternalSignQuoteRequest>,
     },
     Token {
         prepare_token_transaction: ExternalPrepareTokenTransactionRequest,
@@ -1035,6 +1053,7 @@ pub enum _TransferTarget {
         lnurl_pay: Option<LnurlPayContext>,
         fee_policy: FeePolicy,
         completion_timeout_secs: Option<u32>,
+        fee_quote: Option<LightningFeeQuote>,
     },
     CoopExit {
         address: String,
@@ -1060,6 +1079,7 @@ pub struct _SignedTransferPackage {
 pub enum _TransferSignature {
     Transfer {
         signed: ExternalPreparedTransfer,
+        signed_quote: Option<ExternalSignedQuote>,
     },
     Token {
         signed: ExternalPreparedTokenTransaction,
@@ -1121,6 +1141,7 @@ pub enum _ReceivePaymentMethod {
         payment_hash: Option<String>,
         receiver_identity_public_key: Option<String>,
         preimage: Option<String>,
+        fee_policy: Option<FeePolicy>,
     },
     CrossChain {
         route: CrossChainRoutePair,
@@ -1141,8 +1162,14 @@ pub struct _ReceivePaymentRequest {
 #[frb(mirror(ReceivePaymentResponse))]
 pub struct _ReceivePaymentResponse {
     pub payment_request: String,
-    pub fee: u128,
+    pub fee: ReceiveFee,
     pub cross_chain_info: Option<CrossChainReceiveInfo>,
+}
+
+#[frb(mirror(ReceiveFee))]
+pub enum _ReceiveFee {
+    Fixed { amount: u128 },
+    Rate { bps: u32, fixed_sats: u64 },
 }
 
 #[frb(mirror(RefundDepositRequest))]
@@ -1175,6 +1202,14 @@ pub struct _SendOnchainSpeedFeeQuote {
     pub l1_broadcast_fee_sat: u64,
 }
 
+#[frb(mirror(LightningFeeQuote))]
+pub struct _LightningFeeQuote {
+    pub serialized_manifest: String,
+    pub issuer_signature: String,
+    pub expires_at: u64,
+    pub payment_msats: u64,
+}
+
 #[frb(mirror(SendPaymentMethod))]
 pub enum _SendPaymentMethod {
     BitcoinAddress {
@@ -1185,6 +1220,7 @@ pub enum _SendPaymentMethod {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
         lightning_fee_sats: u64,
+        fee_quote: Option<LightningFeeQuote>,
     },
     SparkAddress {
         address: String,

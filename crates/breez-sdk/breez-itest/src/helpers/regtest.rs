@@ -220,7 +220,7 @@ pub async fn build_sdk_with_dir_and_chain_service(
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let mut builder = SdkBuilder::new(config, seed);
+    let mut builder = with_test_partner_jwt(SdkBuilder::new(config, seed));
     if let Some(chain_service) = chain_service {
         builder = builder.with_chain_service(chain_service);
     }
@@ -361,7 +361,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
     let background_tasks_enabled = config.background_tasks_enabled;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let builder = SdkBuilder::new(config, seed);
+    let builder = with_test_partner_jwt(SdkBuilder::new(config, seed));
     let builder = match backend {
         Some(choice) => apply_backend_choice(builder, storage_dir, &choice).await?,
         None => apply_storage(builder, storage_dir).await?,
@@ -1385,4 +1385,14 @@ pub async fn build_sdk_with_mysql_server_mode(
         faucet: FaucetConfig::default(),
         turnkey_guard: None,
     })
+}
+
+/// Attaches `BREEZ_PARTNER_JWT`, when set, as the partner token: regtest has no
+/// Breez endpoint issuing one, so fee attribution is tested with a token for a
+/// partner configured on the SSP for testing.
+fn with_test_partner_jwt(builder: SdkBuilder) -> SdkBuilder {
+    match std::env::var("BREEZ_PARTNER_JWT") {
+        Ok(token) if !token.is_empty() => builder.with_partner_jwt(token),
+        _ => builder,
+    }
 }

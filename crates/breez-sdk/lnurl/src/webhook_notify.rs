@@ -17,6 +17,7 @@ pub enum WebhookPayload {
         invoice: String,
         preimage: String,
         amount_sat: Option<i64>,
+        fee_sat: Option<i64>,
         lightning_address: Option<String>,
         sender_comment: Option<String>,
         timestamp: i64,
@@ -48,6 +49,7 @@ where
             invoice: item.invoice,
             preimage: item.preimage,
             amount_sat: item.amount_received_sat,
+            fee_sat: item.fee_sat,
             lightning_address: item.lightning_address,
             sender_comment: item.sender_comment,
             timestamp: now,
@@ -149,6 +151,7 @@ mod shared_tests {
             actual_domain: None,
             username: None,
             amount_received_sat: Some(1000),
+            fee_sat: None,
         };
         db.upsert_invoice(&invoice).await.unwrap();
 
@@ -201,6 +204,7 @@ mod shared_tests {
             &invoice_str,
             i64::MAX,
             "cash.example",
+            None,
         )
         .await
         .unwrap();
@@ -246,6 +250,7 @@ mod shared_tests {
             actual_domain: None,
             username: None,
             amount_received_sat: None,
+            fee_sat: None,
         };
         db.upsert_invoice(&invoice).await.unwrap();
 
@@ -286,6 +291,7 @@ mod shared_tests {
             actual_domain: None,
             username: None,
             amount_received_sat: Some(1000),
+            fee_sat: None,
         };
         db.upsert_invoice(&invoice).await.unwrap();
 

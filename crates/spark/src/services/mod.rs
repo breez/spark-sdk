@@ -18,7 +18,8 @@ pub use error::*;
 pub use htlc::*;
 pub use lightning::{
     InvoiceDescription, InvoicePreimage, LightningReceivePayment, LightningSendPayment,
-    LightningSendStatus, LightningService, PayLightningResult, store_preimage_shares,
+    LightningSendStatus, LightningService, PayLightningResult, QuotedLightningSend,
+    SendQuoteAmount, store_preimage_shares,
 };
 pub use models::*;
 pub use silent_payment::{

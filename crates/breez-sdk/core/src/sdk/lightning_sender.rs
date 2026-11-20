@@ -7,13 +7,16 @@
 //! have to duplicate it — and so every LN-send path consistently benefits
 //! from SSP-side polling and event emission.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::{PayLightningInvoiceResult, SparkWallet, TransferId};
+use spark_wallet::{
+    IssuedQuote, PayLightningInvoiceResult, QuotedLightningSend, SendQuoteAmount, SparkWallet,
+    TransferId,
+};
 use tokio::select;
 use tokio::sync::{oneshot, watch};
 use tracing::{error, info, warn};
@@ -22,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError, events::EventEmitter,
-    persist::ObjectCacheRepository, utils::payments::record_payment_update,
+    LightningFeeQuote, Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError,
+    events::EventEmitter, persist::ObjectCacheRepository, utils::payments::record_payment_update,
 };
 
 /// A Lightning send that has been recorded but not yet handed to the SSP.
@@ -37,6 +40,28 @@ pub(crate) struct PendingLightningSend {
     pub invoice: String,
     pub amount_sats: Option<u64>,
     pub displayed_amount: u128,
+    /// The fee quote a quoted send committed its leaves under. The SSP must be
+    /// asked to pay it under the same quote.
+    #[serde(default)]
+    pub fee_quote: Option<LightningFeeQuote>,
+}
+
+/// The wait after a failed resume, doubled on each further failure.
+const RESUME_BACKOFF_SECS: u64 = 30;
+const RESUME_BACKOFF_MAX_SECS: u64 = 15 * 60;
+
+/// The wait before resuming a send that failed `failures` times in a row.
+fn resume_backoff_secs(failures: u32) -> u64 {
+    RESUME_BACKOFF_SECS
+        .checked_shl(failures)
+        .unwrap_or(RESUME_BACKOFF_MAX_SECS)
+        .min(RESUME_BACKOFF_MAX_SECS)
+}
+
+fn now_secs() -> u64 {
+    platform_utils::time::SystemTime::now()
+        .duration_since(platform_utils::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Marks a send as running in this process for as long as it is held.
@@ -70,6 +95,17 @@ impl Drop for InFlightSend {
     }
 }
 
+pub(crate) fn issued_quote(fee_quote: &LightningFeeQuote) -> Result<IssuedQuote, SdkError> {
+    let decode = |field: &str, value: &str| {
+        hex::decode(value)
+            .map_err(|e| SdkError::InvalidInput(format!("Invalid fee quote {field}: {e}")))
+    };
+    Ok(IssuedQuote {
+        serialized_manifest: decode("manifest", &fee_quote.serialized_manifest)?,
+        issuer_signature: decode("signature", &fee_quote.issuer_signature)?,
+    })
+}
+
 /// The set is only ever inserted into, removed from and queried, never held
 /// across an await, so a poisoned lock carries no half-written state.
 fn lock_in_flight(in_flight: &StdMutex<HashSet<String>>) -> MutexGuard<'_, HashSet<String>> {
@@ -96,6 +132,9 @@ pub(crate) struct LightningSender {
     /// second completion poll for the same send. Empty after a restart, which is
     /// exactly when the recorded sends do need resuming.
     in_flight: Arc<StdMutex<HashSet<String>>>,
+    /// Per transfer id, how many resumes failed in a row and the time before
+    /// which the next one waits.
+    resume_backoff: StdMutex<HashMap<String, (u32, u64)>>,
 }
 
 impl LightningSender {
@@ -112,6 +151,7 @@ impl LightningSender {
             shutdown_sender,
             pending_lock: Mutex::new(()),
             in_flight: Arc::new(StdMutex::new(HashSet::new())),
+            resume_backoff: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -149,6 +189,7 @@ impl LightningSender {
                 invoice: invoice.to_string(),
                 amount_sats,
                 displayed_amount,
+                fee_quote: None,
             })
             .await;
 
@@ -161,6 +202,74 @@ impl LightningSender {
         ))
         .await?;
         self.forget_pending_send(&transfer_id.to_string()).await;
+        self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
+            .await
+    }
+
+    /// The quote to commit a send under: the prepared `fee_quote` while it is
+    /// still committable, otherwise a new one on the same terms. With
+    /// `transfer_id`, the caller's idempotency key, a new quote commits that
+    /// transfer. A new quote must price the payment exactly as prepared, since
+    /// the prepare response is what the user approved.
+    pub(crate) async fn committable_send_quote(
+        &self,
+        invoice: &str,
+        fee_quote: &LightningFeeQuote,
+        amount: SendQuoteAmount,
+        transfer_id: Option<&TransferId>,
+    ) -> Result<QuotedLightningSend, SdkError> {
+        let prepared = self
+            .spark_wallet
+            .verify_lightning_send_quote(
+                invoice,
+                &issued_quote(fee_quote)?,
+                fee_quote.payment_msats,
+                amount,
+            )
+            .await?;
+        let reusable = prepared.check_unexpired().is_ok()
+            && transfer_id.is_none_or(|id| *id == prepared.transfer_id);
+        if reusable {
+            return Ok(prepared);
+        }
+        let quote = self
+            .spark_wallet
+            .fetch_lightning_send_quote(invoice, amount, transfer_id)
+            .await?;
+        if quote.amount_sats != prepared.amount_sats || quote.total_sats != prepared.total_sats {
+            return Err(SdkError::fees_changed());
+        }
+        Ok(quote)
+    }
+
+    /// [`pay_and_persist_lightning_invoice`](Self::pay_and_persist_lightning_invoice)
+    /// under a committable fee quote, which also fixes the send's transfer id.
+    /// The payment shows what the quote pays the invoice, which is what reaches
+    /// the receiver.
+    pub(crate) async fn pay_and_persist_quoted_lightning_invoice(
+        &self,
+        invoice: &str,
+        quote: QuotedLightningSend,
+        completion_timeout_secs: u64,
+    ) -> Result<Payment, SdkError> {
+        let displayed_amount = u128::from(quote.amount_sats);
+        let _in_flight = self
+            .record_pending_send(&PendingLightningSend {
+                transfer_id: quote.transfer_id.to_string(),
+                invoice: invoice.to_string(),
+                amount_sats: quote.amount_to_send,
+                displayed_amount,
+                fee_quote: Some(LightningFeeQuote::from(&quote)),
+            })
+            .await;
+
+        let payment_response = Box::pin(
+            self.spark_wallet
+                .pay_quoted_lightning_invoice(invoice, &quote),
+        )
+        .await?;
+        self.forget_pending_send(&quote.transfer_id.to_string())
+            .await;
         self.payment_from_pay_result(payment_response, displayed_amount, completion_timeout_secs)
             .await
     }
@@ -189,7 +298,13 @@ impl LightningSender {
         }
         for entry in pending {
             let still_sending = { lock_in_flight(&self.in_flight).contains(&entry.transfer_id) };
-            if still_sending {
+            let backing_off = self
+                .resume_backoff
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&entry.transfer_id)
+                .is_some_and(|(_, retry_at)| now_secs() < *retry_at);
+            if still_sending || backing_off {
                 continue;
             }
             let Ok(transfer_id) = TransferId::from_str(&entry.transfer_id) else {
@@ -197,13 +312,27 @@ impl LightningSender {
                 self.forget_pending_send(&entry.transfer_id).await;
                 continue;
             };
+            let quote = match entry.fee_quote.as_ref().map(issued_quote).transpose() {
+                Ok(quote) => quote,
+                Err(e) => {
+                    error!("Discarding pending lightning send with an unreadable quote: {e:?}");
+                    self.forget_pending_send(&entry.transfer_id).await;
+                    continue;
+                }
+            };
             match self
                 .spark_wallet
-                .resume_lightning_send(&transfer_id, &entry.invoice, entry.amount_sats)
+                .resume_lightning_send(
+                    &transfer_id,
+                    &entry.invoice,
+                    entry.amount_sats,
+                    quote.as_ref(),
+                )
                 .await
             {
                 Ok(Some(payment_response)) => {
                     info!("Resumed lightning send {}", entry.transfer_id);
+                    self.forget_resume_backoff(&entry.transfer_id);
                     self.forget_pending_send(&entry.transfer_id).await;
                     if let Err(e) = self
                         .payment_from_pay_result(payment_response, entry.displayed_amount, 0)
@@ -219,15 +348,41 @@ impl LightningSender {
                         "Dropping pending lightning send {}: nothing left to pay",
                         entry.transfer_id
                     );
+                    self.forget_resume_backoff(&entry.transfer_id);
                     self.forget_pending_send(&entry.transfer_id).await;
                 }
-                // Keep the entry so the next sync tries again.
-                Err(e) => warn!(
-                    "Failed to resume lightning send {}: {e:?}",
-                    entry.transfer_id
-                ),
+                // Keep the entry so a later sync tries again, once its backoff
+                // has passed.
+                Err(e) => {
+                    let wait = self.back_off_resume(&entry.transfer_id);
+                    warn!(
+                        "Failed to resume lightning send {}, retrying in {wait}s: {e:?}",
+                        entry.transfer_id
+                    );
+                }
             }
         }
+    }
+
+    /// Delays the next resume of `transfer_id`, doubling the wait on each
+    /// failure in a row. Returns the wait in seconds.
+    fn back_off_resume(&self, transfer_id: &str) -> u64 {
+        let mut backoff = self
+            .resume_backoff
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (failures, retry_at) = backoff.entry(transfer_id.to_string()).or_insert((0, 0));
+        let wait = resume_backoff_secs(*failures);
+        *failures = failures.saturating_add(1);
+        *retry_at = now_secs().saturating_add(wait);
+        wait
+    }
+
+    fn forget_resume_backoff(&self, transfer_id: &str) {
+        self.resume_backoff
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(transfer_id);
     }
 
     /// Records the send durably and marks it in flight until the returned guard
@@ -270,6 +425,7 @@ impl LightningSender {
                 let payment = Payment::from_lightning(
                     lightning_payment,
                     displayed_amount,
+                    payment_response.transfer.total_value_sat.into(),
                     payment_response.transfer.id.to_string(),
                     htlc_details,
                 )?;
@@ -349,7 +505,7 @@ impl LightningSender {
                             break 'poll None;
                         },
                         p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
+                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.amount.saturating_add(payment.fees), payment.id.clone(), htlc_details.clone()) {
                                 info!("Polling payment status = {} {:?}", payment.status, p.status);
                                 if payment.status != PaymentStatus::Pending {
                                     info!("Polling payment completed status = {}", payment.status);
@@ -478,7 +634,49 @@ mod storage_tests {
             invoice: invoice.to_string(),
             amount_sats: Some(1_000),
             displayed_amount: 1_000,
+            fee_quote: None,
         }
+    }
+
+    #[test]
+    fn a_failing_resume_waits_longer_each_time_up_to_a_cap() {
+        assert_eq!(resume_backoff_secs(0), 30);
+        assert_eq!(resume_backoff_secs(1), 60);
+        assert_eq!(resume_backoff_secs(4), 480);
+        assert_eq!(resume_backoff_secs(5), 900);
+        assert_eq!(resume_backoff_secs(40), 900);
+    }
+
+    // Records written before quoted sends existed carry no quote field.
+    #[test]
+    fn a_record_from_before_quotes_loads_unquoted() {
+        let entry: PendingLightningSend = serde_json::from_str(
+            r#"{"transfer_id":"t","invoice":"lnbc1","amount_sats":1000,"displayed_amount":1000}"#,
+        )
+        .unwrap();
+        assert!(entry.fee_quote.is_none());
+    }
+
+    #[test]
+    fn a_quote_round_trips_to_the_bytes_the_ssp_issued() {
+        let quote = issued_quote(&LightningFeeQuote {
+            serialized_manifest: "0801".to_string(),
+            issuer_signature: "3044".to_string(),
+            expires_at: 0,
+            payment_msats: 1_000_000,
+        })
+        .unwrap();
+        assert_eq!(quote.serialized_manifest, vec![0x08, 0x01]);
+        assert_eq!(quote.issuer_signature, vec![0x30, 0x44]);
+        assert!(
+            issued_quote(&LightningFeeQuote {
+                serialized_manifest: "zz".to_string(),
+                issuer_signature: String::new(),
+                expires_at: 0,
+                payment_msats: 1_000_000,
+            })
+            .is_err()
+        );
     }
 
     #[tokio::test]

@@ -307,6 +307,13 @@ async fn run_interactive_mode(
     if let Some(account_number) = account_number {
         sdk_builder = sdk_builder.with_account_number(account_number);
     }
+    // A partner token for testing fee attribution off mainnet, where none is
+    // fetched with the API key.
+    if let Ok(token) = std::env::var("BREEZ_PARTNER_JWT")
+        && !token.is_empty()
+    {
+        sdk_builder = sdk_builder.with_partner_jwt(token);
+    }
 
     let sdk = sdk_builder.build().await?;
 
