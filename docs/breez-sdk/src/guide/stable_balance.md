@@ -82,7 +82,7 @@ When Stable Balance is active, you can send your entire balance, both the token 
 
 To send all, provide the full token balance as the amount along with {{#enum FeePolicy::FeesIncluded}} and {{#enum ConversionType::ToBitcoin}} conversion options. The SDK converts all specified tokens to bitcoin, combines the result with any existing bitcoin balance, and deducts payment fees from the total.
 
-The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details.
+The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details. When a partner fee applies to a payment to a Lightning address, the amount sent is sized to what the conversion is guaranteed to deliver, so a little bitcoin may remain in the wallet.
 
 The same approach works with {{#name prepare_lnurl_pay}} for [LNURL payments](./lnurl_pay.md).
 

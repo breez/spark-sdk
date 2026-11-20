@@ -64,6 +64,13 @@ fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// The refusal of a send whose fees rose above what its prepare response showed.
+pub(crate) fn fees_changed() -> SdkError {
+    SdkError::InvalidInput(
+        "The fees changed since the payment was prepared: prepare it again".to_string(),
+    )
+}
+
 /// Marks a send as running in this process for as long as it is held.
 ///
 /// A guard rather than a paired call because the mark has to come off on every
@@ -237,27 +244,22 @@ impl LightningSender {
             .fetch_lightning_send_quote(invoice, amount, transfer_id)
             .await?;
         if quote.amount_sats != prepared.amount_sats || quote.total_sats != prepared.total_sats {
-            return Err(SdkError::InvalidInput(
-                "The fees changed since the payment was prepared: prepare it again".to_string(),
-            ));
+            return Err(fees_changed());
         }
         Ok(quote)
     }
 
     /// [`pay_and_persist_lightning_invoice`](Self::pay_and_persist_lightning_invoice)
-    /// under a fee quote, which also fixes the send's transfer id.
+    /// under a committable fee quote, which also fixes the send's transfer id.
+    /// The payment shows what the quote pays the invoice, which is what reaches
+    /// the receiver.
     pub(crate) async fn pay_and_persist_quoted_lightning_invoice(
         &self,
         invoice: &str,
-        fee_quote: &LightningFeeQuote,
-        amount: SendQuoteAmount,
-        transfer_id: Option<TransferId>,
-        displayed_amount: u128,
+        quote: QuotedLightningSend,
         completion_timeout_secs: u64,
     ) -> Result<Payment, SdkError> {
-        let quote = self
-            .committable_send_quote(invoice, fee_quote, amount, transfer_id.as_ref())
-            .await?;
+        let displayed_amount = u128::from(quote.amount_sats);
         let _in_flight = self
             .record_pending_send(&PendingLightningSend {
                 transfer_id: quote.transfer_id.to_string(),

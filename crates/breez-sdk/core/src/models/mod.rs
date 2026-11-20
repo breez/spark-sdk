@@ -2247,8 +2247,8 @@ impl fmt::Debug for ReceivePaymentMethod {
 }
 
 /// A fee quote the Lightning service provider signed for paying a specific
-/// invoice. It is single-use and short-lived: sending after it expires fails,
-/// and preparing again fetches a new one.
+/// invoice. It is single-use and short-lived: a send after it expires is quoted
+/// again on the same terms, and fails if the fees changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LightningFeeQuote {
@@ -2278,7 +2278,9 @@ pub enum SendPaymentMethod {
         lightning_fee_sats: u64,
         /// The fee quote `lightning_fee_sats` was priced from, when a partner
         /// fee applies. Pass the prepare response back unchanged: the send
-        /// commits exactly this quote.
+        /// commits this quote. A send that converts tokens to pay an invoice
+        /// without an amount is quoted again on the sats the conversion
+        /// delivers, and fails if that raises the fee beyond the one shown.
         fee_quote: Option<LightningFeeQuote>,
     }, // should be replaced with the parsed invoice
     SparkAddress {
@@ -2451,8 +2453,8 @@ pub struct PrepareLnurlPayResponse {
     /// `FeesIncluded` (explicit `FeesExcluded` is rejected).
     pub fee_policy: FeePolicy,
     /// The fee quote `fee_sats` was priced from, when a partner fee applies.
-    /// Pass the prepare response back unchanged: the payment commits exactly
-    /// this quote.
+    /// Pass the prepare response back unchanged: the payment commits this
+    /// quote.
     pub fee_quote: Option<LightningFeeQuote>,
 }
 

@@ -267,10 +267,26 @@ async fn prepare_token_denominated(
         ));
     }
 
-    let lightning_fee_sats = sdk
-        .spark_wallet
-        .fetch_lightning_send_fee_estimate(input, Some(estimated_sats.try_into()?))
-        .await?;
+    // The sats are only known once the conversion lands, so this quote prices
+    // the estimate for the fee shown and the send is quoted again on them.
+    let fee_quote = if sdk.quote_lightning_sends {
+        send_fee_quote(
+            sdk,
+            input,
+            send_quote_amount(invoice, fee_policy, estimated_sats)?,
+        )
+        .await
+    } else {
+        None
+    };
+    let lightning_fee_sats = match &fee_quote {
+        Some(quote) => quote.total_sats.saturating_sub(quote.amount_sats),
+        None => {
+            sdk.spark_wallet
+                .fetch_lightning_send_fee_estimate(input, Some(estimated_sats.try_into()?))
+                .await?
+        }
+    };
 
     let total_u64: u64 = estimated_sats.try_into()?;
     // For fixed-amount invoices, the converted sats must cover invoice amount + fees.
@@ -292,7 +308,7 @@ async fn prepare_token_denominated(
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
             lightning_fee_sats,
-            fee_quote: None,
+            fee_quote: fee_quote.as_ref().map(LightningFeeQuote::from),
         },
         amount: estimated_sats,
         // ToBitcoin conversion outputs sats — token_identifier is None

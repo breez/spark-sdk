@@ -26,7 +26,9 @@ pub use bridging::{
     GetBridgeStatusRequest, GetBridgeStatusResponse, default_bridging_config, new_bridging_client,
 };
 pub(crate) use helpers::partner_id;
-pub(crate) use lightning_sender::{LightningSender, PendingLightningSend, issued_quote};
+pub(crate) use lightning_sender::{
+    LightningSender, PendingLightningSend, fees_changed, issued_quote,
+};
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
