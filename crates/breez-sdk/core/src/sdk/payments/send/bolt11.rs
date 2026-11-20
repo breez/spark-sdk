@@ -8,9 +8,7 @@ use crate::{
     SendPaymentOptions,
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
-    sdk::{
-        BreezSdk, PendingLightningSend, fees_changed, issued_quote, payments::send_quote_amount,
-    },
+    sdk::{BreezSdk, PendingLightningSend, issued_quote, payments::send_quote_amount},
     signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer, ExternalSignedQuote},
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::fees::{fee_overpayment, fee_within_prepared},
@@ -369,7 +367,7 @@ async fn converted_send_quote(
     let fee = quote.total_sats.saturating_sub(quote.amount_sats);
     let rounding_sats = u64::try_from(quote.buckets.len()).unwrap_or(u64::MAX);
     if !fee_within_prepared(prepared_fee, prepared_amount, fee, basis, rounding_sats) {
-        return Err(fees_changed());
+        return Err(SdkError::fees_changed());
     }
     Ok(Some(quote))
 }

@@ -63,6 +63,9 @@ pub enum _SdkError {
     CrossChainDisabled {
         docs_url: String,
     },
+    FeesChanged {
+        docs_url: String,
+    },
     NetworkError(String),
     StorageError(String),
     ChainServiceError(String),

@@ -135,6 +135,13 @@ pub enum SdkError {
         docs_url: String,
     },
 
+    /// The fees of a payment changed since it was prepared.
+    #[error("The fees changed since the payment was prepared: prepare it again")]
+    FeesChanged {
+        /// Guide section explaining why fees change after a prepare.
+        docs_url: String,
+    },
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -249,6 +256,7 @@ mod docs_url {
     pub(super) const CROSS_CHAIN_ROUTE_UNAVAILABLE: &str =
         errors_page!("cross-chain-route-unavailable");
     pub(super) const CROSS_CHAIN_DISABLED: &str = errors_page!("cross-chain-disabled");
+    pub(super) const FEES_CHANGED: &str = errors_page!("fees-changed");
     pub(super) const MAX_DEPOSIT_CLAIM_FEE_EXCEEDED: &str =
         errors_page!("max-deposit-claim-fee-exceeded");
     pub(super) const DEPOSIT_TOO_SMALL: &str = errors_page!("deposit-too-small");
@@ -289,6 +297,12 @@ impl SdkError {
     pub(crate) fn cross_chain_disabled() -> Self {
         Self::CrossChainDisabled {
             docs_url: docs_url::CROSS_CHAIN_DISABLED.to_string(),
+        }
+    }
+
+    pub(crate) fn fees_changed() -> Self {
+        Self::FeesChanged {
+            docs_url: docs_url::FEES_CHANGED.to_string(),
         }
     }
 
@@ -355,6 +369,7 @@ impl SdkError {
             Self::CrossChainAmountOutOfRange { docs_url, .. }
             | Self::CrossChainRouteUnavailable { docs_url, .. }
             | Self::CrossChainDisabled { docs_url }
+            | Self::FeesChanged { docs_url }
             | Self::MaxDepositClaimFeeExceeded { docs_url, .. }
             | Self::DepositTooSmall { docs_url, .. }
             | Self::DepositClaimInProgress { docs_url, .. }
@@ -965,6 +980,7 @@ mod docs_url_tests {
             SdkError::cross_chain_amount_out_of_range(String::new(), true, None, None),
             SdkError::cross_chain_route_unavailable(String::new(), true),
             SdkError::cross_chain_disabled(),
+            SdkError::fees_changed(),
             SdkError::max_deposit_claim_fee_exceeded(String::new(), 0, None, 0),
             SdkError::deposit_too_small(String::new(), 0),
             SdkError::deposit_claim_in_progress(String::new(), 0),

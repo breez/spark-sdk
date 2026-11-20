@@ -9,9 +9,7 @@ use crate::error::SdkError;
 /// `current_fee.max(1)` (allow up to 100% of the actual fee, minimum 1 sat).
 pub(crate) fn fee_overpayment(stored_fee: u64, current_fee: u64) -> Result<u64, SdkError> {
     if current_fee > stored_fee {
-        return Err(SdkError::Generic(
-            "Fee increased since prepare. Please retry.".to_string(),
-        ));
+        return Err(SdkError::fees_changed());
     }
 
     let overpayment = stored_fee.saturating_sub(current_fee);
@@ -78,15 +76,10 @@ mod tests {
     #[test_all]
     fn test_fee_overpayment_fee_increased_fails() {
         let result = fee_overpayment(100, 101);
-        assert!(result.is_err(), "Should fail when fee increased");
-        if let Err(SdkError::Generic(msg)) = result {
-            assert!(
-                msg.contains("Fee increased since prepare"),
-                "Error should mention fee increase"
-            );
-        } else {
-            panic!("Expected Generic error");
-        }
+        assert!(
+            matches!(result, Err(SdkError::FeesChanged { .. })),
+            "Should fail when fee increased"
+        );
     }
 
     #[test_all]
