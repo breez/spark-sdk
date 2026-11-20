@@ -45,7 +45,7 @@ pub(super) async fn send(
 
     // Handle FeesIncluded: deduct fees from the total balance.
     // Applies to both amountless invoices and fixed-amount invoices with amount_override
-    // (send-all-with-conversion via LNURL: overpays the invoice to drain the wallet).
+    // (unquoted send-all-with-conversion via LNURL: overpays the invoice to drain the wallet).
     let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
     let transfer_id = request
         .idempotency_key

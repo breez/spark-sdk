@@ -258,8 +258,9 @@ async fn prepare_fees_included(
 /// `None` when the quote carries no partner fee.
 ///
 /// With a conversion the sats are only known once it lands, so the invoice is
-/// sized to what the conversion guarantees and the quote prices the invoice
-/// alone: whatever the conversion delivers beyond it stays in the wallet.
+/// sized below the estimate by the conversion's slippage allowance and the
+/// quote prices the invoice alone: whatever the conversion delivers beyond it
+/// stays in the wallet.
 async fn prepare_quoted_fees_included(
     sdk: &BreezSdk,
     request: &PrepareLnurlPayRequest,

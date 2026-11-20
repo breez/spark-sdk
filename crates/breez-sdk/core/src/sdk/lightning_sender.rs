@@ -64,7 +64,8 @@ fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// The refusal of a send whose fees rose above what its prepare response showed.
+/// The refusal of a send whose fees no longer match what its prepare response
+/// showed.
 pub(crate) fn fees_changed() -> SdkError {
     SdkError::InvalidInput(
         "The fees changed since the payment was prepared: prepare it again".to_string(),
