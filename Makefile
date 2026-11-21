@@ -145,6 +145,15 @@ kotlin-itest:
 	SCENARIO_CLI="java -jar $(CURDIR)/crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/build/libs/breez-sdk-spark-cli-1.0-SNAPSHOT.jar" \
 		cargo xtask test --package cli --test scenarios -- --test-threads=2
 
+# Flutter binding e2e tests: the shared CLI scenarios driven through the Dart
+# CLI port, run with `dart run` (the port uses dart:mirrors, so it stays on the
+# JIT). Setup builds the native library through the package's build hook. Same
+# gating as cli-itest. Needs Flutter 3.38 or later.
+flutter-itest:
+	$(MAKE) -C crates/breez-sdk/bindings/examples/cli/langs/flutter setup
+	SCENARIO_CLI="dart run $(CURDIR)/crates/breez-sdk/bindings/examples/cli/langs/flutter/bin/breez_cli.dart" \
+		cargo xtask test --package cli --test scenarios -- --test-threads=2
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 

@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 import 'package:crypto/crypto.dart';
 
 import 'cli.dart';
@@ -25,7 +25,7 @@ class FilePrfProvider implements PrfProvider {
     if (secretFile.existsSync()) {
       final bytes = secretFile.readAsBytesSync();
       if (bytes.length != 32) {
-        throw Exception('Invalid secret file: expected 32 bytes, got ${bytes.length}');
+        throw GenericPrfProviderException('Invalid secret file: expected 32 bytes, got ${bytes.length}');
       }
       secret = Uint8List.fromList(bytes);
     } else {
@@ -61,10 +61,12 @@ class FilePrfProvider implements PrfProvider {
 
   @override
   Future<CreatePasskeyOutput> createPasskey(List<Uint8List> excludeCredentials, List<String> salts) async {
-    throw Exception(
-      'File-backed PRF provider does not implement create-credential; '
-      'use sign-in by label instead.',
-    );
+    throw PrfNotSupportedPrfProviderException();
+  }
+
+  @override
+  Future<DomainAssociation> checkDomainAssociation() async {
+    return SkippedDomainAssociation('Provider does not verify domain association');
   }
 }
 
@@ -103,15 +105,14 @@ Future<Seed> resolvePasskeySeed(
 
   final filePrf = FilePrfProvider.create(dataDir);
   final passkeyConfig = proxy != null ? PasskeyConfig(proxy: proxy) : null;
-  final passkey =
-      PasskeyClientBuilder(breezApiKey: breezApiKey, config: passkeyConfig).withPrfProvider(filePrf).build();
+  final passkey = PasskeyClient(prfProvider: filePrf, breezApiKey: breezApiKey, config: passkeyConfig);
 
   // --list-labels: discovery sign-in (no cached label) returns the
   // published label set; prompt the user to pick one.
   String? label;
   if (config.listLabels) {
     print('Querying Nostr for available labels...');
-    final discovery = await passkey.signIn(request: SignInRequest(label: null, allowCredentials: const []));
+    final discovery = await passkey.signIn(request: SignInRequest());
     final labels = discovery.labels;
 
     if (labels.isEmpty) {
@@ -123,8 +124,8 @@ Future<Seed> resolvePasskeySeed(
       print('  ${i + 1}: ${labels[i]}');
     }
 
-    final input = prompt('Select label (1-${labels.length}): ');
-    final idx = int.parse(input);
+    final selection = await prompt('Select label (1-${labels.length}): ');
+    final idx = int.parse(selection);
     if (idx < 1 || idx > labels.length) {
       throw Exception('Selection out of range');
     }
@@ -141,6 +142,6 @@ Future<Seed> resolvePasskeySeed(
     print("Label '$label' published successfully.");
   }
 
-  final response = await passkey.signIn(request: SignInRequest(label: label, allowCredentials: const []));
+  final response = await passkey.signIn(request: SignInRequest(label: label));
   return response.wallet.seed;
 }

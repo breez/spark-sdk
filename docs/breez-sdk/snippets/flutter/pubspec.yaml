@@ -4,8 +4,8 @@ version: 1.0.0
 publish_to: "none"
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.27.0"
+  sdk: ^3.10.0
+  flutter: ">=3.38.0"
 
 dependencies:
   flutter_secure_storage: ^6.0.0
@@ -13,7 +13,6 @@ dependencies:
   path_provider: ^2.0.0
   breez_sdk_spark_flutter:
     path: ../../../../packages/flutter
-  rxdart: ^0.28.0
   crypto: ^3.0.7
   convert: ^3.1.1
 

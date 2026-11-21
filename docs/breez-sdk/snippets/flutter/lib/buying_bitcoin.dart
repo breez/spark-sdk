@@ -7,8 +7,8 @@ Future<void> buyBitcoin(BreezSdk sdk) async {
   // Optionally, set a redirect URL for after the purchase is completed
   String? optionalRedirectUrl = "https://example.com/purchase-complete";
 
-  final request = BuyBitcoinRequest_Moonpay(
-    delivery: MoonpayDelivery_Bitcoin(amountSat: optionalAmountSat),
+  final request = MoonpayBuyBitcoinRequest(
+    delivery: BitcoinMoonpayDelivery(optionalAmountSat),
     redirectUrl: optionalRedirectUrl,
   );
 
@@ -23,8 +23,8 @@ Future<void> buyBitcoinViaCrossChain(BreezSdk sdk) async {
   // USD amount to receive, in 6-decimal base units ($50)
   final amount = BigInt.from(50000000);
 
-  final request = BuyBitcoinRequest_Moonpay(
-    delivery: MoonpayDelivery_CrossChain(amount: amount, feeMode: null),
+  final request = MoonpayBuyBitcoinRequest(
+    delivery: CrossChainMoonpayDelivery(amount: amount, feeMode: null),
     redirectUrl: null,
   );
 
@@ -49,7 +49,7 @@ Future<void> buyBitcoinViaCashapp(BreezSdk sdk) async {
   // Cash App requires the amount to be specified up front.
   final amountSats = BigInt.from(50000);
 
-  final request = BuyBitcoinRequest_CashApp(amountSats: amountSats);
+  final request = CashAppBuyBitcoinRequest(amountSats);
 
   final response = await sdk.buyBitcoin(request: request);
   print("Open this URL in Cash App to complete the purchase:");

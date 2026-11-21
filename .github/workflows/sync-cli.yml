@@ -254,8 +254,8 @@ jobs:
       # step, unformatted Dart fails the Flutter CI job on the PR. dart format
       # also rejects unparsable Dart, so a syntactically broken sync fails
       # this job and stays out of the PR. Full analysis (make check-flutter)
-      # cannot run here: it needs the FRB-generated SDK bindings, which only
-      # the Flutter CI job builds. pub get must run first: package resolution
+      # cannot run here: it needs the uniffi-dart generated SDK bindings, which
+      # only the Flutter CI job generates. pub get must run first: package resolution
       # pins the language version the formatter applies.
       - name: Format Flutter CLI
         if: matrix.lang == 'flutter' && inputs.approve-run == ''

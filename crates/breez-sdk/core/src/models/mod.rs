@@ -397,7 +397,13 @@ pub struct Conversion {
 #[cfg(feature = "uniffi")]
 uniffi::custom_type!(u128, String, {
     remote,
-    try_lift: |val| val.parse::<u128>().map_err(uniffi::deps::anyhow::Error::msg),
+    // An `SdkError` here reaches the caller as that error rather than as an
+    // internal one, when the function returns `SdkError`.
+    try_lift: |val| val.parse::<u128>().map_err(|e| {
+        uniffi::deps::anyhow::Error::new(crate::SdkError::InvalidInput(format!(
+            "Invalid amount '{val}': {e}"
+        )))
+    }),
     lower: |obj| obj.to_string(),
 });
 

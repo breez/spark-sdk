@@ -140,6 +140,42 @@ pub struct BreezSdk {
     /// need to pay an LN invoice as part of a larger flow.
     #[allow(dead_code)]
     pub(crate) lightning_sender: Arc<LightningSender>,
+    /// Shared by the copies the app holds and absent from the copies background
+    /// tasks hold (see [`BreezSdk::background_clone`]), so the SDK stops when
+    /// the app releases its last copy.
+    pub(crate) _shutdown_handle: Option<Arc<ShutdownHandle>>,
+}
+
+/// Signals shutdown, as `disconnect` does, when the app releases its last copy
+/// of the SDK. It may be dropped on any thread, long after the app let go, so
+/// it only sends the signal and never waits for the tasks to stop.
+pub(crate) struct ShutdownHandle {
+    shutdown_sender: watch::Sender<()>,
+}
+
+impl ShutdownHandle {
+    pub(crate) fn new(shutdown_sender: watch::Sender<()>) -> Self {
+        Self { shutdown_sender }
+    }
+}
+
+impl Drop for ShutdownHandle {
+    fn drop(&mut self) {
+        // An error means no background task is listening, so there is nothing
+        // to stop.
+        let _ = self.shutdown_sender.send(());
+    }
+}
+
+impl BreezSdk {
+    /// A copy for a background task. It doesn't keep the SDK running once the
+    /// app has released it.
+    pub(crate) fn background_clone(&self) -> Self {
+        Self {
+            _shutdown_handle: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// The parser bound to the SDK's shared HTTP client and its DNS resolver.
@@ -170,6 +206,9 @@ pub(crate) struct BreezSdkParams {
     pub lightning_sender: Arc<LightningSender>,
 }
 
+/// Sets up the SDK's logging: a log file in `log_dir`, an `app_logger` that
+/// receives each entry, and `log_filter` in `RUST_LOG` syntax. Calling it again
+/// replaces all three.
 #[allow(clippy::needless_pass_by_value)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(

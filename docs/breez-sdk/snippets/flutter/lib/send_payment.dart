@@ -8,7 +8,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
   BigInt? optionalAmountSats = BigInt.from(5000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: optionalAmountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -17,7 +17,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_Bolt11Invoice) {
+  if (paymentMethod is Bolt11InvoiceSendPaymentMethod) {
     // Fees to pay via Lightning
     final lightningFeeSats = paymentMethod.lightningFeeSats;
     // Or fees to pay (if available) via a Spark transfer
@@ -37,7 +37,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -46,7 +46,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
 
   // Review the fee quote for each confirmation speed
   final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
+  if (paymentMethod is BitcoinAddressSendPaymentMethod) {
     final feeQuote = paymentMethod.feeQuote;
     final slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
     final mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
@@ -67,7 +67,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -76,7 +76,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_SparkAddress) {
+  if (paymentMethod is SparkAddressSendPaymentMethod) {
     final feeSats = paymentMethod.fee;
     print("Fees: $feeSats sats");
   }
@@ -92,7 +92,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
   BigInt? optionalAmountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: optionalAmountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -101,7 +101,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_SparkInvoice) {
+  if (paymentMethod is SparkInvoiceSendPaymentMethod) {
     final feeSats = paymentMethod.fee;
     print("Fees: $feeSats sats");
   }
@@ -117,15 +117,13 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
   final conversionOptions = ConversionOptions(
-    conversionType: ConversionType.toBitcoin(
-      fromTokenIdentifier: "<token identifier>",
-    ),
+    conversionType: ToBitcoinConversionType("<token identifier>"),
     maxSlippageBps: optionalMaxSlippageBps,
     completionTimeoutSecs: optionalCompletionTimeoutSecs,
   );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: null,
       tokenIdentifier: null,
       conversionOptions: conversionOptions,
@@ -147,7 +145,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
 Future<SendPaymentResponse> sendPaymentLightningBolt11(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-lightning-bolt11
-  final options = SendPaymentOptions.bolt11Invoice(
+  final options = Bolt11InvoiceSendPaymentOptions(
       preferSpark: false, completionTimeoutSecs: 10);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
@@ -167,7 +165,7 @@ Future<GetPaymentResponse> getPaymentPreimage(BreezSdk sdk) async {
   GetPaymentRequest request = GetPaymentRequest(paymentId: paymentId);
   GetPaymentResponse response = await sdk.getPayment(request: request);
   final details = response.payment.details;
-  if (details is PaymentDetails_Lightning) {
+  if (details is LightningPaymentDetails) {
     print("Payment hash: ${details.htlcDetails.paymentHash}");
     print("Preimage: ${details.htlcDetails.preimage}");
   }
@@ -179,8 +177,8 @@ Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
   // Select the confirmation speed for the on-chain transaction
-  final options = SendPaymentOptions.bitcoinAddress(
-      confirmationSpeed: OnchainConfirmationSpeed.medium);
+  final options =
+      BitcoinAddressSendPaymentOptions(OnchainConfirmationSpeed.medium);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
       prepareResponse: prepareResponse,
@@ -238,7 +236,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -266,13 +264,11 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSendAll(
   }
 
   final conversionOptions = ConversionOptions(
-    conversionType: ConversionType.toBitcoin(
-      fromTokenIdentifier: tokenIdentifier,
-    ),
+    conversionType: ToBitcoinConversionType(tokenIdentifier),
   );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: InputPaymentRequest(paymentRequest),
       amount: tokenBalance.balance,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,

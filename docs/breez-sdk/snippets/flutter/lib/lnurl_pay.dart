@@ -8,14 +8,14 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
   String lnurlPayUrl = "lightning@address.com";
 
   InputType inputType = await sdk.parse(input: lnurlPayUrl);
-  if (inputType is InputType_LightningAddress) {
+  if (inputType is LightningAddressInputType) {
     BigInt amountSats = BigInt.from(5000);
     String optionalComment = "<comment>";
     bool optionalValidateSuccessActionUrl = true;
 
     PrepareLnurlPayRequest request = PrepareLnurlPayRequest(
       amount: amountSats,
-      payRequest: inputType.field0.payRequest,
+      payRequest: inputType.v0.payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
       tokenIdentifier: null,

@@ -205,7 +205,7 @@ enum Commands {
     /// finished by the current build, and vice versa.
     CompatItest {},
 
-    /// Check Flutter package (generate bindings and build)
+    /// Check Flutter package (generate bindings and run its tests)
     FlutterCheck {},
 
     /// Sync the canonical native passkey cores into the Flutter and
@@ -1277,7 +1277,6 @@ fn flutter_check_cmd() -> Result<()> {
 
     println!("Checking Flutter package...");
 
-    // Run codegen first to regenerate frb_generated.rs from the current model mirrors
     println!("Running Flutter codegen...");
     let status = Command::new("just")
         .arg("codegen")
@@ -1288,15 +1287,17 @@ fn flutter_check_cmd() -> Result<()> {
         bail!("Flutter check failed: just codegen failed");
     }
 
-    // Then build the Rust library with the regenerated bindings
-    println!("Building Flutter Rust library...");
-    let status = Command::new("just")
-        .arg("build-release")
+    // The package's build hook builds the host libraries for the tests.
+    println!("Running Flutter tests...");
+    let status = Command::new("flutter")
+        .arg("test")
         .current_dir(&flutter_dir)
         .status()
-        .with_context(|| "failed to run `just build-release`")?;
+        .with_context(
+            || "failed to run `flutter test`. Make sure Flutter 3.38 or later is installed",
+        )?;
     if !status.success() {
-        bail!("Flutter check failed: just build-release failed");
+        bail!("Flutter check failed: flutter test failed");
     }
 
     println!("Flutter check completed successfully");

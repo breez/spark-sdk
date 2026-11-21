@@ -28,14 +28,14 @@ Future<BreezSdk> createTokenWithCustomAccountNumber() async {
   var accountNumber = 21;
 
   String mnemonic = "<mnemonic words>";
-  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+  final seed = MnemonicSeed(mnemonic: mnemonic, passphrase: null);
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
   final builder = SdkBuilder(config: config, seed: seed);
-  builder.withDefaultStorage(storageDir: "./.data");
+  await builder.withDefaultStorage(storageDir: "./.data");
 
   // Set the account number for the SDK
-  builder.withAccountNumber(accountNumber: accountNumber);
+  await builder.withAccountNumber(accountNumber: accountNumber);
 
   var sdk = await builder.build();
   // ANCHOR_END: custom-account-number
@@ -66,12 +66,18 @@ Future<List<PaymentDetailsFilter>> listMintBurnPayments(BreezSdk sdk) async {
   // ANCHOR: list-mint-burn-payments
   // Provide one or multiple of the following filters to
   // the `paymentDetailsFilter` field when listing payments
-  PaymentDetailsFilter paymentDetailsTransferFilter =
-      PaymentDetailsFilter.token(txType: TokenTransactionType.transfer);
-  PaymentDetailsFilter paymentDetailsMintFilter =
-      PaymentDetailsFilter.token(txType: TokenTransactionType.mint);
-  PaymentDetailsFilter paymentDetailsBurnFilter =
-      PaymentDetailsFilter.token(txType: TokenTransactionType.burn);
+  PaymentDetailsFilter paymentDetailsTransferFilter = TokenPaymentDetailsFilter(
+      conversionRefundNeeded: null,
+      txHash: null,
+      txType: TokenTransactionType.transfer);
+  PaymentDetailsFilter paymentDetailsMintFilter = TokenPaymentDetailsFilter(
+      conversionRefundNeeded: null,
+      txHash: null,
+      txType: TokenTransactionType.mint);
+  PaymentDetailsFilter paymentDetailsBurnFilter = TokenPaymentDetailsFilter(
+      conversionRefundNeeded: null,
+      txHash: null,
+      txType: TokenTransactionType.burn);
   // ANCHOR_END: list-mint-burn-payments
   return [
     paymentDetailsTransferFilter,

@@ -13,21 +13,20 @@ Future<void> configureMaxDepositClaimFee() async {
   // Set a maximum feerate of 10 sat/vB, plus 0.1% of the deposit amount
   config = config.copyWith(
       maxDepositClaimFee: MaxFee(
-          onchain: MaxOnchainFee.rate(satPerVbyte: BigInt.from(10)),
+          onchain: RateMaxOnchainFee(BigInt.from(10)),
           proportionalPpm: 1000));
 
   // Set a maximum fee of 1000 sat
   config = config.copyWith(
       maxDepositClaimFee: MaxFee(
-          onchain: MaxOnchainFee.fixed(amount: BigInt.from(1000)),
+          onchain: FixedMaxOnchainFee(BigInt.from(1000)),
           proportionalPpm: null));
 
   // Set the maximum fee to the fastest network recommended fee at the time of claim
   // with a leeway of 1 sats/vbyte
   config = config.copyWith(
       maxDepositClaimFee: MaxFee(
-          onchain:
-              MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)),
+          onchain: NetworkRecommendedMaxOnchainFee(BigInt.from(1)),
           proportionalPpm: null));
   // ANCHOR_END: max-deposit-claim-fee
   print(config);
@@ -129,7 +128,7 @@ void configureCrossChain() {
   // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
   final config = defaultConfig(network: Network.mainnet).copyWith(
     apiKey: "<breez api key>",
-    crossChainConfig: const CrossChainConfig(
+    crossChainConfig: CrossChainConfig(
       defaultSlippageBps: 50,
       defaultTargetOverpayBps: null,
     ),
@@ -145,7 +144,7 @@ Future<void> configureProxy() async {
   // RFC 1929 authentication.
   final config = defaultConfig(network: Network.mainnet).copyWith(
     apiKey: "<breez api key>",
-    proxy: const ProxyConfig(
+    proxy: ProxyConfig(
       host: "127.0.0.1",
       port: 9050,
       username: null,

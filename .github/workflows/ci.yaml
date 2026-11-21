@@ -482,8 +482,12 @@ jobs:
         uses: ./.github/actions/check-git-status
 
   flutter:
-    name: Flutter
-    runs-on: ubuntu-latest
+    name: Flutter (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -502,35 +506,48 @@ jobs:
       - name: Set up just
         uses: extractions/setup-just@v3
 
+      - name: Cache the binding generator
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/uniffi_bindgen_dart
+          key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
+
       - name: Initialize the workspace
         working-directory: packages/flutter
         run: just setup
 
-      - name: Generate Dart/Flutter bindings & Check Rust package for errors
+      - name: Generate the Dart bindings
         working-directory: packages/flutter
-        run: |
-          just codegen
-          cd rust && cargo check
+        run: just codegen
 
       - name: Static Analysis
         working-directory: packages/flutter
         if: ${{ success() || failure() }}
-        run: dart analyze --no-fatal-warnings lib
+        run: dart analyze --fatal-infos lib hook test
+
+      # The build hook builds the host libraries from source for the tests.
+      - name: Tests
+        working-directory: packages/flutter
+        run: flutter test
 
       - name: Check Formatting
+        if: runner.os == 'Linux'
         working-directory: packages/flutter
-        run: dart format -o none --set-exit-if-changed -l 110 lib
+        run: dart format -o none --set-exit-if-changed -l 110 lib/*.dart lib/src/*.dart hook test
 
       # This step is added to ensure version recipe was run to update podspec files & Gradle script.
       # It does not catch the case where 'packages/flutter/pubspec.yaml' wasn't updated properly.
       - name: Update version number on podspec files & Gradle scripts
+        if: runner.os == 'Linux'
         working-directory: packages/flutter
         run: just version
 
       - name: Check git status
+        if: runner.os == 'Linux'
         uses: ./.github/actions/check-git-status
 
       - name: CLI static analysis (flutter)
+        if: runner.os == 'Linux'
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-flutter
 

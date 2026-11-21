@@ -7,14 +7,14 @@ Future<void> runFullOptimization(BreezSdk sdk) async {
       .outcome;
 
   switch (outcome) {
-    case OptimizationOutcome_Completed(:final roundsExecuted):
+    case CompletedOptimizationOutcome(:final roundsExecuted):
       if (roundsExecuted == 0) {
         print("Optimization skipped — wallet already optimal");
       } else {
         print("Optimization completed in $roundsExecuted rounds");
       }
       break;
-    case OptimizationOutcome_InProgress():
+    case InProgressOptimizationOutcome():
       // Full mode runs to completion in one call, so InProgress is
       // not reachable here.
       throw StateError("Full mode never returns InProgress");
@@ -29,11 +29,11 @@ Future<void> runOptimizationOneRoundAtATime(BreezSdk sdk) async {
     final outcome = (await sdk.optimizeLeaves(
         request: OptimizeLeavesRequest(mode: OptimizationMode.singleRound))).outcome;
     switch (outcome) {
-      case OptimizationOutcome_InProgress():
+      case InProgressOptimizationOutcome():
         roundsExecuted += 1;
         print("Executed round $roundsExecuted");
         break;
-      case OptimizationOutcome_Completed(roundsExecuted: var n):
+      case CompletedOptimizationOutcome(roundsExecuted: var n):
         roundsExecuted += n;
         if (roundsExecuted == 0) {
           print("Optimization skipped — wallet already optimal");
@@ -49,25 +49,25 @@ Future<void> runOptimizationOneRoundAtATime(BreezSdk sdk) async {
 void handleAutoOptimizationEvent(AutoOptimizationEvent optimizationEvent) {
   // ANCHOR: auto-optimization-events
   switch (optimizationEvent) {
-    case AutoOptimizationEvent_Started(totalRounds: var totalRounds):
+    case StartedAutoOptimizationEvent(totalRounds: var totalRounds):
       print("Auto-optimization started with $totalRounds rounds");
       break;
-    case AutoOptimizationEvent_RoundCompleted(
+    case RoundCompletedAutoOptimizationEvent(
         currentRound: var currentRound,
         totalRounds: var totalRounds
       ):
       print("Auto-optimization round $currentRound of $totalRounds completed");
       break;
-    case AutoOptimizationEvent_Completed():
+    case CompletedAutoOptimizationEvent():
       print("Auto-optimization completed successfully");
       break;
-    case AutoOptimizationEvent_Cancelled():
+    case CancelledAutoOptimizationEvent():
       print("Auto-optimization was cancelled");
       break;
-    case AutoOptimizationEvent_Failed(error: var error):
+    case FailedAutoOptimizationEvent(error: var error):
       print("Auto-optimization failed: $error");
       break;
-    case AutoOptimizationEvent_Skipped():
+    case SkippedAutoOptimizationEvent():
       print("Auto-optimization was skipped because leaves are already optimal");
       break;
   }

@@ -108,6 +108,7 @@ tokio-tungstenite-wasm = { workspace = true, optional = true }
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
 breez-sdk-spark = { workspace = true, features = ["boltz", "test-utils"] }
+log.workspace = true
 # Tests compare the SDK's log filter against `EnvFilter`.
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

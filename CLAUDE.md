@@ -44,6 +44,7 @@ make cli-itest          # Shared CLI scenarios via the Rust CLI (faucet credenti
 make wasm-itest         # Same scenarios via the wasm CLI port + npm-API smoke suite (Node >= 22)
 make swift-itest        # Same scenarios via the swift CLI port (macOS)
 make kotlin-itest       # Same scenarios via the kotlin-multiplatform CLI port (JVM)
+make flutter-itest      # Same scenarios via the Dart CLI port (after `just codegen` in packages/flutter)
 ```
 
 Shared behavioral scenarios (JSON, shared verbatim across language CLI runners,
@@ -190,8 +191,8 @@ When changing the SDK's public interface, update these files:
 1. **crates/breez-sdk/core/src/models.rs** - Add UniFFI macros to interface types
 2. **crates/breez-sdk/wasm/src/models.rs** - Update exported structs/enums
 3. **crates/breez-sdk/wasm/src/sdk.rs** - Update WASM interface
-4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
-5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
+
+Flutter's Dart bindings are generated from the UniFFI annotations by uniffi-dart (`just codegen` in `packages/flutter`), so they need no hand-written changes.
 
 ## Adding SdkError Variants
 
@@ -199,7 +200,7 @@ Every `SdkError` variant (`crates/breez-sdk/core/src/error.rs`) has a section on
 
 When adding a variant:
 
-1. Add it to the enum and to the Flutter mirror in `packages/flutter/rust/src/errors.rs`.
+1. Add it to the enum.
 2. Add its section to `errors.md`: what it means, when it happens and what to do, linking to the feature's guide page when there is one.
 3. If the section tells developers how to resolve the error, give the variant a `docs_url: String` field that links to the section:
    - declare the link in the `docs_url` module with `errors_page!("<kebab-id>")`
@@ -315,7 +316,7 @@ When a comment is technically accurate but reads like a kernel-debug log to anyo
 
 Real production identifiers (Apple Team IDs, internal infra hostnames, employee names, customer IDs) don't belong in example comments. Use a placeholder (`<TEAM_ID>`, `your-app.com`, `<your api key>`). Same for stack-trace excerpts, error strings that contain user data, debugging breadcrumbs from one-off investigations: strip before committing.
 
-**Don't leak language-specific type sugar in cross-language API docs either.** Public API docs cross language boundaries: UniFFI generates Swift / Kotlin, wasm-bindgen generates TypeScript, FRB generates Dart. A Rust doc that enumerates `Some(true)` / `Some(false)` / `None` on an `Option<bool>` field reads as gibberish to the Swift caller who sees `Bool?`, or the TS caller who sees `boolean | undefined`. Use plain values plus "unset" / "absent" / "missing": *"`true` restricts X. `false` allows Y. Unset uses the provider default."* Same for `Result<T, E>::Err(...)`, `Vec<u8>`, etc. The doc is read on every target, not just Rust.
+**Don't leak language-specific type sugar in cross-language API docs either.** Public API docs cross language boundaries: UniFFI generates Swift / Kotlin / Dart, wasm-bindgen generates TypeScript. A Rust doc that enumerates `Some(true)` / `Some(false)` / `None` on an `Option<bool>` field reads as gibberish to the Swift caller who sees `Bool?`, or the TS caller who sees `boolean | undefined`. Use plain values plus "unset" / "absent" / "missing": *"`true` restricts X. `false` allows Y. Unset uses the provider default."* Same for `Result<T, E>::Err(...)`, `Vec<u8>`, etc. The doc is read on every target, not just Rust.
 
 ### 5. Strip narrative; keep implementation facts
 
