@@ -15,12 +15,14 @@ dev_dependencies:
     sdk: flutter
 
 dependencies:
-  code_assets: ^2.2.0
+  # hooks 2.1 and later need a newer `meta` than Flutter 3.38 to 3.44 pin, so
+  # the ranges reach back to the 1.0 releases.
+  code_assets: ">=1.0.0 <3.0.0"
   crypto: ^3.0.8
   ffi: ^2.1.4
   flutter:
     sdk: flutter
-  hooks: ^2.2.0
+  hooks: ">=1.0.0 <3.0.0"
 
 flutter:
   plugin:

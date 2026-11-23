@@ -2,9 +2,11 @@
 
 ## Requirements
 
-Flutter 3.38 or later. The package's build hook bundles the SDK's native
-library: it downloads the prebuilt library for each target from the matching
-release and checks its sha256, so apps don't need a Rust toolchain.
+Flutter 3.38 or later, on Android, iOS or macOS. The package's build hook
+bundles the SDK's native library: it downloads the prebuilt library for each
+target from the matching release and checks its sha256, so apps don't need a
+Rust toolchain. An app that also targets other platforms still builds for
+them, but SDK calls fail there.
 
 ## Installation
 
@@ -51,6 +53,10 @@ pubspec:
 | `prebuilt_base_url` | A mirror to download the release's library files from |
 | `build_from_source` | `true` builds the libraries with cargo from a spark-sdk checkout |
 | `cargo_profile` | The cargo profile for source builds, `release` by default |
+
+Behind an HTTP proxy, the download needs Flutter 3.44 or later, the first
+release that passes `HTTPS_PROXY` to build hooks. On earlier releases, use
+`prebuilt_dir`.
 
 ## Documentation
 

@@ -482,12 +482,18 @@ jobs:
         uses: ./.github/actions/check-git-status
 
   flutter:
-    name: Flutter (${{ matrix.os }})
+    name: Flutter (${{ matrix.os }}${{ matrix.minimum && format(', {0}', matrix.flutter) || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        flutter: ['3.47.4']
+        include:
+          # The oldest Flutter that packages/flutter/pubspec.yaml allows.
+          - os: ubuntu-latest
+            flutter: '3.38.5'
+            minimum: true
     steps:
       - uses: actions/checkout@v4
 
@@ -495,12 +501,14 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Its cargo build matches the other Linux entry, which saves the cache.
+          rust-cache-save: ${{ !matrix.minimum }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.4
+          flutter-version: ${{ matrix.flutter }}
       - run: flutter --version
 
       - name: Set up just
@@ -512,9 +520,12 @@ jobs:
           path: ~/.cargo/bin/uniffi_bindgen_dart
           key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
 
-      - name: Initialize the workspace
+      - name: Install uniffi_bindgen_dart
+        run: command -v uniffi_bindgen_dart || make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
+
+      - name: Get dependencies
         working-directory: packages/flutter
-        run: just setup
+        run: flutter pub get
 
       - name: Generate the Dart bindings
         working-directory: packages/flutter
@@ -530,24 +541,32 @@ jobs:
         working-directory: packages/flutter
         run: flutter test
 
+      - name: Tests at the oldest dependency versions allowed
+        if: matrix.minimum
+        working-directory: packages/flutter
+        run: |
+          flutter pub downgrade
+          dart analyze --fatal-infos lib hook test
+          flutter test
+
       - name: Check Formatting
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: packages/flutter
         run: dart format -o none --set-exit-if-changed -l 110 lib/*.dart lib/src/*.dart hook test
 
       # This step is added to ensure version recipe was run to update podspec files & Gradle script.
       # It does not catch the case where 'packages/flutter/pubspec.yaml' wasn't updated properly.
       - name: Update version number on podspec files & Gradle scripts
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: packages/flutter
         run: just version
 
       - name: Check git status
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.minimum
         uses: ./.github/actions/check-git-status
 
       - name: CLI static analysis (flutter)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-flutter
 
