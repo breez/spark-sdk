@@ -6,7 +6,7 @@ Integrate in minutes with just a few lines of code, onboard users anywhere witho
 
 ## How it works
 
-![Breez SDK flow: BTC (Lightning or on-chain), USDC or USDT on 30+ networks, or fiat (Cash App or MoonPay) comes in; the Breez SDK holds it or bridges it in a non-custodial Spark wallet; and it goes out as BTC, stablecoins, or fiat.](images/breez_sdk_flow.svg)
+![Breez SDK flow: BTC (Lightning or on-chain), USDC or USDT on 30+ networks, or fiat (Cash App or MoonPay) comes in; the Breez SDK holds it or bridges it in a non-custodial Spark wallet; and it goes out as BTC, stablecoins, or fiat.](/guide/images/breez_sdk_flow.svg)
 
 The Breez SDK is a nodeless integration that utilizes the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
 
