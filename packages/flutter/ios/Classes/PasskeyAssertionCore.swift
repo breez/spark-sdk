@@ -479,9 +479,9 @@ public final class PasskeyAssertionCore {
         rpId: String,
         explicitAllowCredentials: [Data],
         configurePrf: (ASAuthorizationPlatformPublicKeyCredentialAssertionRequest) -> Void
-    ) -> ASAuthorizationPlatformPublicKeyCredentialAssertionRequest {
+    ) throws -> ASAuthorizationPlatformPublicKeyCredentialAssertionRequest {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let request = provider.createCredentialAssertionRequest(challenge: Self.randomBytes(count: 32))
+        let request = provider.createCredentialAssertionRequest(challenge: try Self.randomBytes(count: 32))
         applyAllowedCredentials(
             to: request,
             explicitAllowCredentials: explicitAllowCredentials
@@ -514,7 +514,7 @@ public final class PasskeyAssertionCore {
         allowCredentials: [Data],
         preferImmediatelyAvailableCredentials: Bool = true
     ) async throws -> (Data, Data?, Data) {
-        let request = makeAssertionRequest(
+        let request = try makeAssertionRequest(
             rpId: rpId,
             explicitAllowCredentials: allowCredentials
         ) { req in
@@ -581,8 +581,8 @@ public final class PasskeyAssertionCore {
         salts: [String] = []
     ) async throws -> IosPasskeyRegistration {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = Self.randomBytes(count: 32)
-        let resolvedUserId = Self.randomBytes(count: 16)
+        let challenge = try Self.randomBytes(count: 32)
+        let resolvedUserId = try Self.randomBytes(count: 16)
         // The platform provider only exposes the 3-arg
         // challenge:name:userID: overload on current SDKs; the 4-arg
         // displayName overload is security-key-only. Password managers
@@ -639,9 +639,18 @@ public final class PasskeyAssertionCore {
         return registration
     }
 
-    public static func randomBytes(count: Int) -> Data {
+    /// `count` bytes from the system's secure random generator. Throws
+    /// if the generator fails, so a ceremony never runs on a zeroed
+    /// buffer: a repeated `user.id` makes a new passkey replace an
+    /// existing one.
+    private static func randomBytes(count: Int) throws -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        guard status == errSecSuccess else {
+            throw PasskeyAssertionError.generic(
+                "Secure random generation failed (OSStatus \(status))"
+            )
+        }
         return Data(bytes)
     }
 }
