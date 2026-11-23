@@ -2875,9 +2875,9 @@ dependencies = [
 
 [[package]]
 name = "dnssec-prover"
-version = "0.6.8"
+version = "0.6.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec4f825369fc7134da70ca4040fddc8e03b80a46d249ae38d9c1c39b7b4476bf"
+checksum = "d9468f1a08c50bd1e5ad91b151e11ce8e806f8fa1c1eb9b07f66c7011de45a2e"
 dependencies = [
  "bitcoin_hashes 0.14.1",
  "tokio",
