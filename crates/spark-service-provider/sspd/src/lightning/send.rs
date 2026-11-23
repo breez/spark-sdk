@@ -639,7 +639,10 @@ async fn settle_send(
         error!(send_id = %record.id, status = %transfer.status, "lightning send: the payment succeeded after the user's transfer was returned; the SSP paid it from its own funds");
         return Ok(false);
     }
-    let claimed_transfer = deps.htlc_service.provide_preimage(preimage).await?;
+    let claimed_transfer = deps
+        .htlc_service
+        .provide_preimage(preimage, Some(&record.user_transfer_id))
+        .await?;
     let claimed = claim_into_pool(&deps.claim, &claimed_transfer).await?;
     deps.store.set_send_leaves_claimed(&record.id).await?;
     info!(send_id = %record.id, count = claimed.len(), "lightning send: claimed user leaves");

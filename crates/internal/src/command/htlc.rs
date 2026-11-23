@@ -84,7 +84,7 @@ pub async fn handle_command(
         }
         HtlcCommand::Claim { preimage } => {
             let preimage = Preimage::from_hex(&preimage)?;
-            let transfer = wallet.claim_htlc(&preimage).await?;
+            let transfer = wallet.claim_htlc(&preimage, None).await?;
             println!("Transfer: {transfer:#?}");
         }
     }

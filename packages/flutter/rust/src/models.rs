@@ -2019,11 +2019,22 @@ pub enum _ChainApiType {
 #[frb(mirror(ClaimHtlcPaymentRequest))]
 pub struct _ClaimHtlcPaymentRequest {
     pub preimage: String,
+    pub transfer_id: Option<String>,
 }
 
 #[frb(mirror(ClaimHtlcPaymentResponse))]
 pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
+}
+
+#[frb(mirror(FetchHtlcPaymentsRequest))]
+pub struct _FetchHtlcPaymentsRequest {
+    pub payment_hash: String,
+}
+
+#[frb(mirror(FetchHtlcPaymentsResponse))]
+pub struct _FetchHtlcPaymentsResponse {
+    pub payments: Vec<Payment>,
 }
 
 #[frb(mirror(OptimizationMode))]

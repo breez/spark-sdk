@@ -1286,8 +1286,12 @@ impl SparkWallet {
     pub async fn claim_htlc(
         &self,
         preimage: &Preimage,
+        transfer_id: Option<&TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
-        let transfer = self.htlc_service.provide_preimage(preimage).await?;
+        let transfer = self
+            .htlc_service
+            .provide_preimage(preimage, transfer_id)
+            .await?;
 
         // Fetch HTLC preimage request data
         let preimage_request = self
@@ -1297,7 +1301,7 @@ impl SparkWallet {
                     payment_hashes: vec![preimage.compute_hash().to_string()],
                     identity_public_key: self.identity_public_key,
                     status: None,
-                    transfer_ids: Vec::new(),
+                    transfer_ids: vec![transfer.id.to_string()],
                     match_role: PreimageRequestRole::Receiver,
                 },
                 None,
@@ -1351,6 +1355,60 @@ impl SparkWallet {
                     self.identity_public_key,
                     self.config.service_provider_config.identity_public_key,
                 )
+            })
+            .collect()
+    }
+
+    /// Queries the operators for the HTLC transfers this wallet sent or received for a payment hash.
+    pub async fn list_htlc_transfers(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        let htlcs = self
+            .htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    identity_public_key: self.identity_public_key,
+                    status: None,
+                    transfer_ids: Vec::new(),
+                    payment_hashes: vec![payment_hash.to_string()],
+                    match_role: PreimageRequestRole::ReceiverAndSender,
+                },
+                None,
+            )
+            .await?
+            .items;
+
+        let transfer_ids: Vec<String> = htlcs
+            .iter()
+            .filter_map(|h| h.transfer.as_ref())
+            .map(|t| t.id.to_string())
+            .collect();
+        let mut ssp_transfers: HashMap<String, SspTransfer> = if transfer_ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.ssp_client
+                .get_transfers(transfer_ids)
+                .await?
+                .into_iter()
+                .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t)))
+                .collect()
+        };
+
+        htlcs
+            .into_iter()
+            .map(|htlc| {
+                let transfer = htlc.transfer.clone().ok_or(SparkWalletError::Generic(
+                    "Missing transfer in PreimageRequestWithTransfer".to_string(),
+                ))?;
+                let ssp_transfer = ssp_transfers.remove(&transfer.id.to_string());
+                Ok(WalletTransfer::from_transfer(
+                    transfer,
+                    ssp_transfer,
+                    Some(htlc.into()),
+                    self.identity_public_key,
+                    self.config.service_provider_config.identity_public_key,
+                ))
             })
             .collect()
     }

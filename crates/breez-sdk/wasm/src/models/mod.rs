@@ -2249,11 +2249,22 @@ pub struct UpdateUserSettingsRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]
 pub struct ClaimHtlcPaymentRequest {
     pub preimage: String,
+    pub transfer_id: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentResponse)]
 pub struct ClaimHtlcPaymentResponse {
     pub payment: Payment,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchHtlcPaymentsRequest)]
+pub struct FetchHtlcPaymentsRequest {
+    pub payment_hash: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FetchHtlcPaymentsResponse)]
+pub struct FetchHtlcPaymentsResponse {
+    pub payments: Vec<Payment>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlReceiveMetadata)]

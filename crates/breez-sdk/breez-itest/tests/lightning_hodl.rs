@@ -126,12 +126,32 @@ async fn test_01_lightning_hodl_success(#[future] env: Result<Environment>) -> R
             && details.status == SparkHtlcStatus::WaitingForPreimage
     ));
 
+    info!("Fetching Alice's HODL payment by payment hash...");
+    let alice_htlc_payments = alice
+        .sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest {
+            payment_hash: payment_hash.clone(),
+        })
+        .await?
+        .payments;
+    assert_eq!(alice_htlc_payments.len(), 1);
+    assert_eq!(alice_htlc_payments[0].id, alice_pending_payment.id);
+    assert!(matches!(
+        &alice_htlc_payments[0].details,
+        Some(PaymentDetails::Lightning {
+            htlc_details: details, ..
+        })
+        if details.payment_hash == payment_hash
+            && details.status == SparkHtlcStatus::WaitingForPreimage
+    ));
+
     // Alice claims the HODL payment with the preimage.
     info!("Alice claiming HODL payment with preimage...");
     alice
         .sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
             preimage: preimage.clone(),
+            transfer_id: Some(alice_pending_payment.id.clone()),
         })
         .await?;
 

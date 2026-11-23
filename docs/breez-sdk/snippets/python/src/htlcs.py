@@ -5,6 +5,7 @@ from typing import cast
 from breez_sdk_spark import (
     BreezSdk,
     ClaimHtlcPaymentRequest,
+    FetchHtlcPaymentsRequest,
     ListPaymentsRequest,
     PaymentDetails,
     PaymentDetailsFilter,
@@ -113,11 +114,29 @@ async def list_claimable_htlc_payments(sdk: BreezSdk):
     # ANCHOR_END: list-claimable-htlc-payments
 
 
+async def fetch_htlc_payments(sdk: BreezSdk):
+    # ANCHOR: fetch-htlc-payments
+    payment_hash = "<payment hash hex>"
+    response = await sdk.fetch_htlc_payments(
+        request=FetchHtlcPaymentsRequest(payment_hash=payment_hash)
+    )
+    payments = response.payments
+
+    for payment in payments:
+        logging.debug(f"HTLC payment ID: {payment.id}")
+    # ANCHOR_END: fetch-htlc-payments
+
+
 async def claim_htlc_payment(sdk: BreezSdk):
     # ANCHOR: claim-htlc-payment
     preimage = "<preimage hex>"
+    # Optionally, set the ID of the payment to claim
+    optional_transfer_id = "<payment id>"
     response = await sdk.claim_htlc_payment(
-        request=ClaimHtlcPaymentRequest(preimage=preimage)
+        request=ClaimHtlcPaymentRequest(
+            preimage=preimage,
+            transfer_id=optional_transfer_id,
+        )
     )
     payment = response.payment
     # ANCHOR_END: claim-htlc-payment

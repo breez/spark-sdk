@@ -202,7 +202,11 @@ impl HtlcService {
     }
 
     /// Provides a preimage to the operator to claim an HTLC.
-    pub async fn provide_preimage(&self, preimage: &Preimage) -> Result<Transfer, ServiceError> {
+    pub async fn provide_preimage(
+        &self,
+        preimage: &Preimage,
+        transfer_id: Option<&TransferId>,
+    ) -> Result<Transfer, ServiceError> {
         let payment_hash = preimage.compute_hash();
 
         let response = self
@@ -218,7 +222,7 @@ impl HtlcService {
                     .await?
                     .serialize()
                     .to_vec(),
-                transfer_id: String::new(),
+                transfer_id: transfer_id.map(ToString::to_string).unwrap_or_default(),
             })
             .await?;
 

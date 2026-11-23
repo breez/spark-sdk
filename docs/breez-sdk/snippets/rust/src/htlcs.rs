@@ -113,11 +113,31 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     Ok(payments)
 }
 
+async fn fetch_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
+    // ANCHOR: fetch-htlc-payments
+    let payment_hash = "<payment hash hex>".to_string();
+    let response = sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest { payment_hash })
+        .await?;
+    let payments = response.payments;
+
+    for payment in &payments {
+        info!("HTLC payment ID: {}", payment.id);
+    }
+    // ANCHOR_END: fetch-htlc-payments
+    Ok(payments)
+}
+
 async fn claim_htlc_payment(sdk: &BreezSdk) -> Result<Payment> {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>".to_string();
+    // Optionally, set the ID of the payment to claim
+    let optional_transfer_id = Some("<payment id>".to_string());
     let response = sdk
-        .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+        .claim_htlc_payment(ClaimHtlcPaymentRequest {
+            preimage,
+            transfer_id: optional_transfer_id,
+        })
         .await?;
     let payment = response.payment;
     // ANCHOR_END: claim-htlc-payment

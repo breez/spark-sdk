@@ -286,7 +286,7 @@ async fn client_claim_htlc(
         transfer_service.clone(),
         None,
     );
-    let transfer = htlc_service.provide_preimage(preimage).await?;
+    let transfer = htlc_service.provide_preimage(preimage, None).await?;
     let claimed = transfer_service.claim_transfer(&transfer, None).await?;
     Ok(claimed.iter().map(|node| node.value).sum())
 }

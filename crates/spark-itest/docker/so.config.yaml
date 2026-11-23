@@ -35,6 +35,9 @@ knobs:
     # Off by default: parks the leaves of a returned send whose HTLC refund is
     # signed as RETURNED, until the owner renews them.
     spark.so.returned_leaf_status.enabled: 1
+    # Off by default: settles a provided preimage only for the transfer the claim
+    # names, when it names one.
+    spark.so.lightning.enforce_provide_preimage_transfer_id: 1
 bitcoind:
   regtest:
     network: regtest

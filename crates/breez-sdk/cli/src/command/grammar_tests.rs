@@ -424,10 +424,38 @@ fn lnurl_auth() {
 
 #[test]
 fn claim_htlc_payment() {
-    let Command::ClaimHtlcPayment { preimage } = parse_ok("claim-htlc-payment deadbeef") else {
+    let Command::ClaimHtlcPayment {
+        preimage,
+        transfer_id,
+    } = parse_ok("claim-htlc-payment deadbeef")
+    else {
         panic!("expected ClaimHtlcPayment");
     };
     assert_eq!(preimage, "deadbeef");
+    assert_eq!(transfer_id, None);
+}
+
+#[test]
+fn claim_htlc_payment_with_transfer_id() {
+    let Command::ClaimHtlcPayment {
+        preimage,
+        transfer_id,
+    } = parse_ok("claim-htlc-payment deadbeef --transfer-id 0193-abc")
+    else {
+        panic!("expected ClaimHtlcPayment");
+    };
+    assert_eq!(preimage, "deadbeef");
+    assert_eq!(transfer_id.as_deref(), Some("0193-abc"));
+}
+
+#[test]
+fn fetch_htlc_payments() {
+    let Command::FetchHtlcPayments { payment_hash } = parse_ok("fetch-htlc-payments cafebabe")
+    else {
+        panic!("expected FetchHtlcPayments");
+    };
+    assert_eq!(payment_hash, "cafebabe");
+    parse_err("fetch-htlc-payments");
 }
 
 #[test]

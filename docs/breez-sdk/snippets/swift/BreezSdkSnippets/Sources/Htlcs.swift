@@ -119,11 +119,31 @@ func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
     return payments
 }
 
+func fetchHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
+    // ANCHOR: fetch-htlc-payments
+    let paymentHash = "<payment hash hex>"
+    let response = try await sdk.fetchHtlcPayments(
+        request: FetchHtlcPaymentsRequest(paymentHash: paymentHash)
+    )
+    let payments = response.payments
+
+    for payment in payments {
+        print("HTLC payment ID: \(payment.id)")
+    }
+    // ANCHOR_END: fetch-htlc-payments
+    return payments
+}
+
 func claimHtlcPayment(sdk: BreezSdk) async throws -> Payment {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>"
+    // Optionally, set the ID of the payment to claim
+    let optionalTransferId: String? = "<payment id>"
     let response = try await sdk.claimHtlcPayment(
-        request: ClaimHtlcPaymentRequest(preimage: preimage)
+        request: ClaimHtlcPaymentRequest(
+            preimage: preimage,
+            transferId: optionalTransferId
+        )
     )
     let payment = response.payment
     // ANCHOR_END: claim-htlc-payment

@@ -112,12 +112,33 @@ namespace BreezSdkSnippets
             // ANCHOR_END: list-claimable-htlc-payments
         }
 
+        async Task FetchHtlcPayments(BreezSdk sdk)
+        {
+            // ANCHOR: fetch-htlc-payments
+            var paymentHash = "<payment hash hex>";
+            var response = await sdk.FetchHtlcPayments(
+                request: new FetchHtlcPaymentsRequest(paymentHash: paymentHash)
+            );
+            var payments = response.payments;
+
+            foreach (var payment in payments)
+            {
+                Console.WriteLine($"HTLC payment ID: {payment.id}");
+            }
+            // ANCHOR_END: fetch-htlc-payments
+        }
+
         async Task ClaimHtlcPayment(BreezSdk sdk)
         {
             // ANCHOR: claim-htlc-payment
             var preimage = "<preimage hex>";
+            // Optionally, set the ID of the payment to claim
+            var optionalTransferId = "<payment id>";
             var response = await sdk.ClaimHtlcPayment(
-                request: new ClaimHtlcPaymentRequest(preimage: preimage)
+                request: new ClaimHtlcPaymentRequest(
+                    preimage: preimage,
+                    transferId: optionalTransferId
+                )
             );
             var payment = response.payment;
             // ANCHOR_END: claim-htlc-payment
