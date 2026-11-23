@@ -449,7 +449,7 @@ impl TreeService for SynchronousTreeService {
             for leaf in &coordinator_leaves {
                 match operator_leaves_by_id.get(&leaf.id).copied() {
                     Some(operator_leaf) => {
-                        if operators_disagree(leaf, operator_leaf) {
+                        if leaf_copies_disagree(leaf, operator_leaf) {
                             warn!(
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
                                 operator_id.0, leaf, operator_leaf
@@ -844,33 +844,20 @@ impl SynchronousTreeService {
                 .await
             {
                 Ok(nodes) => {
-                    let by_id: HashMap<TreeNodeId, TreeNode> =
-                        nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
-                    let mut keep: Vec<TreeNode> = Vec::new();
-                    let mut dropped: Vec<(TreeNodeId, String)> = Vec::new();
-                    for original in &reservation.leaves {
-                        match by_id.get(&original.id) {
-                            Some(fresh) => {
-                                let owned = fresh
-                                    .owner_identity_public_key
-                                    .map(|owner| owner == self.identity_pubkey)
-                                    .unwrap_or(false);
-                                if !owned {
-                                    dropped.push((original.id.clone(), "not_owned".to_string()));
-                                } else if fresh.status != TreeNodeStatus::Available {
-                                    dropped.push((
-                                        original.id.clone(),
-                                        format!("status:{:?}", fresh.status),
-                                    ));
-                                } else if let Some(defect) = fresh.malformed_tx() {
-                                    dropped.push((original.id.clone(), defect));
-                                } else {
-                                    keep.push(fresh.clone());
-                                }
-                            }
-                            None => dropped
-                                .push((original.id.clone(), "missing_from_response".to_string())),
-                        }
+                    let ClassifiedCancelledLeaves {
+                        mut keep,
+                        changed,
+                        mut dropped,
+                    } = classify_cancelled_leaves(
+                        &reservation.leaves,
+                        nodes,
+                        &self.identity_pubkey,
+                    );
+                    if !changed.is_empty() {
+                        let (confirmed, unconfirmed) =
+                            self.confirm_leaves_with_operators(changed).await;
+                        keep.extend(confirmed);
+                        dropped.extend(unconfirmed);
                     }
                     if dropped.is_empty() {
                         debug!(
@@ -907,6 +894,39 @@ impl SynchronousTreeService {
             reservation.id, last_err
         );
         Vec::new()
+    }
+
+    /// The changed leaves every other operator confirms, and the ids dropped.
+    /// A failed query drops them all, leaving them to the next refresh.
+    async fn confirm_leaves_with_operators(
+        &self,
+        changed: Vec<TreeNode>,
+    ) -> (Vec<TreeNode>, Vec<(TreeNodeId, String)>) {
+        let source = Source::NodeIds(TreeNodeIds {
+            node_ids: changed.iter().map(|l| l.id.to_string()).collect(),
+        });
+        let clients: Vec<SparkRpcClient> = self
+            .operator_pool
+            .get_non_coordinator_operators()
+            .map(|op| op.client.clone())
+            .collect();
+        let replies = join_all(
+            clients
+                .iter()
+                .map(|client| self.query_nodes(client, false, Some(source.clone()), vec![])),
+        )
+        .await;
+        match replies.into_iter().collect::<Result<Vec<_>, _>>() {
+            Ok(operator_nodes) => confirm_changed_leaves(changed, &operator_nodes),
+            Err(e) => {
+                warn!("leaf_lifecycle cancel_confirm_query_failed: error={e:?}");
+                let dropped = changed
+                    .into_iter()
+                    .map(|leaf| (leaf.id, "operator_query_failed".to_string()))
+                    .collect();
+                (Vec::new(), dropped)
+            }
+        }
     }
 
     async fn query_nodes_inner(
@@ -1253,17 +1273,101 @@ fn query_nodes_request(
     }
 }
 
-/// Whether the coordinator's copy of a leaf and an operator's copy describe
-/// different leaves. Compares every field a spend commits to: `value` is the
-/// amount the wallet pays or exits a leaf for, so a coordinator reporting it
-/// differently from the operators that validated the leaf's transaction is as
-/// disqualifying as a different transaction.
-fn operators_disagree(coordinator: &TreeNode, operator: &TreeNode) -> bool {
-    operator.status != coordinator.status
-        || operator.value != coordinator.value
-        || operator.signing_keyshare.public_key != coordinator.signing_keyshare.public_key
-        || operator.node_tx != coordinator.node_tx
-        || operator.refund_tx != coordinator.refund_tx
+/// A cancelled reservation's leaves, sorted by the coordinator's copies.
+struct ClassifiedCancelledLeaves {
+    /// Stored copies of the leaves the coordinator reports unchanged.
+    keep: Vec<TreeNode>,
+    /// Coordinator copies that differ from the stored one. The coordinator alone
+    /// could misreport a leaf's value or transactions, so one of these goes
+    /// back to the pool only once every other operator reports it too.
+    changed: Vec<TreeNode>,
+    dropped: Vec<(TreeNodeId, String)>,
+}
+
+fn classify_cancelled_leaves(
+    reserved: &[TreeNode],
+    coordinator_nodes: Vec<TreeNode>,
+    identity_pubkey: &PublicKey,
+) -> ClassifiedCancelledLeaves {
+    let by_id: HashMap<TreeNodeId, TreeNode> = coordinator_nodes
+        .into_iter()
+        .map(|n| (n.id.clone(), n))
+        .collect();
+    let mut classified = ClassifiedCancelledLeaves {
+        keep: Vec::new(),
+        changed: Vec::new(),
+        dropped: Vec::new(),
+    };
+    for stored in reserved {
+        let drop_reason = match by_id.get(&stored.id) {
+            None => "missing_from_response".to_string(),
+            Some(reported) if reported.owner_identity_public_key != Some(*identity_pubkey) => {
+                "not_owned".to_string()
+            }
+            Some(reported) if reported.status != TreeNodeStatus::Available => {
+                format!("status:{:?}", reported.status)
+            }
+            Some(reported) if !leaf_copies_disagree(reported, stored) => {
+                classified.keep.push(stored.clone());
+                continue;
+            }
+            // A new key needs the ownership check a refresh runs.
+            Some(reported)
+                if reported.verifying_public_key != stored.verifying_public_key
+                    || reported.signing_keyshare.public_key
+                        != stored.signing_keyshare.public_key =>
+            {
+                "keys_changed".to_string()
+            }
+            Some(reported) => match reported.malformed_tx() {
+                Some(defect) => defect,
+                None => {
+                    classified.changed.push(reported.clone());
+                    continue;
+                }
+            },
+        };
+        classified.dropped.push((stored.id.clone(), drop_reason));
+    }
+    classified
+}
+
+/// Splits changed leaves into those every other operator reports the same, and
+/// the ids dropped for want of that. `operator_nodes` holds one reply per
+/// operator other than the coordinator.
+fn confirm_changed_leaves(
+    changed: Vec<TreeNode>,
+    operator_nodes: &[Vec<TreeNode>],
+) -> (Vec<TreeNode>, Vec<(TreeNodeId, String)>) {
+    let by_operator: Vec<HashMap<&TreeNodeId, &TreeNode>> = operator_nodes
+        .iter()
+        .map(|nodes| nodes.iter().map(|n| (&n.id, n)).collect())
+        .collect();
+    let (confirmed, unconfirmed): (Vec<TreeNode>, Vec<TreeNode>) =
+        changed.into_iter().partition(|leaf| {
+            by_operator.iter().all(|nodes| {
+                nodes
+                    .get(&leaf.id)
+                    .is_some_and(|operator_leaf| !leaf_copies_disagree(leaf, operator_leaf))
+            })
+        });
+    let dropped = unconfirmed
+        .into_iter()
+        .map(|leaf| (leaf.id, "unconfirmed_by_operators".to_string()))
+        .collect();
+    (confirmed, dropped)
+}
+
+/// Whether two copies of a leaf describe different leaves. Compares every field
+/// a spend commits to: `value` is the amount the wallet pays or exits a leaf
+/// for, so a copy reporting it differently is as disqualifying as a different
+/// transaction.
+fn leaf_copies_disagree(a: &TreeNode, b: &TreeNode) -> bool {
+    a.status != b.status
+        || a.value != b.value
+        || a.signing_keyshare.public_key != b.signing_keyshare.public_key
+        || a.node_tx != b.node_tx
+        || a.refund_tx != b.refund_tx
 }
 
 #[cfg(test)]
@@ -1337,7 +1441,7 @@ mod tests {
     #[test_all]
     fn operators_agree_on_an_identical_leaf() {
         let leaf = create_test_leaves(&[1000]).remove(0);
-        assert!(!operators_disagree(&leaf, &leaf.clone()));
+        assert!(!leaf_copies_disagree(&leaf, &leaf.clone()));
     }
 
     #[test_all]
@@ -1348,10 +1452,10 @@ mod tests {
         let leaf = create_test_leaves(&[1000]).remove(0);
         let mut deflated = leaf.clone();
         deflated.value = 600;
-        assert!(operators_disagree(&deflated, &leaf));
+        assert!(leaf_copies_disagree(&deflated, &leaf));
         let mut inflated = leaf.clone();
         inflated.value = 1400;
-        assert!(operators_disagree(&inflated, &leaf));
+        assert!(leaf_copies_disagree(&inflated, &leaf));
     }
 
     #[test_all]
@@ -1359,10 +1463,128 @@ mod tests {
         let leaf = create_test_leaves(&[1000]).remove(0);
         let mut other_status = leaf.clone();
         other_status.status = TreeNodeStatus::TransferLocked;
-        assert!(operators_disagree(&leaf, &other_status));
+        assert!(leaf_copies_disagree(&leaf, &other_status));
         let mut other_tx = leaf.clone();
         other_tx.node_tx.lock_time = LockTime::from_consensus(1);
-        assert!(operators_disagree(&leaf, &other_tx));
+        assert!(leaf_copies_disagree(&leaf, &other_tx));
+    }
+
+    /// How a cancel sorts the single reserved leaf `stored` when the coordinator
+    /// reports `reported` for it.
+    fn classify_on_cancel(
+        stored: &TreeNode,
+        reported: Option<TreeNode>,
+    ) -> ClassifiedCancelledLeaves {
+        let identity = stored.owner_identity_public_key.unwrap();
+        let classified = classify_cancelled_leaves(
+            std::slice::from_ref(stored),
+            reported.into_iter().collect(),
+            &identity,
+        );
+        assert_eq!(
+            classified.keep.len() + classified.changed.len() + classified.dropped.len(),
+            1
+        );
+        classified
+    }
+
+    /// `stored` as the coordinator reports it after a change to its value.
+    fn revalued(stored: &TreeNode, value: u64) -> TreeNode {
+        let mut leaf = stored.clone();
+        leaf.value = value;
+        leaf
+    }
+
+    #[test_all]
+    fn a_cancel_returns_the_stored_copy_of_a_leaf_still_held_for_us() {
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let mut reported = stored.clone();
+        reported.direct_tx = Some(stored.node_tx.clone());
+
+        assert_eq!(
+            classify_on_cancel(&stored, Some(reported)).keep,
+            vec![stored]
+        );
+    }
+
+    #[test_all]
+    fn a_cancel_holds_back_a_leaf_the_coordinator_reports_changed() {
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let mut other_refund = stored.clone();
+        set_refund_sequence(&mut other_refund, 1_000);
+        let mut other_node_tx = stored.clone();
+        other_node_tx.node_tx.lock_time = LockTime::from_consensus(1);
+
+        for reported in [
+            revalued(&stored, stored.value / 2),
+            revalued(&stored, stored.value * 2),
+            other_refund,
+            other_node_tx,
+        ] {
+            assert_eq!(
+                classify_on_cancel(&stored, Some(reported.clone())).changed,
+                vec![reported]
+            );
+        }
+    }
+
+    #[test_all]
+    fn a_cancel_drops_a_changed_leaf_with_new_keys_or_a_malformed_tx() {
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let other_key = PublicKey::from_slice(&[2; 33]).unwrap();
+        let mut new_verifying_key = revalued(&stored, 500);
+        new_verifying_key.verifying_public_key = other_key;
+        let mut new_keyshare = stored.clone();
+        new_keyshare.signing_keyshare.public_key = other_key;
+        let mut malformed = revalued(&stored, 500);
+        malformed.refund_tx.as_mut().unwrap().input.clear();
+
+        for reported in [new_verifying_key, new_keyshare, malformed] {
+            assert_eq!(classify_on_cancel(&stored, Some(reported)).dropped.len(), 1);
+        }
+    }
+
+    #[test_all]
+    fn a_cancel_drops_a_leaf_no_longer_ours_or_available() {
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let mut not_ours = stored.clone();
+        not_ours.owner_identity_public_key = Some(PublicKey::from_slice(&[2; 33]).unwrap());
+        let mut locked = stored.clone();
+        locked.status = TreeNodeStatus::TransferLocked;
+
+        for reported in [Some(not_ours), Some(locked), None] {
+            assert_eq!(classify_on_cancel(&stored, reported).dropped.len(), 1);
+        }
+    }
+
+    #[test_all]
+    fn a_changed_leaf_every_operator_reports_goes_back_as_reported() {
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let changed = revalued(&stored, 500);
+        let operators = vec![vec![changed.clone()], vec![changed.clone()]];
+
+        let (confirmed, dropped) = confirm_changed_leaves(vec![changed.clone()], &operators);
+
+        assert_eq!(confirmed, vec![changed]);
+        assert!(dropped.is_empty());
+    }
+
+    #[test_all]
+    fn a_changed_leaf_an_operator_reports_differently_or_not_at_all_is_dropped() {
+        // A coordinator deflating a leaf on its own: the other operators still
+        // report the value it carries. Back in the pool at the deflated value,
+        // the next payment would hand over its real one.
+        let stored = leaf_with_refund_sequence("leaf", 2_000);
+        let deflated = revalued(&stored, stored.value / 2);
+
+        for operators in [
+            vec![vec![deflated.clone()], vec![stored.clone()]],
+            vec![vec![deflated.clone()], vec![]],
+        ] {
+            let (confirmed, dropped) = confirm_changed_leaves(vec![deflated.clone()], &operators);
+            assert!(confirmed.is_empty());
+            assert_eq!(dropped.len(), 1);
+        }
     }
 
     #[test_all]
