@@ -165,5 +165,7 @@ Future<void> removeEventListener(BreezSdk sdk, String listenerId) async {
 // ANCHOR: disconnect
 Future<void> disconnect(BreezSdk sdk) async {
   await sdk.disconnect();
+  // Frees the SDK's native memory now instead of when it is garbage collected.
+  sdk.dispose();
 }
 // ANCHOR_END: disconnect

@@ -8,6 +8,11 @@ target from the matching release and checks its sha256, so apps don't need a
 Rust toolchain. An app that also targets other platforms still builds for
 them, but SDK calls fail there.
 
+The SDK needs network access. On Android, release builds need the `INTERNET`
+permission in `android/app/src/main/AndroidManifest.xml`. On macOS, add the
+`com.apple.security.network.client` entitlement to
+`macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`.
+
 ## Installation
 
 Add the `breez_sdk_spark_flutter` as a dependency in your pubspec file.

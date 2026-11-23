@@ -207,5 +207,7 @@ const exampleGetSparkStatus = async () => {
 const exampleDisconnect = async (sdk: BreezSdk) => {
   // ANCHOR: disconnect
   await sdk.disconnect()
+  // Frees the SDK's native memory now instead of when it is garbage collected.
+  sdk.free()
   // ANCHOR_END: disconnect
 }

@@ -185,6 +185,8 @@ class GettingStarted {
     suspend fun disconnect(sdk: BreezSdk)  {
         try {
             sdk.disconnect()
+            // Frees the SDK's native memory now instead of when it is garbage collected.
+            sdk.close()
         } catch (e: Exception) {
             // handle error
         }
