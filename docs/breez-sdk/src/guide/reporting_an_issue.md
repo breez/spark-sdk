@@ -38,3 +38,16 @@ Always reproduce the issue on the [latest release](https://github.com/breez/spar
 - **Telegram:** join our public group at [t.me/breezsdk](https://t.me/breezsdk)
 - **Email:** [contact@breez.technology](mailto:contact@breez.technology)
 - **GitHub:** open an issue at [breez/spark-sdk](https://github.com/breez/spark-sdk/issues)
+
+<h2 id="usdc-usdt-orders">
+    <a class="header" href="#usdc-usdt-orders">USDC/USDT orders</a>
+</h2>
+
+[USDC/USDT payments](cross_chain.md) and [bridges](bridging.md), including the [Cash App](cash_app.md) bridges, are orders with Flashnet, the cross-chain provider. Once an order is paid, Flashnet swaps and delivers it on its own.
+
+If the SDK returns an error, or your logs show it behaving unexpectedly, report it to us as described above. If the SDK works as expected and a paid order stays pending, or failed without a refund, contact Flashnet directly at [orchestra.flashnet.xyz/support](https://orchestra.flashnet.xyz/support). Include:
+
+- The order id (`ord_...`). For a bridge, it's the {{#name order_id}} returned by {{#name get_bridge_status}}. For a wallet payment, it's the {{#name order_id}} in the payment's {{#name conversion_info}}. If there is no order id yet, send the quote id (`q_...`) instead.
+- The deposit: the transaction hash on the source chain, or the Lightning invoice
+- The recipient and the amount
+- The provider's status and error code, when the SDK reports them
