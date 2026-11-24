@@ -5019,12 +5019,21 @@ async fn refund_sequence(sdk: &LocalSdk) -> Result<Option<u32>> {
         .map(|input| input.sequence.to_consensus_u32()))
 }
 
+/// The length of the one leaf's exit chain in the SDK's export. Waits for the
+/// leaf: `sdk.spark_wallet` often claims a transfer before the SDK's own wallet,
+/// which then takes the finished claim from the operators a moment later.
 async fn chain_len(sdk: &LocalSdk) -> Result<usize> {
-    let exported = sdk.sdk.export_unilateral_exit_state().await?;
-    let chains = exit_state_chains(&exported.exit_state)?;
-    match chains.values().next() {
-        Some(chain) if chains.len() == 1 => Ok(chain.len()),
-        other => anyhow::bail!("expected one exported chain, got {:?}", other.map(Vec::len)),
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let exported = sdk.sdk.export_unilateral_exit_state().await?;
+        let chains = exit_state_chains(&exported.exit_state)?;
+        if let (1, Some(chain)) = (chains.len(), chains.values().next()) {
+            return Ok(chain.len());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("expected one exported chain, got {}", chains.len());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
