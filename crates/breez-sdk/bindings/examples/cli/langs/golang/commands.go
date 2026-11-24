@@ -36,6 +36,7 @@ var CommandNames = []string{
 	"lnurl-withdraw",
 	"lnurl-auth",
 	"claim-htlc-payment",
+	"fetch-htlc-payments",
 	"claim-deposit",
 	"fetch-claim-deposit-quote",
 	"parse",
@@ -74,6 +75,7 @@ func BuildCommandRegistry() map[string]Command {
 		"lnurl-withdraw":                       {Name: "lnurl-withdraw", Description: "Withdraw using LNURL", Run: handleLnurlWithdraw},
 		"lnurl-auth":                           {Name: "lnurl-auth", Description: "Authenticate using LNURL", Run: handleLnurlAuth},
 		"claim-htlc-payment":                   {Name: "claim-htlc-payment", Description: "Claim an HTLC payment", Run: handleClaimHtlcPayment},
+		"fetch-htlc-payments":                  {Name: "fetch-htlc-payments", Description: "Fetch HTLC payments locked to a payment hash", Run: handleFetchHtlcPayments},
 		"claim-deposit":                        {Name: "claim-deposit", Description: "Claim an on-chain deposit", Run: handleClaimDeposit},
 		"fetch-claim-deposit-quote":            {Name: "fetch-claim-deposit-quote", Description: "Quote both ways of claiming a deposit", Run: handleFetchClaimDepositQuote},
 		"parse":                                {Name: "parse", Description: "Parse an input (invoice, address, LNURL)", Run: handleParse},
@@ -1055,18 +1057,48 @@ func handleLnurlAuth(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args 
 // --- claim-htlc-payment ---
 
 func handleClaimHtlcPayment(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
-	if len(args) < 1 {
-		fmt.Println("Usage: claim-htlc-payment <preimage>")
+	fs := flag.NewFlagSet("claim-htlc-payment", flag.ContinueOnError)
+	transferId := fs.String("transfer-id", "", "The ID of the payment to claim")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 1 {
+		fmt.Println("Usage: claim-htlc-payment <preimage> [--transfer-id <id>]")
 		return nil
 	}
 
-	result, err := sdk.ClaimHtlcPayment(breez_sdk_spark.ClaimHtlcPaymentRequest{
-		Preimage: args[0],
-	})
+	req := breez_sdk_spark.ClaimHtlcPaymentRequest{
+		Preimage: positional[0],
+	}
+	if *transferId != "" {
+		req.TransferId = transferId
+	}
+
+	result, err := sdk.ClaimHtlcPayment(req)
 	if err = liftError(err); err != nil {
 		return err
 	}
 	printValue(result.Payment)
+	return nil
+}
+
+// --- fetch-htlc-payments ---
+
+func handleFetchHtlcPayments(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: fetch-htlc-payments <payment_hash>")
+		return nil
+	}
+
+	result, err := sdk.FetchHtlcPayments(breez_sdk_spark.FetchHtlcPaymentsRequest{
+		PaymentHash: args[0],
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
 	return nil
 }
 

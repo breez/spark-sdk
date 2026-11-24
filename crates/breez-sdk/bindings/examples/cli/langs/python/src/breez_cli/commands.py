@@ -12,6 +12,7 @@ from breez_sdk_spark import (
     CheckLightningAddressRequest,
     ClaimDepositRequest,
     ClaimHtlcPaymentRequest,
+    FetchHtlcPaymentsRequest,
     ClaimTransferRequest,
     ConversionOptions,
     ConversionType,
@@ -89,6 +90,7 @@ COMMAND_NAMES = [
     "lnurl-withdraw",
     "lnurl-auth",
     "claim-htlc-payment",
+    "fetch-htlc-payments",
     "claim-deposit",
     "fetch-claim-deposit-quote",
     "parse",
@@ -775,11 +777,29 @@ async def _handle_lnurl_auth(sdk, _token_issuer, session, args):
 def _build_claim_htlc_payment_parser():
     p = _parser("claim-htlc-payment", "Claim an HTLC payment")
     p.add_argument("preimage", help="The preimage of the HTLC (hex string)")
+    p.add_argument("--transfer-id", default=None,
+                   help="The ID of the payment to claim. The claim fails unless the claimable HTLC is this payment")
     return p
 
 async def _handle_claim_htlc_payment(sdk, _token_issuer, _session, args):
-    result = await sdk.claim_htlc_payment(request=ClaimHtlcPaymentRequest(preimage=args.preimage))
+    result = await sdk.claim_htlc_payment(
+        request=ClaimHtlcPaymentRequest(preimage=args.preimage, transfer_id=args.transfer_id)
+    )
     print_value(result.payment)
+
+
+# --- fetch-htlc-payments ---
+
+def _build_fetch_htlc_payments_parser():
+    p = _parser("fetch-htlc-payments", "Fetch the HTLC payments locked to a payment hash from the operators")
+    p.add_argument("payment_hash", help="The payment hash to look up (hex string)")
+    return p
+
+async def _handle_fetch_htlc_payments(sdk, _token_issuer, _session, args):
+    result = await sdk.fetch_htlc_payments(
+        request=FetchHtlcPaymentsRequest(payment_hash=args.payment_hash)
+    )
+    print_value(result)
 
 
 # --- claim-deposit ---
@@ -1315,6 +1335,7 @@ def build_command_registry():
         "lnurl-withdraw": (_build_lnurl_withdraw_parser(), _handle_lnurl_withdraw),
         "lnurl-auth": (_build_lnurl_auth_parser(), _handle_lnurl_auth),
         "claim-htlc-payment": (_build_claim_htlc_payment_parser(), _handle_claim_htlc_payment),
+        "fetch-htlc-payments": (_build_fetch_htlc_payments_parser(), _handle_fetch_htlc_payments),
         "claim-deposit": (_build_claim_deposit_parser(), _handle_claim_deposit),
         "fetch-claim-deposit-quote": (_build_fetch_claim_deposit_quote_parser(), _handle_fetch_claim_deposit_quote),
         "parse": (_build_parse_parser(), _handle_parse),

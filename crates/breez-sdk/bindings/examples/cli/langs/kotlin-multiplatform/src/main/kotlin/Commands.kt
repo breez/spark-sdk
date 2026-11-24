@@ -27,6 +27,7 @@ val COMMAND_NAMES = listOf(
     "lnurl-withdraw",
     "lnurl-auth",
     "claim-htlc-payment",
+    "fetch-htlc-payments",
     "claim-deposit",
     "fetch-claim-deposit-quote",
     "parse",
@@ -68,6 +69,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "lnurl-withdraw" to CliCommand("lnurl-withdraw", "Withdraw using LNURL", ::handleLnurlWithdraw),
         "lnurl-auth" to CliCommand("lnurl-auth", "Authenticate using LNURL", ::handleLnurlAuth),
         "claim-htlc-payment" to CliCommand("claim-htlc-payment", "Claim an HTLC payment", ::handleClaimHtlcPayment),
+        "fetch-htlc-payments" to CliCommand("fetch-htlc-payments", "Fetch the HTLC payments locked to a payment hash from the operators", ::handleFetchHtlcPayments),
         "claim-deposit" to CliCommand("claim-deposit", "Claim an on-chain deposit", ::handleClaimDeposit),
         "fetch-claim-deposit-quote" to CliCommand("fetch-claim-deposit-quote", "Quote both ways of claiming a deposit", ::handleFetchClaimDepositQuote),
         "parse" to CliCommand("parse", "Parse an input (invoice, address, LNURL)", ::handleParse),
@@ -893,13 +895,27 @@ suspend fun handleLnurlAuth(sdk: BreezSdk, reader: LineReader, args: List<String
 // --- claim-htlc-payment ---
 
 suspend fun handleClaimHtlcPayment(sdk: BreezSdk, reader: LineReader, args: List<String>) {
-    if (args.isEmpty()) {
-        println("Usage: claim-htlc-payment <preimage>")
+    val fp = FlagParser(args)
+    if (fp.positional.isEmpty()) {
+        println("Usage: claim-htlc-payment <preimage> [--transfer-id <id>]")
         return
     }
 
-    val result = sdk.claimHtlcPayment(ClaimHtlcPaymentRequest(preimage = args[0]))
+    val transferId = fp.getString("transfer-id")
+    val result = sdk.claimHtlcPayment(ClaimHtlcPaymentRequest(preimage = fp.positional[0], transferId = transferId))
     printValue(result.payment)
+}
+
+// --- fetch-htlc-payments ---
+
+suspend fun handleFetchHtlcPayments(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    if (args.isEmpty()) {
+        println("Usage: fetch-htlc-payments <payment_hash>")
+        return
+    }
+
+    val result = sdk.fetchHtlcPayments(FetchHtlcPaymentsRequest(paymentHash = args[0]))
+    printValue(result)
 }
 
 // --- claim-deposit ---

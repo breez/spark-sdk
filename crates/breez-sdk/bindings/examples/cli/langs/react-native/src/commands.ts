@@ -4,7 +4,7 @@
  * Mirrors ALL commands from the Rust CLI:
  *   get-info, get-payment, fetch-lightning-send-status, sync, list-payments,
  *   receive, pay, pay-batch, lnurl-pay, lnurl-withdraw, lnurl-auth,
- *   claim-htlc-payment, claim-deposit, fetch-claim-deposit-quote, parse,
+ *   claim-htlc-payment, fetch-htlc-payments, claim-deposit, fetch-claim-deposit-quote, parse,
  *   refund-deposit, list-unclaimed-deposits, buy-bitcoin,
  *   check-lightning-address-available, get-lightning-address,
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
@@ -189,6 +189,7 @@ export const COMMAND_NAMES = [
   'lnurl-withdraw',
   'lnurl-auth',
   'claim-htlc-payment',
+  'fetch-htlc-payments',
   'claim-deposit',
   'fetch-claim-deposit-quote',
   'parse',
@@ -239,6 +240,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'lnurl-withdraw', description: 'Withdraw using LNURL', run: handleLnurlWithdraw },
     { name: 'lnurl-auth', description: 'Authenticate using LNURL', run: handleLnurlAuth },
     { name: 'claim-htlc-payment', description: 'Claim an HTLC payment', run: handleClaimHtlcPayment },
+    { name: 'fetch-htlc-payments', description: 'Fetch the HTLC payments locked to a payment hash from the operators', run: handleFetchHtlcPayments },
     { name: 'claim-deposit', description: 'Claim an on-chain deposit', run: handleClaimDeposit },
     { name: 'fetch-claim-deposit-quote', description: 'Quote both ways of claiming a deposit', run: handleFetchClaimDepositQuote },
     { name: 'parse', description: 'Parse an input (invoice, address, LNURL)', run: handleParse },
@@ -1009,11 +1011,24 @@ async function handleLnurlAuth(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuer
 // --- claim-htlc-payment ---
 
 async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  if (args.length < 1) {
-    return 'Usage: claim-htlc-payment <preimage>'
+  const positional = positionalArgs(args)
+  if (positional.length < 1) {
+    return 'Usage: claim-htlc-payment <preimage> [--transfer-id <id>]'
   }
 
-  const result = await sdk.claimHtlcPayment({ preimage: args[0], transferId: undefined })
+  const transferId = parseFlag(args, '--transfer-id')
+  const result = await sdk.claimHtlcPayment({ preimage: positional[0], transferId })
+  return formatValue(result)
+}
+
+// --- fetch-htlc-payments ---
+
+async function handleFetchHtlcPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  if (args.length < 1) {
+    return 'Usage: fetch-htlc-payments <payment_hash>'
+  }
+
+  const result = await sdk.fetchHtlcPayments({ paymentHash: args[0] })
   return formatValue(result)
 }
 

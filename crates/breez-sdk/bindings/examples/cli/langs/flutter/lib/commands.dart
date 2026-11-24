@@ -24,6 +24,7 @@ const commandNames = [
   'lnurl-withdraw',
   'lnurl-auth',
   'claim-htlc-payment',
+  'fetch-htlc-payments',
   'claim-deposit',
   'fetch-claim-deposit-quote',
   'parse',
@@ -76,6 +77,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'lnurl-withdraw': CommandEntry('Withdraw using LNURL', _handleLnurlWithdraw),
     'lnurl-auth': CommandEntry('Authenticate using LNURL', _handleLnurlAuth),
     'claim-htlc-payment': CommandEntry('Claim an HTLC payment', _handleClaimHtlcPayment),
+    'fetch-htlc-payments': CommandEntry(
+      'Fetch the HTLC payments locked to a payment hash from the operators',
+      _handleFetchHtlcPayments,
+    ),
     'claim-deposit': CommandEntry('Claim an on-chain deposit', _handleClaimDeposit),
     'fetch-claim-deposit-quote': CommandEntry(
       'Quote both ways of claiming a deposit',
@@ -902,13 +907,33 @@ Future<void> _handleLnurlAuth(BreezSdk sdk, TokenIssuer tokenIssuer, List<String
 // --- claim-htlc-payment ---
 
 Future<void> _handleClaimHtlcPayment(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
-  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
-    print('Usage: claim-htlc-payment <preimage>');
+  final parser = _parser('claim-htlc-payment')
+    ..addOption('transfer-id', help: 'The ID of the payment to claim');
+  final results = _parseArgs(parser, args, 'claim-htlc-payment <preimage> [--transfer-id <id>]');
+  if (results == null) return;
+
+  if (results.rest.isEmpty) {
+    print('Usage: claim-htlc-payment <preimage> [--transfer-id <id>]');
     return;
   }
-  final preimage = args.first;
-  final result = await sdk.claimHtlcPayment(request: ClaimHtlcPaymentRequest(preimage: preimage));
+  final preimage = results.rest.first;
+  final transferId = results.option('transfer-id');
+  final result = await sdk.claimHtlcPayment(
+    request: ClaimHtlcPaymentRequest(preimage: preimage, transferId: transferId),
+  );
   printValue(result.payment);
+}
+
+// --- fetch-htlc-payments ---
+
+Future<void> _handleFetchHtlcPayments(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: fetch-htlc-payments <payment_hash>');
+    return;
+  }
+  final paymentHash = args.first;
+  final result = await sdk.fetchHtlcPayments(request: FetchHtlcPaymentsRequest(paymentHash: paymentHash));
+  printValue(result);
 }
 
 // --- claim-deposit ---
