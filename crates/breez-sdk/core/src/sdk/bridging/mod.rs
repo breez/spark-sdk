@@ -174,20 +174,7 @@ impl BridgingClient {
         routes.retain(|route| route_pays(&recipient, route));
         let mut seen = HashSet::new();
         routes.retain(|route| seen.insert((route.source.clone(), route.destination.clone())));
-        routes.sort_by(|a, b| {
-            (
-                &a.source.asset,
-                &a.source.chain,
-                &a.destination.asset,
-                &a.destination.chain,
-            )
-                .cmp(&(
-                    &b.source.asset,
-                    &b.source.chain,
-                    &b.destination.asset,
-                    &b.destination.chain,
-                ))
-        });
+        routes.sort_by(|a, b| route_order(a).cmp(&route_order(b)));
         Ok(GetBridgeRoutesResponse { routes })
     }
 
@@ -975,6 +962,18 @@ enum BridgeRecipient {
     Bitcoin(BitcoinAddressDetails),
 }
 
+/// The order routes are listed in: by what the payer pays, then stablecoin
+/// destinations ahead of native coins, then by what the recipient receives.
+fn route_order(route: &BridgeRoutePair) -> (&str, &str, bool, &str, &str) {
+    (
+        &route.source.asset,
+        &route.source.chain,
+        is_native_coin(&route.destination),
+        &route.destination.asset,
+        &route.destination.chain,
+    )
+}
+
 /// Whether `route` pays `recipient`. A Spark or Lightning recipient is paid
 /// from a stablecoin deposit on another chain. A recipient on another chain
 /// is paid a stablecoin from one too, or over Lightning, and only Lightning
@@ -1404,7 +1403,7 @@ mod tests {
         LightningInvoice, LightningRefund, accepted_lightning_refund, amount_side,
         bridge_from_cash_app_response, check_lightning_address_accepts, check_refund_outlives,
         deposit_target, external_pair, is_listed, is_order_id, lightning_funded_bridge_response,
-        native_coin_family, route_pays, route_supports_delivery_method, source_units,
+        native_coin_family, route_order, route_pays, route_supports_delivery_method, source_units,
         validate_spark_recipient,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
@@ -2186,6 +2185,32 @@ mod tests {
             &spark_recipient(),
             &pair(lightning_btc(), bitcoin_btc())
         ));
+    }
+
+    #[test_all]
+    fn routes_list_stablecoins_ahead_of_native_coins_for_each_source() {
+        let mut routes = [
+            pair(lightning_btc(), base_eth()),
+            pair(tron_usdt(), base_usdc()),
+            pair(lightning_btc(), bsc_bnb()),
+            pair(lightning_btc(), base_usdt()),
+            pair(lightning_btc(), base_usdc()),
+        ];
+        routes.sort_by(|a, b| route_order(a).cmp(&route_order(b)));
+        let listed: Vec<_> = routes
+            .iter()
+            .map(|r| (r.source.asset.as_str(), r.destination.asset.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("BTC", "USDC"),
+                ("BTC", "USDT"),
+                ("BTC", "BNB"),
+                ("BTC", "ETH"),
+                ("USDT", "USDC"),
+            ]
+        );
     }
 
     #[test_all]

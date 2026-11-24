@@ -648,6 +648,11 @@ async fn test_cross_chain_07_bridge_native_coin_quotes() -> Result<()> {
     };
     assert_eq!(route.amount_side, BridgeAmountSide::Source);
     assert_eq!(route.destination.contract_address, None);
+    assert_eq!(
+        from_lightning.last().map(|r| r.destination.asset.as_str()),
+        Some("ETH"),
+        "stablecoins should list ahead of the native coin"
+    );
 
     let request = |fee_policy| CreateBridgeRequest {
         recipient: recipient.clone(),

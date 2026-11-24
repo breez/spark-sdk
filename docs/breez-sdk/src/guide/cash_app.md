@@ -18,14 +18,14 @@ Cash App is available in the US and UK only (excluding New York State for Bitcoi
 
 Both bridges run on a [bridging client](./bridging.md#getting-a-bridging-client). List the recipient's routes with {{#name get_routes}}:
 
-- For a stablecoin address, Cash App can fund the routes whose {{#name source}} is on `lightning`. Their {{#name destination}} is the stablecoin the recipient receives.
+- For a stablecoin address, Cash App can fund the routes whose {{#name source}} is on `lightning`. Their {{#name destination}} is what the recipient receives: the stablecoins first, then any [native coin](./bridging.md#native-coins-and-bitcoin) the address can also be paid in.
 - For a Cash App user, the routes' {{#name source}} is the stablecoin the payer pays in.
 
 Pick the {{#name BridgeRoutePair}} whose side matches the stablecoin you want. A route Cash App can't use fails fast, before any funds move.
 
 ## Amounts and fees
 
-The {{#name amount}} is in the stablecoin's base units, per its side's {{#name BridgeRoutePairSide.decimals}}. These routes carry USD-pegged stablecoins, so at parity it is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1.
+On a stablecoin route, the {{#name amount}} is in the stablecoin's base units, per its side's {{#name BridgeRoutePairSide.decimals}}. At parity it is the USD value: `1_000_000` is 1 USDC (6 decimals), about $1. On a route to a native coin it is in sats. The route's {{#name amount_side}} says which [applies](./bridging.md#amount-and-fees).
 
 {{#name fee_policy}} controls who absorbs the provider fee, reusing the same {{#name FeePolicy}} as the send flow:
 

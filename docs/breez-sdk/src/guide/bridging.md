@@ -93,7 +93,7 @@ Their routes have `lightning` as the {{#name source}} {{#name chain}}, and a {{#
 
 - The {{#name amount}} is in sats: the route's {{#name amount_side}} is {{#enum BridgeAmountSide::Source}}. With {{#enum FeePolicy::FeesExcluded}} the fee is added on top, and with {{#enum FeePolicy::FeesIncluded}} the payer pays exactly the amount.
 - {{#name info.expected_received_amount}} is in the coin's base units: wei for ETH, lamports for SOL, sats for Bitcoin.
-- An EVM recipient gets routes to the native coin of every EVM chain, next to its stablecoins. Pick by the {{#name destination}} {{#name asset}} and {{#name chain}}.
+- An EVM recipient gets routes to the native coin of every EVM chain, listed after the stablecoin routes from the same source. Pick by the {{#name destination}} {{#name asset}} and {{#name chain}}.
 
 | Coin | Recipient |
 | ---- | --------- |
