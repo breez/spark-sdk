@@ -31,7 +31,7 @@ jobs:
           cargo install mdbook-pagetoc --vers "^0.2" --locked
 
       - name: Get latest tag
-        uses: actions-ecosystem/action-get-latest-tag@v1
+        uses: actions-ecosystem/action-get-latest-tag@b7c32daec3395a9616f88548363a42652b22d435 # v1.6.0
         id: get-latest-tag
 
       - name: Set latest tag in book

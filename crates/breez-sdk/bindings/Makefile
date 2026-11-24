@@ -40,13 +40,13 @@ build-release-target-%: install-target-%
 	cargo build --release --target $* $(if $(CARGO_FEATURES),--features $(CARGO_FEATURES))
 
 install-uniffi-bindgen-cs:
-	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch v0.29.4-with-fixes
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --rev c1c339be6ae66493e4cf2a299d204f14283e6472 --locked
 
 install-uniffi-bindgen-gobley:
-	@command -v gobley-uniffi-bindgen >/dev/null 2>&1 || $(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --branch v0.3.7-with-fixes
+	@command -v gobley-uniffi-bindgen >/dev/null 2>&1 || $(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 9d658a6750f44d690e4143e609ba3dd65df432e8 --locked
 
 install-uniffi-bindgen-golang:
-	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 16dbddf8a782f848915e92200321645117f1df02 --locked
 
 install-target-%:
 	$(CLANG_PREFIX) rustup target add $*

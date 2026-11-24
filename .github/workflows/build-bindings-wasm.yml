@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           rustup target add wasm32-unknown-unknown
-          cargo install wasm-pack
+          cargo install wasm-pack --version 0.15.1 --locked
 
       - name: Build Wasm packages
         working-directory: crates/breez-sdk/wasm

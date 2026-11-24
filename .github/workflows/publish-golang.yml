@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
@@ -41,7 +41,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download aarch64-linux-android
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-aarch64-linux-android
           path: aarch64-linux-android
@@ -49,11 +49,11 @@ jobs:
       - name: Build Go language bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
+          cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 16dbddf8a782f848915e92200321645117f1df02 --locked
           uniffi-bindgen-go --library ../../../aarch64-linux-android/libbreez_sdk_spark_bindings.so -o ffi/golang -c ./uniffi.toml
 
       - name: Archive Go language bindings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bindings-golang
           path: crates/breez-sdk/bindings/ffi/golang
@@ -64,7 +64,7 @@ jobs:
     needs: build-language-bindings
     steps:
       - name: Checkout breez-sdk-spark-go repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: breez/breez-sdk-spark-go
           ssh-key: ${{ secrets.REPO_SSH_KEY }}
@@ -75,58 +75,58 @@ jobs:
       - name: Remove previous native libraries
         run: find breez_sdk_spark/lib -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -delete
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-golang
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-aarch64-linux-android
           path: breez_sdk_spark/lib/android-aarch64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-i686-linux-android
           path: breez_sdk_spark/lib/android-386
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-armv7-linux-androideabi
           path: breez_sdk_spark/lib/android-aarch
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-x86_64-linux-android
           path: breez_sdk_spark/lib/android-amd64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dynamic-aarch64-apple-darwin
           path: breez_sdk_spark/lib/darwin-aarch64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dynamic-x86_64-apple-darwin
           path: breez_sdk_spark/lib/darwin-amd64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: breez_sdk_spark/lib/linux-aarch64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: breez_sdk_spark/lib/linux-amd64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-x86_64-pc-windows-msvc
           path: breez_sdk_spark/lib/windows-amd64
 
       - name: Archive package
         if: ${{ !inputs.publish }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: golang-${{ inputs.package-version || github.sha }}
           path: |

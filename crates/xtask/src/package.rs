@@ -82,7 +82,7 @@ fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
     let sh = Shell::new()?;
 
     // Ensure wasm-pack exists
-    let _ = cmd!(sh, "cargo install wasm-pack --locked").run();
+    let _ = cmd!(sh, "cargo install wasm-pack --version 0.15.1 --locked").run();
 
     // Get workspace root and set up paths
     let workspace_root = std::env::current_dir()?;

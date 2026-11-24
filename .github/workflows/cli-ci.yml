@@ -7,9 +7,9 @@ on:
 # canonical source so the cache keys invalidate alongside the binary itself.
 env:
   CARGO_NDK_VERSION: 4.1.2
-  # Mirror of the gobley branch pinned in
+  # Mirror of the gobley commit pinned in
   # `crates/breez-sdk/bindings/Makefile` (`install-uniffi-bindgen-gobley`).
-  GOBLEY_REF: v0.3.7-with-fixes
+  GOBLEY_REF: 9d658a6750f44d690e4143e609ba3dd65df432e8
   # Mirror of `kotlin_target_version` in
   # `crates/breez-sdk/bindings/uniffi.kotlin-multiplatform.toml`.
   KOTLIN_NATIVE_VERSION: 1.9.21
@@ -114,7 +114,7 @@ jobs:
 
       - name: Setup Gradle
         if: matrix.gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
 
       - name: Cache Konan toolchain
         if: matrix.konan

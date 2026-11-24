@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
@@ -44,7 +44,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download aarch64-apple-ios
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-aarch64-apple-ios
           path: aarch64-apple-ios
@@ -55,7 +55,7 @@ jobs:
           cargo run -p uniffi-bindgen -- generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.a --no-format --language swift -o ffi/swift
 
       - name: Archive Swift language bindings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bindings-swift
           path: crates/breez-sdk/bindings/ffi/swift/*
@@ -66,14 +66,14 @@ jobs:
     needs: build-language-bindings
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
           path: build
 
       - name: Checkout breez-sdk-spark-swift repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: breez/breez-sdk-spark-swift
           ref: main
@@ -82,43 +82,43 @@ jobs:
           path: dist
 
       - name: Download swift bindings
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-swift
           path: swift
 
       - name: Download aarch64-apple-ios
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dynamic-aarch64-apple-ios
           path: aarch64-apple-ios
 
       - name: Download ios-universal-sim
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dynamic-ios-universal-sim
           path: ios-universal-sim
 
       - name: Download darwin-universal
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dynamic-darwin-universal
           path: darwin-universal
 
       - name: Download dSYM ios-arm64
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dsym-aarch64-apple-ios
           path: dsym-ios-arm64
 
       - name: Download dSYM ios-arm64_x86_64-simulator
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dsym-ios-universal-sim
           path: dsym-ios-arm64_x86_64-simulator
 
       - name: Download dSYM macos-arm64_x86_64
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bindings-dsym-darwin-universal
           path: dsym-macos-arm64_x86_64
@@ -172,14 +172,14 @@ jobs:
 
       - name: Archive XCFramework
         if: ${{ !inputs.publish }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: swift-xcframework-${{ inputs.package-version || '0.0.2' }}
           path: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
 
       - name: Archive package
         if: ${{ !inputs.publish }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: swift-${{ inputs.package-version || '0.0.2' }}
           path: dist/*
@@ -199,7 +199,7 @@ jobs:
 
       - name: Release and attach XCFramework binary artifact
         if: ${{ inputs.publish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           repository: breez/breez-sdk-spark-swift
           files: |

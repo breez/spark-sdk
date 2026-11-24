@@ -170,7 +170,7 @@ jobs:
       # ── Language-specific setup ─────────────────────────────────────
       - name: Set up Flutter
         if: matrix.lang == 'flutter' && inputs.approve-run == ''
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: 3.47.4
@@ -236,7 +236,7 @@ jobs:
 
       - name: Sync ${{ steps.config.outputs.lang_name }} CLI
         if: inputs.approve-run == ''
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@ae68417a745a5df4b2124873632bd73a2255e6f6 # v1.0.259
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: 'github-actions[bot]'

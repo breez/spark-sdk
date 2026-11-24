@@ -16,7 +16,7 @@ runs:
   using: 'composite'
   steps:
     - name: Install Protoc
-      uses: arduino/setup-protoc@v3
+      uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
       with:
         version: "30.2"
         repo-token: ${{ inputs.github-token }}
@@ -43,7 +43,7 @@ runs:
         done
 
     - name: Setup rust cache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         shared-key: ${{ inputs.rust-cache-shared-key }}
         save-if: ${{ inputs.rust-cache-save }}

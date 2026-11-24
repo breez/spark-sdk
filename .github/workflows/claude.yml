@@ -32,7 +32,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@ae68417a745a5df4b2124873632bd73a2255e6f6 # v1.0.259
         env:
           FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
           FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}

@@ -61,14 +61,14 @@ jobs:
 
       - name: Setup Flutter
         if: matrix.flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: 3.47.4
 
       - name: Setup just
         if: matrix.flutter
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3.1.0
 
       - name: Setup Python
         if: matrix.python-version
@@ -85,7 +85,7 @@ jobs:
 
       - name: Setup Gradle
         if: matrix.gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
 
       - name: Cache gobley-uniffi-bindgen
         if: matrix.gradle
@@ -94,7 +94,7 @@ jobs:
           path: ~/.cargo/bin/gobley-uniffi-bindgen
           # Bump the suffix when the gobley pin in
           # crates/breez-sdk/bindings/Makefile changes.
-          key: gobley-uniffi-bindgen-v0.3.7-with-fixes-${{ runner.os }}
+          key: gobley-uniffi-bindgen-9d658a6750f44d690e4143e609ba3dd65df432e8-${{ runner.os }}
 
       - name: Install Rust targets (iOS)
         if: matrix.ios-targets

@@ -68,7 +68,7 @@ jobs:
 
       # Only Flutter.xcframework is needed, so this job skips setup-build.
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: 3.47.4
@@ -412,7 +412,7 @@ jobs:
           node-version: 24
 
       - name: Install wasm-pack
-        run: which wasm-pack || cargo install wasm-pack
+        run: which wasm-pack || cargo install wasm-pack --version 0.15.1 --locked
 
       - name: Restore lnurl server image
         id: lnurl-image
@@ -493,14 +493,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           flutter-version: 3.47.4
       - run: flutter --version
 
       - name: Set up just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3.1.0
 
       - name: Initialize the workspace
         working-directory: packages/flutter

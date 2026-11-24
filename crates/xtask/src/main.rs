@@ -475,7 +475,7 @@ fn wasm_test_cmd(
     let _ = cmd!(sh, "rustup target add wasm32-unknown-unknown").run();
 
     // Ensure wasm-pack exists (preferred runner for wasm tests across crates)
-    let _ = cmd!(sh, "cargo install wasm-pack --locked").run();
+    let _ = cmd!(sh, "cargo install wasm-pack --version 0.15.1 --locked").run();
 
     let packages: Vec<Package> = if let Some(p) = package {
         vec![find_package(&meta, &p)?.clone()]
