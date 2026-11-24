@@ -33,6 +33,7 @@ public static class CommandNames
         "lnurl-withdraw",
         "lnurl-auth",
         "claim-htlc-payment",
+        "fetch-htlc-payments",
         "claim-deposit",
         "fetch-claim-deposit-quote",
         "parse",
@@ -146,6 +147,12 @@ public static class Commands
                 Name = "claim-htlc-payment",
                 Description = "Claim an HTLC payment",
                 Run = HandleClaimHtlcPayment
+            },
+            ["fetch-htlc-payments"] = new()
+            {
+                Name = "fetch-htlc-payments",
+                Description = "Fetch the HTLC payments locked to a payment hash from the operators",
+                Run = HandleFetchHtlcPayments
             },
             ["claim-deposit"] = new()
             {
@@ -1136,14 +1143,36 @@ public static class Commands
 
     private static async Task HandleClaimHtlcPayment(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        if (args.Length < 1)
+        var positional = GetPositionalArgs(args);
+        var transferId = GetFlag(args, "--transfer-id");
+
+        if (positional.Length < 1)
         {
-            Console.WriteLine("Usage: claim-htlc-payment <preimage>");
+            Console.WriteLine("Usage: claim-htlc-payment <preimage> [--transfer-id <id>]");
             return;
         }
 
-        var result = await sdk.ClaimHtlcPayment(new ClaimHtlcPaymentRequest(preimage: args[0]));
+        var result = await sdk.ClaimHtlcPayment(new ClaimHtlcPaymentRequest(
+            preimage: positional[0],
+            transferId: transferId
+        ));
         Serialization.PrintValue(result.payment);
+    }
+
+    // --- fetch-htlc-payments ---
+
+    private static async Task HandleFetchHtlcPayments(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        if (args.Length < 1)
+        {
+            Console.WriteLine("Usage: fetch-htlc-payments <payment_hash>");
+            return;
+        }
+
+        var result = await sdk.FetchHtlcPayments(
+            request: new FetchHtlcPaymentsRequest(paymentHash: args[0])
+        );
+        Serialization.PrintValue(result);
     }
 
     // --- claim-deposit ---

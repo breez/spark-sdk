@@ -84,6 +84,7 @@ let commandNames: [String] = [
     "lnurl-withdraw",
     "lnurl-auth",
     "claim-htlc-payment",
+    "fetch-htlc-payments",
     "claim-deposit",
     "fetch-claim-deposit-quote",
     "parse",
@@ -123,6 +124,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "lnurl-withdraw":                    CommandEntry(name: "lnurl-withdraw", description: "Withdraw using LNURL", run: handleLnurlWithdraw),
         "lnurl-auth":                        CommandEntry(name: "lnurl-auth", description: "Authenticate using LNURL", run: handleLnurlAuth),
         "claim-htlc-payment":                CommandEntry(name: "claim-htlc-payment", description: "Claim an HTLC payment", run: handleClaimHtlcPayment),
+        "fetch-htlc-payments":               CommandEntry(name: "fetch-htlc-payments", description: "Fetch the HTLC payments locked to a payment hash", run: handleFetchHtlcPayments),
         "claim-deposit":                     CommandEntry(name: "claim-deposit", description: "Claim an on-chain deposit", run: handleClaimDeposit),
         "fetch-claim-deposit-quote":         CommandEntry(name: "fetch-claim-deposit-quote", description: "Quote both ways of claiming a deposit", run: handleFetchClaimDepositQuote),
         "parse":                             CommandEntry(name: "parse", description: "Parse an input (invoice, address, LNURL)", run: handleParse),
@@ -824,15 +826,33 @@ func handleLnurlAuth(_ sdk: BreezSdk, _ args: [String]) async throws {
 // --- claim-htlc-payment ---
 
 func handleClaimHtlcPayment(_ sdk: BreezSdk, _ args: [String]) async throws {
-    guard !args.isEmpty else {
-        print("Usage: claim-htlc-payment <preimage>")
+    let fp = FlagParser(args)
+    guard let preimage = fp.positional.first else {
+        print("Usage: claim-htlc-payment <preimage> [--transfer-id <id>]")
         return
     }
 
+    let transferId = fp.get("transfer-id")
+
     let result = try await sdk.claimHtlcPayment(request: ClaimHtlcPaymentRequest(
-        preimage: args[0]
+        preimage: preimage,
+        transferId: transferId
     ))
     printValue(result.payment)
+}
+
+// --- fetch-htlc-payments ---
+
+func handleFetchHtlcPayments(_ sdk: BreezSdk, _ args: [String]) async throws {
+    guard !args.isEmpty else {
+        print("Usage: fetch-htlc-payments <payment_hash>")
+        return
+    }
+
+    let result = try await sdk.fetchHtlcPayments(request: FetchHtlcPaymentsRequest(
+        paymentHash: args[0]
+    ))
+    printValue(result)
 }
 
 // --- claim-deposit ---

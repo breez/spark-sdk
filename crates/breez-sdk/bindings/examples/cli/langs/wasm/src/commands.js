@@ -30,6 +30,7 @@ const COMMAND_NAMES = [
   'lnurl-withdraw',
   'lnurl-auth',
   'claim-htlc-payment',
+  'fetch-htlc-payments',
   'claim-deposit',
   'fetch-claim-deposit-quote',
   'parse',
@@ -651,10 +652,22 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .command('claim-htlc-payment')
     .description('Claim an HTLC payment')
     .argument('<preimage>', 'The preimage of the HTLC (hex string)')
-    .action(async (preimage) => {
+    .option('--transfer-id <id>', 'The ID of the payment to claim. The claim fails unless the claimable HTLC is this payment')
+    .action(async (preimage, options) => {
       const sdk = getSdk()
-      const res = await sdk.claimHtlcPayment({ preimage })
+      const res = await sdk.claimHtlcPayment({ preimage, transferId: options.transferId })
       printValue(res.payment)
+    })
+
+  // --- fetch-htlc-payments ---
+  program
+    .command('fetch-htlc-payments')
+    .description('Fetch the HTLC payments locked to a payment hash from the operators')
+    .argument('<payment_hash>', 'The payment hash to look up (hex string)')
+    .action(async (paymentHash) => {
+      const sdk = getSdk()
+      const value = await sdk.fetchHtlcPayments({ paymentHash })
+      printValue(value)
     })
 
   // --- claim-deposit ---
