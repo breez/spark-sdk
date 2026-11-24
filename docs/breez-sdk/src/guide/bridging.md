@@ -112,6 +112,8 @@ Read a bridge's status with {{#name get_bridge_status}}, passing the {{#name bri
 | {{#enum BridgeStatus::Failed}} | The bridge failed. {{#name error_code}} gives the reason. |
 | {{#enum BridgeStatus::Expired}} | The bridge can no longer be paid, and nobody paid it. |
 
+Once the payment arrives, the response also carries {{#name order_id}}, the provider's id for the order. If a paid bridge stays {{#enum BridgeStatus::Pending}} or fails without a refund, see [USDC/USDT orders](./reporting_an_issue.md#usdc-usdt-orders).
+
 ## Limitations
 
 - **Mainnet only.** The cross-chain provider operates against live networks.

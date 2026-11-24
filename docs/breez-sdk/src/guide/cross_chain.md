@@ -130,6 +130,8 @@ The cross-chain status walks one of:
 
 A background monitor runs while the SDK is active and reconciles non-terminal payments by polling the provider. When it changes the conversion info of a payment that was already reported, the SDK emits {{#enum SdkEvent::PaymentMetadataUpdated}} with the updated payment. On a receive, the inbound payment carries its {{#name conversion_info}} from its first event, with the same {{#name quote_id}} as the {{#name cross_chain_info}} returned for the receive. The delivered amount and the deposit transaction follow in that event once the provider confirms the order.
 
+If a payment's cross-chain leg stays {{#enum ConversionStatus::Pending}} or fails without a refund, see [USDC/USDT orders](./reporting_an_issue.md#usdc-usdt-orders).
+
 ## Send
 
 ### Quote expiry
