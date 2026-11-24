@@ -4956,9 +4956,13 @@ async fn wait_for_mempool_spend(sdk: &LocalSdk, outpoint: OutPoint) -> Result<()
 }
 
 /// Each transfer takes one interval off the refund timelock, and the wallet
-/// renews the leaf once that reaches its threshold.
+/// renews the leaf once that reaches its threshold. The renewal resets the
+/// timelock, which `sdk.spark_wallet` sees as soon as the leaf is back. The
+/// SDK's own copy can trail it by several transfers, and transferring until
+/// that catches up can renew the leaf a second time.
 async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()> {
     let before = chain_len(sdk).await?;
+    let mut timelock = held_refund_timelock(sdk).await?;
     for hop in 0..MAX_TRANSFERS_PER_RENEWAL {
         let (from, to) = if hop % 2 == 0 {
             (sdk, partner)
@@ -4976,8 +4980,15 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
         .await?;
 
         // An even number of hops leaves the leaf where the test expects it.
-        if hop % 2 == 1 && chain_len(sdk).await? > before {
-            return Ok(());
+        if hop % 2 == 1 {
+            let held = held_refund_timelock(sdk).await?;
+            if held > timelock {
+                if renewed(sdk, before).await? {
+                    return Ok(());
+                }
+                anyhow::bail!("the SDK's exit state never showed the renewal");
+            }
+            timelock = held;
         }
     }
 
@@ -4988,6 +4999,22 @@ async fn transfer_until_renewed(sdk: &LocalSdk, partner: &LocalSdk) -> Result<()
         "no renewal after {MAX_TRANSFERS_PER_RENEWAL} transfers; the leaf's refund timelock is {:?}",
         refund_sequence(sdk).await?
     )
+}
+
+/// The refund timelock of the one leaf `sdk.spark_wallet` holds.
+async fn held_refund_timelock(sdk: &LocalSdk) -> Result<Option<u32>> {
+    let leaves = sdk.spark_wallet.list_leaves().await?;
+    let [leaf] = leaves.available.as_slice() else {
+        anyhow::bail!(
+            "expected one available leaf, got {}",
+            leaves.available.len()
+        );
+    };
+    Ok(leaf
+        .refund_tx
+        .as_ref()
+        .and_then(|tx| tx.input.first())
+        .map(|input| input.sequence.to_consensus_u32()))
 }
 
 /// Waits for the renewed leaf's new ancestor to reach the wallet, which fetches
