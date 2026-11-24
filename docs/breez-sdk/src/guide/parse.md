@@ -4,7 +4,7 @@ The SDK provides a versatile and extensible parsing module designed to process a
 
 Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. For the complete list, consult the [API documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html).
 
-Cross-chain destinations on EVM, Solana, and Tron — bare addresses or chain-prefixed URIs — parse to {{#enum InputType::CrossChainAddress}}, carrying the parsed address family along with any token contract address and amount embedded in the URI. Use the resulting {{#name CrossChainAddressDetails}} to discover available routes; see [Send USDC/USDT](./send_payment.md#usdc-usdt) for the send flow.
+Cross-chain destinations on EVM, Solana and Tron (bare addresses or chain-prefixed URIs), and bare XRP and Zcash transparent addresses, parse to {{#enum InputType::CrossChainAddress}}, carrying the parsed address family along with any token contract address and amount embedded in the URI. Use the resulting {{#name CrossChainAddressDetails}} to discover available routes; see [Send USDC/USDT](./send_payment.md#usdc-usdt) for the send flow. XRP and Zcash addresses have no USDC/USDT routes: pay them their native coin with a [bridge](./bridging.md#native-coins-and-bitcoin).
 
 A Cash App username prefixed with `$` (e.g. `$alice`) parses to {{#enum InputType::LightningAddress}} for the user's Lightning address, `alice@cash.app`.
 

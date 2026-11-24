@@ -24,7 +24,8 @@ pub struct BridgingConfig {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetBridgeRoutesRequest {
     /// Who to pay: a Spark address, a Lightning address (a Cash App
-    /// `$cashtag` included), or an EVM/Solana/Tron address or URI.
+    /// `$cashtag` included), a Bitcoin address or BIP21 URI, an
+    /// EVM/Solana/Tron address or URI, or an XRP or Zcash transparent address.
     pub recipient: String,
 }
 
@@ -45,23 +46,39 @@ pub struct BridgeRoutePair {
     pub source: BridgeRoutePairSide,
     /// What the recipient receives.
     pub destination: BridgeRoutePairSide,
-    /// Bounds on what the payer pays, in `source` base units. Unset when the
-    /// provider publishes none.
+    /// Bounds on what the payer pays, in `source` base units. On a route
+    /// paying Bitcoin on-chain, the minimum is what must reach the recipient.
+    /// Unset when the provider publishes none.
     pub limits: Option<CrossChainRouteLimits>,
+    /// The side whose base units [`CreateBridgeRequest::amount`] is in, per
+    /// its `decimals`.
+    pub amount_side: BridgeAmountSide,
+}
+
+/// The side of a [`BridgeRoutePair`] whose base units an amount is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BridgeAmountSide {
+    /// What the payer pays.
+    Source,
+    /// What the recipient receives.
+    Destination,
 }
 
 /// One side of a [`BridgeRoutePair`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct BridgeRoutePairSide {
-    /// `"spark"`, `"lightning"`, or another chain, e.g. `"base"` or `"tron"`.
+    /// `"spark"`, `"lightning"`, `"bitcoin"`, or another chain, e.g. `"base"`
+    /// or `"tron"`.
     pub chain: String,
-    /// EVM `chainId` as a decimal string. Unset on chains without one.
+    /// The provider's id for the chain: the EVM `chainId` as a decimal string,
+    /// or an id such as `"xrp:mainnet"` elsewhere. Unset when it gives none.
     pub chain_id: Option<String>,
-    /// Asset symbol, e.g. `"USDC"`, `"USDT"`, `"BTC"` or `"USDB"`.
+    /// Asset symbol, e.g. `"USDC"`, `"USDT"`, `"BTC"`, `"USDB"` or `"ETH"`.
     pub asset: String,
     /// Token contract or mint address, or the token identifier on Spark.
-    /// Unset for Bitcoin.
+    /// Unset for Bitcoin and for a chain's native coin.
     pub contract_address: Option<String>,
     pub decimals: u8,
 }
@@ -74,10 +91,11 @@ pub struct CreateBridgeRequest {
     /// A route from [`BridgingClient::get_routes`](super::BridgingClient::get_routes)
     /// for this recipient.
     pub route: BridgeRoutePair,
-    /// Amount in stablecoin base units: the destination asset when the
-    /// recipient is paid in a stablecoin, the source asset otherwise, per that
-    /// side's `decimals`. At parity this is the USD value: `1_000_000` is 1
-    /// USDC at 6 decimals.
+    /// Amount in the base units of the route's `amount_side`, per its
+    /// `decimals`: the recipient's stablecoin when they are paid in one,
+    /// otherwise what the payer pays (sats over Lightning, or their
+    /// stablecoin). A stablecoin amount at parity is the USD value:
+    /// `1_000_000` is 1 USDC at 6 decimals.
     pub amount: u128,
     /// The payer's address on the source chain, where the deposit is refunded
     /// if the recipient can't be paid. Required to pay a Lightning address or
@@ -128,10 +146,11 @@ pub struct GetBridgeStatusRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum BridgeStatus {
-    /// The bridge was created, and the payer hasn't paid yet. A bridge from
-    /// Cash App becomes `Expired` once it can no longer be paid. Other unpaid
-    /// bridges stay `Created` after their `expires_at`, and a late deposit on
-    /// another chain may still be accepted at a new price.
+    /// The bridge was created, and the provider hasn't registered a payment
+    /// yet. A payment over Lightning can take several minutes to register. A
+    /// bridge from Cash App becomes `Expired` once it can no longer be paid.
+    /// Other unpaid bridges stay `Created` after their `expires_at`, and a
+    /// late deposit on another chain may still be accepted at a new price.
     Created,
     /// The provider is processing the payment, from confirming the deposit to
     /// paying the recipient. `provider_status` gives the stage.

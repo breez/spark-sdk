@@ -843,6 +843,31 @@ async fn test_bip353_real_dns() {
 }
 
 #[async_test_all]
+async fn test_xrp_and_zcash_addresses() {
+    let input_parser = InputParser::new(MockDnsResolver::new(), MockRestClient::new(), None);
+    for (address, family) in [
+        (
+            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+            crate::input::CrossChainAddressFamily::Xrp,
+        ),
+        (
+            "t1KRqwQhktLV4BjbNLiuH6pb3AMoszZKcQB",
+            crate::input::CrossChainAddressFamily::Zcash,
+        ),
+    ] {
+        let result = input_parser.parse(address).await;
+        assert!(
+            matches!(
+                &result,
+                Ok(crate::input::InputType::CrossChainAddress(details))
+                    if details.address_family == family && details.address == address
+            ),
+            "{address}: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
 async fn test_bitcoin_address() {
     let mock_dns_resolver = MockDnsResolver::new();
     let mock_rest_client = MockRestClient::new();

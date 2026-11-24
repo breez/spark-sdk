@@ -572,13 +572,15 @@ pub struct CrossChainReceiveInfo {
     pub deposit_amount: u128,
     /// Amount the receiver will see, net of provider fees, in
     /// destination-asset base units. Sats when receiving BTC, token base
-    /// units when receiving a Spark token (e.g. USDB), or stablecoin base
-    /// units when the receiver is on another chain. The final delivered
-    /// amount may move within the slippage tolerance.
+    /// units when receiving a Spark token (e.g. USDB), or the stablecoin's or
+    /// native coin's base units (e.g. wei for ETH) when the receiver is on
+    /// another chain. The final delivered amount may move within the slippage
+    /// tolerance.
     pub expected_received_amount: u128,
     /// Symbol of the asset `expected_received_amount` is denominated in, as
     /// the provider reports it: `"BTC"` for sats, a Spark token symbol (e.g.
-    /// `"USDB"`), or the stablecoin when the receiver is on another chain.
+    /// `"USDB"`), or the stablecoin or native coin (e.g. `"ETH"`) when the
+    /// receiver is on another chain.
     pub destination_asset: String,
     /// Spark token identifier when the destination is a Spark token. Absent
     /// otherwise.

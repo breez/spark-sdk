@@ -1317,8 +1317,19 @@ impl OrchestraService {
 
 impl OrchestraQuoter {
     /// `/quote` with the current affiliate ids and the order tag in place of
-    /// `request`'s.
+    /// `request`'s. A route that takes no fee plan gets no affiliate ids.
     async fn quote(&self, request: &QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
+        if !takes_fee_plan(&request.source_asset, &request.destination_asset) {
+            return self
+                .client
+                .quote(QuoteRequest {
+                    affiliate_ids: Vec::new(),
+                    affiliate_error_mode: None,
+                    tag: self.attribution.tag(),
+                    ..request.clone()
+                })
+                .await;
+        }
         self.attribution
             .run(|affiliate_ids| {
                 self.client.quote(QuoteRequest {
@@ -1331,8 +1342,19 @@ impl OrchestraQuoter {
             .await
     }
 
-    /// `/estimate` with the current affiliate ids in place of `request`'s.
+    /// `/estimate` with the current affiliate ids in place of `request`'s. A
+    /// route that takes no fee plan gets no affiliate ids.
     async fn estimate(&self, request: &EstimateRequest) -> Result<EstimateResponse, FlashnetError> {
+        if !takes_fee_plan(&request.source_asset, &request.destination_asset) {
+            return self
+                .client
+                .estimate(EstimateRequest {
+                    affiliate_ids: Vec::new(),
+                    affiliate_error_mode: None,
+                    ..request.clone()
+                })
+                .await;
+        }
         self.attribution
             .run(|affiliate_ids| {
                 self.client.estimate(EstimateRequest {
@@ -1484,6 +1506,131 @@ impl OrchestraQuoter {
         })
     }
 
+    /// Sizes a payment of `amount` source units with the provider's fees
+    /// added on top, for a destination the SDK has no price for. An exact-in
+    /// estimate gives what it delivers and the fee. The `target` is what
+    /// `amount` buys before fees.
+    async fn estimate_fees_on_top(
+        &self,
+        source_chain: &str,
+        source_asset: &ResolvedSparkAsset,
+        route: &CrossChainRoutePair,
+        amount: u128,
+    ) -> Result<SizedDeposit, SdkError> {
+        let moves_one_asset = source_asset.asset.eq_ignore_ascii_case(&route.asset);
+        let mut request = EstimateRequest {
+            source_chain: source_chain.to_string(),
+            source_asset: source_asset.asset.clone(),
+            destination_chain: route.chain.clone(),
+            destination_asset: route.asset.clone(),
+            amount: amount.to_string(),
+            amount_mode: Some(AmountMode::ExactIn),
+            affiliate_ids: Vec::new(),
+            affiliate_error_mode: None,
+        };
+        let mut probe_in = amount;
+        let estimate = match self.estimate(&request).await {
+            // An on-chain Bitcoin exit has a minimum that must arrive after
+            // its fee, which `amount` alone can miss. Twice the amount clears
+            // it whenever `amount` does, and the fee there sizes the payment,
+            // which is then estimated for its own fee.
+            Err(FlashnetError::AmountOutOfRange {
+                too_small: true, ..
+            }) if moves_one_asset => {
+                let doubled = amount.saturating_mul(2);
+                request.amount = doubled.to_string();
+                let estimate = self.estimate(&request).await?;
+                let delivered = parse_amount(&estimate.estimated_out, "estimatedOut")?;
+                probe_in = amount.saturating_add(doubled.saturating_sub(delivered));
+                request.amount = probe_in.to_string();
+                self.estimate(&request).await?
+            }
+            result => result?,
+        };
+        debug!("Orchestra: estimate response: {:?}", estimate);
+        let delivered = parse_amount(&estimate.estimated_out, "estimatedOut")?;
+        let provider_fee = self.fee_in_source_units(&estimate, source_asset).await?;
+        let fee = if moves_one_asset {
+            // What goes missing beyond the provider's fee, such as the reserve
+            // for an on-chain Bitcoin exit, is fixed, so the payment must get
+            // `amount` plus it past the provider's fee.
+            let fixed = probe_in
+                .saturating_sub(delivered)
+                .saturating_sub(provider_fee);
+            deposit_covering_fee(
+                amount.saturating_add(fixed),
+                probe_in,
+                probe_in.saturating_sub(provider_fee),
+                estimate.fee_bps,
+            )
+            .saturating_sub(amount)
+        } else {
+            provider_fee
+        };
+        if delivered == 0 || fee >= amount {
+            return Err(SdkError::cross_chain_amount_out_of_range(
+                "The amount doesn't cover the provider's fees".to_string(),
+                true,
+                None,
+                None,
+            ));
+        }
+        let target = if moves_one_asset {
+            amount
+        } else {
+            mul_div(delivered, amount, amount.saturating_sub(fee), false)
+                .ok_or_else(|| SdkError::Generic("Cross-chain: fee scaling overflow".to_string()))?
+        };
+        debug!(
+            "Orchestra: fees on top: amount={amount} probe_in={probe_in} delivered={delivered} \
+             fee={fee} → required_in={} target={target}",
+            amount.saturating_add(fee)
+        );
+        Ok(SizedDeposit {
+            required_in: amount.saturating_add(fee),
+            target,
+            probe_in,
+            probe_out: delivered,
+        })
+    }
+
+    /// The estimate's `totalFeeAmount` in `source_asset` base units. A fee in
+    /// a USD stablecoin on a BTC source is converted at the BTC/USD rate,
+    /// rounded up.
+    async fn fee_in_source_units(
+        &self,
+        estimate: &EstimateResponse,
+        source_asset: &ResolvedSparkAsset,
+    ) -> Result<u128, SdkError> {
+        let total = parse_amount(&estimate.total_fee_amount, "totalFeeAmount")?;
+        let fee_decimals = estimate.fee_asset_details.as_ref().map(|d| d.decimals);
+        if estimate.fee_asset.eq_ignore_ascii_case(&source_asset.asset) {
+            return match fee_decimals {
+                Some(decimals) => {
+                    super::rescale_decimals(total, decimals, source_asset.decimals.into())
+                }
+                None => Ok(total),
+            };
+        }
+        if source_asset.asset.eq_ignore_ascii_case("BTC")
+            && super::is_usd_stable_asset(&estimate.fee_asset)
+        {
+            let decimals = fee_decimals.ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Orchestra reported a {} fee without its decimals",
+                    estimate.fee_asset
+                ))
+            })?;
+            let btc_usd = super::fetch_btc_usd_rate(self.fiat_service.as_ref()).await?;
+            let sats = super::convert_destination_amount_to_sats(total, btc_usd, decimals)?;
+            return Ok(sats.saturating_add(1));
+        }
+        Err(SdkError::Generic(format!(
+            "Cross-chain: can't add a {} fee to a {} payment",
+            estimate.fee_asset, source_asset.asset
+        )))
+    }
+
     /// Quotes once more when `quote` delivers too little to pass its drift
     /// check, growing the deposit by the shortfall at the probe's rate.
     /// `/estimate` leaves out costs a firm quote takes from its output (the
@@ -1549,6 +1696,13 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
     value
         .parse::<u128>()
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
+}
+
+/// Whether Orchestra takes an affiliate fee plan on a route from
+/// `source_asset` to `destination_asset`. It rejects one on a route that only
+/// moves BTC (`unsupported_fee_plan`).
+fn takes_fee_plan(source_asset: &str, destination_asset: &str) -> bool {
+    !(source_asset.eq_ignore_ascii_case("BTC") && destination_asset.eq_ignore_ascii_case("BTC"))
 }
 
 /// Ticker and decimals of the asset a quote's fees are denominated in.
@@ -2535,24 +2689,33 @@ impl OrchestraQuoter {
             destination_amount: None,
         };
         if fee_mode == CrossChainFeeMode::FeesExcluded {
-            let destination_amount = self
-                .compute_target_destination_amount(&amounts.source_asset, route, amount)
-                .await?;
-            amounts.source_amount = self
-                .estimate_required_source_amount(
-                    source_chain,
-                    &amounts.source_asset.asset,
-                    &route.chain,
-                    &route.asset,
-                    amount,
-                    destination_amount,
-                    false,
-                    None,
-                )
-                .await
-                .map_err(|e| amounts.with_limits(e, route))?
-                .required_in;
-            amounts.destination_amount = Some(destination_amount);
+            if super::is_usd_stable_asset(&route.asset) {
+                let destination_amount = self
+                    .compute_target_destination_amount(&amounts.source_asset, route, amount)
+                    .await?;
+                amounts.source_amount = self
+                    .estimate_required_source_amount(
+                        source_chain,
+                        &amounts.source_asset.asset,
+                        &route.chain,
+                        &route.asset,
+                        amount,
+                        destination_amount,
+                        false,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| amounts.with_limits(e, route))?
+                    .required_in;
+                amounts.destination_amount = Some(destination_amount);
+            } else {
+                let sized = self
+                    .estimate_fees_on_top(source_chain, &amounts.source_asset, route, amount)
+                    .await
+                    .map_err(|e| amounts.with_limits(e, route))?;
+                amounts.source_amount = sized.required_in;
+                amounts.destination_amount = Some(sized.target);
+            }
         }
         Ok(amounts)
     }
@@ -2572,9 +2735,20 @@ impl OrchestraQuoter {
     ) -> Result<CrossChainSendPrepared, SdkError> {
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
-        let service_fee_amount =
+        let mut service_fee_amount =
             service_fee_from_quote(&quote, &route.asset, u32::from(route.decimals))?;
         let (service_fee_asset, service_fee_asset_decimals) = fee_denomination(&quote);
+        if service_fee_asset.is_none()
+            && amounts
+                .source_asset
+                .asset
+                .eq_ignore_ascii_case(&route.asset)
+        {
+            // A fee in sats on a route that only moves BTC. `totalFeeAmount`
+            // leaves out costs taken from the delivery, such as the reserve
+            // for an on-chain Bitcoin exit.
+            service_fee_amount = service_fee_amount.max(amount_in.saturating_sub(estimated_out));
+        }
 
         verify_quote_amount_in(amounts.source_amount, amount_in)?;
         if let Some(target) = amounts.destination_amount {
@@ -2583,10 +2757,19 @@ impl OrchestraQuoter {
 
         // `amount_in` expressed in destination-asset units, via the same
         // path as `target_dest`. `fee_amount` is the gap to `estimated_out`.
-        let asset_amount_in = self
-            .compute_target_destination_amount(&amounts.source_asset, route, amount_in)
-            .await?;
-        let fee_amount = asset_amount_in.saturating_sub(estimated_out);
+        // The SDK has no price for any other destination, so there
+        // `asset_amount_in` is the delivery and `fee_amount` is 0.
+        let (asset_amount_in, fee_amount) = if super::is_usd_stable_asset(&route.asset) {
+            let asset_amount_in = self
+                .compute_target_destination_amount(&amounts.source_asset, route, amount_in)
+                .await?;
+            (
+                asset_amount_in,
+                asset_amount_in.saturating_sub(estimated_out),
+            )
+        } else {
+            (estimated_out, 0)
+        };
 
         let quote_read_token = quote.read_token.map(|t| t.0);
         let provider_context = CrossChainProviderContext::Orchestra {
@@ -2651,19 +2834,24 @@ impl OrchestraQuoter {
             request.destination_chain, request.destination_asset, request.amount
         );
         // A retry changes the body, so it needs its own idempotency key.
-        let outcome = self
-            .attribution
-            .run(|affiliate_ids| {
-                self.client.onramp(
-                    OnrampRequest {
-                        affiliate_ids,
-                        ..request.clone()
-                    },
-                    uuid::Uuid::new_v4().to_string(),
-                )
-            })
-            .await
-            .map_err(|e| amounts.with_limits(SdkError::from(e), route))?;
+        let outcome = if takes_fee_plan("BTC", &route.asset) {
+            self.attribution
+                .run(|affiliate_ids| {
+                    self.client.onramp(
+                        OnrampRequest {
+                            affiliate_ids,
+                            ..request.clone()
+                        },
+                        uuid::Uuid::new_v4().to_string(),
+                    )
+                })
+                .await
+        } else {
+            self.client
+                .onramp(request.clone(), uuid::Uuid::new_v4().to_string())
+                .await
+        }
+        .map_err(|e| amounts.with_limits(SdkError::from(e), route))?;
         let order = match outcome {
             OnrampOutcome::Created(order) => *order,
             OnrampOutcome::HeldForReview { order_id, status } => {
@@ -4687,6 +4875,7 @@ mod tests {
         RouteLimits {
             order_notional_usd: None,
             exact_in: None,
+            constraints: Vec::new(),
         }
     }
 
@@ -4721,6 +4910,7 @@ mod tests {
                     max_usd_cents: Some(max_usd.to_string()),
                 }),
             }),
+            constraints: Vec::new(),
         }
     }
 
@@ -7955,6 +8145,445 @@ mod tests {
         // 12,320 sats at $75,000 is $9.24.
         assert_eq!(prepared.asset_amount_in, 9_240_000);
         assert_eq!(prepared.expires_at, "2026-11-10T22:47:46.800Z");
+    }
+
+    /// A Bitcoin on-chain exit: `reserve` sats plus `bps` of the amount come
+    /// off it, and less than `floor` delivered is rejected.
+    #[derive(Clone, Copy)]
+    struct FakeExit {
+        reserve: u128,
+        bps: u32,
+        floor: u128,
+    }
+
+    /// Lists one Lightning route to `destination`, answers `/estimate` with
+    /// `estimate` and `/quote` with `quote`, charging the amount each quote
+    /// asks for. Records the estimate URLs and the quote request bodies.
+    struct FakeNativeQuoting {
+        destination: serde_json::Value,
+        estimate: serde_json::Value,
+        /// When set, `/estimate` prices a Bitcoin on-chain exit.
+        exit: Option<FakeExit>,
+        quote: serde_json::Value,
+        estimates: std::sync::Mutex<Vec<String>>,
+        quotes: std::sync::Mutex<Vec<serde_json::Value>>,
+    }
+
+    impl FakeNativeQuoting {
+        fn new(
+            destination: serde_json::Value,
+            estimate: serde_json::Value,
+            quote: serde_json::Value,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                destination,
+                estimate,
+                exit: None,
+                quote,
+                estimates: std::sync::Mutex::new(Vec::new()),
+                quotes: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn bitcoin_exit(exit: FakeExit, quote: serde_json::Value) -> Arc<Self> {
+            let route = native_route("bitcoin", None, "BTC", 8);
+            Arc::new(Self {
+                destination: native_destination(&route),
+                estimate: serde_json::json!({}),
+                exit: Some(exit),
+                quote,
+                estimates: std::sync::Mutex::new(Vec::new()),
+                quotes: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn exit_estimate(&self, url: &str) -> (u16, serde_json::Value) {
+            let Some(exit) = self.exit else {
+                return (200, self.estimate.clone());
+            };
+            let amount: u128 = url
+                .split(['?', '&'])
+                .find_map(|param| param.strip_prefix("amount="))
+                .unwrap()
+                .parse()
+                .unwrap();
+            // Orchestra reports its own fee, but not the reserve.
+            let provider_fee = amount.saturating_mul(exit.bps.into()) / 10_000;
+            let delivered = amount
+                .saturating_sub(exit.reserve)
+                .saturating_sub(provider_fee);
+            if delivered < exit.floor {
+                let message = format!("Estimated BTC output ({delivered} sats) is too small");
+                return (
+                    400,
+                    serde_json::json!({ "error": {
+                        "code": "amount_too_small", "message": message,
+                    }}),
+                );
+            }
+            let mut estimate =
+                native_quote(&delivered.to_string(), &provider_fee.to_string(), "BTC");
+            estimate["feeBps"] = exit.bps.into();
+            (200, estimate)
+        }
+
+        fn quoter(self: &Arc<Self>, fiat: Arc<dyn FiatService>) -> OrchestraQuoter {
+            OrchestraQuoter::new(
+                Arc::new(FixedOrchestraConfig),
+                None,
+                fiat,
+                Arc::clone(self) as Arc<dyn platform_utils::HttpClient>,
+            )
+        }
+    }
+
+    #[macros::async_trait]
+    impl platform_utils::HttpClient for FakeNativeQuoting {
+        async fn get(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            let (status, body) = if url.contains("/v1/orchestration/estimate") {
+                let answer = self.exit_estimate(&url);
+                self.estimates.lock().unwrap().push(url);
+                answer
+            } else {
+                assert!(
+                    url.contains("/v1/orchestration/limits"),
+                    "unexpected GET {url}"
+                );
+                let routes = serde_json::json!({ "routes": [{
+                    "sourceChain": "lightning", "sourceAsset": "BTC",
+                    "destinationChain": self.destination["chain"],
+                    "destinationAsset": self.destination["asset"],
+                    "source": {
+                        "chain": "lightning", "asset": "BTC", "contractAddress": null,
+                        "decimals": 8, "chainId": null,
+                    },
+                    "destination": self.destination,
+                    "limits": {},
+                }]});
+                (200, routes)
+            };
+            Ok(platform_utils::HttpResponse {
+                status,
+                body: body.to_string(),
+                headers: HashMap::new(),
+            })
+        }
+
+        async fn post(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            assert!(
+                url.ends_with("/v1/orchestration/quote")
+                    || url.ends_with("/v1/orchestration/onramp"),
+                "unexpected POST {url}"
+            );
+            let request: serde_json::Value =
+                serde_json::from_str(&body.unwrap_or_default()).unwrap();
+            let mut quote = self.quote.clone();
+            quote["amountIn"] = request["amount"].clone();
+            self.quotes.lock().unwrap().push(request);
+            Ok(platform_utils::HttpResponse {
+                status: 200,
+                body: quote.to_string(),
+                headers: HashMap::new(),
+            })
+        }
+
+        async fn delete(
+            &self,
+            url: String,
+            _: Option<HashMap<String, String>>,
+            _: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unreachable!("unexpected DELETE {url}")
+        }
+    }
+
+    fn native_route(
+        chain: &str,
+        chain_id: Option<&str>,
+        asset: &str,
+        decimals: u8,
+    ) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: chain.to_string(),
+            chain_id: chain_id.map(str::to_string),
+            asset: asset.to_string(),
+            contract_address: None,
+            decimals,
+            exact_out_eligible: false,
+            accepted_assets: Vec::new(),
+            delivery_methods: vec![DeliveryMethod::Lightning],
+        }
+    }
+
+    fn native_destination(route: &CrossChainRoutePair) -> serde_json::Value {
+        serde_json::json!({
+            "chain": route.chain, "asset": route.asset, "contractAddress": null,
+            "decimals": route.decimals, "chainId": route.chain_id,
+        })
+    }
+
+    fn native_quote(estimated_out: &str, total_fee: &str, fee_asset: &str) -> serde_json::Value {
+        serde_json::json!({
+            "quoteId": "q_1", "depositAddress": "lnbc1pinvoice",
+            "amountIn": "0", "estimatedOut": estimated_out,
+            "feeAmount": total_fee, "totalFeeAmount": total_fee, "feeAsset": fee_asset,
+            "feeAssetDetails": { "decimals": if fee_asset == "BTC" { 8 } else { 6 } },
+            "feeBps": 65, "expiresAt": "2026-11-23T12:02:00.000Z",
+        })
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_a_native_coin_adds_the_fees_on_top_in_sats() {
+        let route = native_route("base", Some("8453"), "ETH", 18);
+        // 100,000 sats buy 0.0395 ETH after a 0.377 USDC fee.
+        let http = FakeNativeQuoting::new(
+            native_destination(&route),
+            native_quote("39500000000000000", "377000", "USDC"),
+            native_quote("39600000000000000", "377000", "USDC"),
+        );
+        let prepared = http
+            .quoter(Arc::new(FixedFiat))
+            .quote_send(
+                "0xrecipient",
+                &route,
+                100_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let estimates = http.estimates.lock().unwrap().clone();
+        let [estimate] = estimates.as_slice() else {
+            panic!("expected one estimate, got {estimates:?}");
+        };
+        // The amount is probed as given, not converted at USD parity.
+        assert!(estimate.contains("amount=100000"), "{estimate}");
+        assert!(estimate.contains("affiliateIds=breez_sdk"), "{estimate}");
+        let quote = http.quotes.lock().unwrap()[0].clone();
+        // 0.377 USDC at $75,000 is 502.67 sats, rounded up.
+        assert_eq!(quote["amount"], "100503");
+        assert_eq!(quote["affiliateIds"], serde_json::json!(["breez_sdk"]));
+        assert_eq!(prepared.amount_in, 100_503);
+        assert_eq!(prepared.estimated_out, 39_600_000_000_000_000);
+        assert_eq!(prepared.asset_amount_in, prepared.estimated_out);
+        assert_eq!(prepared.fee_amount, 0);
+        assert_eq!(prepared.service_fee_amount, 377_000);
+        assert_eq!(prepared.service_fee_asset.as_deref(), Some("USDC"));
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_a_native_coin_rejects_a_quote_short_of_the_estimate() {
+        let route = native_route("base", Some("8453"), "ETH", 18);
+        let http = FakeNativeQuoting::new(
+            native_destination(&route),
+            native_quote("39500000000000000", "377000", "USDC"),
+            // 2% short of what the payment buys before fees.
+            native_quote("38900000000000000", "377000", "USDC"),
+        );
+        let result = http
+            .quoter(Arc::new(FixedFiat))
+            .quote_send(
+                "0xrecipient",
+                &route,
+                100_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                None,
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(SdkError::InvalidInput(message)) if message.contains("drift")),
+            "{result:?}"
+        );
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_bitcoin_on_chain_counts_the_exit_reserve_as_fee() {
+        let route = native_route("bitcoin", None, "BTC", 8);
+        // Orchestra reports a 100-sat fee at 10 bp, but 2,290 sats never
+        // arrive.
+        let mut estimate = native_quote("97710", "100", "BTC");
+        estimate["feeBps"] = 10.into();
+        let http = FakeNativeQuoting::new(
+            native_destination(&route),
+            estimate,
+            native_quote("99990", "100", "BTC"),
+        );
+        let prepared = http
+            .quoter(Arc::new(FailingFiat))
+            .quote_send(
+                "bc1qrecipient",
+                &route,
+                100_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 102,293 sats pay the 2,190-sat reserve and 10 bp, and deliver 100,000.
+        assert_eq!(prepared.amount_in, 102_293);
+        assert_eq!(prepared.estimated_out, 99_990);
+        assert_eq!(prepared.service_fee_amount, 2_303);
+        assert_eq!(prepared.service_fee_asset, None);
+        // Orchestra rejects a fee plan on a route that only moves BTC.
+        let estimate = http.estimates.lock().unwrap()[0].clone();
+        assert!(!estimate.contains("affiliateIds"), "{estimate}");
+        let quote = http.quotes.lock().unwrap()[0].clone();
+        assert!(quote.get("affiliateIds").is_none(), "{quote}");
+        assert!(quote.get("affiliateErrorMode").is_none(), "{quote}");
+    }
+
+    const EXIT: FakeExit = FakeExit {
+        reserve: 1_470,
+        bps: 25,
+        floor: 8_530,
+    };
+
+    #[async_test_all]
+    async fn lightning_send_to_bitcoin_on_chain_sizes_the_fee_above_the_exit_minimum() {
+        // 9,000 sats clear the 8,530-sat minimum, but less the 1,492-sat fee
+        // they don't.
+        let http = FakeNativeQuoting::bitcoin_exit(EXIT, native_quote("9000", "25", "BTC"));
+        let prepared = http
+            .quoter(Arc::new(FailingFiat))
+            .quote_send(
+                "bc1qrecipient",
+                &native_route("bitcoin", None, "BTC", 8),
+                9_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let estimates = http.estimates.lock().unwrap().clone();
+        let [first, doubled, sized] = estimates.as_slice() else {
+            panic!("expected three estimates, got {estimates:?}");
+        };
+        assert!(first.contains("amount=9000"), "{first}");
+        // 18,000 sats pay a 1,515-sat fee. 10,497 sats pay the 1,470-sat
+        // reserve and 25 bp, and deliver at least 9,000.
+        assert!(doubled.contains("amount=18000"), "{doubled}");
+        assert!(sized.contains("amount=10515"), "{sized}");
+        assert_eq!(prepared.amount_in, 10_497);
+        assert_eq!(prepared.estimated_out, 9_000);
+        assert_eq!(prepared.service_fee_amount, 1_497);
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_bitcoin_on_chain_below_the_exit_minimum_fails() {
+        let http = FakeNativeQuoting::bitcoin_exit(EXIT, native_quote("8000", "25", "BTC"));
+        let result = http
+            .quoter(Arc::new(FailingFiat))
+            .quote_send(
+                "bc1qrecipient",
+                &native_route("bitcoin", None, "BTC", 8),
+                8_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesExcluded,
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(SdkError::CrossChainAmountOutOfRange {
+                    too_small: true,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert!(http.quotes.lock().unwrap().is_empty());
+    }
+
+    #[test_all]
+    fn only_a_route_that_moves_btc_alone_takes_no_fee_plan() {
+        assert!(!takes_fee_plan("BTC", "BTC"));
+        assert!(!takes_fee_plan("btc", "BTC"));
+        assert!(takes_fee_plan("BTC", "ETH"));
+        assert!(takes_fee_plan("BTC", "USDC"));
+        assert!(takes_fee_plan("USDC", "BTC"));
+    }
+
+    #[async_test_all]
+    async fn onramp_send_to_bitcoin_on_chain_names_no_affiliates() {
+        let route = native_route("bitcoin", None, "BTC", 8);
+        let http = FakeNativeQuoting::new(
+            native_destination(&route),
+            serde_json::json!({}),
+            base_usdc_onramp_order(),
+        );
+        http.quoter(Arc::new(FailingFiat))
+            .prepare_onramp_send(
+                "bc1qrecipient",
+                &route,
+                20_000,
+                100,
+                CrossChainFeeMode::FeesIncluded,
+                Some("alice@cash.app"),
+            )
+            .await
+            .unwrap();
+
+        let order = http.quotes.lock().unwrap()[0].clone();
+        assert_eq!(order["destinationChain"], "bitcoin");
+        assert_eq!(order["refundAddress"], "alice@cash.app");
+        assert!(order.get("affiliateIds").is_none(), "{order}");
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_a_native_coin_with_fees_included_charges_the_amount() {
+        let route = native_route("solana", Some("solana:5eykt"), "SOL", 9);
+        let http = FakeNativeQuoting::new(
+            native_destination(&route),
+            serde_json::json!({}),
+            native_quote("423086746", "200000", "USDC"),
+        );
+        let prepared = http
+            .quoter(Arc::new(FailingFiat))
+            .quote_send(
+                "So1recipient",
+                &route,
+                50_000,
+                DeliveryMethod::Lightning,
+                None,
+                100,
+                CrossChainFeeMode::FeesIncluded,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(http.estimates.lock().unwrap().is_empty());
+        assert_eq!(prepared.amount_in, 50_000);
+        assert_eq!(prepared.asset_amount_in, 423_086_746);
     }
 
     #[async_test_all]

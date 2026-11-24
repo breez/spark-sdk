@@ -1,20 +1,53 @@
 //! Bridge models from Orchestra's route listings and orders.
 
-use flashnet::orchestra::{Order, OrderStatus, RouteAsset, RouteWithLimits};
+use flashnet::orchestra::{Order, OrderStatus, RouteAsset, RouteLimits, RouteWithLimits};
 
-use super::{BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, GetBridgeStatusResponse};
+use super::{
+    BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, GetBridgeStatusResponse, amount_side,
+};
 use crate::{
-    CrossChainProvider, DeliveryMethod,
+    CrossChainProvider, CrossChainRouteLimits, DeliveryMethod,
     cross_chain::{delivery_method_from_wire, to_route_limits},
 };
 
+/// Orchestra's constraint on the least an on-chain Bitcoin delivery must
+/// reach the recipient with.
+const BITCOIN_DELIVERY_MIN: &str = "bitcoin_l1_delivery_min";
+
 pub(super) fn to_bridge_route_pair(route: &RouteWithLimits) -> BridgeRoutePair {
+    let destination = to_bridge_route_pair_side(&route.route.destination);
+    let limits = if delivery_method_from_wire(&destination.chain) == Some(DeliveryMethod::Bitcoin) {
+        bitcoin_delivery_limits(&route.limits)
+    } else {
+        to_route_limits(&route.limits)
+    };
     BridgeRoutePair {
         provider: CrossChainProvider::Orchestra,
         source: to_bridge_route_pair_side(&route.route.source),
-        destination: to_bridge_route_pair_side(&route.route.destination),
-        limits: to_route_limits(&route.limits),
+        amount_side: amount_side(&destination.asset),
+        destination,
+        limits,
     }
+}
+
+/// The bounds of a route paying Bitcoin on-chain. Its minimum is the sats
+/// that must reach the recipient, which follows the exit fee, in place of
+/// the route's USD minimum, which sits far below it.
+fn bitcoin_delivery_limits(limits: &RouteLimits) -> Option<CrossChainRouteLimits> {
+    let floor = limits
+        .constraints
+        .iter()
+        .find(|c| c.id == BITCOIN_DELIVERY_MIN && c.leg.as_deref() == Some("destination"))
+        .and_then(|c| c.min_amount_smallest.as_deref()?.parse().ok());
+    let listed = to_route_limits(limits);
+    let bounds = CrossChainRouteLimits {
+        min_amount: floor,
+        max_amount: listed.as_ref().and_then(|l| l.max_amount),
+        min_usd_cents: None,
+        max_usd_cents: listed.and_then(|l| l.max_usd_cents),
+    };
+    (bounds.min_amount.is_some() || bounds.max_amount.is_some() || bounds.max_usd_cents.is_some())
+        .then_some(bounds)
 }
 
 fn to_bridge_route_pair_side(side: &RouteAsset) -> BridgeRoutePairSide {
@@ -113,6 +146,7 @@ fn provider_status(status: OrderStatus) -> Option<String> {
 mod tests {
     use macros::test_all;
 
+    use super::super::BridgeAmountSide;
     use super::*;
 
     fn order(status: &str) -> Order {
@@ -230,6 +264,79 @@ mod tests {
         );
         assert_eq!(pair.destination.chain, "base");
         assert_eq!(pair.destination.chain_id.as_deref(), Some("8453"));
+        assert_eq!(pair.amount_side, BridgeAmountSide::Destination);
         assert_eq!(pair.limits.and_then(|l| l.min_usd_cents), Some(200));
+    }
+
+    #[test_all]
+    fn a_native_coin_route_takes_the_amount_in_source_units() {
+        let route: RouteWithLimits = serde_json::from_value(serde_json::json!({
+            "sourceChain": "lightning",
+            "sourceAsset": "BTC",
+            "destinationChain": "base",
+            "destinationAsset": "ETH",
+            "source": {
+                "chain": "lightning", "asset": "BTC", "contractAddress": null,
+                "decimals": 8, "chainId": null,
+            },
+            "destination": {
+                "chain": "base", "asset": "ETH", "contractAddress": null,
+                "decimals": 18, "chainId": "8453",
+            },
+            "limits": {},
+        }))
+        .unwrap();
+        let pair = to_bridge_route_pair(&route);
+        assert_eq!(pair.destination.contract_address, None);
+        assert_eq!(pair.amount_side, BridgeAmountSide::Source);
+    }
+
+    #[test_all]
+    fn a_bitcoin_on_chain_route_lists_its_delivery_floor() {
+        let route: RouteWithLimits = serde_json::from_value(serde_json::json!({
+            "sourceChain": "lightning",
+            "sourceAsset": "BTC",
+            "destinationChain": "bitcoin",
+            "destinationAsset": "BTC",
+            "source": {
+                "chain": "lightning", "asset": "BTC", "contractAddress": null,
+                "decimals": 8, "chainId": null,
+            },
+            "destination": {
+                "chain": "bitcoin", "asset": "BTC", "contractAddress": null,
+                "decimals": 8, "chainId": null,
+            },
+            "limits": {
+                "orderNotionalUsd": { "minCents": "80", "maxCents": "5240000" },
+                "exactIn": { "supported": true, "requestAmount": {
+                    "minAmountSmallest": null, "minUsdCents": "80", "maxUsdCents": "5230000",
+                }},
+                "constraints": [
+                    { "id": "order_notional_usd", "leg": "route", "minUsdCents": "80" },
+                    { "id": "bitcoin_l1_delivery_min", "leg": "destination",
+                      "minAmountSmallest": "8530" },
+                ],
+            },
+        }))
+        .unwrap();
+        let limits = to_bridge_route_pair(&route).limits.unwrap();
+        assert_eq!(limits.min_amount, Some(8_530));
+        assert_eq!(limits.min_usd_cents, None);
+        assert_eq!(limits.max_usd_cents, Some(5_230_000));
+    }
+
+    #[test_all]
+    fn an_on_chain_bitcoin_delivery_is_its_bitcoin_transaction() {
+        let mut to_bitcoin = order("completed");
+        to_bitcoin.destination_chain = Some("bitcoin".to_string());
+        to_bitcoin.destination_tx_hash = Some("btc-txid".to_string());
+        to_bitcoin.spark_tx_hash = Some("spark-leg".to_string());
+        let response = bridge_status_response(Some(&to_bitcoin));
+        assert_eq!(response.delivery_tx_hash.as_deref(), Some("btc-txid"));
+
+        // The Spark transfer is an internal leg, never the delivery.
+        to_bitcoin.destination_tx_hash = None;
+        let response = bridge_status_response(Some(&to_bitcoin));
+        assert_eq!(response.delivery_tx_hash, None);
     }
 }

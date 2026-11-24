@@ -49,9 +49,8 @@ pub struct RouteWithLimits {
     pub limits: RouteLimits,
 }
 
-/// Only the bounds the SDK surfaces are modelled. The `constraints` array and
-/// the `fiatUsd` / `exactOut` / `dynamicProviderLimits` groups are ignored on
-/// deserialization.
+/// Only the bounds the SDK surfaces are modelled. The `fiatUsd` / `exactOut`
+/// / `dynamicProviderLimits` groups are ignored on deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteLimits {
@@ -59,6 +58,22 @@ pub struct RouteLimits {
     pub order_notional_usd: Option<UsdBounds>,
     #[serde(default)]
     pub exact_in: Option<ModeLimits>,
+    #[serde(default)]
+    pub constraints: Vec<LimitConstraint>,
+}
+
+/// A named bound on one leg of a route, e.g. `bitcoin_l1_delivery_min`, the
+/// least an on-chain Bitcoin delivery must reach the recipient with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitConstraint {
+    pub id: String,
+    /// `"source"`, `"destination"` or `"route"`.
+    #[serde(default)]
+    pub leg: Option<String>,
+    /// In the leg's base units.
+    #[serde(default)]
+    pub min_amount_smallest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

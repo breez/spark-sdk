@@ -71,9 +71,10 @@ impl OrchestraClient {
     ///
     /// Reads `/limits` rather than `/routes`: it returns the same route set
     /// under the same filter with the bounds attached, and filtering server-side
-    /// keeps the payload a fraction of the unfiltered route list. Responses are
-    /// cached per `(chain, direction)` for [`ROUTES_TTL_MS`] so repeated
-    /// parser/UI calls are synchronous.
+    /// keeps the payload a fraction of the unfiltered route list. The request
+    /// is authenticated, so the listing leaves out routes the API key isn't
+    /// enabled for. Responses are cached per `(chain, direction)` for
+    /// [`ROUTES_TTL_MS`] so repeated parser/UI calls are synchronous.
     pub async fn filter_routes(
         &self,
         chain: &str,
@@ -108,7 +109,7 @@ impl OrchestraClient {
         };
 
         let response: LimitsResponse = self
-            .get("v1/orchestration/limits", Some(query), false)
+            .get("v1/orchestration/limits", Some(query), true)
             .await?;
         self.cache_store
             .set(&cache_key, &response, ROUTES_TTL_MS)

@@ -38,12 +38,16 @@
 //!   Spark wallet as USDB. Counters test 02 so the USDB Alice spent to build
 //!   the USDC stash comes back here.
 //!
-//! ## Bridge test (quote only)
+//! ## Bridge tests (quote only)
 //!
 //! - `test_cross_chain_06_bridge_to_cash_app_quote`: quotes USDC on Arbitrum
 //!   to the `$cashapp` Cash App account, refunding the deterministic EVM
 //!   wallet. Nothing is funded. Also checks an unknown cashtag fails before
 //!   quoting.
+//! - `test_cross_chain_07_bridge_native_coin_quotes`: quotes ETH on Arbitrum
+//!   to the deterministic EVM wallet from Lightning, with fees included and
+//!   excluded, and checks a Bitcoin on-chain bridge to Alice's deposit
+//!   address below the provider's floor fails. Nothing is funded.
 //!
 //! Receive tests need Arbitrum ETH at the deterministic EVM address to pay gas
 //! for the ERC-20 transfer. The tests read the balance and skip loudly (never
@@ -611,6 +615,114 @@ async fn test_cross_chain_06_bridge_to_cash_app_quote() -> Result<()> {
     assert!(
         matches!(unknown, Err(SdkError::InvalidInput(_))),
         "unknown cashtag should fail before quoting, got {unknown:?}"
+    );
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cross_chain_07_bridge_native_coin_quotes() -> Result<()> {
+    let Some((alice, _, mnemonic)) = mainnet_cross_chain_setup().await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_cross_chain_07_bridge_native_coin_quotes ===");
+    let (evm_address, _) = mainnet_evm_recipient(&mnemonic)?;
+    let bridging = alice.sdk.get_bridging_client()?;
+
+    let recipient = format!("ethereum:{evm_address}@{TARGET_CHAIN_ID}");
+    let routes = bridging
+        .get_routes(GetBridgeRoutesRequest {
+            recipient: recipient.clone(),
+        })
+        .await?
+        .routes;
+    let from_lightning: Vec<&BridgeRoutePair> = routes
+        .iter()
+        .filter(|r| r.source.chain == "lightning")
+        .collect();
+    let Some(route) = from_lightning
+        .iter()
+        .find(|r| r.destination.asset == "ETH")
+        .map(|r| (*r).clone())
+    else {
+        anyhow::bail!("No Lightning route to ETH on Arbitrum One");
+    };
+    assert_eq!(route.amount_side, BridgeAmountSide::Source);
+    assert_eq!(route.destination.contract_address, None);
+
+    let request = |fee_policy| CreateBridgeRequest {
+        recipient: recipient.clone(),
+        route: route.clone(),
+        amount: 20_000,
+        refund_address: None,
+        fee_policy: Some(fee_policy),
+        max_slippage_bps: None,
+    };
+    let included = bridging
+        .create_bridge(request(FeePolicy::FeesIncluded))
+        .await?;
+    info!("ETH bridge, fees included: {:?}", included.info);
+    assert_eq!(included.info.deposit_amount, 20_000);
+    assert_eq!(included.info.destination_asset, "ETH");
+    assert!(included.info.expected_received_amount > 0);
+    let excluded = bridging
+        .create_bridge(request(FeePolicy::FeesExcluded))
+        .await?;
+    info!("ETH bridge, fees excluded: {:?}", excluded.info);
+    assert!(
+        (20_001..=21_000).contains(&excluded.info.deposit_amount),
+        "fees excluded should add the fee on top of 20,000 sats, got {}",
+        excluded.info.deposit_amount
+    );
+    assert!(excluded.info.expected_received_amount > included.info.expected_received_amount);
+
+    let bitcoin_address = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+    let routes = bridging
+        .get_routes(GetBridgeRoutesRequest {
+            recipient: bitcoin_address.clone(),
+        })
+        .await?
+        .routes;
+    let [route] = routes.as_slice() else {
+        anyhow::bail!("expected one route to a Bitcoin address, got {routes:?}");
+    };
+    assert_eq!(route.destination.chain, "bitcoin");
+    let Some(floor) = route.limits.as_ref().and_then(|l| l.min_amount) else {
+        anyhow::bail!("the Bitcoin route publishes no delivery minimum: {route:?}");
+    };
+    let bitcoin_request = |amount| CreateBridgeRequest {
+        recipient: bitcoin_address.clone(),
+        route: route.clone(),
+        amount,
+        refund_address: None,
+        fee_policy: None,
+        max_slippage_bps: None,
+    };
+    let at_floor = bridging.create_bridge(bitcoin_request(floor)).await?;
+    info!(
+        "Bitcoin bridge at the {floor}-sat floor: {:?}",
+        at_floor.info
+    );
+    assert!(
+        at_floor.info.expected_received_amount >= floor,
+        "fees excluded should deliver the {floor}-sat floor, got {}",
+        at_floor.info.expected_received_amount
+    );
+    let below_floor = bridging.create_bridge(bitcoin_request(5_000)).await;
+    assert!(
+        matches!(
+            below_floor,
+            Err(SdkError::CrossChainAmountOutOfRange {
+                too_small: true,
+                ..
+            })
+        ),
+        "5,000 sats should be below the on-chain floor, got {below_floor:?}"
     );
     Ok(())
 }

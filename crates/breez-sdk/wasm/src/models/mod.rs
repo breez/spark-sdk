@@ -1342,6 +1342,8 @@ pub enum CrossChainAddressFamily {
     Evm,
     Solana,
     Tron,
+    Xrp,
+    Zcash,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteFilter)]
@@ -2552,6 +2554,13 @@ pub struct BridgeRoutePair {
     pub source: BridgeRoutePairSide,
     pub destination: BridgeRoutePairSide,
     pub limits: Option<CrossChainRouteLimits>,
+    pub amount_side: BridgeAmountSide,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeAmountSide)]
+pub enum BridgeAmountSide {
+    Source,
+    Destination,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BridgeRoutePairSide)]
