@@ -16,10 +16,10 @@ use platform_utils::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
 use crate::{
-    AutoOptimizationEvent, Fee, Network, OnchainConfirmationSpeed, OptimizationOutcome, Payment,
-    PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
-    SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
-    TokenBalance, TokenMetadata,
+    AutoOptimizationEvent, Fee, HtlcPayment, Network, OnchainConfirmationSpeed,
+    OptimizationOutcome, Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType,
+    SdkError, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus,
+    SparkInvoicePaymentDetails, TokenBalance, TokenMetadata,
 };
 
 /// Feb 1, 2026 00:00:00 UTC — transfers before this may lack HTLC data on the operator.
@@ -410,6 +410,29 @@ impl TryFrom<WalletTransfer> for Payment {
             method: PaymentMethod::from_transfer(&transfer),
             details,
             conversion_details: None,
+        })
+    }
+}
+
+impl TryFrom<&WalletTransfer> for HtlcPayment {
+    type Error = SdkError;
+    fn try_from(transfer: &WalletTransfer) -> Result<Self, Self::Error> {
+        let request = transfer
+            .htlc_preimage_request
+            .as_ref()
+            .ok_or_else(|| SdkError::Generic(format!("Transfer {} is not an HTLC", transfer.id)))?;
+        Ok(HtlcPayment {
+            id: transfer.id.to_string(),
+            payment_type: match transfer.direction {
+                TransferDirection::Incoming => PaymentType::Receive,
+                TransferDirection::Outgoing => PaymentType::Send,
+            },
+            amount_sats: transfer.total_value_sat,
+            timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
+                Some(Ok(duration)) => duration.as_secs(),
+                _ => 0,
+            },
+            htlc_details: htlc_details_from_preimage_request(request, None)?,
         })
     }
 }

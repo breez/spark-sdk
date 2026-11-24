@@ -3277,12 +3277,26 @@ pub struct FetchHtlcPaymentsRequest {
     pub payment_hash: String,
 }
 
+/// A payment locked to a payment hash, as the Spark operators report it.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HtlcPayment {
+    /// The payment ID, the same one the payment list uses
+    pub id: String,
+    pub payment_type: PaymentType,
+    /// The amount the HTLC locks. For a Lightning send this includes the fee.
+    pub amount_sats: u64,
+    /// When the HTLC was created, as a unix timestamp in seconds
+    pub timestamp: u64,
+    pub htlc_details: SparkHtlcDetails,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct FetchHtlcPaymentsResponse {
     /// The payments this wallet sent or received that are locked to the payment hash, newest
     /// first. Claimed and returned ones are included.
-    pub payments: Vec<Payment>,
+    pub payments: Vec<HtlcPayment>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

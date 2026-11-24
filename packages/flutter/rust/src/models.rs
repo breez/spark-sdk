@@ -2032,9 +2032,18 @@ pub struct _FetchHtlcPaymentsRequest {
     pub payment_hash: String,
 }
 
+#[frb(mirror(HtlcPayment))]
+pub struct _HtlcPayment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub amount_sats: u64,
+    pub timestamp: u64,
+    pub htlc_details: SparkHtlcDetails,
+}
+
 #[frb(mirror(FetchHtlcPaymentsResponse))]
 pub struct _FetchHtlcPaymentsResponse {
-    pub payments: Vec<Payment>,
+    pub payments: Vec<HtlcPayment>,
 }
 
 #[frb(mirror(OptimizationMode))]

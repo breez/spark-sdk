@@ -113,7 +113,7 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     Ok(payments)
 }
 
-async fn fetch_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
+async fn fetch_htlc_payments(sdk: &BreezSdk) -> Result<Vec<HtlcPayment>> {
     // ANCHOR: fetch-htlc-payments
     let payment_hash = "<payment hash hex>".to_string();
     let response = sdk

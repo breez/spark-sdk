@@ -6,7 +6,7 @@ use spark_wallet::{Preimage, TransferId, WalletTransfer};
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchHtlcPaymentsRequest,
-    FetchHtlcPaymentsResponse, error::SdkError, models::Payment, sdk::BreezSdk,
+    FetchHtlcPaymentsResponse, HtlcPayment, error::SdkError, models::Payment, sdk::BreezSdk,
 };
 
 pub(super) async fn claim_htlc_payment(
@@ -23,7 +23,10 @@ pub(super) async fn claim_htlc_payment(
         .map_err(|e| SdkError::InvalidInput(format!("Invalid transfer id: {e}")))?;
     let payment_hash = preimage.compute_hash();
 
-    let claimable_htlc_transfers = sdk.spark_wallet.list_claimable_htlc_transfers(None).await?;
+    let claimable_htlc_transfers = sdk
+        .spark_wallet
+        .list_claimable_htlc_transfers(Some(&payment_hash.to_string()), None)
+        .await?;
     ensure_claimable_htlc(
         &claimable_htlc_transfers,
         payment_hash,
@@ -77,14 +80,14 @@ pub(super) async fn fetch_htlc_payments(
         .list_htlc_transfers(&payment_hash.to_string())
         .await?;
     Ok(FetchHtlcPaymentsResponse {
-        payments: htlc_payments(transfers)?,
+        payments: htlc_payments(&transfers)?,
     })
 }
 
-fn htlc_payments(transfers: Vec<WalletTransfer>) -> Result<Vec<Payment>, SdkError> {
+fn htlc_payments(transfers: &[WalletTransfer]) -> Result<Vec<HtlcPayment>, SdkError> {
     let mut payments = transfers
-        .into_iter()
-        .map(Payment::try_from)
+        .iter()
+        .map(HtlcPayment::try_from)
         .collect::<Result<Vec<_>, _>>()?;
     payments.sort_by_key(|payment| Reverse(payment.timestamp));
     Ok(payments)
@@ -100,6 +103,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::{PaymentType, SparkHtlcStatus};
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -110,13 +114,31 @@ mod tests {
         PublicKey::from_slice(&bytes).unwrap()
     }
 
+    const OURS: u8 = 1;
+    const OTHER: u8 = 7;
+
     fn received_htlc(payment_hash: sha256::Hash, created_time: u64) -> WalletTransfer {
-        let (sender, ours, ssp) = (pk(7), pk(1), pk(2));
+        htlc(
+            payment_hash,
+            created_time,
+            pk(OTHER),
+            pk(OURS),
+            PreimageRequestStatus::WaitingForPreimage,
+        )
+    }
+
+    fn htlc(
+        payment_hash: sha256::Hash,
+        created_time: u64,
+        sender: PublicKey,
+        receiver: PublicKey,
+        status: PreimageRequestStatus,
+    ) -> WalletTransfer {
         WalletTransfer::from_transfer(
             Transfer {
                 id: TransferId::generate(),
                 sender_identity_public_key: sender,
-                receiver_identity_public_key: ours,
+                receiver_identity_public_key: receiver,
                 status: TransferStatus::SenderKeyTweakPending,
                 total_value: 1_000,
                 expiry_time: None,
@@ -129,13 +151,13 @@ mod tests {
             None,
             Some(PreimageRequest {
                 payment_hash,
-                status: PreimageRequestStatus::WaitingForPreimage,
+                status,
                 created_time: SystemTime::now(),
                 expiry_time: SystemTime::now(),
                 preimage: None,
             }),
-            ours,
-            ssp,
+            pk(OURS),
+            pk(2),
         )
     }
 
@@ -190,9 +212,60 @@ mod tests {
         let newer = received_htlc(payment_hash, 200);
         let expected = [newer.id.to_string(), older.id.to_string()];
 
-        let payments = htlc_payments(vec![older, newer]).unwrap();
+        let payments = htlc_payments(&[older, newer]).unwrap();
 
         let ids: Vec<String> = payments.into_iter().map(|p| p.id).collect();
         assert_eq!(ids, expected);
+    }
+
+    #[test_all]
+    fn a_received_htlc_keeps_its_id_amount_and_htlc_details() {
+        let payment_hash = sha256::Hash::hash(b"preimage");
+        let transfer = received_htlc(payment_hash, 100);
+
+        let payments = htlc_payments(std::slice::from_ref(&transfer)).unwrap();
+
+        let [payment] = payments.as_slice() else {
+            panic!("expected one payment, got {}", payments.len());
+        };
+        assert_eq!(payment.id, transfer.id.to_string());
+        assert_eq!(payment.payment_type, PaymentType::Receive);
+        assert_eq!(payment.amount_sats, 1_000);
+        assert_eq!(payment.timestamp, 100);
+        assert_eq!(payment.htlc_details.payment_hash, payment_hash.to_string());
+        assert_eq!(
+            payment.htlc_details.status,
+            SparkHtlcStatus::WaitingForPreimage
+        );
+        assert_eq!(payment.htlc_details.preimage, None);
+    }
+
+    #[test_all]
+    fn an_htlc_this_wallet_sent_is_a_send() {
+        let transfer = htlc(
+            sha256::Hash::hash(b"preimage"),
+            100,
+            pk(OURS),
+            pk(OTHER),
+            PreimageRequestStatus::Returned,
+        );
+
+        let payments = htlc_payments(&[transfer]).unwrap();
+
+        assert_eq!(payments[0].payment_type, PaymentType::Send);
+        assert_eq!(payments[0].htlc_details.status, SparkHtlcStatus::Returned);
+    }
+
+    #[test_all]
+    fn an_unrecognized_htlc_status_is_an_error() {
+        let transfer = htlc(
+            sha256::Hash::hash(b"preimage"),
+            100,
+            pk(OTHER),
+            pk(OURS),
+            PreimageRequestStatus::Unknown,
+        );
+
+        assert!(htlc_payments(&[transfer]).is_err());
     }
 }

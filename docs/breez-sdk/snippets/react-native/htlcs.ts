@@ -1,5 +1,10 @@
 import { createHash } from 'crypto'
-import type { Payment, BreezSdk, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark-react-native'
+import type {
+  Payment,
+  BreezSdk,
+  HtlcPayment,
+  PrepareSendPaymentResponse
+} from '@breeztech/breez-sdk-spark-react-native'
 import {
   PaymentRequest,
   SendPaymentOptions,
@@ -115,7 +120,7 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
   return payments
 }
 
-const exampleFetchHtlcPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
+const exampleFetchHtlcPayments = async (sdk: BreezSdk): Promise<HtlcPayment[]> => {
   // ANCHOR: fetch-htlc-payments
   const paymentHash = '<payment hash hex>'
   const response = await sdk.fetchHtlcPayments(

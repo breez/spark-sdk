@@ -119,7 +119,7 @@ func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
     return payments
 }
 
-func fetchHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
+func fetchHtlcPayments(sdk: BreezSdk) async throws -> [HtlcPayment] {
     // ANCHOR: fetch-htlc-payments
     let paymentHash = "<payment hash hex>"
     let response = try await sdk.fetchHtlcPayments(

@@ -2262,9 +2262,18 @@ pub struct FetchHtlcPaymentsRequest {
     pub payment_hash: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::HtlcPayment)]
+pub struct HtlcPayment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub amount_sats: u64,
+    pub timestamp: u64,
+    pub htlc_details: SparkHtlcDetails,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::FetchHtlcPaymentsResponse)]
 pub struct FetchHtlcPaymentsResponse {
-    pub payments: Vec<Payment>,
+    pub payments: Vec<HtlcPayment>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlReceiveMetadata)]

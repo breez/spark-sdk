@@ -514,25 +514,17 @@ async fn test_04_htlc_reused_payment_hash(#[future] env: Result<Environment>) ->
         anyhow::bail!("Expected two HTLC payments, got {}", bob_htlcs.len());
     };
 
-    assert_eq!(pending.status, PaymentStatus::Pending);
     assert_eq!(pending.payment_type, PaymentType::Receive);
-    assert_eq!(pending.amount, 5);
-    assert!(matches!(
-    &pending.details,
-    Some(PaymentDetails::Spark {
-        htlc_details: Some(details), .. })
-        if details.payment_hash == payment_hash
-        && details.status == SparkHtlcStatus::WaitingForPreimage
-    ));
-    assert_eq!(returned.status, PaymentStatus::Failed);
+    assert_eq!(pending.amount_sats, 5);
+    assert_eq!(pending.htlc_details.payment_hash, payment_hash);
+    assert_eq!(
+        pending.htlc_details.status,
+        SparkHtlcStatus::WaitingForPreimage
+    );
     assert_eq!(returned.payment_type, PaymentType::Receive);
-    assert!(matches!(
-    &returned.details,
-    Some(PaymentDetails::Spark {
-        htlc_details: Some(details), .. })
-        if details.payment_hash == payment_hash
-        && details.status == SparkHtlcStatus::Returned
-    ));
+    assert_eq!(returned.amount_sats, 5);
+    assert_eq!(returned.htlc_details.payment_hash, payment_hash);
+    assert_eq!(returned.htlc_details.status, SparkHtlcStatus::Returned);
 
     info!("Claiming with the returned HTLC's ID...");
     let result = bob
@@ -577,13 +569,11 @@ async fn test_04_htlc_reused_payment_hash(#[future] env: Result<Environment>) ->
     assert_eq!(alice_htlcs.len(), 2);
     assert_eq!(alice_htlcs[0].id, pending.id);
     assert_eq!(alice_htlcs[0].payment_type, PaymentType::Send);
-    assert!(matches!(
-    &alice_htlcs[0].details,
-    Some(PaymentDetails::Spark {
-        htlc_details: Some(details), .. })
-        if details.preimage.as_ref() == Some(&preimage)
-        && details.status == SparkHtlcStatus::PreimageShared
-    ));
+    assert_eq!(alice_htlcs[0].htlc_details.preimage, Some(preimage));
+    assert_eq!(
+        alice_htlcs[0].htlc_details.status,
+        SparkHtlcStatus::PreimageShared
+    );
 
     info!("=== Test test_04_htlc_reused_payment_hash PASSED ===");
     Ok(())
@@ -631,13 +621,11 @@ async fn test_05_htlc_claim_naming_another_transfer(
     let [pending] = bob_htlcs.as_slice() else {
         anyhow::bail!("Expected one HTLC payment, got {}", bob_htlcs.len());
     };
-    assert!(matches!(
-    &pending.details,
-    Some(PaymentDetails::Spark {
-        htlc_details: Some(details), .. })
-        if details.preimage.is_none()
-        && details.status == SparkHtlcStatus::WaitingForPreimage
-    ));
+    assert_eq!(pending.htlc_details.preimage, None);
+    assert_eq!(
+        pending.htlc_details.status,
+        SparkHtlcStatus::WaitingForPreimage
+    );
 
     info!("Claiming with the HTLC's own ID...");
     let claimed = bob

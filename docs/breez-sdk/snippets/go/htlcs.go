@@ -168,7 +168,7 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	return &payments, nil
 }
 
-func FetchHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
+func FetchHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.HtlcPayment, error) {
 	// ANCHOR: fetch-htlc-payments
 	paymentHash := "<payment hash hex>"
 	request := breez_sdk_spark.FetchHtlcPaymentsRequest{

@@ -1331,32 +1331,20 @@ impl SparkWallet {
 
     pub async fn list_claimable_htlc_transfers(
         &self,
+        payment_hash: Option<&str>,
         paging: Option<PagingFilter>,
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        let htlcs = self
-            .htlc_service
-            .query_htlc(
-                QueryHtlcFilter {
-                    identity_public_key: self.identity_public_key,
-                    status: Some(PreimageRequestStatus::WaitingForPreimage),
-                    transfer_ids: Vec::new(),
-                    payment_hashes: Vec::new(),
-                    match_role: PreimageRequestRole::Receiver,
-                },
-                paging,
-            )
-            .await?
-            .items;
-        htlcs
-            .into_iter()
-            .map(|h| {
-                WalletTransfer::from_preimage_request_with_transfer(
-                    h,
-                    self.identity_public_key,
-                    self.config.service_provider_config.identity_public_key,
-                )
-            })
-            .collect()
+        self.query_htlc_transfers(
+            QueryHtlcFilter {
+                identity_public_key: self.identity_public_key,
+                status: Some(PreimageRequestStatus::WaitingForPreimage),
+                transfer_ids: Vec::new(),
+                payment_hashes: payment_hash.map(ToString::to_string).into_iter().collect(),
+                match_role: PreimageRequestRole::Receiver,
+            },
+            paging,
+        )
+        .await
     }
 
     /// Queries the operators for the HTLC transfers this wallet sent or received for a payment hash.
@@ -1364,51 +1352,35 @@ impl SparkWallet {
         &self,
         payment_hash: &str,
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        let htlcs = self
-            .htlc_service
-            .query_htlc(
-                QueryHtlcFilter {
-                    identity_public_key: self.identity_public_key,
-                    status: None,
-                    transfer_ids: Vec::new(),
-                    payment_hashes: vec![payment_hash.to_string()],
-                    match_role: PreimageRequestRole::ReceiverAndSender,
-                },
-                None,
-            )
+        self.query_htlc_transfers(
+            QueryHtlcFilter {
+                identity_public_key: self.identity_public_key,
+                status: None,
+                transfer_ids: Vec::new(),
+                payment_hashes: vec![payment_hash.to_string()],
+                match_role: PreimageRequestRole::ReceiverAndSender,
+            },
+            None,
+        )
+        .await
+    }
+
+    async fn query_htlc_transfers(
+        &self,
+        filter: QueryHtlcFilter,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        self.htlc_service
+            .query_htlc(filter, paging)
             .await?
-            .items;
-
-        let transfer_ids: Vec<String> = htlcs
-            .iter()
-            .filter_map(|h| h.transfer.as_ref())
-            .map(|t| t.id.to_string())
-            .collect();
-        let mut ssp_transfers: HashMap<String, SspTransfer> = if transfer_ids.is_empty() {
-            HashMap::new()
-        } else {
-            self.ssp_client
-                .get_transfers(transfer_ids)
-                .await?
-                .into_iter()
-                .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t)))
-                .collect()
-        };
-
-        htlcs
+            .items
             .into_iter()
-            .map(|htlc| {
-                let transfer = htlc.transfer.clone().ok_or(SparkWalletError::Generic(
-                    "Missing transfer in PreimageRequestWithTransfer".to_string(),
-                ))?;
-                let ssp_transfer = ssp_transfers.remove(&transfer.id.to_string());
-                Ok(WalletTransfer::from_transfer(
-                    transfer,
-                    ssp_transfer,
-                    Some(htlc.into()),
+            .map(|h| {
+                WalletTransfer::from_preimage_request_with_transfer(
+                    h,
                     self.identity_public_key,
                     self.config.service_provider_config.identity_public_key,
-                ))
+                )
             })
             .collect()
     }

@@ -90,7 +90,7 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
   return payments;
 }
 
-Future<List<Payment>> fetchHtlcPayments(BreezSdk sdk) async {
+Future<List<HtlcPayment>> fetchHtlcPayments(BreezSdk sdk) async {
   // ANCHOR: fetch-htlc-payments
   String paymentHash = "<payment hash hex>";
   final response = await sdk.fetchHtlcPayments(
