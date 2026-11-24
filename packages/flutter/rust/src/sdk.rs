@@ -175,6 +175,13 @@ impl BreezSdk {
         self.inner.claim_htlc_payment(request).await
     }
 
+    pub async fn fetch_htlc_payments(
+        &self,
+        request: FetchHtlcPaymentsRequest,
+    ) -> Result<FetchHtlcPaymentsResponse, SdkError> {
+        self.inner.fetch_htlc_payments(request).await
+    }
+
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,

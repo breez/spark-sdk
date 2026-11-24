@@ -349,6 +349,7 @@ async fn test_setup_recovery_wallet(#[future] env: Result<Environment>) -> Resul
     bob.sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
             preimage: preimage1,
+            transfer_id: None,
         })
         .await?;
 
@@ -391,6 +392,7 @@ async fn test_setup_recovery_wallet(#[future] env: Result<Environment>) -> Resul
         .sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
             preimage: preimage2,
+            transfer_id: None,
         })
         .await?;
 

@@ -90,11 +90,28 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
   return payments;
 }
 
+Future<List<HtlcPayment>> fetchHtlcPayments(BreezSdk sdk) async {
+  // ANCHOR: fetch-htlc-payments
+  String paymentHash = "<payment hash hex>";
+  final response = await sdk.fetchHtlcPayments(
+      request: FetchHtlcPaymentsRequest(paymentHash: paymentHash));
+  final payments = response.payments;
+
+  for (final payment in payments) {
+    print("HTLC payment ID: ${payment.id}");
+  }
+  // ANCHOR_END: fetch-htlc-payments
+  return payments;
+}
+
 Future<Payment> claimHtlcPayment(BreezSdk sdk) async {
   // ANCHOR: claim-htlc-payment
   String preimage = "<preimage hex>";
+  // Optionally, set the ID of the payment to claim
+  String? optionalTransferId = "<payment id>";
   final response = await sdk.claimHtlcPayment(
-      request: ClaimHtlcPaymentRequest(preimage: preimage));
+      request: ClaimHtlcPaymentRequest(
+          preimage: preimage, transferId: optionalTransferId));
   final payment = response.payment;
   // ANCHOR_END: claim-htlc-payment
   return payment;

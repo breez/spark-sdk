@@ -37,6 +37,25 @@ async fn test_fetch_lightning_send_status_from_a_restored_wallet(
     assert!(status.preimage.is_some());
     assert_eq!(status.preimage, htlc_details.preimage);
 
+    let htlc_payments = restored
+        .sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest {
+            payment_hash: htlc_details.payment_hash.clone(),
+        })
+        .await?
+        .payments;
+    assert_eq!(htlc_payments.len(), 1);
+    assert_eq!(htlc_payments[0].id, sent.id);
+    assert_eq!(htlc_payments[0].payment_type, PaymentType::Send);
+    assert_eq!(
+        htlc_payments[0].htlc_details.preimage,
+        htlc_details.preimage
+    );
+    assert_eq!(
+        htlc_payments[0].htlc_details.status,
+        SparkHtlcStatus::PreimageShared
+    );
+
     Ok(())
 }
 

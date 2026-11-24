@@ -29,8 +29,16 @@ To list only claimable HTLC payments, you can filter by HTLC status. This works 
 
 {{#tabs htlcs:list-claimable-htlc-payments}}
 
+## Looking up conditional payments by payment hash
+
+To see every HTLC payment locked to a payment hash, call {{#name fetch_htlc_payments}}. It queries the Spark operators directly, so the result does not depend on the local payment history. Payments that were already claimed or returned are included, newest first. Each one carries its payment ID, whether it was sent or received, the amount and the HTLC details. This works for both Spark HTLC payments and HODL invoices.
+
+{{#tabs htlcs:fetch-htlc-payments}}
+
 ## Claiming conditional payments
 
 To claim an HTLC payment, provide the preimage that matches the payment hash. This works for both Spark HTLC payments and HODL invoices.
+
+A payment hash can be locked again by a new HTLC after an earlier one was returned to the sender. To claim one specific payment, set {{#name transfer_id}} to its payment ID. The claim then fails if the claimable HTLC is a different payment.
 
 {{#tabs htlcs:claim-htlc-payment}}

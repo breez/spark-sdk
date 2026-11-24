@@ -9,13 +9,13 @@ use tracing::debug;
 use breez_sdk_common::fiat::FiatService;
 
 use crate::{
-    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, CrossChainConfig,
+    CrossChainConfig,
     cross_chain::{
         CrossChainContext, CrossChainFeeMode, CrossChainReceivePrepared, CrossChainRoutePair,
         DeliveryMethod, SparkAsset,
     },
     error::SdkError,
-    models::{Payment, ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
+    models::{ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
 };
 
 use super::super::{BreezSdk, helpers::get_deposit_address};
@@ -369,35 +369,6 @@ pub(in crate::sdk) fn validate_receive_destination(
         "Requested destination {asset:?} is not supported by this route. \
          Pick one of route.accepted_assets."
     )))
-}
-
-pub(super) async fn claim_htlc_payment(
-    sdk: &BreezSdk,
-    request: ClaimHtlcPaymentRequest,
-) -> Result<ClaimHtlcPaymentResponse, SdkError> {
-    let preimage = Preimage::from_hex(&request.preimage)
-        .map_err(|_| SdkError::InvalidInput("Invalid preimage".to_string()))?;
-    let payment_hash = preimage.compute_hash();
-
-    // Check if there is a claimable HTLC with the given payment hash
-    let claimable_htlc_transfers = sdk.spark_wallet.list_claimable_htlc_transfers(None).await?;
-    if !claimable_htlc_transfers
-        .iter()
-        .filter_map(|t| t.htlc_preimage_request.as_ref())
-        .any(|p| p.payment_hash == payment_hash)
-    {
-        return Err(SdkError::InvalidInput(
-            "No claimable HTLC with the given payment hash".to_string(),
-        ));
-    }
-
-    let transfer = sdk.spark_wallet.claim_htlc(&preimage).await?;
-    let payment: Payment = transfer.try_into()?;
-
-    // Insert the payment into storage to make it immediately available for listing
-    sdk.storage.apply_payment_update(payment.clone()).await?;
-
-    Ok(ClaimHtlcPaymentResponse { payment })
 }
 
 pub(super) async fn receive_bolt11_invoice(

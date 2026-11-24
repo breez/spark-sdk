@@ -11,14 +11,13 @@ use rstest::*;
 use tracing::info;
 
 async fn send_htlc_alice_to_bob(
-    alice: &mut SdkInstance,
-    bob: &mut SdkInstance,
+    alice: &BreezSdk,
+    bob: &BreezSdk,
     payment_hash: &str,
     expiry_duration_secs: u64,
 ) -> Result<()> {
     // Bob exposes a Spark address
     let bob_spark_address = bob
-        .sdk
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkAddress,
         })
@@ -29,7 +28,6 @@ async fn send_htlc_alice_to_bob(
 
     // Alice prepares and sends 5 sats to Bob using a Spark HTLC
     let prepare = alice
-        .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: PaymentRequest::Input {
                 input: bob_spark_address.clone(),
@@ -44,7 +42,6 @@ async fn send_htlc_alice_to_bob(
     info!("Sending 5 sats from Alice to Bob via Spark HTLC...");
 
     let send_resp = alice
-        .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: Some(SendPaymentOptions::SparkAddress {
@@ -63,9 +60,8 @@ async fn send_htlc_alice_to_bob(
         "Payment should be pending"
     );
 
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sync_wallet(SyncWalletRequest {}).await?;
     let bob_list_payments_response = bob
-        .sdk
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Pending]),
             type_filter: Some(vec![PaymentType::Receive]),
@@ -96,7 +92,6 @@ async fn send_htlc_alice_to_bob(
     ));
 
     let alice_list_payments_response = alice
-        .sdk
         .list_payments(ListPaymentsRequest {
             status_filter: Some(vec![PaymentStatus::Pending]),
             type_filter: Some(vec![PaymentType::Send]),
@@ -148,13 +143,14 @@ async fn test_01_htlc_success(#[future] env: Result<Environment>) -> Result<()> 
 
     let (preimage, payment_hash) = generate_preimage_hash_pair();
 
-    send_htlc_alice_to_bob(&mut alice, &mut bob, &payment_hash, 180).await?;
+    send_htlc_alice_to_bob(&alice.sdk, &bob.sdk, &payment_hash, 180).await?;
 
     info!("Claiming Bob's HTLC payment...");
 
     bob.sdk
         .claim_htlc_payment(ClaimHtlcPaymentRequest {
             preimage: preimage.clone(),
+            transfer_id: None,
         })
         .await?;
 
@@ -227,7 +223,7 @@ async fn test_02_htlc_refund(#[future] env: Result<Environment>) -> Result<()> {
 
     let (_, payment_hash) = generate_preimage_hash_pair();
 
-    send_htlc_alice_to_bob(&mut alice, &mut bob, &payment_hash, 5).await?;
+    send_htlc_alice_to_bob(&alice.sdk, &bob.sdk, &payment_hash, 5).await?;
 
     let alice_balance_after_send = alice
         .sdk
@@ -470,5 +466,185 @@ async fn test_03_reconcile_stale_pending_payment(#[future] env: Result<Environme
     );
 
     info!("=== Test test_03_reconcile_stale_pending_payment PASSED ===");
+    Ok(())
+}
+
+/// Test 4: A payment hash is locked by a second HTLC after the first one was returned
+#[rstest]
+#[cfg_attr(
+    not(feature = "local-itest"),
+    ignore = "direct Spark HTLCs are temporarily disabled"
+)]
+#[test_log::test(tokio::test)]
+async fn test_04_htlc_reused_payment_hash(#[future] env: Result<Environment>) -> Result<()> {
+    let env = env.await?;
+    info!("=== Starting test_04_htlc_reused_payment_hash ===");
+
+    let mut alice = env.create_wallet().await?;
+    let mut bob = env.create_wallet().await?;
+
+    ensure_funded(&mut alice, 100).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+
+    let (preimage, payment_hash) = generate_preimage_hash_pair();
+
+    info!("Sending the first HTLC and waiting for it to be returned...");
+    send_htlc_alice_to_bob(&alice.sdk, &bob.sdk, &payment_hash, 5).await?;
+    wait_for_payment_failed_event(&mut bob.events, PaymentType::Receive, 120).await?;
+    wait_for_balance(&alice.sdk, Some(alice_balance), None, 30).await?;
+
+    info!("Sending the second HTLC with the same payment hash...");
+    send_htlc_alice_to_bob(&alice.sdk, &bob.sdk, &payment_hash, 180).await?;
+
+    let bob_htlcs = bob
+        .sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest {
+            payment_hash: payment_hash.clone(),
+        })
+        .await?
+        .payments;
+    let [pending, returned] = bob_htlcs.as_slice() else {
+        anyhow::bail!("Expected two HTLC payments, got {}", bob_htlcs.len());
+    };
+
+    assert_eq!(pending.payment_type, PaymentType::Receive);
+    assert_eq!(pending.amount_sats, 5);
+    assert_eq!(pending.htlc_details.payment_hash, payment_hash);
+    assert_eq!(
+        pending.htlc_details.status,
+        SparkHtlcStatus::WaitingForPreimage
+    );
+    assert_eq!(returned.payment_type, PaymentType::Receive);
+    assert_eq!(returned.amount_sats, 5);
+    assert_eq!(returned.htlc_details.payment_hash, payment_hash);
+    assert_eq!(returned.htlc_details.status, SparkHtlcStatus::Returned);
+
+    info!("Claiming with the returned HTLC's ID...");
+    let result = bob
+        .sdk
+        .claim_htlc_payment(ClaimHtlcPaymentRequest {
+            preimage: preimage.clone(),
+            transfer_id: Some(returned.id.clone()),
+        })
+        .await;
+    assert!(
+        matches!(result, Err(SdkError::InvalidInput(_))),
+        "Claiming the returned HTLC should be rejected"
+    );
+
+    info!("Claiming with the pending HTLC's ID...");
+    let claimed = bob
+        .sdk
+        .claim_htlc_payment(ClaimHtlcPaymentRequest {
+            preimage: preimage.clone(),
+            transfer_id: Some(pending.id.clone()),
+        })
+        .await?
+        .payment;
+    assert_eq!(claimed.id, pending.id);
+    assert!(matches!(
+    &claimed.details,
+    Some(PaymentDetails::Spark {
+        htlc_details: Some(details), .. })
+        if details.payment_hash == payment_hash
+        && details.preimage.as_ref() == Some(&preimage)
+        && details.status == SparkHtlcStatus::PreimageShared
+    ));
+
+    info!("Verifying Alice sees the preimage of the claimed HTLC...");
+    let alice_htlcs = alice
+        .sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest {
+            payment_hash: payment_hash.clone(),
+        })
+        .await?
+        .payments;
+    assert_eq!(alice_htlcs.len(), 2);
+    assert_eq!(alice_htlcs[0].id, pending.id);
+    assert_eq!(alice_htlcs[0].payment_type, PaymentType::Send);
+    assert_eq!(alice_htlcs[0].htlc_details.preimage, Some(preimage));
+    assert_eq!(
+        alice_htlcs[0].htlc_details.status,
+        SparkHtlcStatus::PreimageShared
+    );
+
+    info!("=== Test test_04_htlc_reused_payment_hash PASSED ===");
+    Ok(())
+}
+
+/// Test 5: The operators settle a claim only for the transfer it names
+#[cfg(feature = "local-itest")]
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_05_htlc_claim_naming_another_transfer(
+    #[future] env: Result<Environment>,
+) -> Result<()> {
+    use spark_wallet::{Preimage, TransferId};
+
+    let env = env.await?;
+    info!("=== Starting test_05_htlc_claim_naming_another_transfer ===");
+
+    let mut alice = env.create_wallet().await?;
+    let bob = env.local().create_wallet_with_side_channel().await?;
+
+    ensure_funded(&mut alice, 100).await?;
+
+    let (preimage, payment_hash) = generate_preimage_hash_pair();
+
+    send_htlc_alice_to_bob(&alice.sdk, &bob.sdk, &payment_hash, 180).await?;
+
+    info!("Claiming with another transfer's ID through Bob's wallet...");
+    let another_transfer = TransferId::generate();
+    let refused = bob
+        .spark_wallet
+        .claim_htlc(&Preimage::from_hex(&preimage)?, Some(&another_transfer))
+        .await;
+    let Err(refusal) = refused else {
+        anyhow::bail!("The operators should refuse a claim naming another transfer");
+    };
+    info!("Refused: {refusal}");
+
+    let bob_htlcs = bob
+        .sdk
+        .fetch_htlc_payments(FetchHtlcPaymentsRequest {
+            payment_hash: payment_hash.clone(),
+        })
+        .await?
+        .payments;
+    let [pending] = bob_htlcs.as_slice() else {
+        anyhow::bail!("Expected one HTLC payment, got {}", bob_htlcs.len());
+    };
+    assert_eq!(pending.htlc_details.preimage, None);
+    assert_eq!(
+        pending.htlc_details.status,
+        SparkHtlcStatus::WaitingForPreimage
+    );
+
+    info!("Claiming with the HTLC's own ID...");
+    let claimed = bob
+        .sdk
+        .claim_htlc_payment(ClaimHtlcPaymentRequest {
+            preimage: preimage.clone(),
+            transfer_id: Some(pending.id.clone()),
+        })
+        .await?
+        .payment;
+    assert_eq!(claimed.id, pending.id);
+    assert!(matches!(
+    &claimed.details,
+    Some(PaymentDetails::Spark {
+        htlc_details: Some(details), .. })
+        if details.preimage.as_ref() == Some(&preimage)
+        && details.status == SparkHtlcStatus::PreimageShared
+    ));
+
+    info!("=== Test test_05_htlc_claim_naming_another_transfer PASSED ===");
     Ok(())
 }

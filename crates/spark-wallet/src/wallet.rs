@@ -1286,8 +1286,12 @@ impl SparkWallet {
     pub async fn claim_htlc(
         &self,
         preimage: &Preimage,
+        transfer_id: Option<&TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
-        let transfer = self.htlc_service.provide_preimage(preimage).await?;
+        let transfer = self
+            .htlc_service
+            .provide_preimage(preimage, transfer_id)
+            .await?;
 
         // Fetch HTLC preimage request data
         let preimage_request = self
@@ -1297,7 +1301,7 @@ impl SparkWallet {
                     payment_hashes: vec![preimage.compute_hash().to_string()],
                     identity_public_key: self.identity_public_key,
                     status: None,
-                    transfer_ids: Vec::new(),
+                    transfer_ids: vec![transfer.id.to_string()],
                     match_role: PreimageRequestRole::Receiver,
                 },
                 None,
@@ -1327,23 +1331,49 @@ impl SparkWallet {
 
     pub async fn list_claimable_htlc_transfers(
         &self,
+        payment_hash: Option<&str>,
         paging: Option<PagingFilter>,
     ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
-        let htlcs = self
-            .htlc_service
-            .query_htlc(
-                QueryHtlcFilter {
-                    identity_public_key: self.identity_public_key,
-                    status: Some(PreimageRequestStatus::WaitingForPreimage),
-                    transfer_ids: Vec::new(),
-                    payment_hashes: Vec::new(),
-                    match_role: PreimageRequestRole::Receiver,
-                },
-                paging,
-            )
+        self.query_htlc_transfers(
+            QueryHtlcFilter {
+                identity_public_key: self.identity_public_key,
+                status: Some(PreimageRequestStatus::WaitingForPreimage),
+                transfer_ids: Vec::new(),
+                payment_hashes: payment_hash.map(ToString::to_string).into_iter().collect(),
+                match_role: PreimageRequestRole::Receiver,
+            },
+            paging,
+        )
+        .await
+    }
+
+    /// Queries the operators for the HTLC transfers this wallet sent or received for a payment hash.
+    pub async fn list_htlc_transfers(
+        &self,
+        payment_hash: &str,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        self.query_htlc_transfers(
+            QueryHtlcFilter {
+                identity_public_key: self.identity_public_key,
+                status: None,
+                transfer_ids: Vec::new(),
+                payment_hashes: vec![payment_hash.to_string()],
+                match_role: PreimageRequestRole::ReceiverAndSender,
+            },
+            None,
+        )
+        .await
+    }
+
+    async fn query_htlc_transfers(
+        &self,
+        filter: QueryHtlcFilter,
+        paging: Option<PagingFilter>,
+    ) -> Result<Vec<WalletTransfer>, SparkWalletError> {
+        self.htlc_service
+            .query_htlc(filter, paging)
             .await?
-            .items;
-        htlcs
+            .items
             .into_iter()
             .map(|h| {
                 WalletTransfer::from_preimage_request_with_transfer(

@@ -14,16 +14,17 @@ use breez_sdk_spark::{
     CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
     ClaimTransferRequest, ConversionOptions, ConversionType, CrossChainRouteFilter,
     CrossChainRoutePair, Fee, FeePolicy, FetchClaimDepositQuoteRequest,
-    FetchConversionLimitsRequest, FetchLightningSendStatusRequest, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    MaxFee, MaxOnchainFee, MoonpayDelivery, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PreparePullPaymentRequest,
-    PrepareSendBatchRequest, PrepareSendPaymentRequest, PullReceiver, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest, SendBatchRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SparkMasterIdentityPublicKey, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    TransferAuthorization, UpdateUserSettingsRequest,
+    FetchConversionLimitsRequest, FetchHtlcPaymentsRequest, FetchLightningSendStatusRequest,
+    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
+    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
+    LnurlWithdrawRequest, MaxFee, MaxOnchainFee, MoonpayDelivery, OnchainConfirmationSpeed,
+    PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PreparePullPaymentRequest, PrepareSendBatchRequest, PrepareSendPaymentRequest, PullReceiver,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendBatchRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SparkMasterIdentityPublicKey,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, TransferAuthorization,
+    UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -408,6 +409,16 @@ pub enum Command {
     ClaimHtlcPayment {
         /// The preimage of the HTLC (hex string)
         preimage: String,
+
+        /// The ID of the payment to claim. The claim fails unless the claimable HTLC is this payment
+        #[arg(long)]
+        transfer_id: Option<String>,
+    },
+
+    /// Fetch the HTLC payments locked to a payment hash from the operators
+    FetchHtlcPayments {
+        /// The payment hash to look up (hex string)
+        payment_hash: String,
     },
 
     ClaimDeposit {
@@ -1311,11 +1322,24 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
 
-        Command::ClaimHtlcPayment { preimage } => {
+        Command::ClaimHtlcPayment {
+            preimage,
+            transfer_id,
+        } => {
             let res = sdk
-                .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+                .claim_htlc_payment(ClaimHtlcPaymentRequest {
+                    preimage,
+                    transfer_id,
+                })
                 .await?;
             print_value(&res.payment)?;
+            Ok(true)
+        }
+        Command::FetchHtlcPayments { payment_hash } => {
+            let value = sdk
+                .fetch_htlc_payments(FetchHtlcPaymentsRequest { payment_hash })
+                .await?;
+            print_value(&value)?;
             Ok(true)
         }
         Command::CheckLightningAddressAvailable { username } => {

@@ -2019,11 +2019,31 @@ pub enum _ChainApiType {
 #[frb(mirror(ClaimHtlcPaymentRequest))]
 pub struct _ClaimHtlcPaymentRequest {
     pub preimage: String,
+    pub transfer_id: Option<String>,
 }
 
 #[frb(mirror(ClaimHtlcPaymentResponse))]
 pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
+}
+
+#[frb(mirror(FetchHtlcPaymentsRequest))]
+pub struct _FetchHtlcPaymentsRequest {
+    pub payment_hash: String,
+}
+
+#[frb(mirror(HtlcPayment))]
+pub struct _HtlcPayment {
+    pub id: String,
+    pub payment_type: PaymentType,
+    pub amount_sats: u64,
+    pub timestamp: u64,
+    pub htlc_details: SparkHtlcDetails,
+}
+
+#[frb(mirror(FetchHtlcPaymentsResponse))]
+pub struct _FetchHtlcPaymentsResponse {
+    pub payments: Vec<HtlcPayment>,
 }
 
 #[frb(mirror(OptimizationMode))]

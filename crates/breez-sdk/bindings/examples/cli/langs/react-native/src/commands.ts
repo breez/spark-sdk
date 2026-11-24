@@ -1013,7 +1013,7 @@ async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: Toke
     return 'Usage: claim-htlc-payment <preimage>'
   }
 
-  const result = await sdk.claimHtlcPayment({ preimage: args[0] })
+  const result = await sdk.claimHtlcPayment({ preimage: args[0], transferId: undefined })
   return formatValue(result)
 }
 

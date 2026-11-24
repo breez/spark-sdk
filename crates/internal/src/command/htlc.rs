@@ -42,7 +42,7 @@ pub async fn handle_command(
     match command {
         HtlcCommand::List { limit, offset } => {
             let htlcs = wallet
-                .list_claimable_htlc_transfers(Some(PagingFilter::new(limit, offset, None)))
+                .list_claimable_htlc_transfers(None, Some(PagingFilter::new(limit, offset, None)))
                 .await?;
             println!("HTLC transfers: {htlcs:#?}");
         }
@@ -84,7 +84,7 @@ pub async fn handle_command(
         }
         HtlcCommand::Claim { preimage } => {
             let preimage = Preimage::from_hex(&preimage)?;
-            let transfer = wallet.claim_htlc(&preimage).await?;
+            let transfer = wallet.claim_htlc(&preimage, None).await?;
             println!("Transfer: {transfer:#?}");
         }
     }

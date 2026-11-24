@@ -168,11 +168,40 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	return &payments, nil
 }
 
+func FetchHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.HtlcPayment, error) {
+	// ANCHOR: fetch-htlc-payments
+	paymentHash := "<payment hash hex>"
+	request := breez_sdk_spark.FetchHtlcPaymentsRequest{
+		PaymentHash: paymentHash,
+	}
+	response, err := sdk.FetchHtlcPayments(request)
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return nil, err
+	}
+
+	payments := response.Payments
+
+	for _, payment := range payments {
+		log.Printf("HTLC payment ID: %v", payment.Id)
+	}
+	// ANCHOR_END: fetch-htlc-payments
+	return &payments, nil
+}
+
 func ClaimHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: claim-htlc-payment
 	preimage := "<preimage hex>"
+	// Optionally, set the ID of the payment to claim
+	optionalTransferId := "<payment id>"
 	request := breez_sdk_spark.ClaimHtlcPaymentRequest{
-		Preimage: preimage,
+		Preimage:   preimage,
+		TransferId: &optionalTransferId,
 	}
 	response, err := sdk.ClaimHtlcPayment(request)
 

@@ -133,11 +133,34 @@ class Htlcs {
         // ANCHOR_END: list-claimable-htlc-payments
     }
 
+    suspend fun fetchHtlcPayments(sdk: BreezSdk) {
+        // ANCHOR: fetch-htlc-payments
+        try {
+            val paymentHash = "<payment hash hex>"
+            val request = FetchHtlcPaymentsRequest(paymentHash = paymentHash)
+            val response = sdk.fetchHtlcPayments(request)
+            val payments = response.payments
+
+            for (payment in payments) {
+                // Log.v("Breez", "HTLC payment ID: ${payment.id}")
+            }
+        } catch (e: Exception) {
+            // handle error
+            throw e
+        }
+        // ANCHOR_END: fetch-htlc-payments
+    }
+
     suspend fun claimHtlcPayment(sdk: BreezSdk) {
         // ANCHOR: claim-htlc-payment
         try {
             val preimage = "<preimage hex>"
-            val request = ClaimHtlcPaymentRequest(preimage = preimage)
+            // Optionally, set the ID of the payment to claim
+            val optionalTransferId: String? = "<payment id>"
+            val request = ClaimHtlcPaymentRequest(
+                preimage = preimage,
+                transferId = optionalTransferId
+            )
             val response = sdk.claimHtlcPayment(request)
             val payment = response.payment
         } catch (e: Exception) {

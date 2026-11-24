@@ -3,9 +3,9 @@ use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, FetchLightningSendStatusRequest,
-    FetchLightningSendStatusResponse, GetPaymentRequest, GetPaymentResponse,
-    RefundPendingConversionsResponse, WaitForPaymentIdentifier,
+    FetchConversionLimitsResponse, FetchHtlcPaymentsRequest, FetchHtlcPaymentsResponse,
+    FetchLightningSendStatusRequest, FetchLightningSendStatusResponse, GetPaymentRequest,
+    GetPaymentResponse, RefundPendingConversionsResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
         BuildUnsignedBatchPackageRequest, BuildUnsignedPullPackageRequest,
@@ -23,6 +23,7 @@ use super::BreezSdk;
 
 pub(in crate::sdk) mod client_signing;
 pub(in crate::sdk) mod conversion;
+mod htlc;
 mod lightning_send_status;
 mod polling;
 pub(in crate::sdk) mod prepare;
@@ -45,7 +46,17 @@ impl BreezSdk {
         &self,
         request: ClaimHtlcPaymentRequest,
     ) -> Result<ClaimHtlcPaymentResponse, SdkError> {
-        receive::claim_htlc_payment(self, request).await
+        htlc::claim_htlc_payment(self, request).await
+    }
+
+    /// Fetches the payments locked to a payment hash from the Spark operators, without reading
+    /// the local payment history. Covers Spark HTLC payments and Lightning payments this wallet
+    /// sent or received.
+    pub async fn fetch_htlc_payments(
+        &self,
+        request: FetchHtlcPaymentsRequest,
+    ) -> Result<FetchHtlcPaymentsResponse, SdkError> {
+        htlc::fetch_htlc_payments(self, request).await
     }
 
     pub async fn prepare_send_payment(
