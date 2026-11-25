@@ -1,5 +1,6 @@
 mod allowance;
 mod error;
+mod identifier;
 #[cfg(feature = "tokens")]
 pub mod operations;
 #[cfg(not(feature = "tokens"))]
