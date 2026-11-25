@@ -104,7 +104,7 @@ impl BreezSdk {
     /// finishes typing, not on every keystroke.
     pub async fn check_lightning_address_available(
         &self,
-        req: CheckLightningAddressRequest,
+        request: CheckLightningAddressRequest,
     ) -> Result<bool, SdkError> {
         let Some(client) = &self.lnurl_server_client else {
             return Err(SdkError::Generic(
@@ -112,7 +112,7 @@ impl BreezSdk {
             ));
         };
 
-        let username = sanitize_username(&req.username);
+        let username = sanitize_username(&request.username);
         let available = client.check_username_available(&username).await?;
         Ok(available)
     }

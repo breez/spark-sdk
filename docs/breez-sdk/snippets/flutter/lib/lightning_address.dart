@@ -19,7 +19,7 @@ Future<bool> checkLightningAddressAvailability(BreezSdk sdk) async {
     username: username,
   );
   
-  final available = await sdk.checkLightningAddressAvailable(req: request);
+  final available = await sdk.checkLightningAddressAvailable(request: request);
   // ANCHOR_END: check-lightning-address
   return available;
 }

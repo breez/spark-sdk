@@ -1144,7 +1144,7 @@ Future<void> _handleCheckLightningAddressAvailable(
   }
   final username = args.first;
   final result = await sdk.checkLightningAddressAvailable(
-    req: CheckLightningAddressRequest(username: username),
+    request: CheckLightningAddressRequest(username: username),
   );
   printValue(result);
 }
