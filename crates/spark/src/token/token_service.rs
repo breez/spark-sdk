@@ -416,10 +416,10 @@ impl TokenService {
         let tokens_metadata = self
             .get_tokens_metadata(&[], &[identity_public_key])
             .await?;
-        Ok(tokens_metadata
-            .first()
-            .ok_or(ServiceError::Generic("No issuer token found".to_string()))?
-            .clone())
+        tokens_metadata
+            .into_iter()
+            .find(|m| m.is_issued_by(&identity_public_key, self.network))
+            .ok_or(ServiceError::Generic("No issuer token found".to_string()))
     }
 }
 
