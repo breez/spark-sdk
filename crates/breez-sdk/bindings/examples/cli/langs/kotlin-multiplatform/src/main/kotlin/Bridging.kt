@@ -27,7 +27,7 @@ val BRIDGING_COMMAND_NAMES = listOf(
 fun buildBridgingRegistry(): Map<String, BridgingCliCommand> {
     return mapOf(
         "create" to BridgingCliCommand("create", "Create a bridge that pays a recipient from another chain or over Lightning", ::handleBridgingCreate),
-        "from-cash-app" to BridgingCliCommand("from-cash-app", "Bridge from Cash App to USDC/USDT on an external chain", ::handleBridgingFromCashApp),
+        "from-cash-app" to BridgingCliCommand("from-cash-app", "Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain", ::handleBridgingFromCashApp),
         "to-cash-app" to BridgingCliCommand("to-cash-app", "Bridge USDC/USDT from an external chain to a Cash App user", ::handleBridgingToCashApp),
         "status" to BridgingCliCommand("status", "Read a bridge's status", ::handleBridgingStatus),
     )
@@ -267,7 +267,19 @@ fun chooseBridgeRoute(reader: LineReader, routes: List<BridgeRoutePair>): Bridge
 }
 
 fun bridgeRouteLabel(route: BridgeRoutePair): String {
-    return "${bridgeSideLabel(route.source)} -> ${bridgeSideLabel(route.destination)} [${route.provider}]"
+    return "${bridgeSideLabel(route.source)} -> ${bridgeSideLabel(route.destination)} [${route.provider}] (${bridgeAmountLabel(route)})"
+}
+
+fun bridgeAmountLabel(route: BridgeRoutePair): String {
+    val side = when (route.amountSide) {
+        BridgeAmountSide.SOURCE -> route.source
+        BridgeAmountSide.DESTINATION -> route.destination
+    }
+    return if (side.asset.equals("BTC", ignoreCase = true)) {
+        "amount in sats"
+    } else {
+        "amount in ${side.asset}, ${side.decimals} decimals"
+    }
 }
 
 fun bridgeSideLabel(side: BridgeRoutePairSide): String {

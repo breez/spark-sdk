@@ -29,7 +29,7 @@ Map<String, _BridgingEntry> _getRegistry() {
       _handleCreate,
     ),
     'from-cash-app': _BridgingEntry(
-      'Bridge from Cash App to USDC/USDT on an external chain',
+      'Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain',
       _handleFromCashApp,
     ),
     'to-cash-app': _BridgingEntry(
@@ -93,7 +93,7 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
 Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
   final parser =
       ArgParser(usageLineLength: 80)
-        ..addOption('amount', mandatory: true, help: 'Amount in stablecoin base units')
+        ..addOption('amount', mandatory: true, help: 'Amount in the base units the chosen route names')
         ..addOption('refund-address', help: "Payer's address on the source chain for refunds")
         ..addFlag('fees-included', defaultsTo: false, help: 'Deduct fees from the amount')
         ..addOption('max-slippage-bps', help: 'Maximum slippage in basis points');
@@ -139,11 +139,7 @@ Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
 Future<void> _handleFromCashApp(BreezSdk sdk, List<String> args) async {
   final parser =
       ArgParser(usageLineLength: 80)
-        ..addOption(
-          'amount',
-          mandatory: true,
-          help: 'Amount in stablecoin base units (6 decimals for USDC/USDT)',
-        )
+        ..addOption('amount', mandatory: true, help: 'Amount in the base units the chosen route names')
         ..addOption(
           'refund-address',
           help: 'Lightning address, \$cashtag or amountless BOLT11 invoice refunded if the payment fails',
@@ -308,7 +304,19 @@ BridgeRoutePair? _chooseBridgeRoute(List<BridgeRoutePair> routes) {
 }
 
 String _routeLabel(BridgeRoutePair route) {
-  return '${_sideLabel(route.source)} -> ${_sideLabel(route.destination)} [${route.provider}]';
+  return '${_sideLabel(route.source)} -> ${_sideLabel(route.destination)} '
+      '[${route.provider}] (${_amountLabel(route)})';
+}
+
+String _amountLabel(BridgeRoutePair route) {
+  final side = switch (route.amountSide) {
+    BridgeAmountSide.source => route.source,
+    BridgeAmountSide.destination => route.destination,
+  };
+  if (side.asset.toLowerCase() == 'btc') {
+    return 'amount in sats';
+  }
+  return 'amount in ${side.asset}, ${side.decimals} decimals';
 }
 
 String _sideLabel(BridgeRoutePairSide side) {

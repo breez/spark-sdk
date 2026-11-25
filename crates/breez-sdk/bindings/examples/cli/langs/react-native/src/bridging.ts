@@ -6,6 +6,7 @@
  */
 
 import {
+  BridgeAmountSide,
   FeePolicy,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
@@ -125,7 +126,17 @@ function sideLabel(side: BridgeRoutePairSide): string {
 }
 
 function routeLabel(route: BridgeRoutePair): string {
-  return `${sideLabel(route.source)} -> ${sideLabel(route.destination)} [${route.provider ?? 'unknown'}]`
+  return `${sideLabel(route.source)} -> ${sideLabel(route.destination)} [${route.provider ?? 'unknown'}] (${amountLabel(route)})`
+}
+
+function amountLabel(route: BridgeRoutePair): string {
+  const side = route.amountSide === BridgeAmountSide.Source
+    ? route.source
+    : route.destination
+  if (side.asset.toLowerCase() === 'btc') {
+    return 'amount in sats'
+  }
+  return `amount in ${side.asset}, ${side.decimals} decimals`
 }
 
 function selectBridgeRoute(

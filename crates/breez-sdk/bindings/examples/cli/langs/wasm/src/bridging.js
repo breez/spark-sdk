@@ -28,8 +28,8 @@ function registerBridgingCommands(program, getSdk, rl) {
   bridging
     .command('create')
     .description('Create a bridge that pays a recipient from another chain or over Lightning. Returns what the payer pays.')
-    .argument('<recipient>', 'Who to pay: a Spark address, a Lightning address or Cash App $cashtag, or an EVM/Solana/Tron address')
-    .requiredOption('--amount <number>', 'Amount in stablecoin base units')
+    .argument('<recipient>', 'Who to pay: a Spark address, a Lightning address or Cash App $cashtag, a Bitcoin address, or an EVM/Solana/Tron/XRP/Zcash address')
+    .requiredOption('--amount <number>', 'Amount in the base units the chosen route names')
     .option('--refund-address <address>', 'The payer\'s address on the source chain, refunded if delivery fails')
     .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
     .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
@@ -56,9 +56,9 @@ function registerBridgingCommands(program, getSdk, rl) {
   // --- from-cash-app ---
   bridging
     .command('from-cash-app')
-    .description('Bridge from Cash App to USDC/USDT on an external chain. Returns a cash.app link for the payer to open.')
-    .argument('<recipient>', 'Recipient address on the destination chain (EVM/Solana/Tron)')
-    .requiredOption('--amount <number>', 'Amount in the destination stablecoin\'s base units (6 decimals for USDC/USDT)')
+    .description('Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain. Returns a cash.app link for the payer to open.')
+    .argument('<recipient>', 'Recipient address on the destination chain (EVM/Solana/Tron/XRP/Zcash), or a Bitcoin address')
+    .requiredOption('--amount <number>', 'Amount in the base units the chosen route names')
     .option('--refund-address <address>', 'Lightning address, $cashtag or amountless BOLT11 invoice refunded if the payment fails before the swap')
     .option('--fees-included', 'Deduct fees from the amount instead of adding them on top', false)
     .option('--max-slippage-bps <bps>', 'Maximum slippage in basis points', parseInt)
@@ -169,7 +169,15 @@ async function chooseBridgeRoute(rl, routes) {
 }
 
 function routeLabel(route) {
-  return `${sideLabel(route.source)} -> ${sideLabel(route.destination)} [${route.provider}]`
+  return `${sideLabel(route.source)} -> ${sideLabel(route.destination)} [${route.provider}] (${amountLabel(route)})`
+}
+
+function amountLabel(route) {
+  const side = route.amountSide === 'source' ? route.source : route.destination
+  if (side.asset.toLowerCase() === 'btc') {
+    return 'amount in sats'
+  }
+  return `amount in ${side.asset}, ${side.decimals} decimals`
 }
 
 function sideLabel(side) {

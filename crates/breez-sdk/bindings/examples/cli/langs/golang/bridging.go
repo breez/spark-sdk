@@ -23,7 +23,7 @@ var BridgingCommandNames = []string{
 func BuildBridgingCommandRegistry() map[string]Command {
 	return map[string]Command{
 		"create":        {Name: "create", Description: "Create a bridge that pays a recipient from another chain or over Lightning", Run: handleBridgingCreate},
-		"from-cash-app": {Name: "from-cash-app", Description: "Bridge from Cash App to USDC/USDT on an external chain", Run: handleBridgingFromCashApp},
+		"from-cash-app": {Name: "from-cash-app", Description: "Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain", Run: handleBridgingFromCashApp},
 		"to-cash-app":   {Name: "to-cash-app", Description: "Bridge USDC/USDT from an external chain to a Cash App user", Run: handleBridgingToCashApp},
 		"status":        {Name: "status", Description: "Read a bridge's status", Run: handleBridgingStatus},
 	}
@@ -366,10 +366,27 @@ func chooseBridgeRoute(rl *readline.Instance, routes []breez_sdk_spark.BridgeRou
 }
 
 func bridgeRouteLabel(route breez_sdk_spark.BridgeRoutePair) string {
-	return fmt.Sprintf("%s -> %s [%v]",
+	return fmt.Sprintf("%s -> %s [%v] (%s)",
 		bridgeSideLabel(route.Source),
 		bridgeSideLabel(route.Destination),
-		route.Provider)
+		route.Provider,
+		bridgeAmountLabel(route))
+}
+
+func bridgeAmountLabel(route breez_sdk_spark.BridgeRoutePair) string {
+	var side breez_sdk_spark.BridgeRoutePairSide
+	switch route.AmountSide {
+	case breez_sdk_spark.BridgeAmountSideSource:
+		side = route.Source
+	case breez_sdk_spark.BridgeAmountSideDestination:
+		side = route.Destination
+	default:
+		side = route.Destination
+	}
+	if strings.EqualFold(side.Asset, "BTC") {
+		return "amount in sats"
+	}
+	return fmt.Sprintf("amount in %s, %d decimals", side.Asset, side.Decimals)
 }
 
 func bridgeSideLabel(side breez_sdk_spark.BridgeRoutePairSide) string {

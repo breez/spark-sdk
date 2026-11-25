@@ -48,7 +48,7 @@ public static class BridgingCommands
             ["from-cash-app"] = new()
             {
                 Name = "from-cash-app",
-                Description = "Bridge from Cash App to USDC/USDT on an external chain",
+                Description = "Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain",
                 Run = HandleFromCashApp
             },
             ["to-cash-app"] = new()
@@ -357,7 +357,22 @@ public static class BridgingCommands
 
     private static string RouteLabel(BridgeRoutePair route)
     {
-        return $"{SideLabel(route.source)} -> {SideLabel(route.destination)} [{route.provider}]";
+        return $"{SideLabel(route.source)} -> {SideLabel(route.destination)} [{route.provider}] ({AmountLabel(route)})";
+    }
+
+    private static string AmountLabel(BridgeRoutePair route)
+    {
+        var side = route.amountSide switch
+        {
+            BridgeAmountSide.Source => route.source,
+            BridgeAmountSide.Destination => route.destination,
+            _ => route.destination,
+        };
+        if (side.asset.Equals("BTC", StringComparison.OrdinalIgnoreCase))
+        {
+            return "amount in sats";
+        }
+        return $"amount in {side.asset}, {side.decimals} decimals";
     }
 
     private static string SideLabel(BridgeRoutePairSide side)
