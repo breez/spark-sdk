@@ -45,7 +45,7 @@ func dispatchBridgingCommand(_ args: [String], sdk: BreezSdk) async {
 func printBridgingHelp() {
     print("\nBridging commands:")
     print("  \("create".padding(toLength: 30, withPad: " ", startingAt: 0))Create a bridge that pays a recipient from another chain or over Lightning")
-    print("  \("from-cash-app".padding(toLength: 30, withPad: " ", startingAt: 0))Bridge from Cash App to USDC/USDT on an external chain")
+    print("  \("from-cash-app".padding(toLength: 30, withPad: " ", startingAt: 0))Bridge from Cash App to USDC/USDT or a native coin on an external chain, or to Bitcoin on-chain")
     print("  \("to-cash-app".padding(toLength: 30, withPad: " ", startingAt: 0))Bridge USDC/USDT from an external chain to a Cash App user")
     print("  \("status".padding(toLength: 30, withPad: " ", startingAt: 0))Read a bridge's status")
     print()
@@ -233,7 +233,19 @@ func chooseBridgeRoute(_ routes: [BridgeRoutePair]) throws -> BridgeRoutePair {
 // MARK: - Helpers
 
 private func bridgeRouteLabel(_ route: BridgeRoutePair) -> String {
-    "\(bridgeSideLabel(route.source)) -> \(bridgeSideLabel(route.destination)) [\(route.provider)]"
+    "\(bridgeSideLabel(route.source)) -> \(bridgeSideLabel(route.destination)) [\(route.provider)] (\(bridgeAmountLabel(route)))"
+}
+
+private func bridgeAmountLabel(_ route: BridgeRoutePair) -> String {
+    let side: BridgeRoutePairSide
+    switch route.amountSide {
+    case .source: side = route.source
+    case .destination: side = route.destination
+    }
+    if side.asset.lowercased() == "btc" {
+        return "amount in sats"
+    }
+    return "amount in \(side.asset), \(side.decimals) decimals"
 }
 
 private func bridgeSideLabel(_ side: BridgeRoutePairSide) -> String {

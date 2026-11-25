@@ -1,6 +1,7 @@
 import argparse
 
 from breez_sdk_spark import (
+    BridgeAmountSide,
     CreateBridgeRequest,
     FeePolicy,
     GetBridgeRoutesRequest,
@@ -37,11 +38,21 @@ def _maybe_truncate_address(addr):
     return f" ({addr})"
 
 
+def _amount_label(route):
+    if route.amount_side == BridgeAmountSide.SOURCE:
+        side = route.source
+    else:
+        side = route.destination
+    if side.asset.upper() == "BTC":
+        return "amount in sats"
+    return f"amount in {side.asset}, {side.decimals} decimals"
+
+
 def _route_label(route):
     return (
         f"{_side_label(route.source)} -> "
         f"{_side_label(route.destination)} "
-        f"[{route.provider}]"
+        f"[{route.provider}] ({_amount_label(route)})"
     )
 
 
@@ -92,9 +103,9 @@ def _build_create_parser():
                 "Create a bridge that pays a recipient from another chain or over Lightning")
     p.add_argument("recipient",
                    help="Who to pay: a Spark address, a Lightning address or Cash App $cashtag, "
-                   "or an EVM/Solana/Tron address")
+                   "a Bitcoin address, or an EVM/Solana/Tron/XRP/Zcash address")
     p.add_argument("--amount", type=int, required=True,
-                   help="Amount in stablecoin base units")
+                   help="Amount in the base units the chosen route names")
     p.add_argument("--refund-address", default=None,
                    help="The payer's address on the source chain, refunded if delivery fails")
     p.add_argument("--fees-included", action="store_true", default=False,
@@ -134,12 +145,13 @@ async def _handle_create(sdk, session, args):
 
 def _build_from_cash_app_parser():
     p = _parser("from-cash-app",
-                "Bridge from Cash App to USDC/USDT on an external chain")
+                "Bridge from Cash App to USDC/USDT or a native coin on an external chain, "
+                "or to Bitcoin on-chain")
     p.add_argument("recipient",
-                   help="Recipient address on the destination chain (EVM/Solana/Tron)")
+                   help="Recipient address on the destination chain "
+                   "(EVM/Solana/Tron/XRP/Zcash), or a Bitcoin address")
     p.add_argument("--amount", type=int, required=True,
-                   help="Amount in the destination stablecoin's base units "
-                   "(6 decimals for USDC/USDT)")
+                   help="Amount in the base units the chosen route names")
     p.add_argument("--refund-address", default=None,
                    help="Lightning address, $cashtag or amountless BOLT11 invoice "
                    "refunded if the payment fails before the swap")

@@ -142,6 +142,8 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type BridgeRoutePairSide = any;
   export type CreateBridgeResponse = any;
 
+  export const BridgeAmountSide: any;
+  export type BridgeAmountSide = any;
   export const BridgeStatus: any;
   export type BridgeStatus = any;
 
