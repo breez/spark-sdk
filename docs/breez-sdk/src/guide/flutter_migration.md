@@ -7,6 +7,7 @@ Method names and request types are unchanged. Most of the migration is renaming 
 ## Requirements
 
 - Flutter 3.38 or later. A build hook bundles the native library.
+- iOS 15.0 or later. If your app targets an earlier version, raise `platform :ios` in `ios/Podfile` and the iOS deployment target of the Runner target.
 - `BreezSdkSparkLib.init()` is gone. Delete the call: the library loads on first use.
 
 ## Renamed classes

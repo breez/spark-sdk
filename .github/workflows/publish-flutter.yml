@@ -119,7 +119,7 @@ jobs:
 
       - name: Build relay library
         env:
-          IPHONEOS_DEPLOYMENT_TARGET: '13.0'
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
           manifest=generated/native/dispatch/Cargo.toml

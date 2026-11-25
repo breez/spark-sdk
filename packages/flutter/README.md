@@ -2,11 +2,11 @@
 
 ## Requirements
 
-Flutter 3.38 or later, on Android, iOS or macOS. The package's build hook
-bundles the SDK's native library: it downloads the prebuilt library for each
-target from the matching release and checks its sha256, so apps don't need a
-Rust toolchain. An app that also targets other platforms still builds for
-them, but SDK calls fail there.
+Flutter 3.38 or later, on Android, iOS (15.0 or later) or macOS. The package's
+build hook bundles the SDK's native library: it downloads the prebuilt library
+for each target from the matching release and checks its sha256, so apps don't
+need a Rust toolchain. An app that also targets other platforms still builds
+for them, but SDK calls fail there.
 
 The SDK needs network access. On Android, release builds need the `INTERNET`
 permission in `android/app/src/main/AndroidManifest.xml`. On macOS, add the

@@ -164,7 +164,7 @@ Future<void> _cargoBuild(
     };
     command = ['ndk', '-t', abi, '-P', '${code.android.targetNdkApi}', 'build', ...buildArgs];
   } else {
-    if (code.targetOS == OS.iOS) environment['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0';
+    if (code.targetOS == OS.iOS) environment['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0';
     if (code.targetOS == OS.macOS) environment['MACOSX_DEPLOYMENT_TARGET'] = '10.15';
     command = ['build', '--target', triple, ...buildArgs];
   }
