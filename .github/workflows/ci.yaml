@@ -515,13 +515,16 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Cache the binding generator
+        id: bindgen-cache
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/uniffi_bindgen_dart
           key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
 
+      # Installs on a miss even when the Rust cache restored another commit's generator.
       - name: Install uniffi_bindgen_dart
-        run: command -v uniffi_bindgen_dart || make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        run: make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
 
       - name: Get dependencies
         working-directory: packages/flutter

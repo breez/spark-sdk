@@ -33,6 +33,32 @@ if (event is PaymentSucceededSdkEvent) { ... }
 try { ... } on InsufficientFundsSdkException { ... }
 ```
 
+## Matching variants
+
+Enums with fields are sealed classes. Their `when`, `maybeWhen` and `map` methods are gone, and so are the getters for a field that every variant has. Use a `switch` instead: the compiler checks that it covers every variant.
+
+```dart
+// Before
+final message = event.maybeWhen(
+  paymentSucceeded: (payment) => 'Paid: ${payment.id}',
+  paymentFailed: (payment) => 'Failed: ${payment.id}',
+  orElse: () => null,
+);
+final status = conversionInfo.status;
+
+// After
+final message = switch (event) {
+  PaymentSucceededSdkEvent(:final payment) => 'Paid: ${payment.id}',
+  PaymentFailedSdkEvent(:final payment) => 'Failed: ${payment.id}',
+  _ => null,
+};
+final status = switch (conversionInfo) {
+  AmmConversionInfo(:final status) ||
+  BoltzConversionInfo(:final status) ||
+  OrchestraConversionInfo(:final status) => status,
+};
+```
+
 ## Other changes
 
 - **Constructors are not `const`.** Remove `const` in front of SDK types, such as `const GetInfoRequest(...)`.
@@ -72,6 +98,8 @@ logs.stream.listen((entry) { ... });
 ```
 
 Don't let an exception escape `onEvent` or `log`. The SDK calls them from its own threads and has no way to report the error, so it panics, which can stop the app. Forwarding to a `StreamController`, as above, keeps your handlers' errors on the Dart side.
+
+Other packages, such as `logger`, also export a `Logger` class. In a file that imports both, import one of them with a prefix, for example `import 'package:logger/logger.dart' as logging;`.
 
 ## Passkeys
 

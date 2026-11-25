@@ -72,15 +72,17 @@ jobs:
 
       - name: Cache uniffi_bindgen_dart
         if: matrix.flutter
+        id: bindgen-cache
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/uniffi_bindgen_dart
           # The Makefile pins the generator's commit.
           key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
 
+      # Installs on a miss even when the Rust cache restored another commit's generator.
       - name: Install uniffi_bindgen_dart
-        if: matrix.flutter
-        run: command -v uniffi_bindgen_dart || make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
+        if: matrix.flutter && steps.bindgen-cache.outputs.cache-hit != 'true'
+        run: make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
 
       - name: Setup Python
         if: matrix.python-version

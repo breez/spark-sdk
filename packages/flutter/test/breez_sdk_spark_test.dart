@@ -67,6 +67,37 @@ void main() {
     expect(config.apiKey, 'key');
   });
 
+  test('records and variants compare by value', () {
+    final config = defaultConfig(network: Network.regtest);
+    final same = defaultConfig(network: Network.regtest);
+    expect(identical(config, same), isFalse);
+    expect(config, same);
+    expect(config.hashCode, same.hashCode);
+    expect({config, same}, hasLength(1));
+    expect(config, isNot(defaultConfig(network: Network.mainnet)));
+
+    expect(
+      ListPaymentsRequest(typeFilter: [PaymentType.send], assetFilter: TokenAssetFilter('id')),
+      ListPaymentsRequest(typeFilter: [PaymentType.send], assetFilter: TokenAssetFilter('id')),
+    );
+    expect(ListPaymentsRequest(typeFilter: [PaymentType.send]), isNot(ListPaymentsRequest(typeFilter: [])));
+
+    final entropy = EntropySeed(Uint8List.fromList([1, 2, 3]));
+    expect(entropy, EntropySeed(Uint8List.fromList([1, 2, 3])));
+    expect(entropy, isNot(EntropySeed(Uint8List.fromList([1, 2, 4]))));
+    expect(entropy, isNot(MnemonicSeed(mnemonic: 'words', passphrase: null)));
+  });
+
+  test('enums with fields are sealed', () {
+    // Compiles only because Seed is sealed: a switch expression with no
+    // fallback must cover every variant.
+    String kind(Seed seed) => switch (seed) {
+      MnemonicSeed() => 'mnemonic',
+      EntropySeed() => 'entropy',
+    };
+    expect(kind(EntropySeed(Uint8List(32))), 'entropy');
+  });
+
   test('a Dart PrfProvider is called back from Rust', () async {
     final unsupported = PasskeyClient(
       prfProvider: FakePrfProvider(supported: false, association: AssociatedDomainAssociation()),
