@@ -100,14 +100,12 @@ Their routes have `lightning` as the {{#name source}} {{#name chain}}, and a {{#
 | ETH, BNB, POL, MON, HYPE | EVM address, or an EIP-681 URI naming the chain |
 | SOL | Solana address |
 | TRX | Tron address |
-| XRP | XRP Ledger classic address (`r...`) |
 | ZEC | Zcash transparent address (`t1...` or `t3...`) |
 | Bitcoin on-chain | Bitcoin address or BIP21 URI |
 
 <div class="warning">
 <h4>Developer note</h4>
 
-- **XRP:** the provider can't pass on a destination tag, so don't pay an exchange deposit address that needs one. X-addresses, which carry a tag, are rejected. An XRP account that holds less than the 1 XRP reserve can't receive a smaller payment.
 - **Zcash:** only transparent addresses can be paid. Shielded, unified and TEX addresses are rejected.
 - **Bitcoin on-chain:** the minimum moves with the on-chain exit fee. The route's {{#name min_amount}} is the minimum that must reach the recipient when the routes were listed, so with {{#enum FeePolicy::FeesIncluded}} the amount must also cover the fees. Below the current minimum, {{#name create_bridge}} fails with {{#enum SdkError::CrossChainAmountOutOfRange}}, whose message names it. If the exit fee rises while a bridge with {{#enum FeePolicy::FeesExcluded}} is created, the recipient can receive up to {{#name max_slippage_bps}} less, and a larger rise fails with {{#enum SdkError::InvalidInput}}: create it again. {{#name info.service_fee_amount}} includes the exit fee. No overpay is added, as the cost is known exactly. The provider takes no [partner fee](./cross_chain_partner_fees.md) on these bridges.
 </div>
