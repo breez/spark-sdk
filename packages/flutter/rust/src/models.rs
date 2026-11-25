@@ -632,6 +632,8 @@ pub enum _CrossChainAddressFamily {
     Evm,
     Solana,
     Tron,
+    Xrp,
+    Zcash,
 }
 
 #[frb(mirror(CrossChainAddressDetails))]
@@ -2289,6 +2291,13 @@ pub struct _BridgeRoutePair {
     pub source: BridgeRoutePairSide,
     pub destination: BridgeRoutePairSide,
     pub limits: Option<CrossChainRouteLimits>,
+    pub amount_side: BridgeAmountSide,
+}
+
+#[frb(mirror(BridgeAmountSide))]
+pub enum _BridgeAmountSide {
+    Source,
+    Destination,
 }
 
 #[frb(mirror(BridgeRoutePairSide))]

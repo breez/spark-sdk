@@ -154,7 +154,8 @@ pub enum InputType {
 }
 
 /// Cross-chain recipient details returned by `parse()` when the input is
-/// recognized as an EVM / Solana / Tron address or URI.
+/// recognized as an EVM, Solana or Tron address or URI, or a bare XRP or
+/// Zcash transparent address.
 ///
 /// The UI passes these details to `get_cross_chain_routes()` to discover
 /// available routes, then selects one and calls `prepare_send_payment`
@@ -163,7 +164,7 @@ pub enum InputType {
 pub struct CrossChainAddressDetails {
     /// The raw recipient address (e.g. `0xabc...`).
     pub address: String,
-    /// Which address family this belongs to (EVM / Solana / Tron).
+    /// Which address family this belongs to.
     pub address_family: CrossChainAddressFamily,
     /// Token contract / mint address parsed from the URI.
     /// Used to filter routes by matching against `CrossChainRoutePair.contract_address`.

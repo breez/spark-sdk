@@ -18,10 +18,11 @@ use breez_sdk_common::{
 };
 
 use crate::{
-    BitcoinNetwork, BridgeFromCashAppRequest, BridgeFromCashAppResponse, BridgeToCashAppRequest,
-    BridgeToCashAppResponse, CrossChainAcceptedAsset, CrossChainAddressDetails, CrossChainConfig,
-    CrossChainProvider, CrossChainReceiveInfo, CrossChainRoutePair, DeliveryMethod, FeePolicy,
-    InputType, LightningAddressDetails, SparkAddressDetails, SparkAsset,
+    BitcoinAddressDetails, BitcoinNetwork, BridgeFromCashAppRequest, BridgeFromCashAppResponse,
+    BridgeToCashAppRequest, BridgeToCashAppResponse, CrossChainAcceptedAsset,
+    CrossChainAddressDetails, CrossChainConfig, CrossChainProvider, CrossChainReceiveInfo,
+    CrossChainRoutePair, DeliveryMethod, FeePolicy, InputType, LightningAddressDetails,
+    SparkAddressDetails, SparkAsset,
     cross_chain::{
         BreezServerOrchestraConfigResolver, CachedFiatService, CrossChainContext,
         CrossChainFeeMode, CrossChainProviderContext, CrossChainReceivePrepared,
@@ -166,25 +167,14 @@ impl BridgingClient {
                 self.listed_routes(delivery_method_to_wire(DeliveryMethod::Lightning), false)
                     .await?
             }
-            BridgeRecipient::CrossChain(_) => self.routes_to_other_chain(&recipient).await?,
+            BridgeRecipient::CrossChain(_) | BridgeRecipient::Bitcoin(_) => {
+                self.routes_to_other_chain(&recipient).await?
+            }
         };
         routes.retain(|route| route_pays(&recipient, route));
         let mut seen = HashSet::new();
         routes.retain(|route| seen.insert((route.source.clone(), route.destination.clone())));
-        routes.sort_by(|a, b| {
-            (
-                &a.source.asset,
-                &a.source.chain,
-                &a.destination.asset,
-                &a.destination.chain,
-            )
-                .cmp(&(
-                    &b.source.asset,
-                    &b.source.chain,
-                    &b.destination.asset,
-                    &b.destination.chain,
-                ))
-        });
+        routes.sort_by(|a, b| route_order(a).cmp(&route_order(b)));
         Ok(GetBridgeRoutesResponse { routes })
     }
 
@@ -412,9 +402,29 @@ impl BridgingClient {
             }
             InputType::LightningAddress(details) => Ok(BridgeRecipient::Lightning(details)),
             InputType::CrossChainAddress(details) => Ok(BridgeRecipient::CrossChain(details)),
+            InputType::BitcoinAddress(details) => {
+                validate_bitcoin_recipient(&details)?;
+                Ok(BridgeRecipient::Bitcoin(details))
+            }
+            InputType::Bip21(bip21) => {
+                let details = bip21
+                    .payment_methods
+                    .into_iter()
+                    .find_map(|method| match method {
+                        InputType::BitcoinAddress(details) => Some(details),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        SdkError::InvalidInput(
+                            "A bridge can only pay the Bitcoin address of a BIP21 URI".to_string(),
+                        )
+                    })?;
+                validate_bitcoin_recipient(&details)?;
+                Ok(BridgeRecipient::Bitcoin(details))
+            }
             _ => Err(SdkError::InvalidInput(
-                "A bridge can only pay a Spark address, a Lightning address, or an \
-                 EVM/Solana/Tron address"
+                "A bridge can only pay a Spark address, a Lightning address, a Bitcoin \
+                 address, or an EVM/Solana/Tron/XRP/Zcash address"
                     .to_string(),
             )),
         }
@@ -455,16 +465,8 @@ impl BridgingClient {
                 "The route doesn't pay this recipient".to_string(),
             ));
         }
-        match recipient {
-            BridgeRecipient::Spark(details) => validate_spark_recipient(details)?,
-            // Orchestra only pays out over Lightning with a refund address.
-            BridgeRecipient::Lightning(_) if refund_address.is_none() => {
-                return Err(SdkError::InvalidInput(
-                    "A refund address is required to pay a Lightning address".to_string(),
-                ));
-            }
-            BridgeRecipient::Lightning(_) | BridgeRecipient::CrossChain(_) => {}
-        }
+        self.validate_recipient(recipient, &route, refund_address.as_deref())
+            .await?;
         // The payment request is built from the route's sides, so they must be
         // the provider's, not a hand-built or stale copy.
         let listed = self.listed_routes(&route.destination.chain, false).await?;
@@ -475,9 +477,10 @@ impl BridgingClient {
         }
 
         match recipient {
-            BridgeRecipient::CrossChain(details) => {
+            BridgeRecipient::CrossChain(CrossChainAddressDetails { address, .. })
+            | BridgeRecipient::Bitcoin(BitcoinAddressDetails { address, .. }) => {
                 self.create_bridge_to_other_chain(
-                    details,
+                    address,
                     &route,
                     amount,
                     refund_address.as_deref(),
@@ -535,6 +538,34 @@ impl BridgingClient {
                 check_lightning_address_accepts(details, prepared.info.expected_received_amount)?;
                 Ok(create_bridge_response(prepared))
             }
+        }
+    }
+
+    /// Checks that `recipient` can be paid over `route`, before anything is
+    /// quoted.
+    async fn validate_recipient(
+        &self,
+        recipient: &BridgeRecipient,
+        route: &BridgeRoutePair,
+        refund_address: Option<&str>,
+    ) -> Result<(), SdkError> {
+        match recipient {
+            BridgeRecipient::Spark(details) => validate_spark_recipient(details),
+            BridgeRecipient::Bitcoin(details) => validate_bitcoin_recipient(details),
+            BridgeRecipient::CrossChain(details) => {
+                self.validate_cross_chain_recipient(
+                    details,
+                    &external_pair(route, &route.destination, None),
+                )
+                .await
+            }
+            // Orchestra only pays out over Lightning with a refund address.
+            BridgeRecipient::Lightning(_) if refund_address.is_none() => {
+                Err(SdkError::InvalidInput(
+                    "A refund address is required to pay a Lightning address".to_string(),
+                ))
+            }
+            BridgeRecipient::Lightning(_) => Ok(()),
         }
     }
 
@@ -608,13 +639,16 @@ impl BridgingClient {
         let refund = self.lightning_refund_address(refund_address).await?;
         let refund_address = refund.as_ref().map(|r| r.address.as_str());
 
-        // `amount` is in the destination asset's base units (the route's
-        // `decimals`); for these USD-pegged stablecoins it equals the USD value
-        // at parity. Convert it to the sats the provider's `prepare` expects
-        // (for both fee modes) via the live rate.
-        let btc_usd = fetch_btc_usd_rate(self.cross_chain_context.fiat_service().as_ref()).await?;
-        let source_sats =
-            convert_destination_amount_to_sats(amount, btc_usd, route.decimals.into())?;
+        // A stablecoin `amount` is in the destination's base units (the
+        // route's `decimals`), the USD value at parity, and goes to sats at the
+        // live rate. Any other `amount` is already in sats.
+        let source_sats = if amount_side(&route.asset) == BridgeAmountSide::Destination {
+            let btc_usd =
+                fetch_btc_usd_rate(self.cross_chain_context.fiat_service().as_ref()).await?;
+            convert_destination_amount_to_sats(amount, btc_usd, route.decimals.into())?
+        } else {
+            amount
+        };
         if source_sats == 0 {
             return Err(SdkError::InvalidInput(
                 "Amount is too small to fund over Lightning".to_string(),
@@ -623,12 +657,19 @@ impl BridgingClient {
 
         // Match the send path: on `FeesExcluded` pad the source so the recipient
         // lands at or above target despite provider slippage. The pad comes from
-        // config (no per-request override on a Lightning-funded bridge).
+        // config (no per-request override on a Lightning-funded bridge). A route
+        // that only moves BTC has no price to slip, and its fees are sized
+        // exactly, so it takes none.
         let fee_policy = fee_policy.unwrap_or_default();
         let overpay_bps = crate::cross_chain::resolve_target_overpay_bps(
             None,
             self.default_target_overpay_bps(),
         )?;
+        let overpay_bps = if route.asset.eq_ignore_ascii_case("BTC") {
+            0
+        } else {
+            overpay_bps
+        };
         let source_sats = resolve_direct_overpay_amount(source_sats, fee_policy, overpay_bps);
 
         let (prepared, order_id) = match invoice {
@@ -767,12 +808,12 @@ impl BridgingClient {
         .await
     }
 
-    /// Creates a bridge to a recipient on another chain, funded over Lightning
-    /// or by a stablecoin deposit, as `route` says.
+    /// Creates a bridge to `recipient_address` on another chain, funded over
+    /// Lightning or by a stablecoin deposit, as `route` says.
     #[allow(clippy::too_many_arguments)]
     async fn create_bridge_to_other_chain(
         &self,
-        recipient: &CrossChainAddressDetails,
+        recipient_address: &str,
         route: &BridgeRoutePair,
         amount: u128,
         refund_address: Option<&str>,
@@ -786,11 +827,9 @@ impl BridgingClient {
                 &route.destination,
                 Some((SparkAsset::Bitcoin, DeliveryMethod::Lightning)),
             );
-            self.validate_cross_chain_recipient(recipient, &destination)
-                .await?;
             let funded = self
                 .quote_lightning_funded(
-                    &recipient.address,
+                    recipient_address,
                     &destination,
                     amount,
                     fee_policy,
@@ -806,17 +845,12 @@ impl BridgingClient {
         let refund = self
             .validate_refund_address(refund_address, &source)
             .await?;
-        self.validate_cross_chain_recipient(
-            recipient,
-            &external_pair(route, &route.destination, None),
-        )
-        .await?;
         let prepared = self
             .quote_chain_to_chain(
                 route,
                 &source,
                 amount,
-                &recipient.address,
+                recipient_address,
                 refund.as_deref(),
                 fee_policy,
                 max_slippage_bps,
@@ -922,14 +956,28 @@ enum BridgeRecipient {
     Spark(SparkAddressDetails),
     /// Paid in Bitcoin over Lightning.
     Lightning(LightningAddressDetails),
-    /// Paid in a USD stablecoin.
+    /// Paid in a USD stablecoin, or the chain's native coin.
     CrossChain(CrossChainAddressDetails),
+    /// Paid in Bitcoin on-chain.
+    Bitcoin(BitcoinAddressDetails),
 }
 
-/// Whether `route` pays `recipient`, moving only USD stablecoins and Bitcoin.
-/// A Spark or Lightning recipient is paid from a stablecoin deposit on another
-/// chain. A recipient on another chain is paid from one too, or over
-/// Lightning.
+/// The order routes are listed in: by what the payer pays, then stablecoin
+/// destinations ahead of native coins, then by what the recipient receives.
+fn route_order(route: &BridgeRoutePair) -> (&str, &str, bool, &str, &str) {
+    (
+        &route.source.asset,
+        &route.source.chain,
+        is_native_coin(&route.destination),
+        &route.destination.asset,
+        &route.destination.chain,
+    )
+}
+
+/// Whether `route` pays `recipient`. A Spark or Lightning recipient is paid
+/// from a stablecoin deposit on another chain. A recipient on another chain
+/// is paid a stablecoin from one too, or over Lightning, and only Lightning
+/// pays a native coin or Bitcoin on-chain.
 fn route_pays(recipient: &BridgeRecipient, route: &BridgeRoutePair) -> bool {
     let (source, destination) = (&route.source, &route.destination);
     match recipient {
@@ -944,9 +992,26 @@ fn route_pays(recipient: &BridgeRecipient, route: &BridgeRoutePair) -> bool {
             is_deposit(source) && delivery_method(destination) == Some(DeliveryMethod::Lightning)
         }
         BridgeRecipient::CrossChain(details) => {
-            (is_deposit(source) || delivery_method(source) == Some(DeliveryMethod::Lightning))
-                && pays_address(destination, details)
+            let funded = delivery_method(source) == Some(DeliveryMethod::Lightning)
+                || (is_deposit(source) && !is_native_coin(destination));
+            funded && pays_address(destination, details)
         }
+        BridgeRecipient::Bitcoin(_) => {
+            delivery_method(source) == Some(DeliveryMethod::Lightning)
+                && delivery_method(destination) == Some(DeliveryMethod::Bitcoin)
+                && is_bitcoin(destination)
+        }
+    }
+}
+
+/// The side whose base units a bridge's `amount` is in, for a route paying
+/// `destination_asset`: the recipient's when it is a USD stablecoin, the
+/// payer's otherwise.
+pub(super) fn amount_side(destination_asset: &str) -> BridgeAmountSide {
+    if is_usd_stable_asset(destination_asset) {
+        BridgeAmountSide::Destination
+    } else {
+        BridgeAmountSide::Source
     }
 }
 
@@ -979,13 +1044,46 @@ fn is_deposit(side: &BridgeRoutePairSide) -> bool {
             .is_some()
 }
 
-/// Whether `side` delivers a stablecoin `recipient` can hold: on a chain of
-/// its address family, and the token and chain it names, if any.
+/// A chain's own coin, on a chain other than Spark, Lightning and Bitcoin.
+fn is_native_coin(side: &BridgeRoutePairSide) -> bool {
+    delivery_method(side).is_none()
+        && side.contract_address.is_none()
+        && !is_usd_stable_asset(&side.asset)
+}
+
+/// The address family of the chain a native coin `side` is on: the family
+/// that names the chain, else EVM for a decimal EIP-155 chain id.
+fn native_coin_family(side: &BridgeRoutePairSide) -> Option<CrossChainAddressFamily> {
+    [
+        CrossChainAddressFamily::Evm,
+        CrossChainAddressFamily::Solana,
+        CrossChainAddressFamily::Tron,
+        CrossChainAddressFamily::Xrp,
+        CrossChainAddressFamily::Zcash,
+    ]
+    .into_iter()
+    .find(|family| family.matches_chain(&side.chain, None))
+    .or_else(|| {
+        side.chain_id
+            .as_deref()?
+            .parse::<u64>()
+            .ok()
+            .map(|_| CrossChainAddressFamily::Evm)
+    })
+}
+
+/// Whether `side` delivers a stablecoin or native coin `recipient` can hold:
+/// on a chain of its address family, and the token and chain it names, if
+/// any.
 fn pays_address(side: &BridgeRoutePairSide, recipient: &CrossChainAddressDetails) -> bool {
     let family: CrossChainAddressFamily = recipient.address_family.into();
+    let on_family = if is_usd_stable_asset(&side.asset) {
+        family.matches_chain(&side.chain, side.contract_address.as_deref())
+    } else {
+        is_native_coin(side) && native_coin_family(side) == Some(family)
+    };
     delivery_method(side).is_none()
-        && is_usd_stable_asset(&side.asset)
-        && family.matches_chain(&side.chain, side.contract_address.as_deref())
+        && on_family
         && recipient.contract_address.as_deref().is_none_or(|wanted| {
             side.contract_address
                 .as_deref()
@@ -1012,7 +1110,7 @@ fn spark_asset(side: &BridgeRoutePairSide) -> SparkAsset {
 /// `amount` in source units. A stablecoin destination is rescaled at parity,
 /// and any other amount is already in source units.
 fn source_units(route: &BridgeRoutePair, amount: u128) -> Result<u128, SdkError> {
-    if is_bitcoin(&route.destination) {
+    if amount_side(&route.destination.asset) == BridgeAmountSide::Source {
         return Ok(amount);
     }
     rescale_decimals(
@@ -1051,6 +1149,16 @@ fn external_pair(
         accepted_assets,
         delivery_methods,
     }
+}
+
+/// Rejects a Bitcoin address on a network other than mainnet.
+fn validate_bitcoin_recipient(details: &BitcoinAddressDetails) -> Result<(), SdkError> {
+    if details.network != BitcoinNetwork::Bitcoin {
+        return Err(SdkError::InvalidInput(
+            "The Bitcoin address is not a mainnet address".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Rejects a Spark address on a network other than mainnet.
@@ -1094,8 +1202,8 @@ fn create_bridge_response(prepared: CrossChainReceivePrepared) -> CreateBridgeRe
 
 /// The response for a bridge the payer funds over Lightning: the deposit is
 /// the provider's BOLT11 for `amount_sats`, and the recipient receives the
-/// route's stablecoin. The bridge is the order when there is one, otherwise
-/// the quote.
+/// route's destination asset. The bridge is the order when there is one,
+/// otherwise the quote.
 fn lightning_funded_bridge_response(
     funded: LightningFunded,
 ) -> Result<CreateBridgeResponse, SdkError> {
@@ -1290,19 +1398,21 @@ mod tests {
     use macros::{async_test_all, test_all};
 
     use super::{
-        BridgeRecipient, BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient,
-        CreateBridgeRequest, GetBridgeStatusRequest, LightningFunded, LightningInvoice,
-        LightningRefund, accepted_lightning_refund, bridge_from_cash_app_response,
-        check_lightning_address_accepts, check_refund_outlives, deposit_target, external_pair,
-        is_listed, is_order_id, lightning_funded_bridge_response, route_pays,
-        route_supports_delivery_method, source_units, validate_spark_recipient,
+        BridgeAmountSide, BridgeRecipient, BridgeRoutePair, BridgeRoutePairSide, BridgeStatus,
+        BridgingClient, CreateBridgeRequest, GetBridgeStatusRequest, LightningFunded,
+        LightningInvoice, LightningRefund, accepted_lightning_refund, amount_side,
+        bridge_from_cash_app_response, check_lightning_address_accepts, check_refund_outlives,
+        deposit_target, external_pair, is_listed, is_order_id, lightning_funded_bridge_response,
+        native_coin_family, route_order, route_pays, route_supports_delivery_method, source_units,
+        validate_spark_recipient,
     };
     use crate::cross_chain::{CrossChainProviderContext, CrossChainSendPrepared};
     use crate::{
-        BitcoinNetwork, Bolt11Invoice, Bolt11InvoiceDetails, CrossChainAddressDetails,
-        CrossChainAddressFamily, CrossChainFeeMode, CrossChainProvider, CrossChainRouteLimits,
-        CrossChainRoutePair, DeliveryMethod, InputType, LightningAddressDetails,
-        LnurlPayRequestDetails, PaymentRequestSource, SdkError, SparkAddressDetails, SparkAsset,
+        BitcoinAddressDetails, BitcoinNetwork, Bolt11Invoice, Bolt11InvoiceDetails,
+        CrossChainAddressDetails, CrossChainAddressFamily, CrossChainFeeMode, CrossChainProvider,
+        CrossChainRouteLimits, CrossChainRoutePair, DeliveryMethod, InputType,
+        LightningAddressDetails, LnurlPayRequestDetails, PaymentRequestSource, SdkError,
+        SparkAddressDetails, SparkAsset,
     };
 
     #[cfg(feature = "browser-tests")]
@@ -1842,9 +1952,59 @@ mod tests {
         side("lightning", "BTC", None, 8)
     }
 
+    fn native(
+        chain: &str,
+        chain_id: Option<&str>,
+        asset: &str,
+        decimals: u8,
+    ) -> BridgeRoutePairSide {
+        BridgeRoutePairSide {
+            chain_id: chain_id.map(str::to_string),
+            ..side(chain, asset, None, decimals)
+        }
+    }
+
+    fn base_eth() -> BridgeRoutePairSide {
+        native("base", Some("8453"), "ETH", 18)
+    }
+
+    fn ethereum_eth() -> BridgeRoutePairSide {
+        native("ethereum", Some("1"), "ETH", 18)
+    }
+
+    fn bsc_bnb() -> BridgeRoutePairSide {
+        native("bsc", Some("56"), "BNB", 18)
+    }
+
+    fn tron_trx() -> BridgeRoutePairSide {
+        native("tron", Some("728126428"), "TRX", 6)
+    }
+
+    fn solana_sol() -> BridgeRoutePairSide {
+        native(
+            "solana",
+            Some("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            "SOL",
+            9,
+        )
+    }
+
+    fn xrp_xrp() -> BridgeRoutePairSide {
+        native("xrp", Some("xrp:mainnet"), "XRP", 6)
+    }
+
+    fn zcash_zec() -> BridgeRoutePairSide {
+        native("zcash", Some("zcash:mainnet"), "ZEC", 8)
+    }
+
+    fn bitcoin_btc() -> BridgeRoutePairSide {
+        native("bitcoin", None, "BTC", 8)
+    }
+
     fn pair(source: BridgeRoutePairSide, destination: BridgeRoutePairSide) -> BridgeRoutePair {
         BridgeRoutePair {
             provider: CrossChainProvider::Orchestra,
+            amount_side: amount_side(&destination.asset),
             source,
             destination,
             limits: None,
@@ -1861,6 +2021,22 @@ mod tests {
 
     fn base_recipient() -> BridgeRecipient {
         BridgeRecipient::CrossChain(base_address())
+    }
+
+    fn other_chain_recipient(address: &str, family: CrossChainAddressFamily) -> BridgeRecipient {
+        BridgeRecipient::CrossChain(CrossChainAddressDetails {
+            address: address.to_string(),
+            address_family: family,
+            ..base_address()
+        })
+    }
+
+    fn bitcoin_recipient() -> BridgeRecipient {
+        BridgeRecipient::Bitcoin(BitcoinAddressDetails {
+            address: "bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj".to_string(),
+            network: BitcoinNetwork::Bitcoin,
+            source: PaymentRequestSource::default(),
+        })
     }
 
     #[test_all]
@@ -1884,7 +2060,7 @@ mod tests {
     }
 
     #[test_all]
-    fn route_pays_only_in_usd_stablecoins_and_bitcoin() {
+    fn route_pays_no_other_tokens_or_sources() {
         let (spark, base) = (spark_recipient(), base_recipient());
         assert!(!route_pays(&spark, &pair(base_weth(), spark_btc())));
         assert!(!route_pays(&base, &pair(tron_usdt(), base_weth())));
@@ -1919,6 +2095,171 @@ mod tests {
             ..base_address()
         });
         assert!(!route_pays(&on_arbitrum, &pair(tron_usdt(), base_usdc())));
+    }
+
+    #[test_all]
+    fn native_coin_family_is_named_by_the_chain_or_its_chain_id() {
+        for (side, family) in [
+            (base_eth(), Some(CrossChainAddressFamily::Evm)),
+            (ethereum_eth(), Some(CrossChainAddressFamily::Evm)),
+            (bsc_bnb(), Some(CrossChainAddressFamily::Evm)),
+            // Tron's chain id is decimal too, but its name comes first.
+            (tron_trx(), Some(CrossChainAddressFamily::Tron)),
+            (solana_sol(), Some(CrossChainAddressFamily::Solana)),
+            (xrp_xrp(), Some(CrossChainAddressFamily::Xrp)),
+            (zcash_zec(), Some(CrossChainAddressFamily::Zcash)),
+            (native("plasma", None, "XPL", 18), None),
+            (native("sui", Some("sui:mainnet"), "SUI", 9), None),
+        ] {
+            assert_eq!(
+                native_coin_family(&side),
+                family.map(Into::into),
+                "{side:?}"
+            );
+        }
+    }
+
+    #[test_all]
+    fn route_pays_a_native_coin_from_lightning_on_the_recipients_chain() {
+        let base = base_recipient();
+        assert!(route_pays(&base, &pair(lightning_btc(), base_eth())));
+        assert!(route_pays(&base, &pair(lightning_btc(), bsc_bnb())));
+        assert!(route_pays(&base, &pair(lightning_btc(), ethereum_eth())));
+        assert!(!route_pays(&base, &pair(lightning_btc(), tron_trx())));
+        assert!(!route_pays(&base, &pair(lightning_btc(), solana_sol())));
+        // Only Lightning pays a native coin.
+        assert!(!route_pays(&base, &pair(base_usdc(), base_eth())));
+        assert!(!route_pays(&base, &pair(tron_usdt(), bsc_bnb())));
+        // A token that isn't a stablecoin stays out.
+        assert!(!route_pays(&base, &pair(lightning_btc(), base_weth())));
+
+        let on_ethereum = BridgeRecipient::CrossChain(CrossChainAddressDetails {
+            chain_id: Some(1),
+            ..base_address()
+        });
+        assert!(route_pays(
+            &on_ethereum,
+            &pair(lightning_btc(), ethereum_eth())
+        ));
+        assert!(!route_pays(
+            &on_ethereum,
+            &pair(lightning_btc(), base_eth())
+        ));
+        let usdc = BridgeRecipient::CrossChain(CrossChainAddressDetails {
+            contract_address: Some(BASE_USDC.to_string()),
+            ..base_address()
+        });
+        assert!(!route_pays(&usdc, &pair(lightning_btc(), base_eth())));
+
+        let tron = other_chain_recipient(
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            CrossChainAddressFamily::Tron,
+        );
+        assert!(route_pays(&tron, &pair(lightning_btc(), tron_trx())));
+        assert!(!route_pays(&tron, &pair(lightning_btc(), base_eth())));
+        let xrp = other_chain_recipient(
+            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+            CrossChainAddressFamily::Xrp,
+        );
+        assert!(route_pays(&xrp, &pair(lightning_btc(), xrp_xrp())));
+        assert!(!route_pays(&xrp, &pair(lightning_btc(), zcash_zec())));
+        let zcash = other_chain_recipient(
+            "t1KRqwQhktLV4BjbNLiuH6pb3AMoszZKcQB",
+            CrossChainAddressFamily::Zcash,
+        );
+        assert!(route_pays(&zcash, &pair(lightning_btc(), zcash_zec())));
+    }
+
+    #[test_all]
+    fn route_pays_bitcoin_on_chain_only_from_lightning() {
+        let bitcoin = bitcoin_recipient();
+        assert!(route_pays(&bitcoin, &pair(lightning_btc(), bitcoin_btc())));
+        assert!(!route_pays(&bitcoin, &pair(base_usdc(), bitcoin_btc())));
+        assert!(!route_pays(&bitcoin, &pair(lightning_btc(), base_usdc())));
+        assert!(!route_pays(&bitcoin, &pair(lightning_btc(), spark_btc())));
+        assert!(!route_pays(
+            &base_recipient(),
+            &pair(lightning_btc(), bitcoin_btc())
+        ));
+        assert!(!route_pays(
+            &spark_recipient(),
+            &pair(lightning_btc(), bitcoin_btc())
+        ));
+    }
+
+    #[test_all]
+    fn routes_list_stablecoins_ahead_of_native_coins_for_each_source() {
+        let mut routes = [
+            pair(lightning_btc(), base_eth()),
+            pair(tron_usdt(), base_usdc()),
+            pair(lightning_btc(), bsc_bnb()),
+            pair(lightning_btc(), base_usdt()),
+            pair(lightning_btc(), base_usdc()),
+        ];
+        routes.sort_by(|a, b| route_order(a).cmp(&route_order(b)));
+        let listed: Vec<_> = routes
+            .iter()
+            .map(|r| (r.source.asset.as_str(), r.destination.asset.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("BTC", "USDC"),
+                ("BTC", "USDT"),
+                ("BTC", "BNB"),
+                ("BTC", "ETH"),
+                ("USDT", "USDC"),
+            ]
+        );
+    }
+
+    #[test_all]
+    fn amount_side_is_the_recipients_stablecoin_or_what_the_payer_pays() {
+        for (route, side) in [
+            (
+                pair(lightning_btc(), base_usdc()),
+                BridgeAmountSide::Destination,
+            ),
+            (
+                pair(tron_usdt(), spark_usdb()),
+                BridgeAmountSide::Destination,
+            ),
+            (pair(base_usdc(), spark_btc()), BridgeAmountSide::Source),
+            (pair(base_usdc(), lightning_btc()), BridgeAmountSide::Source),
+            (pair(lightning_btc(), base_eth()), BridgeAmountSide::Source),
+            (
+                pair(lightning_btc(), bitcoin_btc()),
+                BridgeAmountSide::Source,
+            ),
+        ] {
+            assert_eq!(amount_side(&route.destination.asset), side, "{route:?}");
+        }
+        assert_eq!(
+            source_units(&pair(lightning_btc(), base_eth()), 50_000).unwrap(),
+            50_000
+        );
+    }
+
+    #[async_test_all]
+    async fn parse_recipient_takes_a_mainnet_bitcoin_address() {
+        let client = offline_client();
+        for input in [
+            "bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj",
+            "bitcoin:bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj?amount=0.001",
+        ] {
+            let recipient = client.parse_recipient(input).await;
+            assert!(
+                matches!(&recipient, Ok(BridgeRecipient::Bitcoin(details))
+                    if details.address == "bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj"),
+                "{input}: {recipient:?}"
+            );
+        }
+        assert_invalid_input(
+            client
+                .parse_recipient("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+                .await,
+            "not a mainnet address",
+        );
     }
 
     #[test_all]
@@ -1997,6 +2338,8 @@ mod tests {
             (lightning_recipient(), pair(base_usdc(), spark_btc())),
             (base_recipient(), pair(spark_btc(), base_usdc())),
             (base_recipient(), pair(tron_usdt(), base_weth())),
+            (base_recipient(), pair(base_usdc(), base_eth())),
+            (bitcoin_recipient(), pair(base_usdc(), bitcoin_btc())),
         ] {
             assert_invalid_input(
                 client

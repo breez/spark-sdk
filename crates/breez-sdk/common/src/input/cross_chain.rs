@@ -3,11 +3,12 @@
 //! This module lives in `breez-sdk-common` so it has **zero** provider
 //! dependencies (no flashnet, no Orchestra client). It handles:
 //!
-//! * Detecting whether a bare string is an EVM / Solana / Tron address.
+//! * Detecting whether a bare string is an EVM, Solana, Tron, XRP or Zcash
+//!   address.
 //! * Parsing canonical URIs of the form
 //!   `ethereum:<addr>?chain=base&asset=usdc&amount=1000`.
 //!
-//! Chain and asset are passed through as plain strings — the SDK does not
+//! Chain and asset are passed through as plain strings: the SDK does not
 //! maintain a curated enum of supported chains/assets. Route availability
 //! is checked at prepare time via `get_cross_chain_routes()`.
 
@@ -27,6 +28,11 @@ pub enum CrossChainAddressFamily {
     Solana,
     /// Tron (base58check, `T` prefix).
     Tron,
+    /// XRP Ledger classic address (base58check in the Ripple alphabet, `r`
+    /// prefix). X-addresses, which carry a destination tag, are not detected.
+    Xrp,
+    /// Zcash transparent address (base58check, `t1` or `t3` prefix).
+    Zcash,
 }
 
 impl CrossChainAddressFamily {
@@ -36,6 +42,8 @@ impl CrossChainAddressFamily {
             Self::Evm => "ethereum",
             Self::Solana => "solana",
             Self::Tron => "tron",
+            Self::Xrp => "xrpl",
+            Self::Zcash => "zcash",
         }
     }
 
@@ -46,11 +54,14 @@ impl CrossChainAddressFamily {
     /// (`0x` + 40 hex chars). This avoids false positives for non-EVM chains
     /// like `"bitcoin"` or `"spark"` that lack EVM contract addresses.
     ///
-    /// For **Solana** and **Tron**, matching is by chain name only.
+    /// For **Solana**, **Tron**, **XRP** and **Zcash**, matching is by chain
+    /// name only.
     pub fn matches_chain(self, chain: &str, contract_address: Option<&str>) -> bool {
         match self {
             Self::Solana => chain.eq_ignore_ascii_case("solana"),
             Self::Tron => chain.eq_ignore_ascii_case("tron"),
+            Self::Xrp => chain.eq_ignore_ascii_case("xrp"),
+            Self::Zcash => chain.eq_ignore_ascii_case("zcash"),
             Self::Evm => {
                 chain.eq_ignore_ascii_case("ethereum")
                     || contract_address
@@ -62,13 +73,13 @@ impl CrossChainAddressFamily {
     /// Whether two addresses of this family refer to the same account.
     ///
     /// EVM hex is compared case-insensitively so a lowercase address matches
-    /// its EIP-55 checksummed form. Solana and Tron are base58, where case
-    /// carries information, so those compare exactly.
+    /// its EIP-55 checksummed form. The other families are base58, where
+    /// case carries information, so those compare exactly.
     pub fn addresses_equal(self, a: &str, b: &str) -> bool {
         let (a, b) = (a.trim(), b.trim());
         match self {
             Self::Evm => a.eq_ignore_ascii_case(b),
-            Self::Solana | Self::Tron => a == b,
+            Self::Solana | Self::Tron | Self::Xrp | Self::Zcash => a == b,
         }
     }
 }
@@ -99,6 +110,14 @@ pub fn detect_address_family(input: &str) -> Option<CrossChainAddressFamily> {
         return Some(CrossChainAddressFamily::Tron);
     }
 
+    if is_zcash_transparent_address(trimmed) {
+        return Some(CrossChainAddressFamily::Zcash);
+    }
+
+    if is_xrp_classic_address(trimmed) {
+        return Some(CrossChainAddressFamily::Xrp);
+    }
+
     // Solana: base58 encoding of a 32-byte public key. Length is 43-44 chars
     // typically; we just try to decode and check the byte length.
     if (32..=44).contains(&trimmed.len())
@@ -108,6 +127,42 @@ pub fn detect_address_family(input: &str) -> Option<CrossChainAddressFamily> {
     }
 
     None
+}
+
+/// Zcash transparent P2PKH (`t1`) or P2SH (`t3`): a 2-byte version and a
+/// 20-byte hash in base58check. Shielded, unified and TEX (ZIP-320) addresses
+/// are not transparent and don't match.
+fn is_zcash_transparent_address(input: &str) -> bool {
+    input.len() == 35
+        && (input.starts_with("t1") || input.starts_with("t3"))
+        && bitcoin::base58::decode_check(input).is_ok_and(|decoded| {
+            decoded.len() == 22 && decoded[0] == 0x1C && matches!(decoded[1], 0xB8 | 0xBD)
+        })
+}
+
+/// XRP Ledger classic address: a `0x00` version and a 20-byte account id in
+/// base58check, written in the Ripple alphabet.
+fn is_xrp_classic_address(input: &str) -> bool {
+    const RIPPLE: &[u8; 58] = b"rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz";
+    const BITCOIN: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    if !(25..=35).contains(&input.len()) || !input.starts_with('r') {
+        return false;
+    }
+    // Same 58 characters in a different order, so translating to the Bitcoin
+    // alphabet lets `bitcoin::base58` check the double-SHA256 checksum.
+    let translated: Option<String> = input
+        .bytes()
+        .map(|c| {
+            RIPPLE
+                .iter()
+                .position(|&r| r == c)
+                .map(|i| char::from(BITCOIN[i]))
+        })
+        .collect();
+    translated.is_some_and(|encoded| {
+        bitcoin::base58::decode_check(&encoded)
+            .is_ok_and(|decoded| decoded.len() == 21 && decoded[0] == 0x00)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -246,13 +301,12 @@ fn parse_tron_uri(scheme: &str, path: &str, params: &QueryParams) -> ParsedCross
 
 /// Builds the string surfaced to the sender on a cross-chain receive.
 ///
-/// `chain_id` is the EIP-681 chain id as a decimal string and is ignored on
-/// Solana/Tron. `amount` is in base units and is ignored on Solana/Tron.
+/// `chain_id` is the EIP-681 chain id as a decimal string, and `amount` is in
+/// base units. Both are used only for EVM.
 ///
 /// - **EVM with contract** → `ethereum:<contract>[@<chain_id>]/transfer?address=<addr>&uint256=<amount>`
 /// - **EVM without contract** → `ethereum:<addr>[@<chain_id>]?value=<amount>`
-/// - **Solana** → `<address>`
-/// - **Tron** → `<address>`
+/// - **Solana**, **Tron**, **XRP** and **Zcash** → `<address>`
 pub fn format_cross_chain_uri(
     family: CrossChainAddressFamily,
     address: &str,
@@ -274,7 +328,13 @@ pub fn format_cross_chain_uri(
         (CrossChainAddressFamily::Evm, None) => {
             format!("{scheme}:{address}{chain_id_suffix}?value={amount}")
         }
-        (CrossChainAddressFamily::Solana | CrossChainAddressFamily::Tron, _) => address.to_string(),
+        (
+            CrossChainAddressFamily::Solana
+            | CrossChainAddressFamily::Tron
+            | CrossChainAddressFamily::Xrp
+            | CrossChainAddressFamily::Zcash,
+            _,
+        ) => address.to_string(),
     }
 }
 
@@ -847,6 +907,134 @@ mod tests {
             let out =
                 format_cross_chain_uri(CrossChainAddressFamily::Tron, addr, contract, None, 500);
             assert_eq!(out, addr);
+        }
+    }
+
+    // -- XRP and Zcash --------------------------------------------------------
+
+    /// The XRP Ledger genesis account.
+    const XRP_ADDR: &str = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+    const ZCASH_T1_ADDR: &str = "t1KRqwQhktLV4BjbNLiuH6pb3AMoszZKcQB";
+    const ZCASH_T3_ADDR: &str = "t3Mg6o2UpMFVtrzqGs7f2VTS6DaiPnFT5rL";
+
+    fn with_last_char(address: &str, last: char) -> String {
+        let mut changed = address.to_string();
+        changed.pop();
+        changed.push(last);
+        changed
+    }
+
+    #[test]
+    fn detects_xrp_classic_addresses() {
+        for address in [
+            XRP_ADDR,
+            "rpZNAnHcvr6TbaY7QJa9yrVfu6coDz9pPH",
+            "raLnyR4PTuc5SgXGHqYA894a4eoKqoFwu",
+        ] {
+            assert_eq!(
+                detect_address_family(address),
+                Some(CrossChainAddressFamily::Xrp),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_xrp_with_bad_checksum_and_x_addresses() {
+        assert_eq!(detect_address_family(&with_last_char(XRP_ADDR, 'j')), None);
+        // An X-address carries a destination tag that a bridge can't pass on.
+        assert_eq!(
+            detect_address_family("X7AcgcsBL6XDcUb289X4mJ8djcdyKaB5hJDWMArnXr61cqZ"),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_zcash_transparent_addresses() {
+        for address in [
+            ZCASH_T1_ADDR,
+            ZCASH_T3_ADDR,
+            "t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQvu",
+        ] {
+            assert_eq!(
+                detect_address_family(address),
+                Some(CrossChainAddressFamily::Zcash),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_other_zcash_addresses() {
+        for address in [
+            // Bad checksum.
+            with_last_char(ZCASH_T1_ADDR, 'C').as_str(),
+            // Testnet transparent.
+            "tm9ogR9KukTCiTKvrsSxQwFv2x1vhZTydav",
+            // Sapling and unified addresses are shielded.
+            "zs1z7rejlpsa98s2rrrfkwmaxu53e4ue0ulcrw0h4x5g8jl04tak0d3mm47vdtahatqrlkngh9sly",
+            "u1l8xunezsvhq8fgzfl7404m450nwnd76zshscn6nfys7vyz2ywyh4cc5daaq0c7q2su5lqfh23sp7fkf3kt27ve5948mzpfdvckzaect2jtte308mkwlycj2u0eac077wu70vqcetkxf",
+            // TEX (ZIP-320).
+            "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte",
+        ] {
+            assert_eq!(detect_address_family(address), None, "{address}");
+        }
+    }
+
+    #[test]
+    fn xrp_and_zcash_match_chains_by_name() {
+        let xrp = CrossChainAddressFamily::Xrp;
+        assert!(xrp.matches_chain("xrp", None));
+        assert!(xrp.matches_chain("XRP", None));
+        assert!(!xrp.matches_chain("ethereum", None));
+
+        let zcash = CrossChainAddressFamily::Zcash;
+        assert!(zcash.matches_chain("zcash", None));
+        assert!(!zcash.matches_chain("bitcoin", None));
+    }
+
+    #[test]
+    fn xrp_and_zcash_compare_exactly() {
+        assert!(CrossChainAddressFamily::Xrp.addresses_equal(XRP_ADDR, XRP_ADDR));
+        assert!(
+            !CrossChainAddressFamily::Xrp.addresses_equal(XRP_ADDR, &XRP_ADDR.to_ascii_lowercase())
+        );
+        assert!(
+            !CrossChainAddressFamily::Zcash
+                .addresses_equal(ZCASH_T1_ADDR, &ZCASH_T1_ADDR.to_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn try_parse_bare_xrp_and_zcash_addresses() {
+        let xrp = try_parse_cross_chain_address(XRP_ADDR).unwrap();
+        assert_eq!(xrp.address_family, CrossChainAddressFamily::Xrp);
+        assert!(xrp.contract_address.is_none());
+
+        let zcash = try_parse_cross_chain_address(ZCASH_T3_ADDR).unwrap();
+        assert_eq!(zcash.address_family, CrossChainAddressFamily::Zcash);
+    }
+
+    /// Only bare addresses parse: an `xrpl:` URI can carry a destination tag,
+    /// and ZIP-321 amounts are decimal ZEC.
+    #[test]
+    fn try_parse_rejects_xrp_and_zcash_uris() {
+        assert!(try_parse_cross_chain_address(&format!("xrpl:{XRP_ADDR}?dt=12345")).is_none());
+        assert!(
+            try_parse_cross_chain_address(&format!("zcash:{ZCASH_T1_ADDR}?amount=1.5")).is_none()
+        );
+    }
+
+    #[test]
+    fn format_xrp_and_zcash_return_bare_addresses() {
+        for (family, address) in [
+            (CrossChainAddressFamily::Xrp, XRP_ADDR),
+            (CrossChainAddressFamily::Zcash, ZCASH_T1_ADDR),
+        ] {
+            assert_eq!(
+                format_cross_chain_uri(family, address, None, Some("1"), 1_000),
+                address
+            );
         }
     }
 }

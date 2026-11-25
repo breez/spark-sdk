@@ -21,9 +21,10 @@ mod unilateral_exit_backup;
 mod watchtower_exit;
 
 pub use bridging::{
-    BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient, BridgingConfig,
-    CreateBridgeRequest, CreateBridgeResponse, GetBridgeRoutesRequest, GetBridgeRoutesResponse,
-    GetBridgeStatusRequest, GetBridgeStatusResponse, default_bridging_config, new_bridging_client,
+    BridgeAmountSide, BridgeRoutePair, BridgeRoutePairSide, BridgeStatus, BridgingClient,
+    BridgingConfig, CreateBridgeRequest, CreateBridgeResponse, GetBridgeRoutesRequest,
+    GetBridgeRoutesResponse, GetBridgeStatusRequest, GetBridgeStatusResponse,
+    default_bridging_config, new_bridging_client,
 };
 pub(crate) use helpers::partner_id;
 pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};

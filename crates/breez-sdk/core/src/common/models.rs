@@ -296,6 +296,8 @@ pub enum CrossChainAddressFamily {
     Evm,
     Solana,
     Tron,
+    Xrp,
+    Zcash,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

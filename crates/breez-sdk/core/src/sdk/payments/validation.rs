@@ -92,6 +92,8 @@ fn address_family_label(family: input::CrossChainAddressFamily) -> &'static str 
         input::CrossChainAddressFamily::Evm => "EVM",
         input::CrossChainAddressFamily::Solana => "Solana",
         input::CrossChainAddressFamily::Tron => "Tron",
+        input::CrossChainAddressFamily::Xrp => "XRP",
+        input::CrossChainAddressFamily::Zcash => "Zcash",
     }
 }
 
@@ -249,10 +251,8 @@ pub(in crate::sdk) fn resolve_slippage_bps(
 
 /// Pads a sats-denominated order for `FeesExcluded` so the recipient lands at
 /// or above target despite provider slippage (`FeesIncluded` fixes the payer's
-/// spend, so it passes through). Padding sats to hit a USD target is valid
-/// because the route aggregator lists only USD-pegged destinations: parity
-/// holds for both a BTC source (sats fiat-inverted by the provider) and a
-/// stable-token source (parity rescale).
+/// spend, so it passes through). Padding the source by a share scales the
+/// delivery by the same share, whatever the destination asset.
 pub(in crate::sdk) fn resolve_direct_overpay_amount(
     amount: u128,
     fee_policy: FeePolicy,

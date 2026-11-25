@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    BreezSdk, BridgeRoutePair, BridgeRoutePairSide, CreateBridgeRequest, CreateBridgeResponse,
-    FeePolicy, GetBridgeRoutesRequest, GetBridgeStatusRequest,
+    BreezSdk, BridgeAmountSide, BridgeRoutePair, BridgeRoutePairSide, CreateBridgeRequest,
+    CreateBridgeResponse, FeePolicy, GetBridgeRoutesRequest, GetBridgeStatusRequest,
 };
 use clap::Subcommand;
 use rustyline::{Editor, history::DefaultHistory};
@@ -13,12 +13,14 @@ pub enum BridgingCommand {
     /// Lightning. Returns what the payer pays.
     Create {
         /// Who to pay: a Spark address, a Lightning address or Cash App
-        /// `$cashtag`, or an EVM/Solana/Tron address
+        /// `$cashtag`, a Bitcoin address, or an EVM/Solana/Tron/XRP/Zcash
+        /// address
         recipient: String,
 
-        /// Amount in stablecoin base units: the recipient's stablecoin when
-        /// they are paid in one, the payer's otherwise. `1000000` = 1 USDC at
-        /// 6 decimals, about $1
+        /// Amount in the base units the chosen route names: the recipient's
+        /// stablecoin when they are paid in one, otherwise what the payer
+        /// pays (sats over Lightning). `1000000` = 1 USDC at 6 decimals,
+        /// about $1
         #[arg(long)]
         amount: u128,
 
@@ -35,14 +37,17 @@ pub enum BridgingCommand {
         #[arg(long)]
         max_slippage_bps: Option<u32>,
     },
-    /// Bridge from Cash App to USDC/USDT on an external chain. Returns a
-    /// `cash.app` link for the payer to open.
+    /// Bridge from Cash App to USDC/USDT or a native coin on an external
+    /// chain, or to Bitcoin on-chain. Returns a `cash.app` link for the payer
+    /// to open.
     FromCashApp {
-        /// Recipient address on the destination chain (EVM/Solana/Tron)
+        /// Recipient address on the destination chain (EVM/Solana/Tron/XRP/
+        /// Zcash), or a Bitcoin address
         recipient: String,
 
-        /// Amount in the destination stablecoin's base units (6 decimals for
-        /// USDC/USDT), so `1000000` = 1 USDC, about $1
+        /// Amount in the base units the chosen route names: the recipient's
+        /// stablecoin when they are paid in one, sats otherwise. `1000000` = 1
+        /// USDC at 6 decimals, about $1
         #[arg(long)]
         amount: u128,
 
@@ -284,11 +289,25 @@ pub(crate) fn choose_bridge_route(
 
 fn route_label(route: &BridgeRoutePair) -> String {
     format!(
-        "{} -> {} [{:?}]",
+        "{} -> {} [{:?}] ({})",
         side_label(&route.source),
         side_label(&route.destination),
-        route.provider
+        route.provider,
+        amount_label(route)
     )
+}
+
+/// The unit `--amount` is in for `route`.
+fn amount_label(route: &BridgeRoutePair) -> String {
+    let side = match route.amount_side {
+        BridgeAmountSide::Source => &route.source,
+        BridgeAmountSide::Destination => &route.destination,
+    };
+    if side.asset.eq_ignore_ascii_case("BTC") {
+        "amount in sats".to_string()
+    } else {
+        format!("amount in {}, {} decimals", side.asset, side.decimals)
+    }
 }
 
 fn side_label(side: &BridgeRoutePairSide) -> String {

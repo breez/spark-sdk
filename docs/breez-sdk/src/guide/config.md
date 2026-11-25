@@ -188,4 +188,6 @@ Constraints:
 
 The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
 
+The {{#name default_target_overpay_bps}} field sets the overpay added to a payment when fees are excluded, so a price move doesn't leave the recipient short. The recipient receives it. It must be in the 0 to 500 bps range, and 0 turns it off. When it is unset, the SDK falls back to 15 bps. A request's own {{#name target_overpay_bps}} takes precedence where the request has one.
+
 See [USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
