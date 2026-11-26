@@ -13,6 +13,9 @@ class ReceivePayment {
             // Optionally set the expiry duration in seconds
             val optionalExpirySecs = 3600.toUInt()
             val optionalReceiverIdentityPublicKey: String? = null
+            // Set to FeePolicy.FEES_INCLUDED to deduct a partner fee from the amount
+            // instead of adding it on top for the payer
+            val optionalFeePolicy: FeePolicy? = null
 
             val request = ReceivePaymentRequest(
                 ReceivePaymentMethod.Bolt11Invoice(
@@ -21,15 +24,24 @@ class ReceivePayment {
                     optionalExpirySecs,
                     null,
                     optionalReceiverIdentityPublicKey,
-                    null
+                    null,
+                    optionalFeePolicy
                 )
             )
             val response = sdk.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
-            val receiveFeeSats = response.fee
-            // Log.v("Breez", "Fees: ${receiveFeeSats} sats")
+            when (val fee = response.fee) {
+                is ReceiveFee.Fixed -> {
+                    // Log.v("Breez", "Fees: ${fee.amount} sats")
+                }
+                // Only on an amountless invoice: a share of what the payer sends
+                is ReceiveFee.Rate -> {
+                    // Log.v("Breez", "Fees: ${fee.bps} bps of the amount sent" +
+                    //     " plus ${fee.fixedSats} sats")
+                }
+            }
         } catch (e: Exception) {
             // handle error
         }
@@ -47,8 +59,10 @@ class ReceivePayment {
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
-            val receiveFeeSats = response.fee
-            // Log.v("Breez", "Fees: ${receiveFeeSats} sats")
+            val fee = response.fee
+            if (fee is ReceiveFee.Fixed) {
+                // Log.v("Breez", "Fees: ${fee.amount} sats")
+            }
         } catch (e: Exception) {
             // handle error
         }
@@ -63,8 +77,10 @@ class ReceivePayment {
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
-            val receiveFeeSats = response.fee
-            // Log.v("Breez", "Fees: ${receiveFeeSats} sats")
+            val fee = response.fee
+            if (fee is ReceiveFee.Fixed) {
+                // Log.v("Breez", "Fees: ${fee.amount} sats")
+            }
         } catch (e: Exception) {
             // handle error
         }
@@ -97,8 +113,10 @@ class ReceivePayment {
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
-            val receiveFeeSats = response.fee
-            // Log.v("Breez", "Fees: ${receiveFeeSats} sats")
+            val fee = response.fee
+            if (fee is ReceiveFee.Fixed) {
+                // Log.v("Breez", "Fees: ${fee.amount} sats")
+            }
         } catch (e: Exception) {
             // handle error
         }

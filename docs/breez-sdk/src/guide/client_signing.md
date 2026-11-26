@@ -21,7 +21,7 @@ The server keeps no state between these steps. Everything needed to complete the
 
 The user's side does not need a connected SDK, only a signer that holds the user's key: any {{#name ExternalSparkSigner}} implementation (see [Using an External Signer](external_signer.md)), whether it runs on the user's device or fronts a remote signing service.
 
-The package tells the user exactly what they are approving: the amount, the fee and the destination. Show these to the user before signing. Sign Transfer and Swap packages with {{#name prepare_transfer}}, and Token packages with {{#name prepare_token_transaction}}:
+The package tells the user exactly what they are approving: the amount, the fee and the destination. Show these to the user before signing. Sign Transfer and Swap packages with {{#name prepare_transfer}}, and Token packages with {{#name prepare_token_transaction}}. A Transfer package for a Lightning payment priced by a partner fee quote also carries a {{#name sign_quote}} request: sign it with {{#name sign_quote}} too, which approves how the payment is split between its recipients:
 
 {{#tabs client_signing:client-signing-sign-package}}
 
@@ -67,6 +67,7 @@ The pull must be published before the package's {{#name expiry_time}}, at most 5
 
 - Publishing the same signed package twice returns the same result, so it is safe to retry after a lost response or a network error.
 - If publishing fails because the wallet's funds moved or fees changed since the package was built, prepare again and restart the loop with a fresh package.
+- A Lightning package priced by a partner fee quote must be published before the quote's {{#name expires_at}}, which leaves the user at least a minute to approve it. Past that, publishing fails with [QuoteExpired](./errors.md#quote-expired): build the package again from the same prepare response and have the user sign it.
 - Never reuse a signature for a changed payment. Any change to the amount, fee or destination needs a new package, reviewed and signed by the user.
 
 ## Remote signers

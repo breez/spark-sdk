@@ -2122,10 +2122,12 @@ pub enum ReceivePaymentMethod {
         expiry_secs: Option<u32>,
         /// If set, creates a HODL invoice with this payment hash (hex-encoded).
         /// The payer's HTLC will be held until the preimage is provided via
-        /// `claim_htlc_payment` or the HTLC expires.
+        /// `claim_htlc_payment` or the HTLC expires. A HODL invoice is always
+        /// for the connected wallet, so it cannot name another receiver.
         payment_hash: Option<String>,
         /// Spark identity public key that will receive the payment.
         /// If absent, the connected wallet's identity public key is used.
+        /// Another wallet's key cannot be combined with `payment_hash`.
         receiver_identity_public_key: Option<String>,
         /// If set, creates an invoice for the hash of this preimage (hex-encoded)
         /// instead of one the SDK generates. The SSP settles the payment without
@@ -2134,6 +2136,13 @@ pub enum ReceivePaymentMethod {
         /// invoice never includes a Spark address. Set at most one of this and
         /// `payment_hash`.
         preimage: Option<String>,
+        /// Who pays a partner fee on the invoice, when one applies.
+        /// [`FeePolicy::FeesExcluded`] (the default) issues the invoice for
+        /// `amount_sats` plus the fee, so the receiver keeps `amount_sats`.
+        /// [`FeePolicy::FeesIncluded`] issues it for exactly `amount_sats` and
+        /// the receiver keeps that less the fee. An amountless invoice always
+        /// deducts the fee from what the payer sends.
+        fee_policy: Option<FeePolicy>,
     },
     CrossChain {
         /// The selected cross-chain route in the receive direction.
@@ -2204,6 +2213,7 @@ impl fmt::Debug for ReceivePaymentMethod {
                 payment_hash,
                 receiver_identity_public_key,
                 preimage,
+                fee_policy,
             } => f
                 .debug_struct("Bolt11Invoice")
                 .field("description", description)
@@ -2212,6 +2222,7 @@ impl fmt::Debug for ReceivePaymentMethod {
                 .field("payment_hash", payment_hash)
                 .field("receiver_identity_public_key", receiver_identity_public_key)
                 .field("preimage", &preimage.as_ref().map(|_| "<redacted>"))
+                .field("fee_policy", fee_policy)
                 .finish(),
             ReceivePaymentMethod::CrossChain {
                 route,
@@ -2235,6 +2246,24 @@ impl fmt::Debug for ReceivePaymentMethod {
     }
 }
 
+/// A fee quote the Lightning service provider signed for paying a specific
+/// invoice. It is single-use and short-lived: a send after it expires is quoted
+/// again on the same terms, and fails if the fees changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LightningFeeQuote {
+    /// The quoted payment split, as hex.
+    pub serialized_manifest: String,
+    /// The service provider's signature over the quote, as hex.
+    pub issuer_signature: String,
+    /// When the quote expires, in seconds since the epoch.
+    pub expires_at: u64,
+    /// The payment the quote prices, in millisatoshis, which its signature
+    /// binds.
+    #[serde(default)]
+    pub payment_msats: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentMethod {
@@ -2245,7 +2274,14 @@ pub enum SendPaymentMethod {
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
         spark_transfer_fee_sats: Option<u64>,
+        /// Every fee of paying over Lightning, a partner fee included.
         lightning_fee_sats: u64,
+        /// The fee quote `lightning_fee_sats` was priced from, when a partner
+        /// fee applies. Pass the prepare response back unchanged: the send
+        /// commits this quote. A send that converts tokens to pay an invoice
+        /// without an amount is quoted again on the sats the conversion
+        /// delivers, and fails if that raises the fee beyond the one shown.
+        fee_quote: Option<LightningFeeQuote>,
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
@@ -2349,11 +2385,29 @@ pub struct ReceivePaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceivePaymentResponse {
     pub payment_request: String,
-    /// Fee to pay to receive the payment
-    /// Denominated in sats or token base units
-    pub fee: u128,
+    /// Fee charged for receiving the payment. See [`FeePolicy`] for whether
+    /// the payer or the receiver bears it on a Lightning invoice.
+    pub fee: ReceiveFee,
     /// Optional information populated only for cross-chain receives.
     pub cross_chain_info: Option<crate::cross_chain::CrossChainReceiveInfo>,
+}
+
+/// The fee charged for receiving a payment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ReceiveFee {
+    /// A fixed fee, in sats, or in token base units on a token receive.
+    Fixed { amount: u128 },
+    /// A share of whatever the payer sends, in basis points, plus a fixed
+    /// part in sats. Only an amountless Lightning invoice is priced this way.
+    Rate { bps: u32, fixed_sats: u64 },
+}
+
+impl ReceiveFee {
+    /// No fee.
+    pub fn none() -> Self {
+        Self::Fixed { amount: 0 }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -2398,6 +2452,10 @@ pub struct PrepareLnurlPayResponse {
     /// LNURL sends with `token_identifier` set + conversion are always
     /// `FeesIncluded` (explicit `FeesExcluded` is rejected).
     pub fee_policy: FeePolicy,
+    /// The fee quote `fee_sats` was priced from, when a partner fee applies.
+    /// Pass the prepare response back unchanged: the payment commits this
+    /// quote.
+    pub fee_quote: Option<LightningFeeQuote>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -2572,6 +2630,10 @@ pub enum UnsignedTransferPackage {
         amount_sat: u64,
         fee_sat: u64,
         target: TransferTarget,
+        /// Set on a Lightning send priced by a partner fee quote: the sender's
+        /// consent to the quote's payment split, to sign with
+        /// `ExternalSparkSigner::sign_quote` alongside `prepare_transfer`.
+        sign_quote: Option<crate::signer::ExternalSignQuoteRequest>,
     },
     Token {
         prepare_token_transaction: crate::signer::ExternalPrepareTokenTransactionRequest,
@@ -2610,6 +2672,7 @@ pub enum UnsignedTransferPackage {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum TransferTarget {
@@ -2622,6 +2685,8 @@ pub enum TransferTarget {
         lnurl_pay: Option<LnurlPayContext>,
         fee_policy: FeePolicy,
         completion_timeout_secs: Option<u32>,
+        /// The partner fee quote the send is priced by, if any.
+        fee_quote: Option<LightningFeeQuote>,
     },
     CoopExit {
         address: String,
@@ -2650,6 +2715,9 @@ pub struct SignedTransferPackage {
 pub enum TransferSignature {
     Transfer {
         signed: crate::signer::ExternalPreparedTransfer,
+        /// The signature over the package's `sign_quote` request, when it has
+        /// one.
+        signed_quote: Option<crate::signer::ExternalSignedQuote>,
     },
     Token {
         signed: crate::signer::ExternalPreparedTokenTransaction,
@@ -4026,6 +4094,7 @@ mod tests {
             payment_hash: None,
             receiver_identity_public_key: None,
             preimage: Some(preimage.clone()),
+            fee_policy: None,
         };
 
         let written = format!("{method:?}");

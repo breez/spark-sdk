@@ -25,6 +25,8 @@ Payments can be sent without holding Bitcoin by converting on-the-fly as a step 
 
 For BOLT11 invoices the amount can be optionally set. It is only required if the invoice doesn't specify an amount. If the invoice specifies an amount, providing a different amount is not supported.
 
+When your [partner fee](./lightning_partner_fees.md) applies, the Lightning fee includes it, and the prepare response carries the {{#name fee_quote}} it was priced from. Send with the prepare response unchanged. The quote is short-lived: once {{#name expires_at}} has passed, the send is quoted again and fails with [FeesChanged](./errors.md#fees-changed) if the fees changed, in which case prepare again.
+
 If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee. Note that only one fee is paid: either the Lightning fee or the Spark transfer fee, depending on which payment method is ultimately used. See [Lightning](send_payment.md#lightning-1) for how to select the payment method.
 
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}

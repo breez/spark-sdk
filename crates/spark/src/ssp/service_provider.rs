@@ -2,20 +2,22 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::{HttpClient, create_http_client};
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::{
     default_user_agent,
     header_provider::{CombinedHeaderProvider, HeaderProvider},
+    quote::ReceiveAmountBasis,
     session_store::SessionStore,
     signer::SparkSigner,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
-        CreateClaimInstantStaticDepositInput, CurrencyAmount, InstantStaticDepositClaim,
-        InstantStaticDepositQuoteResult, LeavesSwapRequest, RequestCoopExitInput,
-        RequestLightningReceiveInput, RequestLightningSendInput, RequestSwapInput,
-        ServiceProviderConfig, SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer,
-        StaticDepositQuote, WebhookEntry,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CommittedReceiveQuote,
+        CommittedSendQuote, CoopExitFeeQuote, CreateClaimInstantStaticDepositInput, CurrencyAmount,
+        InstantStaticDepositClaim, InstantStaticDepositQuoteResult, LeavesSwapRequest,
+        LightningQuote, RequestCoopExitInput, RequestLightningReceiveInput,
+        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig,
+        SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer, StaticDepositQuote,
+        WebhookEntry,
         error::{ServiceProviderError, ServiceProviderResult},
         graphql::{
             CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest,
@@ -27,6 +29,7 @@ use crate::{
 pub struct ServiceProvider {
     identity_public_key: PublicKey,
     gql_client: GraphQLClient,
+    extra_header_provider: Option<Arc<dyn HeaderProvider>>,
 }
 
 impl ServiceProvider {
@@ -78,11 +81,22 @@ impl ServiceProvider {
             Arc::clone(&http_client),
             spark_signer,
             session_store,
-            extra_header_provider,
+            extra_header_provider.clone(),
         );
         Self {
             identity_public_key: config.identity_public_key,
             gql_client: GraphQLClient::new_with_client(config.into(), header_provider, http_client),
+            extra_header_provider,
+        }
+    }
+
+    /// Renews the extra headers sent beside the SSP session, such as a
+    /// partner token, without re-authenticating the session.
+    pub async fn refresh_extra_headers(&self) {
+        if let Some(provider) = &self.extra_header_provider
+            && let Err(e) = provider.renew().await
+        {
+            warn!("Failed to refresh the extra SSP headers: {e}");
         }
     }
 
@@ -197,6 +211,71 @@ impl ServiceProvider {
         input: RequestLightningSendInput,
     ) -> ServiceProviderResult<LightningSendRequest> {
         Ok(self.gql_client.request_lightning_send(input).await?)
+    }
+
+    /// Request a signed fee quote for a lightning receive of `amount_sats`,
+    /// read on `amount_basis`. Zero quotes an amountless invoice.
+    /// `receiver_identity_public_key` names the payee of a delegated receive;
+    /// unset, the caller is the payee.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn lightning_receive_quote(
+        &self,
+        network: BitcoinNetwork,
+        amount_sats: u64,
+        amount_basis: ReceiveAmountBasis,
+        receiver_identity_public_key: Option<PublicKey>,
+    ) -> ServiceProviderResult<LightningQuote> {
+        Ok(self
+            .gql_client
+            .lightning_receive_quote(
+                network,
+                amount_sats,
+                amount_basis,
+                receiver_identity_public_key.map(|key| key.to_string()),
+            )
+            .await?)
+    }
+
+    /// Request a signed fee quote for paying `encoded_invoice`, with
+    /// `amount_sats` read on `amount_basis`, committing `transfer_id` when set.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn lightning_send_quote(
+        &self,
+        encoded_invoice: &str,
+        amount_sats: Option<u64>,
+        amount_basis: ReceiveAmountBasis,
+        transfer_id: Option<String>,
+    ) -> ServiceProviderResult<LightningQuote> {
+        Ok(self
+            .gql_client
+            .lightning_send_quote(encoded_invoice, amount_sats, amount_basis, transfer_id)
+            .await?)
+    }
+
+    /// Request a lightning receive that commits a fee quote.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn request_quoted_lightning_receive(
+        &self,
+        input: RequestLightningReceiveInput,
+        quote: &CommittedReceiveQuote,
+    ) -> ServiceProviderResult<LightningReceiveRequest> {
+        Ok(self
+            .gql_client
+            .request_quoted_lightning_receive(input, quote)
+            .await?)
+    }
+
+    /// Request a lightning send that commits a fee quote.
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
+    pub async fn request_quoted_lightning_send(
+        &self,
+        input: RequestLightningSendInput,
+        quote: &CommittedSendQuote,
+    ) -> ServiceProviderResult<LightningSendRequest> {
+        Ok(self
+            .gql_client
+            .request_quoted_lightning_send(input, quote)
+            .await?)
     }
 
     /// Request swap (v3)

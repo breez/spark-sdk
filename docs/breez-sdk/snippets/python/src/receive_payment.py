@@ -2,6 +2,7 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    ReceiveFee,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
 )
@@ -17,6 +18,9 @@ async def receive_lightning(sdk: BreezSdk):
         optional_expiry_secs = 3600
         # Set this to create an invoice for another Spark identity
         optional_receiver_identity_public_key = None
+        # Set to FeePolicy.FEES_INCLUDED to deduct a partner fee from the amount
+        # instead of adding it on top for the payer
+        optional_fee_policy = None
         payment_method = ReceivePaymentMethod.BOLT11_INVOICE(
             description=description,
             amount_sats=optional_amount_sats,
@@ -24,14 +28,21 @@ async def receive_lightning(sdk: BreezSdk):
             payment_hash=None,
             receiver_identity_public_key=optional_receiver_identity_public_key,
             preimage=None,
+            fee_policy=optional_fee_policy,
         )
         request = ReceivePaymentRequest(payment_method=payment_method)
         response = await sdk.receive_payment(request=request)
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
-        receive_fee_sats = response.fee
-        logging.debug(f"Fees: {receive_fee_sats} sats")
+        fee = response.fee
+        if isinstance(fee, ReceiveFee.FIXED):
+            logging.debug(f"Fees: {fee.amount} sats")
+        # Only on an amountless invoice: a share of what the payer sends
+        elif isinstance(fee, ReceiveFee.RATE):
+            logging.debug(
+                f"Fees: {fee.bps} bps of the amount sent plus {fee.fixed_sats} sats"
+            )
         return response
     except Exception as error:
         logging.error(error)
@@ -51,8 +62,8 @@ async def receive_onchain(sdk: BreezSdk):
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
-        receive_fee_sats = response.fee
-        logging.debug(f"Fees: {receive_fee_sats} sats")
+        if isinstance(response.fee, ReceiveFee.FIXED):
+            logging.debug(f"Fees: {response.fee.amount} sats")
         return response
     except Exception as error:
         logging.error(error)
@@ -70,8 +81,8 @@ async def receive_spark_address(sdk: BreezSdk):
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
-        receive_fee_sats = response.fee
-        logging.debug(f"Fees: {receive_fee_sats} sats")
+        if isinstance(response.fee, ReceiveFee.FIXED):
+            logging.debug(f"Fees: {response.fee.amount} sats")
         return response
     except Exception as error:
         logging.error(error)
@@ -101,8 +112,8 @@ async def receive_spark_invoice(sdk: BreezSdk):
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
-        receive_fee_sats = response.fee
-        logging.debug(f"Fees: {receive_fee_sats} sats")
+        if isinstance(response.fee, ReceiveFee.FIXED):
+            logging.debug(f"Fees: {response.fee.amount} sats")
         return response
     except Exception as error:
         logging.error(error)

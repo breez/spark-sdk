@@ -53,6 +53,8 @@ use spark::operator::rpc::spark::{
     QueryNodesRequest, TreeNodeStatus as ProtoTreeNodeStatus,
     query_nodes_request::Source as QueryNodesSource,
 };
+use spark::quote::ReceiveAmountBasis;
+use spark::services::SendQuoteAmount;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -73,19 +75,20 @@ use spark::{
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpFundingStrategy, CpfpInput,
         DepositService, ExitChainState, ExitSpeed, Fee, HtlcService, InvoiceDescription,
-        InvoicePreimage, LightningReceivePayment, LightningSendPayment, LightningService,
-        PayLightningResult, Preimage, PreimageRequestStatus, PreimageRequestWithTransfer,
-        QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap,
-        TimelockManager, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
-        TransferStatus, TransferType, UnilateralExitLeafFilter, Utxo, WatchtowerRecoveryService,
-        WithdrawalAddress, WithdrawalAddressError,
+        InvoicePreimage, LeafKeyTweak, LightningReceivePayment, LightningSendPayment,
+        LightningService, PayLightningResult, Preimage, PreimageRequestStatus,
+        PreimageRequestWithTransfer, QueryHtlcFilter, QueryTokenTransactionsFilter,
+        QuotedLightningSend, ServiceError, StaticDepositQuote, Swap, TimelockManager,
+        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
+        TransferType, UnilateralExitLeafFilter, Utxo, WatchtowerRecoveryService, WithdrawalAddress,
+        WithdrawalAddressError,
     },
     session_store::{InMemorySessionStore, SessionStore},
     signer::{PrepareTransferRequest, PreparedTransfer, SparkSigner},
     silent_payment::SilentPaymentAddress,
     ssp::{
         InstantStaticDepositPlan, InstantStaticDepositQuote, InstantStaticDepositQuoteResult,
-        ServiceProvider, SspTransfer, SspUserRequest,
+        IssuedQuote, ServiceProvider, SspTransfer, SspUserRequest,
     },
     token::{
         InMemoryTokenOutputStore, SynchronousTokenOutputService, TokenMetadata, TokenOutputService,
@@ -96,7 +99,7 @@ use spark::{
         LeafOptimizer, LeafPedigree, LeafSelection, OptimizationError, OptimizationOutcome,
         ReservationPurpose, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
         TreeNodeId, TreeNodeStatus, TreeService, TreeStore, chain_reaches_root,
-        select_leaves_by_target_amounts, with_reserved_leaves,
+        partition_by_exact_amounts, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::{
         leaf_key_tweak::with_node_id_keys,
@@ -290,6 +293,27 @@ fn importable_parts(
     }
 }
 
+/// Pairs the reserved leaves with the quote receiver each one funds, filling
+/// the quote's buckets in order.
+fn bucket_leaves(
+    leaves: &[TreeNode],
+    quote: &QuotedLightningSend,
+) -> Result<Vec<(LeafKeyTweak, PublicKey)>, SparkWalletError> {
+    let amounts: Vec<u64> = quote.buckets.iter().map(|b| b.amount_sats).collect();
+    let groups = partition_by_exact_amounts(leaves, &amounts).ok_or_else(|| {
+        SparkWalletError::Generic("the reserved leaves do not fund the quote's receivers".into())
+    })?;
+    Ok(groups
+        .into_iter()
+        .zip(&quote.buckets)
+        .flat_map(|(group, bucket)| {
+            with_node_id_keys(group)
+                .into_iter()
+                .map(move |leaf| (leaf, bucket.receiver_identity_public_key))
+        })
+        .collect())
+}
+
 /// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
 /// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
 macro_rules! with_leafs_spent_retry {
@@ -317,7 +341,9 @@ macro_rules! with_leafs_spent_retry {
                 );
                 $self.tree_service.refresh_leaves().await?;
             }
-            let $leaves_reservation = $self.select_leaves_with_retry($target_amounts).await?;
+            let $leaves_reservation = $self
+                .reserve_leaves_with_retry(LeafTarget::from($target_amounts))
+                .await?;
 
             let result = with_reserved_leaves(
                 $self.tree_service.as_ref(),
@@ -726,8 +752,61 @@ impl SparkWallet {
         self.finalize_pay_lightning(lightning_payment).await
     }
 
+    /// Asks the SSP for a fee quote on paying `invoice` for `amount`, committing
+    /// `transfer_id` when set, and checks it.
+    pub async fn fetch_lightning_send_quote(
+        &self,
+        invoice: &str,
+        amount: SendQuoteAmount,
+        transfer_id: Option<&TransferId>,
+    ) -> Result<QuotedLightningSend, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .fetch_lightning_send_quote(invoice, amount, transfer_id)
+            .await?)
+    }
+
+    /// Checks a send quote obtained earlier, for example one carried through a
+    /// prepare response, before paying under it.
+    pub async fn verify_lightning_send_quote(
+        &self,
+        invoice: &str,
+        issued_quote: &IssuedQuote,
+        payment_msats: u64,
+        amount: SendQuoteAmount,
+    ) -> Result<QuotedLightningSend, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .verify_lightning_send_quote(invoice, issued_quote, payment_msats, amount)
+            .await?)
+    }
+
+    /// Pays `invoice` under a checked send quote, funding each of the quote's
+    /// receivers exactly and signing the manifest as the sole sender.
+    pub async fn pay_quoted_lightning_invoice(
+        &self,
+        invoice: &str,
+        quote: &QuotedLightningSend,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let amounts: Vec<u64> = quote.buckets.iter().map(|b| b.amount_sats).collect();
+        let lightning_payment = with_leafs_spent_retry!(
+            self,
+            LeafTarget::Split(&amounts),
+            "Quoted lightning payment",
+            |leaves_reservation| async {
+                let leaves = bucket_leaves(&leaves_reservation.leaves, quote)
+                    .map_err(|e| ServiceError::Generic(e.to_string()))?;
+                self.lightning_service
+                    .pay_quoted_lightning_invoice(invoice, quote, &leaves)
+                    .await
+            }
+        )?;
+        self.finalize_pay_lightning(lightning_payment).await
+    }
+
     /// Asks the SSP to pay a send whose preimage swap is already committed with
-    /// the operators, for a send whose SSP request was never made.
+    /// the operators, for a send whose SSP request was never made. A quoted
+    /// send resumes with the quote it committed its leaves under.
     ///
     /// Returns `None` when there is nothing left to pay. Safe to call more than
     /// once for the same transfer: the SSP keys the request on the transfer id.
@@ -736,10 +815,11 @@ impl SparkWallet {
         transfer_id: &TransferId,
         invoice: &str,
         amount_to_send: Option<u64>,
+        quote: Option<&IssuedQuote>,
     ) -> Result<Option<PayLightningInvoiceResult>, SparkWalletError> {
         let Some(lightning_payment) = self
             .lightning_service
-            .resume_lightning_send(transfer_id, invoice, amount_to_send)
+            .resume_lightning_send(transfer_id, invoice, amount_to_send, quote)
             .await?
         else {
             return Ok(None);
@@ -796,9 +876,13 @@ impl SparkWallet {
         })
     }
 
-    /// Creates a Lightning invoice for the specified amount and description.
-    /// If a public key is provided, the invoice will be associated with that key.
-    /// Otherwise, the wallet's identity public key will be used.
+    /// Creates a Lightning invoice paying `public_key` (this wallet when unset).
+    ///
+    /// With `quote_basis` set, the invoice is priced by an SSP fee quote that
+    /// reads `amount_sat` on that basis; the returned payment carries its fee.
+    /// The invoice is unquoted when the SSP prices no partner fee, and a quote
+    /// that can't be had or committed fails the receive.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_lightning_invoice(
         &self,
         amount_sat: u64,
@@ -807,6 +891,7 @@ impl SparkWallet {
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
+        quote_basis: Option<ReceiveAmountBasis>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -817,6 +902,7 @@ impl SparkWallet {
                 expiry_secs,
                 include_spark_address,
                 public_key,
+                quote_basis,
             )
             .await?)
     }
@@ -2583,15 +2669,23 @@ impl SparkWallet {
         &self,
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
+        self.reserve_leaves_with_retry(LeafTarget::Amounts(target_amounts))
+            .await
+    }
+
+    /// [`select_leaves_with_retry`](Self::select_leaves_with_retry) for any
+    /// [`LeafTarget`].
+    async fn reserve_leaves_with_retry(
+        &self,
+        target: LeafTarget<'_>,
+    ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
         use spark::tree::TreeServiceError;
 
         let mut reservation: Option<spark::tree::LeavesReservation> = None;
 
         for i in 0..SELECT_LEAVES_MAX_RETRIES {
             // Try to select leaves with inner optimization retry logic
-            let reserve_result = self
-                .try_select_leaves_with_optimization_retry(target_amounts)
-                .await;
+            let reserve_result = self.try_select_leaves_with_optimization_retry(target).await;
 
             match reserve_result {
                 Ok(r) => {
@@ -2627,9 +2721,9 @@ impl SparkWallet {
                 .await;
 
             // Check if we have enough funds after refresh
-            if let Some(target_amounts) = target_amounts {
+            if let Some(total_sats) = target.total_sats() {
                 let available_balance = self.tree_service.get_available_balance().await?;
-                if available_balance < target_amounts.total_sats() {
+                if available_balance < total_sats {
                     info!("Not enough funds to select leaves after refresh");
                     return Err(TreeServiceError::InsufficientFunds.into());
                 }
@@ -2653,19 +2747,11 @@ impl SparkWallet {
     /// leaves, this method cancels the optimization and retries once.
     async fn try_select_leaves_with_optimization_retry(
         &self,
-        target_amounts: Option<&TargetAmounts>,
+        target: LeafTarget<'_>,
     ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
-        use spark::tree::{ReservationPurpose, TreeServiceError};
+        use spark::tree::TreeServiceError;
 
-        match self
-            .tree_service
-            .select_leaves(
-                target_amounts,
-                ReservationPurpose::Payment,
-                SelectLeavesOptions::default(),
-            )
-            .await
-        {
+        match self.reserve_leaves_once(target).await {
             Ok(reservation) => Ok(reservation),
             Err(TreeServiceError::InsufficientFunds) => {
                 // Check if optimization has reserved leaves
@@ -2679,21 +2765,57 @@ impl SparkWallet {
                         debug!("Failed to cancel optimization: {:?}", e);
                     }
 
-                    // Retry select_leaves
-                    let reservation = self
-                        .tree_service
-                        .select_leaves(
-                            target_amounts,
-                            ReservationPurpose::Payment,
-                            SelectLeavesOptions::default(),
-                        )
-                        .await?;
-                    Ok(reservation)
+                    Ok(self.reserve_leaves_once(target).await?)
                 } else {
                     Err(TreeServiceError::InsufficientFunds.into())
                 }
             }
             Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn reserve_leaves_once(
+        &self,
+        target: LeafTarget<'_>,
+    ) -> Result<spark::tree::LeavesReservation, spark::tree::TreeServiceError> {
+        use spark::tree::ReservationPurpose;
+
+        let (purpose, options) = (ReservationPurpose::Payment, SelectLeavesOptions::default());
+        match target {
+            LeafTarget::Amounts(target_amounts) => {
+                self.tree_service
+                    .select_leaves(target_amounts, purpose, options)
+                    .await
+            }
+            LeafTarget::Split(amounts) => {
+                self.tree_service
+                    .select_leaves_for_amounts(amounts, purpose, options)
+                    .await
+            }
+        }
+    }
+}
+
+/// What a payment reserves leaves for.
+#[derive(Clone, Copy)]
+enum LeafTarget<'a> {
+    /// The amounts, all the available leaves when unset.
+    Amounts(Option<&'a TargetAmounts>),
+    /// A separate set of leaves funding each amount exactly.
+    Split(&'a [u64]),
+}
+
+impl<'a> From<Option<&'a TargetAmounts>> for LeafTarget<'a> {
+    fn from(target_amounts: Option<&'a TargetAmounts>) -> Self {
+        Self::Amounts(target_amounts)
+    }
+}
+
+impl LeafTarget<'_> {
+    fn total_sats(self) -> Option<u64> {
+        match self {
+            Self::Amounts(target_amounts) => target_amounts.map(TargetAmounts::total_sats),
+            Self::Split(amounts) => Some(amounts.iter().sum()),
         }
     }
 }
@@ -3150,18 +3272,28 @@ impl BackgroundProcessor {
             return Ok(());
         }
 
-        // get the ssp transfer details, if it fails just use None
-        // Internal transfers will not have an SSP entry so just skip it
-        let ssp_transfer = if transfer.transfer_type == spark::services::TransferType::Transfer {
-            None
-        } else {
-            self.ssp_client
-                .get_transfers(vec![transfer.id.to_string()])
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .next()
-        };
+        // Internal transfers have no SSP entry. A failed lookup is not fatal: the
+        // claim goes ahead, and the transfer is marked so its payment is not
+        // read as having no SSP request.
+        let (ssp_transfer, user_request_unknown) =
+            if transfer.transfer_type == spark::services::TransferType::Transfer {
+                (None, false)
+            } else {
+                match self
+                    .ssp_client
+                    .get_transfers(vec![transfer.id.to_string()])
+                    .await
+                {
+                    Ok(transfers) => (transfers.into_iter().next(), false),
+                    Err(e) => {
+                        warn!(
+                            "Failed to fetch the SSP transfer for {}: {e:?}",
+                            transfer.id
+                        );
+                        (None, true)
+                    }
+                }
+            };
 
         let htlc = if transfer.transfer_type == spark::services::TransferType::PreimageSwap {
             self.htlc_service
@@ -3184,16 +3316,21 @@ impl BackgroundProcessor {
             None
         };
 
+        let wallet_transfer = |transfer| {
+            let mut wallet_transfer = WalletTransfer::from_transfer(
+                transfer,
+                ssp_transfer.clone(),
+                htlc.clone(),
+                self.identity_public_key,
+                self.ssp_client.identity_public_key(),
+            );
+            wallet_transfer.user_request_unknown = user_request_unknown;
+            wallet_transfer
+        };
         self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimStarting(
-                WalletTransfer::from_transfer(
-                    transfer.clone(),
-                    ssp_transfer.clone(),
-                    htlc.clone(),
-                    self.identity_public_key,
-                    self.ssp_client.identity_public_key(),
-                ),
-            ));
+            .notify_listeners(WalletEvent::TransferClaimStarting(wallet_transfer(
+                transfer.clone(),
+            )));
 
         trace!("Claiming transfer from event");
         claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
@@ -3201,14 +3338,7 @@ impl BackgroundProcessor {
 
         self.event_manager
             .notify_listeners(WalletEvent::TransferClaimed(
-                WalletTransfer::from_transfer(
-                    transfer,
-                    ssp_transfer,
-                    htlc,
-                    self.identity_public_key,
-                    self.ssp_client.identity_public_key(),
-                )
-                .claimed(),
+                wallet_transfer(transfer).claimed(),
             ));
         self.on_leaves_changed().await;
 

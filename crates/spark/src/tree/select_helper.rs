@@ -80,6 +80,50 @@ pub fn select_leaves_by_exact_amount<L: LeafLike>(
     Ok(None)
 }
 
+/// [`select_leaves_by_exact_amounts`] using every one of `leaves`. `None` when
+/// they cannot be split that way.
+pub fn partition_by_exact_amounts<L: LeafLike>(
+    leaves: &[L],
+    amounts: &[u64],
+) -> Option<Vec<Vec<L>>> {
+    let total: u64 = leaves.iter().map(LeafLike::leaf_value).sum();
+    if amounts.iter().copied().fold(0u64, u64::saturating_add) != total {
+        return None;
+    }
+    select_leaves_by_exact_amounts(leaves, amounts)
+}
+
+/// A separate set of `leaves` for each of `amounts` that adds up to it
+/// exactly, in the order of `amounts`, leaving any other leaves out. Larger
+/// amounts are filled first, which leaves the small ones a chance among the
+/// leftovers.
+pub fn select_leaves_by_exact_amounts<L: LeafLike>(
+    leaves: &[L],
+    amounts: &[u64],
+) -> Option<Vec<Vec<L>>> {
+    let mut order: Vec<usize> = (0..amounts.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(amounts.get(i).copied().unwrap_or_default()));
+
+    let mut remaining = leaves.to_vec();
+    let mut groups: Vec<Option<Vec<L>>> = vec![None; amounts.len()];
+    for i in order {
+        let amount = *amounts.get(i)?;
+        let group = select_leaves_by_exact_amount(&remaining, amount).ok()??;
+        remaining.retain(|leaf| !group.iter().any(|g| g.leaf_id() == leaf.leaf_id()));
+        *groups.get_mut(i)? = Some(group);
+    }
+    groups.into_iter().collect()
+}
+
+/// The leaves [`select_leaves_by_exact_amounts`] picks for `amounts`, when
+/// [`partition_by_exact_amounts`] splits them back into those amounts: the
+/// leaves are reserved together and split again when paid, and the two
+/// searches can part ways on the same leaves.
+pub fn select_resplittable_leaves<L: LeafLike>(leaves: &[L], amounts: &[u64]) -> Option<Vec<L>> {
+    let selected = select_leaves_by_exact_amounts(leaves, amounts)?.concat();
+    partition_by_exact_amounts(&selected, amounts).map(|_| selected)
+}
+
 pub fn select_leaves_by_exact_denominations<L: LeafLike>(
     leaves: &[L],
     denominations: &[u64],
@@ -221,5 +265,94 @@ where
             }
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod partition_tests {
+    use macros::test_all;
+
+    use super::{
+        partition_by_exact_amounts, select_leaves_by_exact_amounts, select_resplittable_leaves,
+    };
+    use crate::tree::TreeNode;
+    use crate::tree::tests::create_test_tree_node;
+
+    fn leaves(values: &[u64]) -> Vec<TreeNode> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| create_test_tree_node(&format!("leaf-{i}"), *value))
+            .collect()
+    }
+
+    fn sums(groups: &[Vec<TreeNode>]) -> Vec<u64> {
+        groups
+            .iter()
+            .map(|group| group.iter().map(|leaf| leaf.value).sum())
+            .collect()
+    }
+
+    #[test_all]
+    fn splits_leaves_into_groups_in_the_order_asked() {
+        let groups =
+            partition_by_exact_amounts(&leaves(&[8_192, 2_048, 256, 64, 16, 4]), &[64, 10_496, 20])
+                .unwrap();
+        assert_eq!(sums(&groups), vec![64, 10_496, 20]);
+        let used: usize = groups.iter().map(Vec::len).sum();
+        assert_eq!(used, 6, "every leaf lands in exactly one group");
+    }
+
+    /// What a swap returns for several receivers: each amount in its own
+    /// power-of-two pieces, some of them shared between the amounts.
+    #[test_all]
+    fn splits_each_amounts_power_of_two_pieces_back_into_it() {
+        let pieces = [
+            8_192, 1_024, 512, 256, 16, // 10,000
+            128, 32, 8, 2, // 170
+            16, 8, 4, 2, // 30
+        ];
+        let groups = partition_by_exact_amounts(&leaves(&pieces), &[10_000, 170, 30]).unwrap();
+        assert_eq!(sums(&groups), vec![10_000, 170, 30]);
+    }
+
+    #[test_all]
+    fn picks_each_amounts_pieces_out_from_among_change() {
+        let swapped = [
+            8_192, 1_024, 512, 256, 16, // 10,000
+            16, 8, 4, 2, // 30
+            4_096, 64, 32, 16, // change
+        ];
+        let groups = select_leaves_by_exact_amounts(&leaves(&swapped), &[10_000, 30]).unwrap();
+        assert_eq!(sums(&groups), vec![10_000, 30]);
+    }
+
+    #[test_all]
+    fn refuses_amounts_that_do_not_add_up_to_the_leaves() {
+        assert!(partition_by_exact_amounts(&leaves(&[1_024, 512]), &[1_024]).is_none());
+        assert!(partition_by_exact_amounts(&leaves(&[1_024]), &[1_024, 1]).is_none());
+    }
+
+    #[test_all]
+    fn refuses_a_split_no_subset_makes() {
+        // 3 + 3 cannot be carved out of a single 6-sat leaf.
+        assert!(partition_by_exact_amounts(&leaves(&[6]), &[3, 3]).is_none());
+    }
+
+    /// Groups found among more leaves can hold a set that, taken alone, splits
+    /// into the amounts another way the search does not find.
+    #[test_all]
+    fn picks_only_leaves_that_split_back_into_the_amounts() {
+        let all = leaves(&[3, 4, 8, 9, 10, 19, 31, 32]);
+        let amounts = [22, 40, 44];
+        let picked = select_leaves_by_exact_amounts(&all, &amounts)
+            .unwrap()
+            .concat();
+        assert!(partition_by_exact_amounts(&picked, &amounts).is_none());
+
+        assert!(select_resplittable_leaves(&all, &amounts).is_none());
+        let pieces = leaves(&[16, 4, 2, 32, 8, 32, 8, 4]);
+        let picked = select_resplittable_leaves(&pieces, &amounts).unwrap();
+        assert!(partition_by_exact_amounts(&picked, &amounts).is_some());
     }
 }

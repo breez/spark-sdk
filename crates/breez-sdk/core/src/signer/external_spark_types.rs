@@ -273,6 +273,10 @@ pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub new_leaf_id: ExternalTreeNodeId,
     pub signing_key: ExternalLeafSigningKey,
+    /// Identity public key (33 bytes compressed) of the wallet this leaf goes
+    /// to. The new leaf key must be encrypted for it. One transfer may send
+    /// leaves to several receivers.
+    pub receiver_public_key: Vec<u8>,
 }
 
 impl ExternalTransferLeafInput {
@@ -283,7 +287,12 @@ impl ExternalTransferLeafInput {
             node_id: ExternalTreeNodeId::from_tree_node_id(&leaf.node.id)?,
             new_leaf_id: ExternalTreeNodeId::from_tree_node_id(&leaf.new_leaf_id)?,
             signing_key: ExternalLeafSigningKey::from_leaf_signing_key(&leaf.signing_key)?,
+            receiver_public_key: leaf.receiver_public_key.serialize().to_vec(),
         })
+    }
+
+    pub fn receiver_pubkey(&self) -> Result<secp256k1::PublicKey, SdkError> {
+        public_key_from_bytes(&self.receiver_public_key, "receiver public key")
     }
 }
 
@@ -313,7 +322,9 @@ impl ExternalNewLeafKey {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalPrepareTransferRequest {
     pub transfer_id: String,
-    /// Receiver public key (33 bytes compressed).
+    /// Receiver public key (33 bytes compressed) of every leaf, when they all
+    /// go to one receiver. Empty when the transfer sends its leaves to several:
+    /// each leaf's `receiver_public_key` names its own.
     pub receiver_public_key: Vec<u8>,
     pub leaves: Vec<ExternalTransferLeafInput>,
     pub operator_recipients: Vec<ExternalOperatorRecipient>,
@@ -324,9 +335,16 @@ impl ExternalPrepareTransferRequest {
     pub fn from_prepare_transfer_request(
         r: &spark_wallet::PrepareTransferRequest,
     ) -> Result<Self, SdkError> {
+        let single_receiver = r
+            .leaves
+            .first()
+            .map(|l| l.receiver_public_key)
+            .filter(|first| r.leaves.iter().all(|l| l.receiver_public_key == *first));
         Ok(Self {
             transfer_id: r.transfer_id.to_string(),
-            receiver_public_key: r.receiver_public_key.serialize().to_vec(),
+            receiver_public_key: single_receiver
+                .map(|key| key.serialize().to_vec())
+                .unwrap_or_default(),
             leaves: r
                 .leaves
                 .iter()
@@ -352,8 +370,24 @@ impl ExternalPrepareTransferRequest {
         spark_wallet::TransferId::from_str(&self.transfer_id).map_err(SdkError::Generic)
     }
 
+    /// The receiver every leaf goes to. Refuses a transfer that splits its
+    /// leaves across receivers, or has none.
     pub fn receiver_pubkey(&self) -> Result<secp256k1::PublicKey, SdkError> {
-        public_key_from_bytes(&self.receiver_public_key, "receiver public key")
+        let mut receivers = self
+            .leaves
+            .iter()
+            .map(ExternalTransferLeafInput::receiver_pubkey);
+        let first = receivers
+            .next()
+            .ok_or_else(|| SdkError::InvalidInput("transfer has no leaves".to_string()))??;
+        for receiver in receivers {
+            if receiver? != first {
+                return Err(SdkError::InvalidInput(
+                    "transfer sends leaves to more than one receiver".to_string(),
+                ));
+            }
+        }
+        Ok(first)
     }
 }
 
@@ -889,6 +923,79 @@ impl ExternalPreparedTokenTransaction {
     }
 }
 
+// ─── quote signing ──────────────────────────────────────────────────────────
+
+/// FFI-safe representation of `spark_wallet::SignQuoteRequest`: a signature
+/// over a fee-bearing (quoted) payment. The signer computes the digest it signs
+/// from the quote, with [`quote_signing_digest`](crate::quote_signing_digest).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ExternalSignQuoteRequest {
+    /// A sender's consent to how the payment it funds is split.
+    TransferManifest { serialized_manifest: Vec<u8> },
+    /// The attestor's endorsement of a receive quote, bound to the invoice
+    /// paid under it.
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: Vec<u8>,
+    },
+}
+
+impl ExternalSignQuoteRequest {
+    pub fn from_sign_quote_request(r: &spark_wallet::SignQuoteRequest) -> Self {
+        match r {
+            spark_wallet::SignQuoteRequest::TransferManifest {
+                serialized_manifest,
+            } => Self::TransferManifest {
+                serialized_manifest: serialized_manifest.clone(),
+            },
+            spark_wallet::SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => Self::ReceiveAttestation {
+                serialized_manifest: serialized_manifest.clone(),
+                payment_hash: payment_hash.to_vec(),
+            },
+        }
+    }
+
+    pub fn to_sign_quote_request(&self) -> Result<spark_wallet::SignQuoteRequest, SdkError> {
+        Ok(match self {
+            Self::TransferManifest {
+                serialized_manifest,
+            } => spark_wallet::SignQuoteRequest::TransferManifest {
+                serialized_manifest: serialized_manifest.clone(),
+            },
+            Self::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => spark_wallet::SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest: serialized_manifest.clone(),
+                payment_hash: payment_hash.as_slice().try_into().map_err(|_| {
+                    SdkError::InvalidInput("payment hash must be 32 bytes".to_string())
+                })?,
+            },
+        })
+    }
+}
+
+/// FFI-safe representation of `spark_wallet::SignedQuote`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ExternalSignedQuote {
+    pub signature: EcdsaSignatureBytes,
+}
+
+impl ExternalSignedQuote {
+    pub fn to_signed_quote(&self) -> Result<spark_wallet::SignedQuote, SdkError> {
+        let mut signature = self.signature.to_signature()?;
+        // The operators and the SSP refuse high-S signatures, and a foreign
+        // signer may return one.
+        signature.normalize_s();
+        Ok(spark_wallet::SignedQuote { signature })
+    }
+}
+
 // ─── static-deposit claim ───────────────────────────────────────────────────
 
 /// FFI-safe representation of `spark_wallet::PrepareStaticDepositClaimRequest`.
@@ -938,7 +1045,7 @@ mod tests {
     fn leaf_ids_round_trip_from_request() {
         let req = ExternalPrepareTransferRequest {
             transfer_id: "11111111-1111-1111-1111-111111111111".to_string(),
-            receiver_public_key: vec![2u8; 33],
+            receiver_public_key: vec![],
             leaves: vec![ExternalTransferLeafInput {
                 node_id: ExternalTreeNodeId {
                     id: "22222222-2222-2222-2222-222222222222".to_string(),
@@ -951,6 +1058,7 @@ mod tests {
                         id: "22222222-2222-2222-2222-222222222222".to_string(),
                     },
                 },
+                receiver_public_key: vec![2u8; 33],
             }],
             operator_recipients: vec![],
             threshold: 2,
@@ -958,6 +1066,52 @@ mod tests {
         let ids = req.leaf_ids().unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0].to_string(), "22222222-2222-2222-2222-222222222222");
+    }
+
+    fn leaf_to(receiver_seed: u8) -> ExternalTransferLeafInput {
+        let receiver = secp256k1::SecretKey::from_slice(&[receiver_seed; 32])
+            .unwrap()
+            .public_key(&secp256k1::Secp256k1::new());
+        let id = || ExternalTreeNodeId {
+            id: "22222222-2222-2222-2222-222222222222".to_string(),
+        };
+        ExternalTransferLeafInput {
+            node_id: id(),
+            new_leaf_id: id(),
+            signing_key: ExternalLeafSigningKey { derived_from: id() },
+            receiver_public_key: receiver.serialize().to_vec(),
+        }
+    }
+
+    fn request_to(leaves: Vec<ExternalTransferLeafInput>) -> ExternalPrepareTransferRequest {
+        ExternalPrepareTransferRequest {
+            transfer_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            receiver_public_key: vec![],
+            leaves,
+            operator_recipients: vec![],
+            threshold: 2,
+        }
+    }
+
+    #[test]
+    fn a_single_receiver_transfer_names_its_receiver() {
+        let req = request_to(vec![leaf_to(3), leaf_to(3)]);
+        assert_eq!(
+            req.receiver_pubkey().unwrap(),
+            leaf_to(3).receiver_pubkey().unwrap()
+        );
+    }
+
+    // A transfer published through the single-receiver path must not silently
+    // send every leaf to the first leaf's receiver.
+    #[test]
+    fn a_transfer_split_across_receivers_has_no_single_receiver() {
+        assert!(
+            request_to(vec![leaf_to(3), leaf_to(4)])
+                .receiver_pubkey()
+                .is_err()
+        );
+        assert!(request_to(vec![]).receiver_pubkey().is_err());
     }
 }
 

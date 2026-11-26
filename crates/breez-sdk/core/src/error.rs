@@ -135,6 +135,20 @@ pub enum SdkError {
         docs_url: String,
     },
 
+    /// The fees of a payment changed since it was prepared.
+    #[error("The fees changed since the payment was prepared: prepare it again")]
+    FeesChanged {
+        /// Guide section explaining why fees change after a prepare.
+        docs_url: String,
+    },
+
+    /// The fee quote pricing a payment expired before the payment was sent.
+    #[error("The fee quote expired before the payment was sent: send it again")]
+    QuoteExpired {
+        /// Guide section explaining how to send the payment again.
+        docs_url: String,
+    },
+
     /// Network error
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -249,6 +263,8 @@ mod docs_url {
     pub(super) const CROSS_CHAIN_ROUTE_UNAVAILABLE: &str =
         errors_page!("cross-chain-route-unavailable");
     pub(super) const CROSS_CHAIN_DISABLED: &str = errors_page!("cross-chain-disabled");
+    pub(super) const FEES_CHANGED: &str = errors_page!("fees-changed");
+    pub(super) const QUOTE_EXPIRED: &str = errors_page!("quote-expired");
     pub(super) const MAX_DEPOSIT_CLAIM_FEE_EXCEEDED: &str =
         errors_page!("max-deposit-claim-fee-exceeded");
     pub(super) const DEPOSIT_TOO_SMALL: &str = errors_page!("deposit-too-small");
@@ -289,6 +305,18 @@ impl SdkError {
     pub(crate) fn cross_chain_disabled() -> Self {
         Self::CrossChainDisabled {
             docs_url: docs_url::CROSS_CHAIN_DISABLED.to_string(),
+        }
+    }
+
+    pub(crate) fn fees_changed() -> Self {
+        Self::FeesChanged {
+            docs_url: docs_url::FEES_CHANGED.to_string(),
+        }
+    }
+
+    pub(crate) fn quote_expired() -> Self {
+        Self::QuoteExpired {
+            docs_url: docs_url::QUOTE_EXPIRED.to_string(),
         }
     }
 
@@ -355,6 +383,8 @@ impl SdkError {
             Self::CrossChainAmountOutOfRange { docs_url, .. }
             | Self::CrossChainRouteUnavailable { docs_url, .. }
             | Self::CrossChainDisabled { docs_url }
+            | Self::FeesChanged { docs_url }
+            | Self::QuoteExpired { docs_url }
             | Self::MaxDepositClaimFeeExceeded { docs_url, .. }
             | Self::DepositTooSmall { docs_url, .. }
             | Self::DepositClaimInProgress { docs_url, .. }
@@ -529,6 +559,9 @@ impl From<SparkWalletError> for SdkError {
             SparkWalletError::ServiceError(spark_wallet::ServiceError::InvalidInput(msg)) => {
                 SdkError::InvalidInput(msg)
             }
+            SparkWalletError::ServiceError(spark_wallet::ServiceError::Quote(
+                spark_wallet::QuoteError::Expired,
+            )) => SdkError::quote_expired(),
             SparkWalletError::SilentPaymentAddressNotSupported(_) => {
                 SdkError::InvalidInput(e.to_string())
             }
@@ -907,6 +940,29 @@ mod token_allowance_error_tests {
 }
 
 #[cfg(test)]
+mod quote_error_tests {
+    use spark_wallet::{QuoteError, ServiceError, SparkWalletError};
+
+    use super::SdkError;
+
+    #[test]
+    fn an_expired_quote_reads_as_quote_expired() {
+        let error = SdkError::from(SparkWalletError::ServiceError(ServiceError::Quote(
+            QuoteError::Expired,
+        )));
+        assert!(matches!(error, SdkError::QuoteExpired { .. }));
+    }
+
+    #[test]
+    fn other_quote_errors_stay_spark_errors() {
+        let error = SdkError::from(SparkWalletError::ServiceError(ServiceError::Quote(
+            QuoteError::invalid("bad split"),
+        )));
+        assert!(matches!(error, SdkError::SparkError(_)));
+    }
+}
+
+#[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 mod docs_url_tests {
     use super::*;
@@ -965,6 +1021,8 @@ mod docs_url_tests {
             SdkError::cross_chain_amount_out_of_range(String::new(), true, None, None),
             SdkError::cross_chain_route_unavailable(String::new(), true),
             SdkError::cross_chain_disabled(),
+            SdkError::fees_changed(),
+            SdkError::quote_expired(),
             SdkError::max_deposit_claim_fee_exceeded(String::new(), 0, None, 0),
             SdkError::deposit_too_small(String::new(), 0),
             SdkError::deposit_claim_in_progress(String::new(), 0),

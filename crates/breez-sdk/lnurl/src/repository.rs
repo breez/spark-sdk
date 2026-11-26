@@ -69,6 +69,9 @@ pub struct Invoice {
     pub username: Option<String>,
     /// Amount received in satoshis (from the HTLC). NULL when unknown.
     pub amount_received_sat: Option<i64>,
+    /// The partner fee the invoice was priced with, which the user does not
+    /// receive. NULL for an invoice priced without one.
+    pub fee_sat: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +89,11 @@ pub struct DomainConfig {
     pub api_key: Option<String>,
     /// The cached partner JWT if one has been fetched and persisted.
     pub jwt: Option<String>,
+    /// Hex SHA-256 of the api key `jwt` was fetched with. Unset for a token
+    /// persisted without one.
+    pub jwt_key_hash: Option<String>,
+    /// Whether the domain's invoices carry its partner fee.
+    pub quote_receives: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -282,8 +290,14 @@ pub trait LnurlRepository {
     /// Get the domains the server handles as another domain.
     async fn list_domain_aliases(&self) -> Result<Vec<DomainAliasConfig>, LnurlRepositoryError>;
 
-    /// Store the cached partner JWT for a domain.
-    async fn set_domain_jwt(&self, domain: &str, jwt: &str) -> Result<(), LnurlRepositoryError>;
+    /// Store the cached partner JWT for a domain, with the hash of the api key
+    /// it was fetched with.
+    async fn set_domain_jwt(
+        &self,
+        domain: &str,
+        jwt: &str,
+        key_hash: &str,
+    ) -> Result<(), LnurlRepositoryError>;
 
     /// Insert or update an invoice
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError>;
@@ -351,6 +365,7 @@ pub struct WebhookPayloadData {
     pub invoice: String,
     pub preimage: String,
     pub amount_received_sat: Option<i64>,
+    pub fee_sat: Option<i64>,
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
     pub domain: String,
@@ -474,6 +489,7 @@ pub mod shared_tests {
                 actual_domain: actual_domain.map(Into::into),
                 username: username.map(Into::into),
                 amount_received_sat: None,
+                fee_sat: None,
             }
         };
         for stored in [
@@ -972,11 +988,30 @@ pub mod shared_tests {
             .find(|d| d.domain == "b.com")
             .expect("domain with no api key");
         assert_eq!(without_key.api_key, None);
+        assert!(
+            domains.iter().all(|d| !d.quote_receives),
+            "fee quoting is off until switched on"
+        );
     }
 
-    /// `set_domain_jwt` updates the cached JWT of a domain with an api key
-    /// (readable via `list_domains`); a domain with no attribution row is a
-    /// no-op, not an error. The caller seeds `a.com` with an api key (allowlisted
+    /// `list_domains` surfaces a domain's fee quoting switch. The caller seeds
+    /// `a.com` with an api key and switches it on first, since both are direct
+    /// row writes with no trait method.
+    pub async fn list_domains_surfaces_fee_quoting<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        db.add_domain("b.com").await.unwrap();
+
+        let domains = db.list_domains().await.unwrap();
+        let quoting = |name: &str| domains.iter().find(|d| d.domain == name).unwrap();
+        assert!(quoting("a.com").quote_receives);
+        assert!(!quoting("b.com").quote_receives);
+    }
+
+    /// `set_domain_jwt` updates the cached JWT of a domain with an api key and
+    /// the hash of the key it was fetched with (readable via `list_domains`); a
+    /// domain with no attribution row is a no-op, not an error. The caller seeds `a.com` with an api key (allowlisted
     /// + `api_key` set) first, since a row can only be created by setting an api key.
     pub async fn set_domain_jwt_round_trips<DB>(db: &DB)
     where
@@ -988,20 +1023,14 @@ pub mod shared_tests {
             None
         );
 
-        db.set_domain_jwt("a.com", "tok").await.unwrap();
+        db.set_domain_jwt("a.com", "tok", "hash").await.unwrap();
         // A domain with no attribution row updates zero rows, not an error.
-        db.set_domain_jwt("missing.com", "x").await.unwrap();
+        db.set_domain_jwt("missing.com", "x", "hash").await.unwrap();
 
         let after = db.list_domains().await.unwrap();
-        assert_eq!(
-            after
-                .iter()
-                .find(|d| d.domain == "a.com")
-                .unwrap()
-                .jwt
-                .as_deref(),
-            Some("tok")
-        );
+        let a = after.iter().find(|d| d.domain == "a.com").unwrap();
+        assert_eq!(a.jwt.as_deref(), Some("tok"));
+        assert_eq!(a.jwt_key_hash.as_deref(), Some("hash"));
     }
 
     /// A limit inside a window that never expires during the test.

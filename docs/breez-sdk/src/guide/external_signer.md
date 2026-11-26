@@ -43,6 +43,12 @@ The default implementations of the two interfaces, [DefaultExternalSigner](https
 
 {{#name supports_adaptor_v2}} says whether your Spark signer can make version 2 adaptor signatures, used in swaps. Spark operators will eventually require version 2. Return true once {{#name sign_frost}} honors {{#name adaptor_v2}} on a job: when it is set, the FROST binding factors must also cover the adaptor public key, as defined in [Lightspark's FROST library](https://github.com/lightsparkdev/frost/pull/10). With that library, build the signing package with `SigningPackage::new_with_adaptor_v2` instead of `new_with_adaptor`. The SDK then sets it on every adaptor job for your signer. Return false only while your signing backend cannot make version 2 signatures: the SDK then never sets it, and your swaps keep using version 1.
 
+{{#name sign_quote}} signs the fee quote of a Lightning payment that carries a partner fee, with the identity key. Compute the digest to sign with {{#name quote_signing_digest}} from the request and sign it as is: unlike {{#name sign_message}}, it is not hashed again.
+
+A {{#name prepare_transfer}} request names the receiver of each of its leaves in the leaf's {{#name receiver_public_key}}. When every leaf goes to one receiver, the request's own {{#name receiver_public_key}} names it too. It is empty when the transfer splits its leaves across receivers, so a signer that reads the receiver from the request must read it from each leaf to sign those.
+
+{{#name supports_split_transfers}} says whether {{#name prepare_transfer}} sends each leaf to the receiver its own {{#name receiver_public_key}} names, so that one transfer pays several receivers. A Lightning send that carries a partner fee needs this, since the fee is paid to its own receivers in the same transfer. It defaults to false, and your signer's Lightning sends then carry no partner fee. Return true once {{#name prepare_transfer}} honors each leaf's receiver.
+
 <div class="warning">
 <h4>Developer note</h4>
 

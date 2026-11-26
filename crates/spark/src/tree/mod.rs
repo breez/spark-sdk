@@ -16,7 +16,8 @@ pub use exit_chain_resolver::ExitChainResolver;
 pub use leaf_optimizer::*;
 use platform_utils::tokio::sync::{broadcast, watch};
 pub use select_helper::{
-    select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
+    partition_by_exact_amounts, select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
+    with_reserved_leaves,
 };
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
@@ -1243,6 +1244,16 @@ pub trait TreeService: Send + Sync {
         purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError>;
 
+    /// Reserves leaves of which a separate set funds each of `amounts`
+    /// exactly, swapping them with the SSP once when the available leaves
+    /// cannot be split that way.
+    async fn select_leaves_for_amounts(
+        &self,
+        amounts: &[u64],
+        purpose: ReservationPurpose,
+        options: SelectLeavesOptions,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
     /// Selects leaves for a deferred-signing send package without reserving
     /// them, renewing the node and refund timelocks of any selected leaf that
     /// needs it so the package is signed over up-to-date leaves. Renewal
@@ -1251,6 +1262,15 @@ pub trait TreeService: Send + Sync {
     async fn select_leaves_for_package(
         &self,
         target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeafSelection, TreeServiceError>;
+
+    /// [`select_leaves_for_package`](Self::select_leaves_for_package) for leaves
+    /// of which a separate set funds each of `amounts` exactly, whatever their
+    /// denominations. When the available leaves cannot be split that way, the
+    /// leaves to swap cover the amounts' total.
+    async fn select_leaves_for_package_by_amounts(
+        &self,
+        amounts: &[u64],
     ) -> Result<LeafSelection, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.

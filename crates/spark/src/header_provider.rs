@@ -24,6 +24,14 @@ pub trait HeaderProvider: Send + Sync {
     async fn headers_refresh(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
         self.headers().await
     }
+
+    /// Fetches anew a credential that a server reported missing or rejected in
+    /// a response it otherwise served, such as a partner token on a fee quote.
+    /// Unlike [`headers_refresh`](Self::headers_refresh), it never touches an
+    /// authenticated session. The default does nothing.
+    async fn renew(&self) -> Result<(), HeaderProviderError> {
+        Ok(())
+    }
 }
 
 /// Composes multiple [`HeaderProvider`]s by resolving their `headers()` in
@@ -59,6 +67,13 @@ impl HeaderProvider for CombinedHeaderProvider {
             merged.extend(provider.headers_refresh().await?);
         }
         Ok(merged)
+    }
+
+    async fn renew(&self) -> Result<(), HeaderProviderError> {
+        for provider in &self.providers {
+            provider.renew().await?;
+        }
+        Ok(())
     }
 }
 

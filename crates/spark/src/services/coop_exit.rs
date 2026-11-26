@@ -397,6 +397,8 @@ impl CoopExitService {
             )));
         }
 
+        let submitted: Vec<TreeNodeId> =
+            leaf_key_tweaks.iter().map(|l| l.node.id.clone()).collect();
         let res = self
             .submit_coop_exit_transfer(
                 leaf_key_tweaks,
@@ -414,7 +416,7 @@ impl CoopExitService {
             // finished once complete_coop_exit tells the SSP to broadcast the payout.
             Err(e) => {
                 self.transfer_service
-                    .recover_committed_transfer(&unwrapped_transfer_id, e)
+                    .recover_committed_transfer(&unwrapped_transfer_id, &submitted, e)
                     .await?
             }
         };
@@ -571,13 +573,13 @@ impl CoopExitService {
                 self.spark_signer
                     .prepare_transfer(PrepareTransferRequest {
                         transfer_id: transfer_id.clone(),
-                        receiver_public_key,
                         leaves: leaf_key_tweaks
                             .iter()
                             .map(|l| TransferLeafInput {
                                 node: l.node.clone(),
                                 new_leaf_id: TreeNodeId::generate(),
                                 signing_key: l.signing_key.clone(),
+                                receiver_public_key,
                             })
                             .collect(),
                         operator_recipients: self.operator_recipients(),

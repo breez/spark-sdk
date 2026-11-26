@@ -78,8 +78,10 @@ class Tokens {
 
             val paymentRequest = response.paymentRequest
             println("Payment request: $paymentRequest")
-            val receiveFee = response.fee
-            println("Fees: $receiveFee token base units")
+            val fee = response.fee
+            if (fee is ReceiveFee.Fixed) {
+                println("Fees: ${fee.amount} token base units")
+            }
         } catch (e: Exception) {
             // handle error
         }

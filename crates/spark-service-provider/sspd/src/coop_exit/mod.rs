@@ -829,10 +829,10 @@ pub fn verify_committed_transfer(
     let required = record
         .amount_sats
         .saturating_add(miner_fees_sats(spent, &exit_tx, &connector));
-    if transfer.total_value < required {
+    let committed = transfer.total_sats();
+    if committed < required {
         return Err(CoopExitError::InvalidInput(format!(
-            "committed transfer value ({} sats) does not cover the payout plus miner fees ({required} sats)",
-            transfer.total_value
+            "committed transfer value ({committed} sats) does not cover the payout plus miner fees ({required} sats)"
         )));
     }
     Ok(())

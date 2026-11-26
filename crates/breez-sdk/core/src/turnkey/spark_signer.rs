@@ -48,8 +48,9 @@ use crate::signer::{
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice, ExternalSparkSigner,
+    ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedQuote, ExternalSignedSparkInvoice, ExternalSparkSigner,
     ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
     ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
     ExternalTransferLeafInput, ExternalTreeNodeId, IdentifierCommitmentPair,
@@ -458,18 +459,24 @@ impl TurnkeySparkSigner {
         schnorr_from_rs(&result.r, &result.s).map_err(to_spark_err)
     }
 
-    /// ECDSA-signs `message` with the identity key via `SIGN_RAW_PAYLOAD`.
-    /// `signWith` is the compressed identity address, which selects secp256k1
-    /// ECDSA (the Spark-format address would instead select BIP-340 Schnorr).
-    /// Turnkey applies SHA-256 to the payload, matching the local signer.
-    async fn sign_identity_ecdsa(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError> {
+    /// ECDSA-signs `payload` with the identity key via `SIGN_RAW_PAYLOAD`,
+    /// hashed by Turnkey with `hash_function`: `HASH_FUNCTION_SHA256` for a
+    /// message, matching the local signer, or `HASH_FUNCTION_NO_OP` for a
+    /// precomputed 32-byte digest. `signWith` is the compressed identity
+    /// address, which selects secp256k1 ECDSA (the Spark-format address would
+    /// instead select BIP-340 Schnorr).
+    async fn sign_identity_ecdsa(
+        &self,
+        payload: &[u8],
+        hash_function: &'static str,
+    ) -> Result<ecdsa::Signature, SignerError> {
         let identity = self.identity_public_key().await?;
         let result = self
             .client
             .sign_raw(
                 hex::encode(identity.serialize()),
-                hex::encode(message),
-                HASH_FUNCTION_SHA256,
+                hex::encode(payload),
+                hash_function,
             )
             .await
             .map_err(to_spark_err)?;
@@ -607,6 +614,11 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         true
     }
 
+    /// Turnkey's prepare-transfer activity names one receiver per transfer.
+    fn supports_split_transfers(&self) -> bool {
+        false
+    }
+
     // `SPARK_SIGN_FROST` takes no adaptor version, so Turnkey signs version 1.
     fn supports_adaptor_v2(&self) -> bool {
         false
@@ -628,12 +640,16 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         &self,
         challenge: Vec<u8>,
     ) -> Result<EcdsaSignatureBytes, SignerError> {
-        let sig = self.sign_identity_ecdsa(&challenge).await?;
+        let sig = self
+            .sign_identity_ecdsa(&challenge, HASH_FUNCTION_SHA256)
+            .await?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
     async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, SignerError> {
-        let sig = self.sign_identity_ecdsa(&message).await?;
+        let sig = self
+            .sign_identity_ecdsa(&message, HASH_FUNCTION_SHA256)
+            .await?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
@@ -696,7 +712,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 operator_recipients: operator_recipients(&native_recipients(
                     &request.operator_recipients,
                 )?),
-                receiver_public_key: hex::encode(&request.receiver_public_key),
+                receiver_public_key: hex::encode(single_receiver(&request)?.serialize()),
             },
         };
         let result: SparkPrepareTransferResult = self
@@ -859,7 +875,9 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             .generate_random_signing_commitment()
             .await
             .map_err(to_spark_err)?;
-        let user_signature = self.sign_identity_ecdsa(&user_statement).await?;
+        let user_signature = self
+            .sign_identity_ecdsa(&user_statement, HASH_FUNCTION_SHA256)
+            .await?;
         Ok(ExternalStartedStaticDepositRefund {
             signing_public_key: signing_public_key.serialize().to_vec(),
             nonce_commitment: ExternalFrostCommitments::from_frost_commitments(&nonce_commitment)
@@ -959,12 +977,37 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
         request: ExternalPrepareStaticDepositClaimRequest,
     ) -> Result<ExternalPreparedStaticDepositClaim, SignerError> {
         let deposit_secret_key = self.export_static_deposit_key(request.index).await?;
-        let user_signature = self.sign_identity_ecdsa(&request.user_statement).await?;
+        let user_signature = self
+            .sign_identity_ecdsa(&request.user_statement, HASH_FUNCTION_SHA256)
+            .await?;
         Ok(ExternalPreparedStaticDepositClaim {
             deposit_secret_key: SecretBytes::from_secret_key(&deposit_secret_key),
             user_signature: EcdsaSignatureBytes::from_signature(&user_signature),
         })
     }
+
+    async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, SignerError> {
+        let digest = crate::quote_signing_digest(request)
+            .map_err(|e| SignerError::InvalidInput(e.to_string()))?;
+        let signature = self
+            .sign_identity_ecdsa(&digest, HASH_FUNCTION_NO_OP)
+            .await?;
+        Ok(ExternalSignedQuote {
+            signature: EcdsaSignatureBytes::from_signature(&signature),
+        })
+    }
+}
+
+/// The receiver every leaf of `request` goes to. Turnkey's prepare-transfer
+/// activity names one receiver per transfer, so a transfer split across
+/// receivers (a fee-bearing Lightning send) cannot be signed here yet.
+fn single_receiver(
+    request: &ExternalPrepareTransferRequest,
+) -> Result<bitcoin::secp256k1::PublicKey, SignerError> {
+    request.receiver_pubkey().map_err(to_spark_err)
 }
 
 #[cfg(test)]
@@ -1121,6 +1164,7 @@ mod tests {
             signing_key: ExternalLeafSigningKey {
                 derived_from: id("held"),
             },
+            receiver_public_key: vec![2; 33],
         };
 
         let request = serde_json::to_value(super::transfer_leaf(&leaf).unwrap()).unwrap();

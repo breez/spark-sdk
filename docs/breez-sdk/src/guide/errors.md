@@ -58,6 +58,18 @@ The USDC/USDT provider won't serve the route. When {{#name temporary}} is set, t
 
 USDC/USDT payments are not enabled on this SDK instance, so every cross-chain call fails, including {{#name get_cross_chain_routes}}. Enable them by setting {{#name cross_chain_config}}, as described in [USDC/USDT configuration](./config.md#usdc-usdt). A [bridging client](./bridging.md) doesn't need it.
 
+<h3 id="fees-changed">
+    <a class="header" href="#fees-changed">FeesChanged</a>
+</h3>
+
+The fees of a payment changed after it was prepared, so it was not sent. This happens when the fee went up since the prepare, when a fee quote expired and the new one prices the payment differently, or when a token conversion delivered an amount whose fee is higher than the one shown. Prepare the payment again and show the new fee. See [Lightning](./send_payment.md#bolt11-invoice) and [sending with a stable balance](./stable_balance.md#sending-payments-with-stable-balance).
+
+<h3 id="quote-expired">
+    <a class="header" href="#quote-expired">QuoteExpired</a>
+</h3>
+
+The fee quote pricing a Lightning payment expired before the payment was sent, so nothing was sent. With [client signing](./client_signing.md), this happens when the user takes longer to approve the package than the quote lasts: build the package again from the same prepare response and have the user sign it. Otherwise, send the payment again with the same prepare response. Either way the payment is quoted again on the same terms, and fails with [FeesChanged](#fees-changed) if its fees changed.
+
 <h3 id="network-error">
     <a class="header" href="#network-error">NetworkError</a>
 </h3>

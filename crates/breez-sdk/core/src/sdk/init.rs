@@ -46,6 +46,8 @@ impl BreezSdk {
             cross_chain_context: params.cross_chain_context,
             orchestra: params.orchestra,
             lightning_sender: params.lightning_sender,
+            quote_lightning_payments: params.quote_lightning_payments,
+            quote_lightning_sends: params.quote_lightning_sends,
         };
 
         if let Err(e) = sdk.clear_lightning_address_on_other_domain().await {

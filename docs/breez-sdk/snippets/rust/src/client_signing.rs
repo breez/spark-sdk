@@ -16,6 +16,7 @@ async fn sign_package(
             amount_sat,
             fee_sat,
             target,
+            sign_quote,
         } => {
             // Show the user what they are approving before signing
             let destination = match target {
@@ -24,8 +25,14 @@ async fn sign_package(
                 TransferTarget::CoopExit { address, .. } => address,
             };
             info!("Approve sending {amount_sat} sats (fee {fee_sat} sats) to {destination}");
+            // Set when a partner fee quote prices the send: sign its payment split too
+            let signed_quote = match sign_quote {
+                Some(request) => Some(signer.sign_quote(request.clone()).await?),
+                None => None,
+            };
             TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+                signed_quote,
             }
         }
         UnsignedTransferPackage::Swap {
@@ -37,6 +44,7 @@ async fn sign_package(
             info!("Approve re-shaping funds for a {amount_sat} sat send (fee {fee_sat} sats)");
             TransferSignature::Transfer {
                 signed: signer.prepare_transfer(prepare_transfer.clone()).await?,
+                signed_quote: None,
             }
         }
         UnsignedTransferPackage::Token {

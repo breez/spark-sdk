@@ -72,8 +72,9 @@ async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
 
     let payment_request = response.payment_request;
     info!("Payment request: {payment_request}");
-    let receive_fee = response.fee;
-    info!("Fees: {receive_fee} token base units");
+    if let ReceiveFee::Fixed { amount } = response.fee {
+        info!("Fees: {amount} token base units");
+    }
     // ANCHOR_END: receive-token-payment-spark-invoice
     Ok(())
 }

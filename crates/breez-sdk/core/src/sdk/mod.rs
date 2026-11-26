@@ -27,7 +27,9 @@ pub use bridging::{
     default_bridging_config, new_bridging_client,
 };
 pub(crate) use helpers::partner_id;
-pub(crate) use lightning_sender::{LightningSender, PendingLightningSend};
+pub(crate) use lightning_sender::{
+    InFlightSend, LightningSender, PendingLightningSend, Resumption, issued_quote,
+};
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
@@ -141,6 +143,13 @@ pub struct BreezSdk {
     /// need to pay an LN invoice as part of a larger flow.
     #[allow(dead_code)]
     pub(crate) lightning_sender: Arc<LightningSender>,
+    /// Whether Lightning receives and sends are priced by SSP fee quotes. Set
+    /// when a partner token is attached to SSP requests: without one every
+    /// quote is feeless, so it would only cost a round trip.
+    pub(crate) quote_lightning_payments: bool,
+    /// Whether Lightning sends are priced by SSP fee quotes: as for receives,
+    /// and only with a signer that can split one transfer across receivers.
+    pub(crate) quote_lightning_sends: bool,
 }
 
 /// The parser bound to the SDK's shared HTTP client and its DNS resolver.
@@ -169,6 +178,8 @@ pub(crate) struct BreezSdkParams {
     pub cross_chain_context: crate::cross_chain::CrossChainContext,
     pub orchestra: Option<Arc<crate::cross_chain::OrchestraService>>,
     pub lightning_sender: Arc<LightningSender>,
+    pub quote_lightning_payments: bool,
+    pub quote_lightning_sends: bool,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -462,6 +473,21 @@ pub fn default_external_signers(
         breez_signer: Arc::new(breez_signer),
         spark_signer: Arc::new(spark_signer),
     })
+}
+
+/// The 32-byte digest an [`ExternalSparkSigner`](crate::signer::ExternalSparkSigner)
+/// signs for `request`, with the identity key, as is. Computed from the quote
+/// itself, so a signer never signs bytes the requester chose.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn quote_signing_digest(
+    request: crate::signer::ExternalSignQuoteRequest,
+) -> Result<Vec<u8>, SdkError> {
+    Ok(request
+        .to_sign_quote_request()?
+        .digest()
+        .map_err(|e| SdkError::InvalidInput(e.to_string()))?
+        .to_vec())
 }
 
 /// Options for [`get_spark_status`].

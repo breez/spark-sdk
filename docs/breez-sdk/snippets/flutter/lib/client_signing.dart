@@ -3,6 +3,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 abstract class PackageSigner {
   Future<ExternalPreparedTransfer> prepareTransfer(
       ExternalPrepareTransferRequest request);
+  Future<ExternalSignedQuote> signQuote(ExternalSignQuoteRequest request);
   Future<ExternalPreparedTokenTransaction> prepareTokenTransaction(
       ExternalPrepareTokenTransactionRequest request);
 }
@@ -24,13 +25,19 @@ Future<SignedTransferPackage> signPackage(
     }
     print("Approve sending ${unsigned.amountSat} sats"
         " (fee ${unsigned.feeSat} sats) to $destination");
+    // Set when a partner fee quote prices the send: sign its payment split too
+    final signQuote = unsigned.signQuote;
+    final signedQuote =
+        signQuote != null ? await signer.signQuote(signQuote) : null;
     signature = TransferSignature.transfer(
-        signed: await signer.prepareTransfer(unsigned.prepareTransfer));
+        signed: await signer.prepareTransfer(unsigned.prepareTransfer),
+        signedQuote: signedQuote);
   } else if (unsigned is UnsignedTransferPackage_Swap) {
     print("Approve re-shaping funds for a ${unsigned.amountSat} sat send"
         " (fee ${unsigned.feeSat} sats)");
     signature = TransferSignature.transfer(
-        signed: await signer.prepareTransfer(unsigned.prepareTransfer));
+        signed: await signer.prepareTransfer(unsigned.prepareTransfer),
+        signedQuote: null);
   } else if (unsigned is UnsignedTransferPackage_Token) {
     if (unsigned.isSwap) {
       print("Approve combining token outputs for a ${unsigned.tokenIdentifier} send");

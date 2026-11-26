@@ -195,6 +195,16 @@ pub fn default_external_signers(
     })
 }
 
+/// The 32-byte digest an `ExternalSparkSigner` signs for a `signQuote` request,
+/// with the identity key, as is. Computed from the quote itself, so a signer
+/// never signs bytes the requester chose.
+#[wasm_bindgen(js_name = "quoteSigningDigest")]
+pub fn quote_signing_digest(
+    request: crate::signer::ExternalSignQuoteRequest,
+) -> WasmResult<Vec<u8>> {
+    Ok(breez_sdk_spark::quote_signing_digest(request.into())?)
+}
+
 /// Creates a default CPFP signer backed by a single private key.
 #[wasm_bindgen(js_name = "singleKeyCpfpSigner")]
 pub fn single_key_cpfp_signer(

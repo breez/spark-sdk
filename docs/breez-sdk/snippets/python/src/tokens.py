@@ -8,6 +8,7 @@ from breez_sdk_spark import (
     PaymentRequest,
     PrepareSendPaymentRequest,
     PrepareSendBatchRequest,
+    ReceiveFee,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
     SendPaymentMethod,
@@ -85,8 +86,8 @@ async def receive_token_payment_spark_invoice(sdk: BreezSdk):
 
         payment_request = response.payment_request
         print(f"Payment request: {payment_request}")
-        receive_fee = response.fee
-        print(f"Fees: {receive_fee} token base units")
+        if isinstance(response.fee, ReceiveFee.FIXED):
+            print(f"Fees: {response.fee.amount} token base units")
         return response
     except Exception as error:
         logging.error(error)

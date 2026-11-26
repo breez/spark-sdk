@@ -282,7 +282,8 @@ namespace BreezSdkSnippets
                 expirySecs: 3600U,
                 paymentHash: null,
                 receiverIdentityPublicKey: null,
-                preimage: null
+                preimage: null,
+                feePolicy: null
             );
             var response = await sdk.ReceivePayment(
                 request: new ReceivePaymentRequest(paymentMethod: paymentMethod)

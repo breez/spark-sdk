@@ -64,6 +64,8 @@ uuid.workspace = true
 futures.workspace = true
 axum = "0.7"
 bech32.workspace = true
+# Signs the partner JWTs the dev environment tests attach.
+p256 = { workspace = true, features = ["pkcs8", "pem"] }
 # The receiving side of spdk, the silent payment wallet kit, to check that a
 # wallet finds the SDK's silent payment withdrawals.
 silentpayments = { version = "0.8.1", default-features = false, features = ["receiving"] }

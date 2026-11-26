@@ -3,7 +3,10 @@ use std::str::FromStr;
 use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::time::{Duration, SystemTime};
-use spark_wallet::{InvoiceDescription, InvoicePreimage, LightningReceivePayment, Preimage};
+use spark_wallet::{
+    InvoiceDescription, InvoicePreimage, LightningReceivePayment, Preimage, ReceiveAmountBasis,
+    ReceiveQuoteFee,
+};
 use tracing::debug;
 
 use breez_sdk_common::fiat::FiatService;
@@ -15,7 +18,9 @@ use crate::{
         DeliveryMethod, SparkAsset,
     },
     error::SdkError,
-    models::{ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse},
+    models::{
+        FeePolicy, ReceiveFee, ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse,
+    },
 };
 
 use super::super::{BreezSdk, helpers::get_deposit_address};
@@ -29,7 +34,7 @@ pub(super) async fn receive_payment(
     sdk.maybe_ensure_spark_private_mode_initialized().await?;
     match request.payment_method {
         ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
-            fee: 0,
+            fee: ReceiveFee::none(),
             cross_chain_info: None,
             payment_request: sdk
                 .spark_wallet
@@ -67,7 +72,7 @@ pub(super) async fn receive_payment(
                 )
                 .await?;
             Ok(ReceivePaymentResponse {
-                fee: 0,
+                fee: ReceiveFee::none(),
                 cross_chain_info: None,
                 payment_request: invoice,
             })
@@ -81,7 +86,7 @@ pub(super) async fn receive_payment(
             .await?;
             Ok(ReceivePaymentResponse {
                 payment_request: address,
-                fee: 0,
+                fee: ReceiveFee::none(),
                 cross_chain_info: None,
             })
         }
@@ -92,6 +97,7 @@ pub(super) async fn receive_payment(
             payment_hash,
             receiver_identity_public_key,
             preimage,
+            fee_policy,
         } => {
             receive_bolt11_invoice(
                 sdk,
@@ -101,6 +107,7 @@ pub(super) async fn receive_payment(
                 payment_hash,
                 receiver_identity_public_key,
                 preimage,
+                quote_basis(sdk, amount_sats, fee_policy),
             )
             .await
         }
@@ -131,7 +138,7 @@ impl From<CrossChainReceivePrepared> for ReceivePaymentResponse {
     fn from(prepared: CrossChainReceivePrepared) -> Self {
         ReceivePaymentResponse {
             payment_request: prepared.payment_request,
-            fee: 0,
+            fee: ReceiveFee::none(),
             cross_chain_info: Some(prepared.info),
         }
     }
@@ -371,6 +378,7 @@ pub(in crate::sdk) fn validate_receive_destination(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn receive_bolt11_invoice(
     sdk: &BreezSdk,
     description: String,
@@ -379,6 +387,7 @@ pub(super) async fn receive_bolt11_invoice(
     payment_hash: Option<String>,
     receiver_identity_public_key: Option<String>,
     preimage: Option<String>,
+    quote_basis: Option<ReceiveAmountBasis>,
 ) -> Result<ReceivePaymentResponse, SdkError> {
     let receive = receive_bolt11_invoice_inner(
         sdk,
@@ -388,19 +397,59 @@ pub(super) async fn receive_bolt11_invoice(
         payment_hash,
         receiver_identity_public_key,
         preimage,
+        quote_basis,
     )
     .await?;
     Ok(ReceivePaymentResponse {
         payment_request: receive.invoice,
-        fee: 0,
+        fee: receive.quote_fee.map_or_else(ReceiveFee::none, receive_fee),
         cross_chain_info: None,
     })
+}
+
+/// The basis to quote a Bolt11 receive on, when this SDK quotes them at all.
+fn quote_basis(
+    sdk: &BreezSdk,
+    amount_sats: Option<u64>,
+    fee_policy: Option<FeePolicy>,
+) -> Option<ReceiveAmountBasis> {
+    sdk.quote_lightning_payments
+        .then(|| receive_amount_basis(amount_sats, fee_policy))
+}
+
+/// The basis a receive quote reads the requested amount on. An amountless
+/// invoice has no net to pin, so the fee always comes out of what is sent.
+fn receive_amount_basis(
+    amount_sats: Option<u64>,
+    fee_policy: Option<FeePolicy>,
+) -> ReceiveAmountBasis {
+    match (
+        amount_sats.unwrap_or_default(),
+        fee_policy.unwrap_or_default(),
+    ) {
+        (0, _) | (_, FeePolicy::FeesIncluded) => ReceiveAmountBasis::Gross,
+        (_, FeePolicy::FeesExcluded) => ReceiveAmountBasis::Net,
+    }
+}
+
+fn receive_fee(fee: ReceiveQuoteFee) -> ReceiveFee {
+    if fee.rate_bps == 0 {
+        ReceiveFee::Fixed {
+            amount: fee.flat_sats.into(),
+        }
+    } else {
+        ReceiveFee::Rate {
+            bps: fee.rate_bps,
+            fixed_sats: fee.flat_sats,
+        }
+    }
 }
 
 /// Internal variant of [`receive_bolt11_invoice`] that keeps the
 /// full SSP receive object (id + invoice + status + …). Used by
 /// `lnurl_withdraw` to get the SSP id for the synchronous wait via
 /// `WaitForPaymentIdentifier::LightningReceive`.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn receive_bolt11_invoice_inner(
     sdk: &BreezSdk,
     description: String,
@@ -409,6 +458,7 @@ pub(super) async fn receive_bolt11_invoice_inner(
     payment_hash: Option<String>,
     receiver_identity_public_key: Option<String>,
     preimage: Option<String>,
+    quote_basis: Option<ReceiveAmountBasis>,
 ) -> Result<LightningReceivePayment, SdkError> {
     let receiver_identity_public_key = receiver_identity_public_key
         .map(|key| PublicKey::from_str(&key))
@@ -431,6 +481,8 @@ pub(super) async fn receive_bolt11_invoice_inner(
         // No Spark address: a payer who pays by a direct Spark transfer never learns the preimage.
         (InvoicePreimage::FromCaller(preimage), false)
     } else {
+        // An app preferring Spark gives up the partner fee on these invoices:
+        // one carrying a Spark address is never quoted.
         (
             InvoicePreimage::FromSigner,
             sdk.config.prefer_spark_over_lightning,
@@ -445,6 +497,70 @@ pub(super) async fn receive_bolt11_invoice_inner(
             receiver_identity_public_key,
             expiry_secs,
             include_spark_address,
+            quote_basis,
         )
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use macros::test_all;
+    use spark_wallet::{ReceiveAmountBasis, ReceiveQuoteFee};
+
+    use super::{receive_amount_basis, receive_fee};
+    use crate::models::{FeePolicy, ReceiveFee};
+
+    #[test_all]
+    fn the_receiver_keeps_the_amount_unless_fees_are_included() {
+        assert_eq!(
+            receive_amount_basis(Some(1_000), None),
+            ReceiveAmountBasis::Net
+        );
+        assert_eq!(
+            receive_amount_basis(Some(1_000), Some(FeePolicy::FeesExcluded)),
+            ReceiveAmountBasis::Net
+        );
+        assert_eq!(
+            receive_amount_basis(Some(1_000), Some(FeePolicy::FeesIncluded)),
+            ReceiveAmountBasis::Gross
+        );
+    }
+
+    // An amountless invoice has no net to pin.
+    #[test_all]
+    fn an_amountless_invoice_always_deducts_the_fee() {
+        for amount in [None, Some(0)] {
+            for policy in [
+                None,
+                Some(FeePolicy::FeesExcluded),
+                Some(FeePolicy::FeesIncluded),
+            ] {
+                assert_eq!(
+                    receive_amount_basis(amount, policy),
+                    ReceiveAmountBasis::Gross
+                );
+            }
+        }
+    }
+
+    #[test_all]
+    fn a_quote_fee_is_fixed_unless_it_carries_a_rate() {
+        assert_eq!(
+            receive_fee(ReceiveQuoteFee {
+                flat_sats: 2_000,
+                rate_bps: 0
+            }),
+            ReceiveFee::Fixed { amount: 2_000 }
+        );
+        assert_eq!(
+            receive_fee(ReceiveQuoteFee {
+                flat_sats: 5,
+                rate_bps: 200
+            }),
+            ReceiveFee::Rate {
+                bps: 200,
+                fixed_sats: 5
+            }
+        );
+    }
 }

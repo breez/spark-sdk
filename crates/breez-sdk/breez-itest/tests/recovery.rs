@@ -410,6 +410,7 @@ async fn test_setup_recovery_wallet(#[future] env: Result<Environment>) -> Resul
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -452,6 +453,7 @@ async fn test_setup_recovery_wallet(#[future] env: Result<Environment>) -> Resul
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?

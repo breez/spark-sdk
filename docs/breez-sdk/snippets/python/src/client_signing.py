@@ -48,8 +48,13 @@ async def sign_package(
             f"Approve sending {unsigned.amount_sat} sats"
             f" (fee {unsigned.fee_sat} sats) to {destination}"
         )
+        # Set when a partner fee quote prices the send: sign its payment split too
+        signed_quote = None
+        if unsigned.sign_quote is not None:
+            signed_quote = await signer.sign_quote(unsigned.sign_quote)
         signature = TransferSignature.TRANSFER(
-            signed=await signer.prepare_transfer(unsigned.prepare_transfer)
+            signed=await signer.prepare_transfer(unsigned.prepare_transfer),
+            signed_quote=signed_quote,
         )
     elif isinstance(unsigned, UnsignedTransferPackage.SWAP):
         logging.debug(
@@ -57,7 +62,8 @@ async def sign_package(
             f" (fee {unsigned.fee_sat} sats)"
         )
         signature = TransferSignature.TRANSFER(
-            signed=await signer.prepare_transfer(unsigned.prepare_transfer)
+            signed=await signer.prepare_transfer(unsigned.prepare_transfer),
+            signed_quote=None,
         )
     elif isinstance(unsigned, UnsignedTransferPackage.TOKEN):
         if unsigned.is_swap:

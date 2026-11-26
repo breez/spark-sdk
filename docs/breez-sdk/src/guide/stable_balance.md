@@ -67,6 +67,8 @@ When you [prepare to send a payment](./send_payment.md#preparing-payments) witho
 
 For [bitcoin address](./send_payment.md#bitcoin) destinations the prepare response marks its fee quote {{#name is_estimate}} when your bitcoin balance is zero. Any balance at all still gets a real quote. An estimate is always replaced with a real one before the payment goes out.
 
+When your [partner fee](./lightning_partner_fees.md) applies to a [BOLT11 invoice](./send_payment.md#bolt11-invoice) without an amount, the sats are only known once the conversion completes, so the Lightning fee is an estimate. The send is quoted again on the converted amount, and fails with [FeesChanged](./errors.md#fees-changed) rather than charge more than the fee shown, scaled to that amount.
+
 The same flow extends to [USDC/USDT](./send_payment.md#usdc-usdt): when paying a recipient on USDC or USDT, the SDK can spend the user's USDB balance directly (Orchestra routes that accept USDB as source) or auto-convert it through bitcoin if the chosen route only accepts sats.
 
 <div class="warning">
@@ -82,7 +84,7 @@ When Stable Balance is active, you can send your entire balance, both the token 
 
 To send all, provide the full token balance as the amount along with {{#enum FeePolicy::FeesIncluded}} and {{#enum ConversionType::ToBitcoin}} conversion options. The SDK converts all specified tokens to bitcoin, combines the result with any existing bitcoin balance, and deducts payment fees from the total.
 
-The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details.
+The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details. When a partner fee applies to a payment to a Lightning address, the amount sent is sized below the conversion estimate by its slippage allowance, so a little bitcoin may remain in the wallet.
 
 The same approach works with {{#name prepare_lnurl_pay}} for [LNURL payments](./lnurl_pay.md).
 
