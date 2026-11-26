@@ -154,8 +154,8 @@ pub enum InputType {
 }
 
 /// Cross-chain recipient details returned by `parse()` when the input is
-/// recognized as an EVM, Solana or Tron address or URI, or a bare XRP or
-/// Zcash transparent address.
+/// recognized as an EVM, Solana or Tron address or URI, a bare XRP address, or
+/// a bare Zcash transparent or Unified Address.
 ///
 /// The UI passes these details to `get_cross_chain_routes()` to discover
 /// available routes, then selects one and calls `prepare_send_payment`

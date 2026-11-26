@@ -13,7 +13,10 @@ use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     buy::cashapp::{CashAppProvider, cash_app_lightning_address},
     fiat::FiatService,
-    input::{CrossChainAddressFamily, detect_address_family, validate_lightning_address_format},
+    input::{
+        CrossChainAddressFamily, detect_address_family, is_zcash_orchard_unified_address,
+        validate_lightning_address_format,
+    },
     lnurl::pay::validate_user_input,
 };
 
@@ -220,7 +223,8 @@ impl BridgingClient {
     /// with the Cash App link as its `payment_request`. The provider allows
     /// these payments 10% slippage when they execute. With fees excluded,
     /// `max_slippage_bps` bounds how far the quoted delivery may fall short of
-    /// `amount` when the bridge is created.
+    /// `amount` when the bridge is created. A Zcash Unified Address can't be
+    /// paid from Cash App.
     pub async fn bridge_from_cash_app(
         &self,
         request: CreateBridgeRequest,
@@ -228,6 +232,11 @@ impl BridgingClient {
         if delivery_method(&request.route.source) != Some(DeliveryMethod::Lightning) {
             return Err(SdkError::InvalidInput(
                 "Cash App pays a recipient on another chain over Lightning".to_string(),
+            ));
+        }
+        if is_zcash_orchard_unified_address(request.recipient.trim()) {
+            return Err(SdkError::InvalidInput(
+                "Cash App can't pay a Zcash Unified Address".to_string(),
             ));
         }
         let mut response = self
@@ -2429,6 +2438,15 @@ mod tests {
                 ))
                 .await,
             "over Lightning",
+        );
+        assert_invalid_input(
+            client
+                .bridge_from_cash_app(create_request(
+                    "u1ddnjsdcpm36r6aq79n3s68shjweksnmwtdltrh046s8m6xcws9ygyawalxx8n6hg6vegk0wh8zjnafxgh6msppjsljvyt0ynece3lvm0",
+                    pair(lightning_btc(), zcash_zec()),
+                ))
+                .await,
+            "Zcash Unified Address",
         );
 
         for recipient in [

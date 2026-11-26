@@ -127,6 +127,9 @@ pub struct EstimateRequest {
     pub amount: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_mode: Option<AmountMode>,
+    /// Unset prices paying the recipient the chain's default way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_payment_mode: Option<DestinationPaymentMode>,
     /// Sent as one comma-joined value. Orchestra keeps only the last of
     /// repeated keys and ignores `affiliateIds[]`, both without an error.
     #[serde(
@@ -207,6 +210,15 @@ pub enum AmountMode {
     Unknown,
 }
 
+/// How the recipient is paid, where the destination chain has more than one
+/// way.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DestinationPaymentMode {
+    /// To the Orchard receiver of a Zcash Unified Address.
+    Shielded,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppFeeRequest {
@@ -224,6 +236,9 @@ pub struct QuoteRequest {
     pub destination_asset: String,
     pub amount: String,
     pub recipient_address: String,
+    /// Unset pays the recipient the chain's default way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_payment_mode: Option<DestinationPaymentMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_mode: Option<AmountMode>,
     /// Required for `exact_out` quotes.
@@ -785,6 +800,7 @@ mod attribution_tests {
             destination_asset: "USDC".to_string(),
             amount: "1000000".to_string(),
             amount_mode: None,
+            destination_payment_mode: None,
             affiliate_ids,
             affiliate_error_mode: Some(AffiliateErrorMode::Specific),
         }
@@ -803,6 +819,19 @@ mod attribution_tests {
              &destinationAsset=USDC&amount=1000000&affiliateIds=breez_sdk%2Cbreez_ff\
              &affiliateErrorMode=specific"
         );
+    }
+
+    #[test]
+    fn estimate_query_carries_the_destination_payment_mode_when_set() {
+        let query = serde_urlencoded::to_string(estimate(Vec::new())).expect("serializes");
+        assert!(!query.contains("destinationPaymentMode"), "{query}");
+
+        let query = serde_urlencoded::to_string(EstimateRequest {
+            destination_payment_mode: Some(DestinationPaymentMode::Shielded),
+            ..estimate(Vec::new())
+        })
+        .expect("serializes");
+        assert!(query.contains("destinationPaymentMode=shielded"), "{query}");
     }
 
     #[test]
@@ -836,6 +865,7 @@ mod attribution_tests {
             destination_asset: "USDC".to_string(),
             amount: "1000000".to_string(),
             recipient_address: "0xabc".to_string(),
+            destination_payment_mode: None,
             amount_mode: None,
             refund_address: None,
             slippage_bps: None,
@@ -845,6 +875,19 @@ mod attribution_tests {
             affiliate_error_mode: Some(AffiliateErrorMode::Specific),
             tag: tag.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn quote_body_carries_the_destination_payment_mode_when_set() {
+        let body = serde_json::to_value(quote(Vec::new(), None)).expect("serializes");
+        assert!(body.get("destinationPaymentMode").is_none(), "{body}");
+
+        let body = serde_json::to_value(QuoteRequest {
+            destination_payment_mode: Some(DestinationPaymentMode::Shielded),
+            ..quote(Vec::new(), None)
+        })
+        .expect("serializes");
+        assert_eq!(body["destinationPaymentMode"], "shielded");
     }
 
     #[test]

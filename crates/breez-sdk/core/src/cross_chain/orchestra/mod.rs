@@ -13,12 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::fiat::FiatService;
-use breez_sdk_common::input::CrossChainAddressFamily;
+use breez_sdk_common::input::{CrossChainAddressFamily, is_zcash_orchard_unified_address};
 use chrono::DateTime;
 use flashnet::orchestra::{
-    AffiliateErrorMode, AmountMode, EstimateRequest, EstimateResponse, OnrampOutcome,
-    OnrampRequest, OnrampResponse, Order, OrderStatus, QuoteRequest, QuoteResponse, Route,
-    RouteAsset, RouteLimits, RouteWithLimits, StatusResponse, SubmitResponse,
+    AffiliateErrorMode, AmountMode, DestinationPaymentMode, EstimateRequest, EstimateResponse,
+    OnrampOutcome, OnrampRequest, OnrampResponse, Order, OrderStatus, QuoteRequest, QuoteResponse,
+    Route, RouteAsset, RouteLimits, RouteWithLimits, StatusResponse, SubmitResponse,
 };
 use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::Duration;
@@ -1460,6 +1460,7 @@ impl OrchestraQuoter {
             destination_asset: destination_asset.to_string(),
             amount: source_amount.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
+            destination_payment_mode: None,
             affiliate_ids: Vec::new(),
             affiliate_error_mode: None,
         };
@@ -1516,6 +1517,7 @@ impl OrchestraQuoter {
         source_asset: &ResolvedSparkAsset,
         route: &CrossChainRoutePair,
         amount: u128,
+        payment_mode: Option<DestinationPaymentMode>,
     ) -> Result<SizedDeposit, SdkError> {
         let moves_one_asset = source_asset.asset.eq_ignore_ascii_case(&route.asset);
         let mut request = EstimateRequest {
@@ -1525,6 +1527,7 @@ impl OrchestraQuoter {
             destination_asset: route.asset.clone(),
             amount: amount.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
+            destination_payment_mode: payment_mode,
             affiliate_ids: Vec::new(),
             affiliate_error_mode: None,
         };
@@ -1690,6 +1693,12 @@ fn needs_refund_address_to_receive(chain: &str) -> bool {
     RECEIVE_NEEDS_REFUND_ADDRESS
         .iter()
         .any(|c| c.eq_ignore_ascii_case(chain))
+}
+
+/// Orchestra pays a Zcash Unified Address's Orchard receiver only when asked.
+pub(crate) fn destination_payment_mode(recipient_address: &str) -> Option<DestinationPaymentMode> {
+    is_zcash_orchard_unified_address(recipient_address.trim())
+        .then_some(DestinationPaymentMode::Shielded)
 }
 
 fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
@@ -2603,6 +2612,7 @@ impl OrchestraQuoter {
         fee_mode: CrossChainFeeMode,
         refund_address: Option<&str>,
     ) -> Result<CrossChainSendPrepared, SdkError> {
+        let payment_mode = destination_payment_mode(recipient_address);
         let amounts = self
             .send_amounts(
                 route,
@@ -2610,6 +2620,7 @@ impl OrchestraQuoter {
                 delivery_method,
                 source_token_identifier.as_deref(),
                 fee_mode,
+                payment_mode,
             )
             .await?;
 
@@ -2620,6 +2631,7 @@ impl OrchestraQuoter {
             destination_asset: route.asset.clone(),
             amount: amounts.source_amount.to_string(),
             recipient_address: recipient_address.to_string(),
+            destination_payment_mode: payment_mode,
             amount_mode: Some(AmountMode::ExactIn),
             refund_address: refund_address.map(str::to_string),
             slippage_bps: Some(max_slippage_bps),
@@ -2667,6 +2679,7 @@ impl OrchestraQuoter {
         delivery_method: DeliveryMethod,
         source_token_identifier: Option<&str>,
         fee_mode: CrossChainFeeMode,
+        payment_mode: Option<DestinationPaymentMode>,
     ) -> Result<SendAmounts, SdkError> {
         // `spark` matches BTC or the token; `lightning`/`bitcoin` match the
         // externally funded BTC route.
@@ -2710,7 +2723,13 @@ impl OrchestraQuoter {
                 amounts.destination_amount = Some(destination_amount);
             } else {
                 let sized = self
-                    .estimate_fees_on_top(source_chain, &amounts.source_asset, route, amount)
+                    .estimate_fees_on_top(
+                        source_chain,
+                        &amounts.source_asset,
+                        route,
+                        amount,
+                        payment_mode,
+                    )
                     .await
                     .map_err(|e| amounts.with_limits(e, route))?;
                 amounts.source_amount = sized.required_in;
@@ -2815,7 +2834,14 @@ impl OrchestraQuoter {
         refund_address: Option<&str>,
     ) -> Result<OnrampSendPrepared, SdkError> {
         let amounts = self
-            .send_amounts(route, amount, DeliveryMethod::Lightning, None, fee_mode)
+            .send_amounts(
+                route,
+                amount,
+                DeliveryMethod::Lightning,
+                None,
+                fee_mode,
+                None,
+            )
             .await?;
         // No `slippageBps`: Orchestra applies 1000 bps to onramp orders
         // whatever is asked.
@@ -3079,6 +3105,7 @@ impl OrchestraQuoter {
             destination_asset: destination.asset.clone(),
             amount: source_amount.to_string(),
             recipient_address: recipient_address.to_string(),
+            destination_payment_mode: None,
             // ExactIn: the deposit is fixed (caller-picked on FeesIncluded,
             // SDK-computed on FeesExcluded); Orchestra forward-computes what
             // the receiver gets net of fees.
@@ -8383,6 +8410,51 @@ mod tests {
         assert_eq!(prepared.fee_amount, 0);
         assert_eq!(prepared.service_fee_amount, 377_000);
         assert_eq!(prepared.service_fee_asset.as_deref(), Some("USDC"));
+    }
+
+    #[async_test_all]
+    async fn lightning_send_to_a_zcash_unified_address_asks_for_shielded_delivery() {
+        let route = native_route("zcash", Some("zcash:mainnet"), "ZEC", 8);
+        for (recipient, mode) in [
+            (
+                "u1ddnjsdcpm36r6aq79n3s68shjweksnmwtdltrh046s8m6xcws9ygyawalxx8n6hg6vegk0wh8zjnafxgh6msppjsljvyt0ynece3lvm0",
+                Some("shielded"),
+            ),
+            ("t1KRqwQhktLV4BjbNLiuH6pb3AMoszZKcQB", None),
+        ] {
+            // Fees excluded, so the estimate that sizes the fee is priced the
+            // same way as the quote.
+            let http = FakeNativeQuoting::new(
+                native_destination(&route),
+                native_quote("15000000", "377000", "USDC"),
+                native_quote("15100000", "377000", "USDC"),
+            );
+            http.quoter(Arc::new(FixedFiat))
+                .quote_send(
+                    recipient,
+                    &route,
+                    100_000,
+                    DeliveryMethod::Lightning,
+                    None,
+                    100,
+                    CrossChainFeeMode::FeesExcluded,
+                    None,
+                )
+                .await
+                .unwrap();
+            let estimate = http.estimates.lock().unwrap()[0].clone();
+            assert_eq!(
+                estimate.contains("destinationPaymentMode=shielded"),
+                mode.is_some(),
+                "{estimate}"
+            );
+            let quote = http.quotes.lock().unwrap()[0].clone();
+            assert_eq!(
+                quote["destinationPaymentMode"].as_str(),
+                mode,
+                "{recipient}"
+            );
+        }
     }
 
     #[async_test_all]

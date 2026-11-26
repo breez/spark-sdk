@@ -100,13 +100,13 @@ Their routes have `lightning` as the {{#name source}} {{#name chain}}, and a {{#
 | ETH, BNB, POL, MON, HYPE | EVM address, or an EIP-681 URI naming the chain |
 | SOL | Solana address |
 | TRX | Tron address |
-| ZEC | Zcash transparent address (`t1...` or `t3...`) |
+| ZEC | Zcash transparent address (`t1...` or `t3...`), or a Unified Address (`u1...`) with an Orchard receiver |
 | Bitcoin on-chain | Bitcoin address or BIP21 URI |
 
 <div class="warning">
 <h4>Developer note</h4>
 
-- **Zcash:** only transparent addresses can be paid. Shielded, unified and TEX addresses are rejected.
+- **Zcash:** a Unified Address is paid shielded, to its Orchard receiver. The provider doesn't deliver shielded from Lightning yet, so until it does, {{#name create_bridge}} to a Unified Address fails. Shielded delivery takes longer: the provider receives the ZEC first and sends it on once that confirms. Each bridge also reserves up to 90,000 zats (0.0009 ZEC) of the delivery for the shielded network fee. {{#name info.expected_received_amount}} already allows for the whole reserve, and only the actual fee is deducted, so the recipient can receive slightly more. The reserve isn't part of {{#name info.service_fee_amount}}. {{#name bridge_from_cash_app}} can't pay a Unified Address. Sapling and TEX addresses, and Unified Addresses without an Orchard receiver, are rejected.
 - **Bitcoin on-chain:** the minimum moves with the on-chain exit fee. The route's {{#name min_amount}} is the minimum that must reach the recipient when the routes were listed, so with {{#enum FeePolicy::FeesIncluded}} the amount must also cover the fees. Below the current minimum, {{#name create_bridge}} fails with {{#enum SdkError::CrossChainAmountOutOfRange}}, whose message names it. If the exit fee rises while a bridge with {{#enum FeePolicy::FeesExcluded}} is created, the recipient can receive up to {{#name max_slippage_bps}} less, and a larger rise fails with {{#enum SdkError::InvalidInput}}: create it again. {{#name info.service_fee_amount}} includes the exit fee. No overpay is added, as the cost is known exactly. The provider takes no [partner fee](./cross_chain_partner_fees.md) on these bridges.
 </div>
 

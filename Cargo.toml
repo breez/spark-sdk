@@ -184,6 +184,7 @@ encoding_rs = "0.8.35"
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+f4jumble = "0.1.2"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
 # main branch

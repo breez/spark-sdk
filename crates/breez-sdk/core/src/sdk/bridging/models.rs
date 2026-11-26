@@ -25,7 +25,8 @@ pub struct BridgingConfig {
 pub struct GetBridgeRoutesRequest {
     /// Who to pay: a Spark address, a Lightning address (a Cash App
     /// `$cashtag` included), a Bitcoin address or BIP21 URI, an
-    /// EVM/Solana/Tron address or URI, or an XRP or Zcash transparent address.
+    /// EVM/Solana/Tron address or URI, an XRP address, or a Zcash transparent
+    /// or Unified Address.
     pub recipient: String,
 }
 

@@ -23,6 +23,7 @@ base64.workspace = true
 bech32.workspace = true
 bitcoin.workspace = true
 cbc = { workspace = true, features = ["std"] }
+f4jumble.workspace = true
 # flutter_rust_bridge = { workspace = true, optional = true}
 hex.workspace = true
 lightning.workspace = true

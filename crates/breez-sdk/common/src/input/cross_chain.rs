@@ -12,6 +12,8 @@
 //! maintain a curated enum of supported chains/assets. Route availability
 //! is checked at prepare time via `get_cross_chain_routes()`.
 
+use bech32::{Bech32m, Hrp, primitives::decode::CheckedHrpstring};
+use bitcoin::consensus::{deserialize_partial, encode::VarInt};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -31,7 +33,8 @@ pub enum CrossChainAddressFamily {
     /// XRP Ledger classic address (base58check in the Ripple alphabet, `r`
     /// prefix). X-addresses, which carry a destination tag, are not detected.
     Xrp,
-    /// Zcash transparent address (base58check, `t1` or `t3` prefix).
+    /// Zcash transparent address (base58check, `t1` or `t3` prefix), or a
+    /// Unified Address (`u1` prefix) with an Orchard receiver.
     Zcash,
 }
 
@@ -110,7 +113,7 @@ pub fn detect_address_family(input: &str) -> Option<CrossChainAddressFamily> {
         return Some(CrossChainAddressFamily::Tron);
     }
 
-    if is_zcash_transparent_address(trimmed) {
+    if is_zcash_transparent_address(trimmed) || is_zcash_orchard_unified_address(trimmed) {
         return Some(CrossChainAddressFamily::Zcash);
     }
 
@@ -138,6 +141,67 @@ fn is_zcash_transparent_address(input: &str) -> bool {
         && bitcoin::base58::decode_check(input).is_ok_and(|decoded| {
             decoded.len() == 22 && decoded[0] == 0x1C && matches!(decoded[1], 0xB8 | 0xBD)
         })
+}
+
+/// Zcash mainnet Unified Address (ZIP 316, revision 0) with an Orchard
+/// receiver. Its Bech32m data is jumbled with `F4Jumble`. Unjumbled, it is
+/// items in ascending typecode order, each a compactSize typecode, length and
+/// value, then the HRP padded to 16 bytes.
+pub fn is_zcash_orchard_unified_address(input: &str) -> bool {
+    const HRP: &str = "u";
+    const ORCHARD: u64 = 0x03;
+    let Ok(checked) = CheckedHrpstring::new::<Bech32m>(input) else {
+        return false;
+    };
+    if checked.hrp() != Hrp::parse_unchecked(HRP) {
+        return false;
+    }
+    let Ok(raw) = f4jumble::f4jumble_inv(&checked.byte_iter().collect::<Vec<_>>()) else {
+        return false;
+    };
+    let mut padding = [0u8; 16];
+    padding[..HRP.len()].copy_from_slice(HRP.as_bytes());
+    let Some(mut items) = raw.strip_suffix(&padding) else {
+        return false;
+    };
+    let mut previous = None;
+    let mut has_orchard = false;
+    while !items.is_empty() {
+        let Some((typecode, value, rest)) = split_unified_item(items) else {
+            return false;
+        };
+        if previous.is_some_and(|p| typecode <= p) || !unified_item_allowed(typecode, value.len()) {
+            return false;
+        }
+        has_orchard |= typecode == ORCHARD;
+        previous = Some(typecode);
+        items = rest;
+    }
+    has_orchard
+}
+
+/// The first unified item in `bytes`: its typecode, its value, and the bytes
+/// after it.
+fn split_unified_item(bytes: &[u8]) -> Option<(u64, &[u8], &[u8])> {
+    let (VarInt(typecode), read) = deserialize_partial::<VarInt>(bytes).ok()?;
+    let bytes = bytes.get(read..)?;
+    let (VarInt(len), read) = deserialize_partial::<VarInt>(bytes).ok()?;
+    let (value, rest) = bytes
+        .get(read..)?
+        .split_at_checked(usize::try_from(len).ok()?)?;
+    Some((typecode, value, rest))
+}
+
+/// Receivers have fixed lengths: 20 bytes for P2PKH and P2SH, 43 for Sapling
+/// and Orchard. Revision 0 defines no MUST-understand metadata (`0xE0` to
+/// `0xFC`), and other typecodes are skipped.
+fn unified_item_allowed(typecode: u64, len: usize) -> bool {
+    match typecode {
+        0x00 | 0x01 => len == 20,
+        0x02 | 0x03 => len == 43,
+        0xE0..=0xFC => false,
+        _ => true,
+    }
 }
 
 /// XRP Ledger classic address: a `0x00` version and a 20-byte account id in
@@ -971,12 +1035,76 @@ mod tests {
             with_last_char(ZCASH_T1_ADDR, 'C').as_str(),
             // Testnet transparent.
             "tm9ogR9KukTCiTKvrsSxQwFv2x1vhZTydav",
-            // Sapling and unified addresses are shielded.
+            // Sapling, and a unified address with Sapling and P2PKH receivers.
             "zs1z7rejlpsa98s2rrrfkwmaxu53e4ue0ulcrw0h4x5g8jl04tak0d3mm47vdtahatqrlkngh9sly",
             "u1l8xunezsvhq8fgzfl7404m450nwnd76zshscn6nfys7vyz2ywyh4cc5daaq0c7q2su5lqfh23sp7fkf3kt27ve5948mzpfdvckzaect2jtte308mkwlycj2u0eac077wu70vqcetkxf",
             // TEX (ZIP-320).
             "tex1s2rt77ggv6q989lr49rkgzmh5slsksa9khdgte",
         ] {
+            assert_eq!(detect_address_family(address), None, "{address}");
+        }
+    }
+
+    // ZIP 316 test vectors (zcash-test-vectors, unified_address.py).
+    const UA_ORCHARD_SAPLING_P2PKH: &str = "u1pg2aaph7jp8rpf6yhsza25722sg5fcn3vaca6ze27hqjw7jvvhhuxkpcg0ge9xh6drsgdkda8qjq5chpehkcpxf87rnjryjqwymdheptpvnljqqrjqzjwkc2ma6hcq666kgwfytxwac8eyex6ndgr6ezte66706e3vaqrd25dzvzkc69kw0jgywtd0cmq52q5lkw6uh7hyvzjse8ksx";
+    const UA_ORCHARD_P2PKH: &str = "u1snf9yr883aj2hm8pksp9aymnqdwzy42rpzuffevj35hhxeckays5pcpeq7vy2mtgzlcuc4mnh9443qnuyje0yx6h59angywka4v2ap6kchh2j96ezf9w0c0auyz3wwts2lx5gmk2sk9";
+    /// With an unknown typecode 65532, a multi-byte compactSize.
+    const UA_ORCHARD_P2PKH_UNKNOWN: &str = "u1en8ysypun4gdkdnu8zqqg6k73ankr9ffwfzg08wtzg9z939w0wupewemfrc8a630e8gc4uqucym0l4v44fszy3et4veyypt3jsyp0whfpfsn2lw30kj8nepe6wvvasf00wklh85u9v8glqndupmamk9z2ja9sanf70pp4yxvkt3dmyzxa0kkhv2c9pxmkghrxqk0590azvya3nzrtevj449nu3laskrhf7c7nj9cyw7ty38mccg4znrr876guu6pzndx7ngwzhmlsn8d89saf5araaacrhr9958xr6z23mj4qtzzn98whdpu8u7n8fhf5d2vypljda62q73du44sf0e0kxmq3gvgkta0qqgq9w6r403gc5jz2any02etmwlttkv84hgh95czhdf2jugk3u36ke0kchcthg240";
+    const UA_ORCHARD: &str = "u1ddnjsdcpm36r6aq79n3s68shjweksnmwtdltrh046s8m6xcws9ygyawalxx8n6hg6vegk0wh8zjnafxgh6msppjsljvyt0ynece3lvm0";
+    const UA_SAPLING: &str = "u187vrwl4ampyxd5m6aj38n4ndkmj8v6gs97hkt23aps3sn5k89a0gk2smluexgdprcrtm56ezc5c7tjwlrnnl79tjtrxmqd42c5mpyz7g";
+
+    /// A unified address under `hrp` whose `items` are (typecode, value
+    /// length), padded with `padding`.
+    fn unified_address(hrp: &str, padding: &str, items: &[(u8, usize)]) -> String {
+        let mut raw = Vec::new();
+        for &(typecode, len) in items {
+            raw.push(typecode);
+            raw.push(u8::try_from(len).unwrap());
+            raw.extend(std::iter::repeat_n(0x42, len));
+        }
+        let mut pad = [0u8; 16];
+        pad[..padding.len()].copy_from_slice(padding.as_bytes());
+        raw.extend(pad);
+        let jumbled = f4jumble::f4jumble(&raw).unwrap();
+        bech32::encode::<Bech32m>(Hrp::parse(hrp).unwrap(), &jumbled).unwrap()
+    }
+
+    #[test]
+    fn detects_unified_addresses_with_an_orchard_receiver() {
+        for address in [
+            UA_ORCHARD_SAPLING_P2PKH,
+            UA_ORCHARD_P2PKH,
+            UA_ORCHARD_P2PKH_UNKNOWN,
+            UA_ORCHARD,
+            &unified_address("u", "u", &[(0x00, 20), (0x03, 43)]),
+            // SHOULD-understand metadata is skipped.
+            &unified_address("u", "u", &[(0x03, 43), (0xC0, 4)]),
+        ] {
+            assert!(is_zcash_orchard_unified_address(address), "{address}");
+            assert_eq!(
+                detect_address_family(address),
+                Some(CrossChainAddressFamily::Zcash),
+                "{address}"
+            );
+        }
+        let parsed = try_parse_cross_chain_address(UA_ORCHARD).unwrap();
+        assert_eq!(parsed.address_family, CrossChainAddressFamily::Zcash);
+        assert!(!is_zcash_orchard_unified_address(ZCASH_T1_ADDR));
+    }
+
+    #[test]
+    fn rejects_unified_addresses_without_a_valid_orchard_receiver() {
+        for address in [
+            UA_SAPLING,
+            with_last_char(UA_ORCHARD, 'q').as_str(),
+            &unified_address("utest", "utest", &[(0x03, 43)]),
+            &unified_address("u", "x", &[(0x03, 43)]),
+            &unified_address("u", "u", &[(0x03, 43), (0x00, 20)]),
+            &unified_address("u", "u", &[(0x03, 43), (0x03, 43)]),
+            &unified_address("u", "u", &[(0x03, 42)]),
+            &unified_address("u", "u", &[(0x03, 43), (0xE0, 4)]),
+        ] {
+            assert!(!is_zcash_orchard_unified_address(address), "{address}");
             assert_eq!(detect_address_family(address), None, "{address}");
         }
     }

@@ -854,6 +854,10 @@ async fn test_xrp_and_zcash_addresses() {
             "t1KRqwQhktLV4BjbNLiuH6pb3AMoszZKcQB",
             crate::input::CrossChainAddressFamily::Zcash,
         ),
+        (
+            "u1ddnjsdcpm36r6aq79n3s68shjweksnmwtdltrh046s8m6xcws9ygyawalxx8n6hg6vegk0wh8zjnafxgh6msppjsljvyt0ynece3lvm0",
+            crate::input::CrossChainAddressFamily::Zcash,
+        ),
     ] {
         let result = input_parser.parse(address).await;
         assert!(
