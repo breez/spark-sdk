@@ -6,8 +6,8 @@ Future<void> createTokenAllowance(BreezSdk sdk) async {
       request: CreateTokenAllowanceRequest(
           spenderAddress: "<spender spark address>",
           tokenIdentifier: "<token identifier>",
-          maxPerPayment: TokenAllowanceLimit.amount(amount: BigInt.from(5000000)),
-          maxTotal: TokenAllowanceLimit.amount(amount: BigInt.from(100000000)),
+          maxPerPayment: AmountTokenAllowanceLimit(BigInt.from(5000000)),
+          maxTotal: AmountTokenAllowanceLimit(BigInt.from(100000000)),
           expiryTime: BigInt.from(1798761600),
           allowedRecipients: []));
   print("Allowance id: ${response.allowance.id}");

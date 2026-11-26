@@ -482,8 +482,18 @@ jobs:
         uses: ./.github/actions/check-git-status
 
   flutter:
-    name: Flutter
-    runs-on: ubuntu-latest
+    name: Flutter (${{ matrix.os }}${{ matrix.minimum && format(', {0}', matrix.flutter) || '' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        flutter: ['3.47.4']
+        include:
+          # The oldest Flutter that packages/flutter/pubspec.yaml allows.
+          - os: ubuntu-latest
+            flutter: '3.38.5'
+            minimum: true
     steps:
       - uses: actions/checkout@v4
 
@@ -491,46 +501,75 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Its cargo build matches the other Linux entry, which saves the cache.
+          rust-cache-save: ${{ !matrix.minimum }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.4
+          flutter-version: ${{ matrix.flutter }}
       - run: flutter --version
 
       - name: Set up just
         uses: extractions/setup-just@v3
 
-      - name: Initialize the workspace
-        working-directory: packages/flutter
-        run: just setup
+      - name: Cache the binding generator
+        id: bindgen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/uniffi_bindgen_dart
+          key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
 
-      - name: Generate Dart/Flutter bindings & Check Rust package for errors
+      # Installs on a miss even when the Rust cache restored another commit's generator.
+      - name: Install uniffi_bindgen_dart
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        run: make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
+
+      - name: Get dependencies
         working-directory: packages/flutter
-        run: |
-          just codegen
-          cd rust && cargo check
+        run: flutter pub get
+
+      - name: Generate the Dart bindings
+        working-directory: packages/flutter
+        run: just codegen
 
       - name: Static Analysis
         working-directory: packages/flutter
         if: ${{ success() || failure() }}
-        run: dart analyze --no-fatal-warnings lib
+        run: dart analyze --fatal-infos lib hook test
+
+      # The build hook builds the host libraries from source for the tests.
+      - name: Tests
+        working-directory: packages/flutter
+        run: flutter test
+
+      - name: Tests at the oldest dependency versions allowed
+        if: matrix.minimum
+        working-directory: packages/flutter
+        run: |
+          flutter pub downgrade
+          dart analyze --fatal-infos lib hook test
+          flutter test
 
       - name: Check Formatting
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: packages/flutter
-        run: dart format -o none --set-exit-if-changed -l 110 lib
+        run: dart format -o none --set-exit-if-changed -l 110 lib/*.dart lib/src/*.dart hook test
 
       # This step is added to ensure version recipe was run to update podspec files & Gradle script.
       # It does not catch the case where 'packages/flutter/pubspec.yaml' wasn't updated properly.
       - name: Update version number on podspec files & Gradle scripts
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: packages/flutter
         run: just version
 
       - name: Check git status
+        if: runner.os == 'Linux' && !matrix.minimum
         uses: ./.github/actions/check-git-status
 
       - name: CLI static analysis (flutter)
+        if: runner.os == 'Linux' && !matrix.minimum
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-flutter
 

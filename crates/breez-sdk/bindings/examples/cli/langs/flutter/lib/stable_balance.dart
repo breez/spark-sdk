@@ -1,4 +1,4 @@
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'serialization.dart';
 
@@ -65,7 +65,7 @@ Future<void> _handleSet(BreezSdk sdk, List<String> args) async {
   await sdk.updateUserSettings(
     request: UpdateUserSettingsRequest(
       sparkPrivateModeEnabled: null,
-      stableBalanceActiveLabel: StableBalanceActiveLabel_Set(label: label),
+      stableBalanceActiveLabel: SetStableBalanceActiveLabel(label),
       sparkMasterIdentityPublicKey: null,
     ),
   );
@@ -79,7 +79,7 @@ Future<void> _handleUnset(BreezSdk sdk, List<String> args) async {
   await sdk.updateUserSettings(
     request: UpdateUserSettingsRequest(
       sparkPrivateModeEnabled: null,
-      stableBalanceActiveLabel: StableBalanceActiveLabel_Unset(),
+      stableBalanceActiveLabel: UnsetStableBalanceActiveLabel(),
       sparkMasterIdentityPublicKey: null,
     ),
   );

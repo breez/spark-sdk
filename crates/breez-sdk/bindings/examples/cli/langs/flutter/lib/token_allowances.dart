@@ -1,7 +1,8 @@
 import 'package:args/args.dart';
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'serialization.dart';
+import 'u128.dart';
 
 /// Token allowance subcommand names (used for tab completion).
 const tokenAllowanceCommandNames = [
@@ -77,11 +78,11 @@ ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
 
 TokenAllowanceLimit? _parseLimit(String s) {
   if (s.toLowerCase() == 'unlimited') {
-    return const TokenAllowanceLimit.unlimited();
+    return UnlimitedTokenAllowanceLimit();
   }
-  final amount = BigInt.tryParse(s);
+  final amount = tryParseU128(s);
   if (amount == null) return null;
-  return TokenAllowanceLimit.amount(amount: amount);
+  return AmountTokenAllowanceLimit(amount);
 }
 
 TokenAllowanceRole? _parseRole(String s) {
@@ -98,19 +99,18 @@ TokenAllowanceRole? _parseRole(String s) {
 // --- create ---
 
 Future<void> _handleCreate(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption(
-          'max-per-payment',
-          mandatory: true,
-          help: 'Limit on one payment, in token base units, or "unlimited"',
-        )
-        ..addOption(
-          'max-total',
-          mandatory: true,
-          help: 'Limit on all payments together, in token base units, or "unlimited"',
-        )
-        ..addMultiOption('recipient', abbr: 'r', help: 'Allowed recipient Spark address (repeatable)');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption(
+      'max-per-payment',
+      mandatory: true,
+      help: 'Limit on one payment, in token base units, or "unlimited"',
+    )
+    ..addOption(
+      'max-total',
+      mandatory: true,
+      help: 'Limit on all payments together, in token base units, or "unlimited"',
+    )
+    ..addMultiOption('recipient', abbr: 'r', help: 'Allowed recipient Spark address (repeatable)');
   final results = _parseArgs(
     parser,
     args,
@@ -175,13 +175,12 @@ Future<void> _handleRevoke(BreezSdk sdk, List<String> args) async {
 // --- list ---
 
 Future<void> _handleList(BreezSdk sdk, List<String> args) async {
-  final parser =
-      ArgParser(usageLineLength: 80)
-        ..addOption('counterparty-address', help: 'Only allowances with this counterparty Spark address')
-        ..addOption('token-identifier', help: 'Only allowances for this token')
-        ..addOption('include-inactive', help: 'Include revoked, expired and exhausted allowances')
-        ..addOption('offset', help: 'Number of allowances to skip')
-        ..addOption('limit', help: 'Maximum number of allowances to return');
+  final parser = ArgParser(usageLineLength: 80)
+    ..addOption('counterparty-address', help: 'Only allowances with this counterparty Spark address')
+    ..addOption('token-identifier', help: 'Only allowances for this token')
+    ..addOption('include-inactive', help: 'Include revoked, expired and exhausted allowances')
+    ..addOption('offset', help: 'Number of allowances to skip')
+    ..addOption('limit', help: 'Maximum number of allowances to return');
   final results = _parseArgs(parser, args, 'token-allowances list [owner|spender] [options]');
   if (results == null) return;
 
@@ -195,8 +194,9 @@ Future<void> _handleList(BreezSdk sdk, List<String> args) async {
   final counterpartyAddress = results.option('counterparty-address');
   final tokenIdentifier = results.option('token-identifier');
   final includeInactiveStr = results.option('include-inactive');
-  final includeInactive =
-      includeInactiveStr != null ? ['true', '1', 'yes'].contains(includeInactiveStr.toLowerCase()) : null;
+  final includeInactive = includeInactiveStr != null
+      ? ['true', '1', 'yes'].contains(includeInactiveStr.toLowerCase())
+      : null;
   final offsetStr = results.option('offset');
   final offset = offsetStr != null ? int.parse(offsetStr) : null;
   final limitStr = results.option('limit');
@@ -250,6 +250,5 @@ bool _mayStillSettle(PullPaymentResponse? response, Object? error) {
     return response.status == PaymentStatus.pending;
   }
   if (error == null) return false;
-  final msg = error.toString();
-  return msg.contains('NetworkError') || msg.contains('SparkError');
+  return error is NetworkExceptionSdkException || error is SparkExceptionSdkException;
 }

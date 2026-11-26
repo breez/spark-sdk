@@ -595,7 +595,7 @@ impl From<LnurlServerError> for SdkError {
 
 impl From<TryInitError> for SdkError {
     fn from(_value: TryInitError) -> Self {
-        SdkError::Generic("Logging can only be initialized once".to_string())
+        SdkError::Generic("Another global tracing subscriber is already installed".to_string())
     }
 }
 
@@ -717,6 +717,37 @@ impl From<&str> for SignerError {
     fn from(s: &str) -> Self {
         SignerError::Generic(s.to_string())
     }
+}
+
+// Maps an exception that an app's implementation of an SDK interface throws
+// but doesn't declare. UniFFI uses this conversion when the interface's error
+// type has it, and panics otherwise.
+#[cfg(feature = "uniffi")]
+macro_rules! from_unexpected_callback_error {
+    ($($error:ty => $variant:path),* $(,)?) => {
+        $(
+            impl From<uniffi::UnexpectedUniFFICallbackError> for $error {
+                fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
+                    $variant(e.reason)
+                }
+            }
+        )*
+    };
+}
+
+#[cfg(feature = "uniffi")]
+from_unexpected_callback_error! {
+    SignerError => SignerError::Generic,
+    crate::ChainServiceError => crate::ChainServiceError::Generic,
+    crate::PaymentObserverError => crate::PaymentObserverError::Generic,
+    crate::ServiceConnectivityError => crate::ServiceConnectivityError::Other,
+    crate::SessionStoreError => crate::SessionStoreError::Generic,
+    crate::StorageError => crate::StorageError::Implementation,
+}
+
+#[cfg(all(feature = "uniffi", feature = "passkey"))]
+from_unexpected_callback_error! {
+    crate::passkey::PrfProviderError => crate::passkey::PrfProviderError::Generic,
 }
 
 /// Renders the bound an amount rejection ran into, for the error message.

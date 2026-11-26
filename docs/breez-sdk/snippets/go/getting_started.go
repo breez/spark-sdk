@@ -189,6 +189,8 @@ func GetSparkStatus() error {
 // ANCHOR: disconnect
 func Disconnect(sdk *breez_sdk_spark.BreezSdk) {
 	sdk.Disconnect()
+	// Frees the SDK's native memory now instead of when it is garbage collected.
+	sdk.Destroy()
 }
 
 // ANCHOR_END: disconnect

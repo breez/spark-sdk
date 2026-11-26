@@ -185,11 +185,6 @@ Whichever signer you use, the funding inputs must be **native SegWit** (a witnes
 
 {{#tabs recover_funds:custom-cpfp-signer}}
 
-<div class="warning">
-<h4>Flutter</h4>
-Flutter cannot pass a foreign <code>CpfpSigner</code>, so it exposes two recovery calls. <code>recoverFunds</code> takes the funding secret key bytes, or none when there is nothing to fund, and uses the built-in single-key signer. <code>recoverFundsWithSigner</code> takes a <code>signPsbt</code> callback that receives the serialized PSBT, signs the inputs that are not already finalized (any scheme), and returns the serialized signed PSBT.
-</div>
-
 ## Keep the response
 
 A {{#name RecoverFundsResponse}} is the record of the recovery it holds: the signed transactions, the leaves they recover, and the funding they spend. The SDK does not keep it, and {{#name check_recover_funds}} needs it to follow the recovery. Without it the recovery cannot be followed or finished as built, though the money stays recoverable: when you prepare and build again, the SDK picks it up from wherever it is.

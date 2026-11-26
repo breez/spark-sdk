@@ -4,7 +4,7 @@ version: 0.1.0
 publish_to: "none"
 
 environment:
-  sdk: ">=3.7.0 <4.0.0"
+  sdk: ^3.10.0
 
 dependencies:
   args: ^2.5.0
@@ -15,3 +15,10 @@ dependencies:
 
 dev_dependencies:
   lints: ^5.1.1
+
+# The build hook builds the SDK's native library from this checkout. A dev
+# build is much faster to build than the release profile.
+hooks:
+  user_defines:
+    breez_sdk_spark_flutter:
+      cargo_profile: dev

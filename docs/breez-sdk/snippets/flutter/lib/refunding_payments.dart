@@ -10,16 +10,16 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
     print("Amount: ${deposit.amountSats} sats");
 
     final claimError = deposit.claimError;
-    if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+    if (claimError is MaxDepositClaimFeeExceededDepositClaimException) {
       final maxFee = claimError.maxFeeSats;
       final maxFeeStr = maxFee != null ? '$maxFee sats' : 'none';
       print("Max claim fee exceeded. Max: $maxFeeStr, "
           "Required: ${claimError.requiredFeeSats} sats");
-    } else if (claimError is DepositClaimError_MissingUtxo) {
+    } else if (claimError is MissingUtxoDepositClaimException) {
       print("UTXO not found when claiming deposit");
-    } else if (claimError is DepositClaimError_DepositTooSmall) {
+    } else if (claimError is DepositTooSmallDepositClaimException) {
       print("Deposit too small to claim");
-    } else if (claimError is DepositClaimError_Generic) {
+    } else if (claimError is GenericDepositClaimException) {
       print("Claim failed: ${claimError.message}");
     }
   }
@@ -44,7 +44,7 @@ Future<void> listPendingDeposits(BreezSdk sdk) async {
 Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR: handle-fee-exceeded
   final claimError = deposit.claimError;
-  if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+  if (claimError is MaxDepositClaimFeeExceededDepositClaimException) {
     final requiredFee = claimError.requiredFeeSats;
 
     // Show UI to user with the required fee and get approval
@@ -55,7 +55,7 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
         txid: deposit.txid,
         vout: deposit.vout,
         maxFee: MaxFee(
-          onchain: MaxOnchainFee.fixed(amount: requiredFee),
+          onchain: FixedMaxOnchainFee(requiredFee),
           proportionalPpm: null,
         ),
       );
@@ -99,9 +99,9 @@ Future<void> refundDeposit(BreezSdk sdk) async {
 
   // Set the fee for the refund transaction using the half-hour feerate
   final recommendedFees = await sdk.recommendedFees();
-  Fee fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee);
+  Fee fee = RateFee(recommendedFees.halfHourFee);
   // or using a fixed amount
-  //Fee fee = Fee.fixed(amount: BigInt.from(500));
+  //Fee fee = FixedFee(BigInt.from(500));
   //
 
   final request = RefundDepositRequest(
@@ -128,8 +128,7 @@ Future<void> setMaxFeeToRecommendedFees() async {
   // with a leeway of 1 sats/vbyte, plus 0.1% of the deposit amount
   config = config.copyWith(
       maxDepositClaimFee: MaxFee(
-          onchain:
-              MaxOnchainFee.networkRecommended(leewaySatPerVbyte: BigInt.from(1)),
+          onchain: NetworkRecommendedMaxOnchainFee(BigInt.from(1)),
           proportionalPpm: 1000));
   // ANCHOR_END: set-max-fee-to-recommended-fees
   print("Config: $config");
@@ -138,7 +137,7 @@ Future<void> setMaxFeeToRecommendedFees() async {
 Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR: custom-claim-logic
   final claimError = deposit.claimError;
-  if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
+  if (claimError is MaxDepositClaimFeeExceededDepositClaimException) {
     final requiredFee = claimError.requiredFeeSats;
 
     // Accept up to 1% of the deposit amount, but never more than 5,000 sats
@@ -150,7 +149,7 @@ Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
         txid: deposit.txid,
         vout: deposit.vout,
         maxFee: MaxFee(
-          onchain: MaxOnchainFee.fixed(amount: requiredFee),
+          onchain: FixedMaxOnchainFee(requiredFee),
           proportionalPpm: null,
         ),
       );

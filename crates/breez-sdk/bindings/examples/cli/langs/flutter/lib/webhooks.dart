@@ -1,4 +1,4 @@
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'serialization.dart';
 
@@ -50,13 +50,13 @@ Future<void> dispatchWebhookCommand(List<String> args, BreezSdk sdk) async {
 WebhookEventType? _parseEventType(String s) {
   switch (s) {
     case 'lightning-receive':
-      return WebhookEventType.lightningReceiveFinished();
+      return LightningReceiveFinishedWebhookEventType();
     case 'lightning-send':
-      return WebhookEventType.lightningSendFinished();
+      return LightningSendFinishedWebhookEventType();
     case 'coop-exit':
-      return WebhookEventType.coopExitFinished();
+      return CoopExitFinishedWebhookEventType();
     case 'static-deposit':
-      return WebhookEventType.staticDepositFinished();
+      return StaticDepositFinishedWebhookEventType();
     default:
       return null;
   }

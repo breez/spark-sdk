@@ -30,7 +30,7 @@ impl BreezSdk {
             lnurl_server_client: params.lnurl_server_client,
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
-            shutdown_sender: params.shutdown_sender,
+            shutdown_sender: params.shutdown_sender.clone(),
             exit_chain_trigger: super::exit_chain_downloader::ExitChainTrigger::new(),
             runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
@@ -46,6 +46,7 @@ impl BreezSdk {
             cross_chain_context: params.cross_chain_context,
             orchestra: params.orchestra,
             lightning_sender: params.lightning_sender,
+            _shutdown_handle: Some(Arc::new(super::ShutdownHandle::new(params.shutdown_sender))),
         };
 
         if let Err(e) = sdk.clear_lightning_address_on_other_domain().await {
@@ -63,7 +64,7 @@ impl BreezSdk {
     }
 
     pub(crate) fn spawn_spark_private_mode_initialization(&self) {
-        let sdk = self.clone();
+        let sdk = self.background_clone();
         platform_utils::spawn(async move {
             if let Err(e) = sdk.maybe_ensure_spark_private_mode_initialized().await {
                 error!("Failed to initialize spark private mode: {e:?}");
@@ -73,7 +74,7 @@ impl BreezSdk {
 
     /// Refreshes the user's lightning address on the server on startup.
     pub(crate) fn try_recover_lightning_address(&self) {
-        let sdk = self.clone();
+        let sdk = self.background_clone();
         platform_utils::spawn(async move {
             if sdk.config.lnurl_domain.is_none() {
                 return;

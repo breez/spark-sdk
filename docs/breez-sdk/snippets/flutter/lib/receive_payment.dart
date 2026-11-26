@@ -13,7 +13,7 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
 
   // Create an invoice and set the amount you wish the payer to send
   ReceivePaymentRequest request = ReceivePaymentRequest(
-      paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+      paymentMethod: Bolt11InvoiceReceivePaymentMethod(
           description: description,
           amountSats: optionalAmountSats,
           expirySecs: optionalExpirySecs,
@@ -37,8 +37,7 @@ Future<ReceivePaymentResponse> receivePaymentOnchain(
   // ANCHOR: receive-payment-onchain
   bool? newAddress; // Set to true to get a new address
   ReceivePaymentRequest request = ReceivePaymentRequest(
-      paymentMethod: ReceivePaymentMethod.bitcoinAddress(
-          newAddress: newAddress));
+      paymentMethod: BitcoinAddressReceivePaymentMethod(newAddress));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );
@@ -54,7 +53,7 @@ Future<ReceivePaymentResponse> receivePaymentOnchain(
 Future<ReceivePaymentResponse> receivePaymentSparkAddress(BreezSdk sdk) async {
   // ANCHOR: receive-payment-spark-address
   ReceivePaymentRequest request =
-      ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkAddress());
+      ReceivePaymentRequest(paymentMethod: SparkAddressReceivePaymentMethod());
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );
@@ -76,9 +75,10 @@ Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
   String optionalSenderPublicKey = "<sender public key>";
 
   ReceivePaymentRequest request =
-      ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkInvoice(
+      ReceivePaymentRequest(paymentMethod: SparkInvoiceReceivePaymentMethod(
         description: optionalDescription,
         amount: optionalAmountSats,
+        tokenIdentifier: null,
         expiryTime: optionalExpiryTimeSeconds,
         senderPublicKey: optionalSenderPublicKey,
       ));

@@ -1,47 +1,39 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-abstract class PackageSigner {
-  Future<ExternalPreparedTransfer> prepareTransfer(
-      ExternalPrepareTransferRequest request);
-  Future<ExternalPreparedTokenTransaction> prepareTokenTransaction(
-      ExternalPrepareTokenTransactionRequest request);
-}
-
 Future<SignedTransferPackage> signPackage(
-    PackageSigner signer, UnsignedTransferPackage unsigned) async {
+    ExternalSparkSigner signer, UnsignedTransferPackage unsigned) async {
   // ANCHOR: client-signing-sign-package
   TransferSignature signature;
-  if (unsigned is UnsignedTransferPackage_Transfer) {
+  if (unsigned is TransferUnsignedTransferPackage) {
     // Show the user what they are approving before signing
     final target = unsigned.target;
     String destination = "";
-    if (target is TransferTarget_Spark) {
+    if (target is SparkTransferTarget) {
       destination = target.address;
-    } else if (target is TransferTarget_Lightning) {
+    } else if (target is LightningTransferTarget) {
       destination = target.bolt11;
-    } else if (target is TransferTarget_CoopExit) {
+    } else if (target is CoopExitTransferTarget) {
       destination = target.address;
     }
     print("Approve sending ${unsigned.amountSat} sats"
         " (fee ${unsigned.feeSat} sats) to $destination");
-    signature = TransferSignature.transfer(
-        signed: await signer.prepareTransfer(unsigned.prepareTransfer));
-  } else if (unsigned is UnsignedTransferPackage_Swap) {
+    signature = TransferTransferSignature(
+        await signer.prepareTransfer(unsigned.prepareTransfer));
+  } else if (unsigned is SwapUnsignedTransferPackage) {
     print("Approve re-shaping funds for a ${unsigned.amountSat} sat send"
         " (fee ${unsigned.feeSat} sats)");
-    signature = TransferSignature.transfer(
-        signed: await signer.prepareTransfer(unsigned.prepareTransfer));
-  } else if (unsigned is UnsignedTransferPackage_Token) {
+    signature = TransferTransferSignature(
+        await signer.prepareTransfer(unsigned.prepareTransfer));
+  } else if (unsigned is TokenUnsignedTransferPackage) {
     if (unsigned.isSwap) {
       print("Approve combining token outputs for a ${unsigned.tokenIdentifier} send");
     } else {
       print("Approve sending ${unsigned.amount} of token"
           " ${unsigned.tokenIdentifier} (fee ${unsigned.fee})");
     }
-    signature = TransferSignature.token(
-        signed: await signer
-            .prepareTokenTransaction(unsigned.prepareTokenTransaction));
-  } else if (unsigned is UnsignedTransferPackage_TokenBatch) {
+    signature = TokenTransferSignature(
+        await signer.prepareTokenTransaction(unsigned.prepareTokenTransaction));
+  } else if (unsigned is TokenBatchUnsignedTransferPackage) {
     if (unsigned.isSwap) {
       print("Approve combining token outputs before the batch is sent");
     } else {
@@ -50,19 +42,17 @@ Future<SignedTransferPackage> signPackage(
             " ${total.tokenIdentifier}");
       }
     }
-    signature = TransferSignature.token(
-        signed: await signer
-            .prepareTokenTransaction(unsigned.prepareTokenTransaction));
-  } else if (unsigned is UnsignedTransferPackage_TokenPull) {
+    signature = TokenTransferSignature(
+        await signer.prepareTokenTransaction(unsigned.prepareTokenTransaction));
+  } else if (unsigned is TokenPullUnsignedTransferPackage) {
     print("Approve pulling ${unsigned.amount} of token"
         " ${unsigned.tokenIdentifier} from ${unsigned.payerAddress}");
     for (final receiver in unsigned.receivers) {
       print("  ${receiver.amount} to ${receiver.receiverAddress}");
     }
     print("Expires at ${unsigned.expiryTime}");
-    signature = TransferSignature.token(
-        signed: await signer
-            .prepareTokenTransaction(unsigned.prepareTokenTransaction));
+    signature = TokenTransferSignature(
+        await signer.prepareTokenTransaction(unsigned.prepareTokenTransaction));
   } else {
     throw Exception("Unknown transfer package variant");
   }
@@ -73,12 +63,12 @@ Future<SignedTransferPackage> signPackage(
   return signedPackage;
 }
 
-Future<Payment> sendWithClientSigning(BreezSdk sdk, PackageSigner signer) async {
+Future<Payment> sendWithClientSigning(
+    BreezSdk sdk, ExternalSparkSigner signer) async {
   // ANCHOR: client-signing-send
   final prepareResponse = await sdk.prepareSendPayment(
       request: PrepareSendPaymentRequest(
-          paymentRequest:
-              PaymentRequest.input(input: "<spark address or invoice>"),
+          paymentRequest: InputPaymentRequest("<spark address or invoice>"),
           amount: BigInt.from(5000),
           tokenIdentifier: null,
           conversionOptions: null,
@@ -95,15 +85,15 @@ Future<Payment> sendWithClientSigning(BreezSdk sdk, PackageSigner signer) async 
     final result = await sdk.publishSignedTransferPackage(
         request:
             PublishSignedTransferPackageRequest(signedPackage: signedPackage));
-    if (result is PublishSignedTransferPackageResponse_SwapCompleted) {
+    if (result is SwapCompletedPublishSignedTransferPackageResponse) {
       // The wallet's funds were re-shaped first: build the payment again
       continue;
     }
-    if (result is PublishSignedTransferPackageResponse_PaymentSent) {
+    if (result is PaymentSentPublishSignedTransferPackageResponse) {
       return result.payment;
     }
     // Only a batch package pays several recipients at once
-    if (result is PublishSignedTransferPackageResponse_PaymentsSent) {
+    if (result is PaymentsSentPublishSignedTransferPackageResponse) {
       throw Exception("unexpected batch response for a single payment");
     }
   }
@@ -118,8 +108,8 @@ Future<void> buildOnchainPackage(
   final unsigned = await sdk.buildUnsignedTransferPackage(
       request: BuildUnsignedTransferPackageRequest(
           prepareResponse: prepareResponse,
-          options: BuildTransferPackageOptions.bitcoinAddress(
-              confirmationSpeed: OnchainConfirmationSpeed.medium)));
+          options: BitcoinAddressBuildTransferPackageOptions(
+              OnchainConfirmationSpeed.medium)));
   // ANCHOR_END: client-signing-build-onchain-options
   print("Unsigned package: $unsigned");
 }
@@ -130,14 +120,14 @@ Future<void> buildBolt11Package(
   final unsigned = await sdk.buildUnsignedTransferPackage(
       request: BuildUnsignedTransferPackageRequest(
           prepareResponse: prepareResponse,
-          options: BuildTransferPackageOptions.bolt11Invoice(
+          options: Bolt11InvoiceBuildTransferPackageOptions(
               preferSpark: true, completionTimeoutSecs: 10)));
   // ANCHOR_END: client-signing-build-bolt11-options
   print("Unsigned package: $unsigned");
 }
 
 Future<LnurlPayResponse> lnurlPayWithClientSigning(BreezSdk sdk,
-    PackageSigner signer, PrepareLnurlPayResponse prepareResponse) async {
+    ExternalSparkSigner signer, PrepareLnurlPayResponse prepareResponse) async {
   // ANCHOR: client-signing-lnurl-pay
   while (true) {
     final unsigned = await sdk.buildUnsignedLnurlPayPackage(
@@ -149,10 +139,10 @@ Future<LnurlPayResponse> lnurlPayWithClientSigning(BreezSdk sdk,
     final result = await sdk.publishSignedLnurlPayPackage(
         request:
             PublishSignedLnurlPayPackageRequest(signedPackage: signedPackage));
-    if (result is PublishSignedLnurlPayResponse_SwapCompleted) {
+    if (result is SwapCompletedPublishSignedLnurlPayResponse) {
       continue;
     }
-    if (result is PublishSignedLnurlPayResponse_PaymentSent) {
+    if (result is PaymentSentPublishSignedLnurlPayResponse) {
       return result.response;
     }
   }
@@ -160,7 +150,7 @@ Future<LnurlPayResponse> lnurlPayWithClientSigning(BreezSdk sdk,
 }
 
 Future<PullPaymentResponse> pullWithClientSigning(BreezSdk sdk,
-    PackageSigner signer, PreparePullPaymentResponse prepareResponse) async {
+    ExternalSparkSigner signer, PreparePullPaymentResponse prepareResponse) async {
   // ANCHOR: client-signing-pull
   final unsigned = await sdk.buildUnsignedPullPackage(
       request:

@@ -43,6 +43,12 @@ what to do next.
 
 {{#tabs getting_started:add-event-listener}}
 
+<div class="warning">
+<h4>Developer note</h4>
+
+If your listener can throw, catch errors inside it. The SDK calls {{#name on_event}} from its own threads and has no way to report an exception that escapes it, so it panics, which can stop the app.
+</div>
+
 ## Remove event listener
 
 When you no longer need to listen to events, you can remove the listener.

@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO_DIR="$(git rev-parse --show-toplevel)"
 
-CRATES=(. packages/flutter/rust crates/breez-sdk/lnurl docs/breez-sdk/snippets/rust)
+CRATES=(. crates/breez-sdk/lnurl docs/breez-sdk/snippets/rust)
 
 for crate in "${CRATES[@]}"; do
     cargo update -w --manifest-path "$REPO_DIR/$crate/Cargo.toml"

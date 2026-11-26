@@ -45,14 +45,15 @@ pub trait ExternalSparkSigner: Send + Sync {
     /// network round-trips rather than local computation. Local signers return
     /// false; a hosted signer like Turnkey returns true. With a remote signer the
     /// SDK skips redundant calls, e.g. re-deriving keys for leaves it has already
-    /// verified, and does not support the watchtower fee ladder.
+    /// verified, and does not support the watchtower fee ladder. The SDK reads it
+    /// once, when it is built.
     fn is_remote(&self) -> bool {
         false
     }
 
     /// Whether [`sign_frost`](Self::sign_frost) can sign jobs whose
     /// `adaptor_v2` is set, with version 2 adaptor signing. The SDK only sets it
-    /// for a signer that returns true.
+    /// for a signer that returns true. The SDK reads it once, when it is built.
     fn supports_adaptor_v2(&self) -> bool;
 
     /// The static-deposit signing public key at `index`.

@@ -4,13 +4,13 @@ Future<List<CrossChainRoutePair>> getCrossChainRoutes(BreezSdk sdk) async {
   // ANCHOR: cross-chain-get-routes
   String input = "<recipient address>";
   InputType parsed = await sdk.parse(input: input);
-  if (parsed is! InputType_CrossChainAddress) {
+  if (parsed is! CrossChainAddressInputType) {
     throw Exception("Not a cross-chain address");
   }
-  CrossChainAddressDetails addressDetails = parsed.field0;
+  CrossChainAddressDetails addressDetails = parsed.v0;
 
   List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
-    filter: CrossChainRouteFilter.send(
+    filter: SendCrossChainRouteFilter(
       addressDetails: addressDetails,
       deliveryMethod: null,
     ),
@@ -45,7 +45,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentCrossChain(
   int? optionalMaxSlippageBps = 100;
 
   final request = PrepareSendPaymentRequest(
-    paymentRequest: PaymentRequest.crossChain(
+    paymentRequest: CrossChainPaymentRequest(
       address: addressDetails.address,
       route: route,
       maxSlippageBps: optionalMaxSlippageBps,
@@ -59,7 +59,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentCrossChain(
   final response = await sdk.prepareSendPayment(request: request);
 
   final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_CrossChainAddress) {
+  if (paymentMethod is CrossChainAddressSendPaymentMethod) {
     print("Amount in: ${paymentMethod.amountIn}");
     print("Estimated out: ${paymentMethod.estimatedOut}");
     print("Provider fee: ${paymentMethod.feeAmount}");
@@ -90,7 +90,7 @@ Future<SendPaymentResponse> sendPaymentCrossChain(
 Future<List<CrossChainRoutePair>> getCrossChainReceiveRoutes(BreezSdk sdk) async {
   // ANCHOR: cross-chain-get-receive-routes
   List<CrossChainRoutePair> routes = await sdk.getCrossChainRoutes(
-    filter: CrossChainRouteFilter.receive(
+    filter: ReceiveCrossChainRouteFilter(
       contractAddress: null,
       deliveryMethod: null,
     ),
@@ -121,7 +121,7 @@ Future<ReceivePaymentResponse> receivePaymentCrossChain(
   String? optionalRefundAddress;
 
   final request = ReceivePaymentRequest(
-    paymentMethod: ReceivePaymentMethod.crossChain(
+    paymentMethod: CrossChainReceivePaymentMethod(
       route: route,
       amount: amount,
       destination: optionalDestination,

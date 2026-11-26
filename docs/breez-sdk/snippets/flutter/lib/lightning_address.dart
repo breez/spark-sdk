@@ -110,7 +110,7 @@ Future<void> accessLightningAddress(BreezSdk sdk) async {
 
   // ANCHOR: access-lightning-address
   // Check if this is a lightning payment with LNURL receive metadata
-  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+  if (payment.details case LightningPaymentDetails lightningDetails) {
     final metadata = lightningDetails.lnurlReceiveMetadata;
 
     // Access the Lightning address the sender paid, if present
@@ -131,7 +131,7 @@ Future<void> accessSenderComment(BreezSdk sdk) async {
 
   // ANCHOR: access-sender-comment
   // Check if this is a lightning payment with LNURL receive metadata
-  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+  if (payment.details case LightningPaymentDetails lightningDetails) {
     final metadata = lightningDetails.lnurlReceiveMetadata;
 
     // Access the sender comment if present
@@ -152,7 +152,7 @@ Future<void> accessNostrZap(BreezSdk sdk) async {
 
   // ANCHOR: access-nostr-zap
   // Check if this is a lightning payment with LNURL receive metadata
-  if (payment.details case PaymentDetails_Lightning lightningDetails) {
+  if (payment.details case LightningPaymentDetails lightningDetails) {
     final metadata = lightningDetails.lnurlReceiveMetadata;
 
     if (metadata != null) {

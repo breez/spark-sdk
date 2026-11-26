@@ -18,7 +18,7 @@ func checkLightningAddressAvailability(sdk: BreezSdk) async throws {
         username: username
     )
     
-    let available = try await sdk.checkLightningAddressAvailable(req: request)
+    let available = try await sdk.checkLightningAddressAvailable(request: request)
     // ANCHOR_END: check-lightning-address
 }
 

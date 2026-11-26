@@ -23,6 +23,11 @@ cdylib_name = "breez_sdk_spark_bindings"
 namespace = "Breez.Sdk.Spark"
 access_modifier = "public"
 
+# https://github.com/breez/uniffi-dart (fork of Uniffi-Dart/uniffi-dart)
+[bindings.dart]
+package_name = "breez_sdk_spark_flutter"
+cdylib_name = "breez_sdk_spark_bindings"
+
 # https://github.com/NordSecurity/uniffi-bindgen-go/blob/main/docs/CONFIGURATION.md
 [bindings.go]
 go_mod = "github.com/breez/breez-sdk-spark-go"

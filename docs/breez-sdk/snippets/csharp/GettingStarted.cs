@@ -191,6 +191,8 @@ namespace BreezSdkSnippets
         async Task Disconnect(BreezSdk sdk)
         {
             await sdk.Disconnect();
+            // Frees the SDK's native memory now instead of when it is garbage collected.
+            sdk.Dispose();
         }
         // ANCHOR_END: disconnect
     }

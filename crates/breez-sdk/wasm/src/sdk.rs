@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    Registry, filter::Targets, layer::SubscriberExt, reload, util::SubscriberInitExt,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -17,16 +19,31 @@ pub struct BreezSdk {
     pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
 }
 
+thread_local! {
+    // The installed subscriber's filter. A later `initLogging` reloads it,
+    // since a global subscriber can be installed only once.
+    static LOG_FILTER: std::cell::RefCell<Option<reload::Handle<Targets, Registry>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Sets the logger that receives the SDK's log entries, and their filter in
+/// `RUST_LOG` syntax. Calling it again replaces both.
 #[wasm_bindgen(js_name = "initLogging")]
 pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<()> {
-    crate::logger::WASM_LOGGER.set(Some(logger));
-
     let filter = breez_sdk_spark::sdk_log_filter(filter.as_deref());
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(WasmTracingLayer {});
-
-    subscriber.try_init()?;
+    if let Some(handle) = LOG_FILTER.with_borrow(Clone::clone) {
+        handle
+            .reload(filter)
+            .map_err(|e| breez_sdk_spark::SdkError::Generic(e.to_string()))?;
+    } else {
+        let (filter, handle) = reload::Layer::new(filter);
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(WasmTracingLayer {})
+            .try_init()?;
+        LOG_FILTER.set(Some(handle));
+    }
+    crate::logger::WASM_LOGGER.set(Some(logger));
 
     Ok(())
 }

@@ -26,43 +26,29 @@ on:
       FLUTTER_RELEASE_TOKEN:
         description: 'GitHub token to release to the breez-sdk-spark-flutter repository'
         required: true
-      CARGOKIT_PRIVATE_KEY:
-        description: 'Cargokit private key for signing precompiled binaries'
-        required: true
 
+# The package's build hook downloads each target's libraries from the GitHub
+# release of the package version, checking them against hook/prebuilt.json.
+# The SDK libraries come from the build-bindings-* jobs of the calling
+# workflow. The callback relay library is generated with the Dart bindings, so
+# it is built here.
 env:
   FLUTTER_VERSION: '3.47.4'
-  NDK_VERSION: '23.2.8568313'
-  ANDROID_MIN_SDK: '24'
-  IPHONEOS_DEPLOYMENT_TARGET: '13.0'
-  CARGO_MANIFEST_DIR: '../../rust'
   FLUTTER_PACKAGE_REPO: 'breez/breez-sdk-spark-flutter'
 
 jobs:
-  build-package:
-    name: Build Flutter Package
+  codegen:
+    name: Generate Dart bindings
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      package-version: ${{ inputs.package-version }}
     steps:
-      - name: Checkout Flutter Package Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.FLUTTER_PACKAGE_REPO }}
-          ssh-key: ${{ secrets.REPO_SSH_KEY }}
-          fetch-depth: 0
-          path: dist
-      
       - name: Checkout SDK Repository
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref || github.sha }}
-          path: build
-  
+
       - name: Setup build
-        uses: ./build/.github/actions/setup-build
+        uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -74,74 +60,199 @@ jobs:
         with:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-      - run: flutter --version
 
-      - name: Update Cargo Dependencies
-        working-directory: build/packages/flutter/rust
-        run: |
-          HASH=$(git rev-parse HEAD)
-          sed -i.bak -e 's/^breez-sdk-common = .*/breez-sdk-common = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'" }/' Cargo.toml
-          sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = [/' Cargo.toml
-          rm Cargo.toml.bak
+      - name: Cache uniffi_bindgen_dart
+        id: bindgen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/uniffi_bindgen_dart
+          key: uniffi-bindgen-dart-${{ runner.os }}-${{ hashFiles('crates/breez-sdk/bindings/Makefile') }}
 
-      - name: Install flutter_rust_bridge_codegen
-        working-directory: build/packages/flutter
-        run: just frb
+      # Installs on a miss even when the Rust cache restored another commit's generator.
+      - name: Install uniffi_bindgen_dart
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        run: make -C crates/breez-sdk/bindings install-uniffi-bindgen-dart
 
-      - name: Generate Flutter Bindings
-        working-directory: build/packages/flutter
+      # Builds the host library with the mobile feature set, whose metadata
+      # matches the shipped libraries.
+      - name: Generate bindings
+        working-directory: packages/flutter
         run: just codegen
-  
+
+      - name: Archive generated bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-generated
+          path: |
+            packages/flutter/lib/src/generated
+            packages/flutter/native/dispatch
+
+  build-relay:
+    name: Build relay ${{ matrix.target }}
+    needs: codegen
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { target: aarch64-linux-android, runner: ubuntu-latest }
+          - { target: armv7-linux-androideabi, runner: ubuntu-latest }
+          - { target: x86_64-linux-android, runner: ubuntu-latest }
+          - { target: aarch64-apple-ios, runner: macos-latest }
+          - { target: aarch64-apple-ios-sim, runner: macos-latest }
+          - { target: x86_64-apple-ios, runner: macos-latest }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-apple-darwin, runner: macos-latest }
+    steps:
+      # The workspace's .cargo/config.toml sets the Android link flags.
+      - name: Checkout SDK Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flutter-generated
+          path: generated
+
+      - name: Install target
+        run: |
+          rustup target add ${{ matrix.target }}
+          if [[ "${{ matrix.target }}" == *android* ]]; then cargo install cargo-ndk; fi
+
+      - name: Build relay library
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: |
+          manifest=generated/native/dispatch/Cargo.toml
+          if [[ "${{ matrix.target }}" == *android* ]]; then
+            cargo ndk -t ${{ matrix.target }} -P 24 build --release --manifest-path $manifest --target-dir target
+          else
+            cargo build --release --manifest-path $manifest --target ${{ matrix.target }} --target-dir target
+          fi
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings_dart_dispatch.{so,dylib} dist/ 2>/dev/null || true
+          ls dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-relay-${{ matrix.target }}
+          path: dist/*
+
+  build-package:
+    name: Build Flutter Package
+    needs: build-relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Flutter Package Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FLUTTER_PACKAGE_REPO }}
+          ssh-key: ${{ secrets.REPO_SSH_KEY }}
+          fetch-depth: 0
+          path: dist
+
+      - name: Checkout SDK Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          path: build
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flutter-generated
+          path: build/packages/flutter
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: flutter-relay-*
+          path: artifacts
+
+      # Each library is gzipped as lib<name>-<target>.<ext>.gz and listed with
+      # its sha256 in hook/prebuilt.json, which the build hook reads.
+      - name: Collect release libraries
+        run: |
+          mkdir -p release
+          python3 - <<'EOF'
+          import gzip, hashlib, json, os, shutil
+          version = "${{ inputs.package-version }}"
+          targets = {
+              "aarch64-linux-android": "so", "armv7-linux-androideabi": "so", "x86_64-linux-android": "so",
+              "aarch64-apple-ios": "dylib", "aarch64-apple-ios-sim": "dylib", "x86_64-apple-ios": "dylib",
+              "aarch64-apple-darwin": "dylib", "x86_64-apple-darwin": "dylib",
+          }
+          libraries = {
+              "uniffi:breez_sdk_spark_bindings": ("breez_sdk_spark_bindings", lambda t, ext: (
+                  f"artifacts/bindings-{t}" if ext == "so" else f"artifacts/bindings-dynamic-{t}")),
+              "uniffi:breez_sdk_spark_bindings_dispatch": ("breez_sdk_spark_bindings_dart_dispatch",
+                  lambda t, ext: f"artifacts/flutter-relay-{t}"),
+          }
+          manifest = {
+              "base_url": f"https://github.com/${{ env.FLUTTER_PACKAGE_REPO }}/releases/download/v{version}/",
+              "targets": {},
+          }
+          for target, ext in targets.items():
+              entry = manifest["targets"][target] = {}
+              for asset, (name, directory) in libraries.items():
+                  source = os.path.join(directory(target, ext), f"lib{name}.{ext}")
+                  file = f"lib{name}-{target}.{ext}.gz"
+                  with open(source, "rb") as src, gzip.GzipFile(os.path.join("release", file), "wb", mtime=0) as dst:
+                      shutil.copyfileobj(src, dst)
+                  with open(os.path.join("release", file), "rb") as f:
+                      entry[asset] = {"file": file, "sha256": hashlib.sha256(f.read()).hexdigest()}
+          with open("build/packages/flutter/hook/prebuilt.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          EOF
+          ls -la release
+
       - name: Prepare Package Structure
         working-directory: dist
         run: |
-          # Remove existing directories
-          rm -rf android cargokit ios macos lib rust
+          # Remove what earlier package layouts shipped
+          rm -rf android cargokit ios macos lib rust hook native test Makefile cargokit_options.yaml flutter_rust_bridge.yaml
 
-          # Copy source directories
-          cp -r ../build/packages/flutter/{android,cargokit,ios,macos,lib,rust} .
-
-          # Clean up gitignore files
-          rm -f {lib,rust}/src/.gitignore
-
-          # Clean up build artifacts
-          rm -rf rust/target
-
-          # Copy package metadata
-          cp ../build/packages/flutter/*.yaml .
+          cp -r ../build/packages/flutter/{android,ios,lib,hook} .
+          rm -f lib/src/.gitignore
+          cp ../build/packages/flutter/{pubspec.yaml,analysis_options.yaml} .
 
       - name: Copy Documentation
         working-directory: dist
         run: |
           for file in CHANGELOG.md LICENSE README.md; do
-            [ -f "../packages/flutter/$file" ] && cp "../packages/flutter/$file" . || echo "Warning: $file not found"
+            [ -f "../build/packages/flutter/$file" ] && cp "../build/packages/flutter/$file" . || echo "Warning: $file not found"
           done
 
       - name: Update Package Version to Release Version
         working-directory: dist
         run: |
-          # Override version with the release version specified in inputs
-          # Note: The version script already synced versions in the build directory,
-          # but for releases we use the explicit package-version input parameter
+          sed -i -e 's/^version:.*/version: ${{ inputs.package-version }}/' pubspec.yaml
+          sed -i -e "s/^version .*/version '${{ inputs.package-version }}'/" android/build.gradle
+          # CocoaPods won't resolve a pre-release version for a local pod, so
+          # the podspec drops any suffix such as `-dryrun`.
+          POD_VERSION="${{ inputs.package-version }}"
+          POD_VERSION="${POD_VERSION%%[-+]*}"
+          sed -i -E "s/^([ ]*spec\.version[ ]*=[ ]*).*/\1\"$POD_VERSION\"/" ios/breez_sdk_spark_flutter.podspec
 
-          # Update pubspec.yaml
-          sed -i.bak -e 's/^version:.*/version: ${{ inputs.package-version }}/' pubspec.yaml
-
-          # Update Android gradle
-          sed -i.bak -e "s/^version .*/version '${{ inputs.package-version }}'/" android/build.gradle
-
-          # Update iOS podspec
-          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" ios/breez_sdk_spark_flutter.podspec
-
-          # Update macOS podspec
-          sed -i.bak -e "s/version             = .*/version             = '${{ inputs.package-version }}'/" macos/breez_sdk_spark_flutter.podspec
-
-          # Update Rust Cargo.toml
-          sed -i.bak -e 's/^version = ".*"/version = "${{ inputs.package-version }}"/' rust/Cargo.toml
-
-          # Remove backup files
-          rm *.bak */*.bak 2>/dev/null || true
+      - name: Analyze Package
+        working-directory: dist
+        run: |
+          flutter pub get
+          dart analyze --fatal-infos lib hook
 
       - name: Archive Flutter Package
         uses: actions/upload-artifact@v4
@@ -150,44 +261,79 @@ jobs:
           path: |
             dist/*
             !dist/.git
+            !dist/.dart_tool
+            !dist/pubspec.lock
           retention-days: 30
           compression-level: 9
 
-      - name: Publish Package
-        working-directory: dist
-        if: ${{ inputs.publish }}
-        run: |
-          git config user.name "Breez SDK Bot"
-          git config user.email "sdk-bot@breez.technology"
+      - name: Archive Release Libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-release-libraries
+          path: release/*
+          retention-days: 30
 
-          git add .
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-
-          git commit -m "chore: release Flutter package v${{ inputs.package-version }}"
-          git push
-
-          git tag "v${{ inputs.package-version }}" -m "Release v${{ inputs.package-version }}"
-          git push origin "v${{ inputs.package-version }}"
-
-  precompile-binaries:
-    name: Precompile Binaries (${{ matrix.platform }})
+  verify:
+    name: Verify package (${{ matrix.os }})
     needs: build-package
-    if: ${{ inputs.publish }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux
-            os: ubuntu-latest
-            features: android
-          - platform: darwin
-            os: macOS-latest
-            features: ios,macos
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: breez-sdk-spark-flutter-${{ inputs.package-version || github.sha }}
+          path: package
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: flutter-release-libraries
+          path: libraries
+
+      # An app that depends on the package and takes its libraries from
+      # prebuilt_dir, the same files the release will host.
+      - name: Build an app with the package
+        run: |
+          flutter create --platforms android,ios,macos verify_app
+          cd verify_app
+          flutter pub add "breez_sdk_spark_flutter:{\"path\":\"$GITHUB_WORKSPACE/package\"}"
+          cat >> pubspec.yaml <<EOF
+
+          hooks:
+            user_defines:
+              breez_sdk_spark_flutter:
+                prebuilt_dir: $GITHUB_WORKSPACE/libraries
+          EOF
+          cat > lib/main.dart <<'EOF'
+          import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+          import 'package:flutter/widgets.dart';
+
+          void main() {
+            final config = defaultConfig(network: Network.regtest);
+            runApp(Text('${config.network}', textDirection: TextDirection.ltr));
+          }
+          EOF
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            flutter build apk --release
+          else
+            flutter build ios --simulator --debug
+            flutter build ios --release --no-codesign
+            flutter build macos --release
+          fi
+
+  publish:
+    name: Publish Flutter Package
+    needs: verify
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Flutter Package Repository
         uses: actions/checkout@v4
@@ -195,84 +341,58 @@ jobs:
           repository: ${{ env.FLUTTER_PACKAGE_REPO }}
           ssh-key: ${{ secrets.REPO_SSH_KEY }}
           fetch-depth: 0
+          path: dist
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
+      - uses: actions/download-artifact@v4
         with:
-          version: "30.2"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          name: breez-sdk-spark-flutter-${{ inputs.package-version || github.sha }}
+          path: package
 
-      # Shortens the absolute source paths that panic locations embed in the
-      # binaries, as `.github/actions/setup-build` does for the other mobile
-      # builds. Cargokit appends its Android flags to this variable.
-      - name: Remap source paths
-        run: |
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          # The last matching prefix wins, so the full registry path goes last. Its
-          # hash can change with cargo versions, leaving only the shorter generic
-          # prefix. Cargo's `trim-paths` profile option (unstable) remaps all of
-          # this on its own: switch to it once it is stable.
-          flags=(
-            "--remap-path-prefix=$cargo_home/registry/src/="
-            "--remap-path-prefix=$cargo_home/registry/src/index.crates.io-1949cf8c6b5b557f/="
-            "--remap-path-prefix=$cargo_home/git/checkouts/="
-            "--remap-path-prefix=$GITHUB_WORKSPACE/="
-          )
-          echo "CARGO_ENCODED_RUSTFLAGS=$(IFS=$'\x1f'; echo "${flags[*]}")" >> "$GITHUB_ENV"
-
-      - name: Setup rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Setup Dart SDK
-        uses: dart-lang/setup-dart@v1
-
-      - name: Install Linux Dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev
-
-      - name: Setup Android Development
-        if: matrix.platform == 'linux'
-        uses: android-actions/setup-android@v3
+      - uses: actions/download-artifact@v4
         with:
-          packages: platform-tools
+          name: flutter-release-libraries
+          path: release
 
-      - name: Install Android NDK
-        if: matrix.platform == 'linux'
-        run: sdkmanager "ndk;${{ env.NDK_VERSION }}"
-
-      - name: Set iOS Deployment Target
-        if: matrix.platform == 'darwin'
-        run: echo "IPHONEOS_DEPLOYMENT_TARGET=${{ env.IPHONEOS_DEPLOYMENT_TARGET }}" >> $GITHUB_ENV
-
-      - name: Precompile Binaries (Linux + Android)
-        if: matrix.platform == 'linux'
-        working-directory: cargokit/build_tool
+      - name: Commit the package
+        working-directory: dist
         run: |
-          dart run build_tool precompile-binaries \
-            --verbose \
-            --manifest-dir=${{ env.CARGO_MANIFEST_DIR }} \
-            --repository=${{ env.FLUTTER_PACKAGE_REPO }} \
-            --android-sdk-location=$ANDROID_HOME \
-            --android-ndk-version=${{ env.NDK_VERSION }} \
-            --android-min-sdk-version=${{ env.ANDROID_MIN_SDK }}
+          git config user.name "Breez SDK Bot"
+          git config user.email "sdk-bot@breez.technology"
+
+          # The archive holds no dotfiles, so the repository's own stay.
+          rm -rf android cargokit ios macos lib rust hook native test Makefile cargokit_options.yaml flutter_rust_bridge.yaml
+          cp -r ../package/. .
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: release Flutter package v${{ inputs.package-version }}"
+            git push
+          fi
+
+      # The release creates the tag, so the tag never points at a prebuilt.json
+      # whose libraries aren't uploaded yet.
+      - name: Create the release with the libraries
         env:
-          GITHUB_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
-          PRIVATE_KEY: ${{ secrets.CARGOKIT_PRIVATE_KEY }}
-
-      - name: Precompile Binaries (macOS + iOS)
-        if: matrix.platform == 'darwin'
-        working-directory: cargokit/build_tool
+          GH_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
         run: |
-          dart run build_tool precompile-binaries \
-            --verbose \
-            --manifest-dir=${{ env.CARGO_MANIFEST_DIR }} \
-            --repository=${{ env.FLUTTER_PACKAGE_REPO }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.FLUTTER_RELEASE_TOKEN }}
-          PRIVATE_KEY: ${{ secrets.CARGOKIT_PRIVATE_KEY }}
+          gh release create "v${{ inputs.package-version }}" release/* \
+            --target "$(git -C dist rev-parse HEAD)" \
+            --repo ${{ env.FLUTTER_PACKAGE_REPO }} \
+            --title "v${{ inputs.package-version }}" \
+            --notes "Native libraries for breez_sdk_spark_flutter ${{ inputs.package-version }}."
 
-      - name: Validate Binary Compilation
+      # Download every library the way the build hook does and check it.
+      - name: Check the released libraries
         run: |
-          echo "Binary precompilation completed successfully for ${{ matrix.platform }}"
+          python3 - <<'EOF'
+          import hashlib, json, urllib.request
+          manifest = json.load(open("package/hook/prebuilt.json"))
+          for target, entry in manifest["targets"].items():
+              for asset, file in entry.items():
+                  data = urllib.request.urlopen(manifest["base_url"] + file["file"]).read()
+                  actual = hashlib.sha256(data).hexdigest()
+                  assert actual == file["sha256"], f"{file['file']}: {actual} != {file['sha256']}"
+                  print("ok", file["file"])
+          EOF

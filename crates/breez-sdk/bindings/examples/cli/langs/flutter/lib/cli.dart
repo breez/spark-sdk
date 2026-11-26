@@ -1,8 +1,6 @@
-import 'dart:async';
 import 'dart:io';
 
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark_dart.dart';
 
 import 'advanced.dart';
 import 'bridging.dart';
@@ -51,8 +49,6 @@ Future<void> runCli({
   String? realTimeSyncServerUrl,
   ProxyConfig? proxy,
 }) async {
-  await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
-
   final dir = Directory(dataDir);
   if (!dir.existsSync()) {
     dir.createSync(recursive: true);
@@ -117,13 +113,13 @@ Future<void> runCli({
     seed = await resolvePasskeySeed(passkeyConfig, dataDir, apiKey, proxy);
   } else {
     final mnemonic = persistence.getOrCreateMnemonic();
-    seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+    seed = MnemonicSeed(mnemonic: mnemonic, passphrase: null);
   }
 
-  var builder = SdkBuilder(config: config, seed: seed);
+  final builder = SdkBuilder(config: config, seed: seed);
 
   if (chainApiUrl != null) {
-    builder = builder.withRestChainService(
+    await builder.withRestChainService(
       url: chainApiUrl,
       apiType: chainApiType ?? ChainApiType.esplora,
       credentials: null,
@@ -141,34 +137,30 @@ Future<void> runCli({
       'Using default SQLite storage instead.',
     );
   }
-  builder = builder.withDefaultStorage(storageDir: dataDir);
+  await builder.withDefaultStorage(storageDir: dataDir);
 
   if (accountNumber != null) {
-    builder = builder.withAccountNumber(accountNumber: accountNumber);
+    await builder.withAccountNumber(accountNumber: accountNumber);
   }
 
   final sdk = await builder.build();
 
-  // Listen for events in the background
-  StreamSubscription<SdkEvent>? eventSub;
-  try {
-    final eventStream = sdk.addEventListener().asBroadcastStream();
-    eventSub = eventStream.listen((event) {
-      try {
-        stderr.writeln('Event: ${serialize(event)}');
-      } catch (_) {
-        stderr.writeln('Event: $event');
-      }
-    });
-  } catch (e) {
-    stderr.writeln('Warning: could not subscribe to events: $e');
-  }
+  await sdk.addEventListener(listener: _CliEventListener());
 
   final tokenIssuer = sdk.getTokenIssuer();
 
   await _runRepl(sdk, tokenIssuer, networkEnum, persistence);
+}
 
-  eventSub?.cancel();
+class _CliEventListener implements EventListener {
+  @override
+  Future<void> onEvent(SdkEvent event) async {
+    try {
+      stderr.writeln('Event: ${serializeCompact(event)}');
+    } catch (_) {
+      stderr.writeln('Event: $event');
+    }
+  }
 }
 
 Future<void> _runRepl(
@@ -209,7 +201,7 @@ Future<void> _runRepl(
 
   while (true) {
     try {
-      final line = rl.readLine(promptStr)?.trim();
+      final line = (await rl.readLine(promptStr))?.trim();
       if (line == null) {
         // EOF (CTRL-D)
         stdout.writeln('CTRL-D');
@@ -335,21 +327,13 @@ List<String> _splitArgs(String line) {
   return args;
 }
 
-/// Prompt user for input and return the trimmed response.
-String prompt(String message, {String? defaultValue}) {
-  if (defaultValue != null) {
-    stdout.write('$message[$defaultValue] ');
-  } else {
-    stdout.write(message);
+/// Prompt user for input and return the trimmed response. Piped (non-TTY)
+/// stdin gets no prompt text, so the output that follows starts its own line.
+Future<String> prompt(String message, {String? defaultValue}) async {
+  if (stdin.hasTerminal) {
+    stdout.write(defaultValue != null ? '$message[$defaultValue] ' : message);
   }
-  final line = stdin.readLineSync()?.trim() ?? '';
+  final line = (await input.readLine())?.trim() ?? '';
   if (line.isEmpty && defaultValue != null) return defaultValue;
   return line;
-}
-
-/// Resolve the path to the native library built by `make setup`.
-String _nativeLibPath() {
-  final ext = Platform.isMacOS ? 'dylib' : 'so';
-  return '../../../../../../../packages/flutter/rust/target/release/'
-      'libbreez_sdk_spark_flutter.$ext';
 }

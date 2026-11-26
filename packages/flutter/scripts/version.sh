@@ -19,14 +19,11 @@ sed -i.bak -E "s/^(version: ).*/\1$TAG_NAME/" \
   "$ROOT/packages/flutter/pubspec.yaml"
 rm "$ROOT/packages/flutter/pubspec.yaml.bak"
 
-# iOS & macOS podspec
-APPLE_HEADER="version             = '$TAG_NAME' # generated; do not edit"
-for platform in ios macos; do
-  log "Updating $platform podspec..."
-  sed -i.bak -E "s/^([ ]*version[ ]*=[ ]*).*/  $APPLE_HEADER/" \
-    "$ROOT/packages/flutter/$platform/breez_sdk_spark_flutter.podspec"
-  rm "$ROOT/packages/flutter/$platform/"*.bak
-done
+# iOS podspec
+log "Updating iOS podspec..."
+sed -i.bak -E "s/^([ ]*spec\.version[ ]*=[ ]*).*/\1\"$TAG_NAME\"/" \
+  "$ROOT/packages/flutter/ios/breez_sdk_spark_flutter.podspec"
+rm "$ROOT/packages/flutter/ios/"*.bak
 
 # Android Gradle
 GRADLE_HEADER="version '$TAG_NAME' // generated; do not edit"
@@ -35,20 +32,11 @@ sed -i.bak -E "s/^version .*/version '$TAG_NAME' \/\/ generated; do not edit/" \
   "$ROOT/packages/flutter/android/build.gradle"
 rm "$ROOT/packages/flutter/android/"*.bak
 
-# Plugin Rust crate Cargo.toml
-log "Updating plugin Cargo.toml..."
-sed -i.bak -E "s/^version = \".*\"/version = \"$TAG_NAME\"/" \
-  "$ROOT/packages/flutter/rust/Cargo.toml"
-rm "$ROOT/packages/flutter/rust/Cargo.toml.bak"
-
 # Stage changes for commit
 log "Staging updated files for git..."
 git add \
   "$ROOT/packages/flutter/pubspec.yaml" \
   "$ROOT/packages/flutter/ios/breez_sdk_spark_flutter.podspec" \
-  "$ROOT/packages/flutter/macos/breez_sdk_spark_flutter.podspec" \
-  "$ROOT/packages/flutter/android/build.gradle" \
-  "$ROOT/packages/flutter/rust/Cargo.toml" \
-  "$ROOT/packages/flutter/rust/Cargo.lock"
+  "$ROOT/packages/flutter/android/build.gradle"
 
 log "✅ Version bump to $TAG_NAME completed successfully."

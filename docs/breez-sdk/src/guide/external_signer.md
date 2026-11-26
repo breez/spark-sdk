@@ -51,12 +51,6 @@ Implementing a custom signer requires deep understanding of Bitcoin cryptography
 Most applications should use the default external signers factory function rather than implementing their own.
 </div>
 
-<div class="warning">
-<h4>Flutter Limitation</h4>
-
-External signers are not supported in Flutter due to limitations with passing trait objects through the flutter_rust_bridge FFI. Flutter applications should use the standard `connect` method with mnemonic-based key management.
-</div>
-
 ### Signers Without Local ECIES/HMAC Support
 
 Some external signers can't perform the SDK's local ECIES/HMAC operations (for example, a policy-restricted enclave that won't release key material). For these, implement {{#name ExternalSigningSigner}} instead of {{#name ExternalBreezSigner}}, then connect with {{#name connect_with_signing_only_signer}}. With such a signer:
