@@ -38,6 +38,23 @@ cargo test -p breez-sdk-itest test_02_deposit_claim -- --nocapture --test-thread
 | `RECOVERY_TEST_MNEMONIC` | BIP-39 mnemonic for recovery testing | None |
 | `RECOVERY_TEST_EXPECTED_PAYMENTS` | JSON spec of expected payments | None |
 
+## Quoted Payment Tests (Lightspark dev)
+
+`tests/dev_quoted_payments.rs` and `tests/dev_lnurl_quoted.rs` exercise partner-fee (quoted) Lightning payments against Lightspark's dev environment, the only one whose SSP prices them. The dev endpoints are bundled (`src/dev_spark_config.json`); the credentials come from the environment, and each test skips without a partner key:
+
+| Variable | Description |
+|----------|-------------|
+| `DEV_PARTNER_KEY` | Path to a file holding the partner's P-256 PKCS#8 PEM key, alone or among other text |
+| `DEV_FAUCET_USERNAME`, `DEV_FAUCET_PASSWORD` | Dev faucet credentials |
+| `DEV_SPARK_CONFIG`, `DEV_CHAIN_SERVICE_URL`, `DEV_FAUCET_URL` | Optional: override the bundled dev operators and SSP, mempool API and faucet |
+| `DEV_PARTNER_ISSUER`, `DEV_PARTNER_AFFILIATE` | The partner JWT's `iss` and `sub` (default to the dev fixture's) |
+| `DEV_AFFILIATE_MNEMONIC`, `DEV_PARTNER_MNEMONIC` | Optional: the fee payout wallets, to check each records its share |
+| `DEV_FUNDING_MNEMONIC` | Optional: a funded dev wallet tests are paid from instead of the rate-limited faucet. Run one test binary at a time when set |
+
+```bash
+cargo test -p breez-sdk-itest --test dev_quoted_payments -- --nocapture
+```
+
 ## Wallet Recovery Tests
 
 The `recovery.rs` test file contains tests for wallet recovery from mnemonic. These tests verify

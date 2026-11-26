@@ -20,11 +20,12 @@ use crate::signer::external_spark_types::{
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignWatchtowerExitRecoveryRequest, ExternalSignedSparkInvoice,
-    ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
-    ExternalStartWatchtowerExitRecoveryRequest, ExternalStartedStaticDepositRefund,
-    ExternalStartedWatchtowerExitRecovery, ExternalTokenTransactionKind, ExternalTransferLeafInput,
+    ExternalSignQuoteRequest, ExternalSignSparkInvoiceRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignWatchtowerExitRecoveryRequest,
+    ExternalSignedQuote, ExternalSignedSparkInvoice, ExternalSparkInvoiceKind,
+    ExternalStartStaticDepositRefundRequest, ExternalStartWatchtowerExitRecoveryRequest,
+    ExternalStartedStaticDepositRefund, ExternalStartedWatchtowerExitRecovery,
+    ExternalTokenTransactionKind, ExternalTransferLeafInput,
 };
 use crate::signer::external_types::{
     EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
@@ -165,6 +166,7 @@ impl TryFrom<&ExternalTransferLeafInput> for TransferLeafInput {
             node: node_with_id(leaf.node_id.to_tree_node_id().map_err(err)?),
             new_leaf_id: leaf.new_leaf_id.to_tree_node_id().map_err(err)?,
             signing_key: leaf.signing_key.to_leaf_signing_key().map_err(err)?,
+            receiver_public_key: public_key(&leaf.receiver_public_key)?,
         })
     }
 }
@@ -205,6 +207,10 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
 
     fn supports_adaptor_v2(&self) -> bool {
         self.inner.supports_adaptor_v2()
+    }
+
+    fn supports_split_transfers(&self) -> bool {
+        self.inner.supports_split_transfers()
     }
 
     async fn get_static_deposit_public_key(
@@ -271,7 +277,6 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
     ) -> Result<ExternalPreparedTransfer, SignerError> {
         let native_request = PrepareTransferRequest {
             transfer_id: request.transfer_id.parse().map_err(err)?,
-            receiver_public_key: public_key(&request.receiver_public_key)?,
             leaves: request
                 .leaves
                 .iter()
@@ -550,6 +555,20 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
             user_signature: EcdsaSignatureBytes::from_signature(&prepared.user_signature),
         })
     }
+
+    async fn sign_quote(
+        &self,
+        request: ExternalSignQuoteRequest,
+    ) -> Result<ExternalSignedQuote, SignerError> {
+        let signed = self
+            .inner
+            .sign_quote(request.to_sign_quote_request().map_err(err)?)
+            .await
+            .map_err(err)?;
+        Ok(ExternalSignedQuote {
+            signature: EcdsaSignatureBytes::from_signature(&signed.signature),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -564,13 +583,18 @@ mod tests {
     use frost_secp256k1_tr::keys::{KeyPackage, SigningShare, VerifyingShare};
     use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
     use spark_wallet::{
-        DefaultSigner, LeafSigningKey, SignWatchtowerExitRecoveryRequest, SparkSigner,
-        SparkSignerAdapter, StartWatchtowerExitRecoveryRequest, TransferLeafInput, TreeNodeId,
+        DefaultSigner, LeafSigningKey, PrepareTransferRequest, SignQuoteRequest,
+        SignWatchtowerExitRecoveryRequest, SparkSigner, SparkSignerAdapter,
+        StartWatchtowerExitRecoveryRequest, TransferId, TransferLeafInput, TreeNodeId,
     };
 
     use super::{DefaultExternalSparkSigner, node_with_id};
-    use crate::signer::ExternalSparkSignerAdapter;
-    use crate::signer::external_spark_types::{ExternalLeafSigningKey, ExternalTransferLeafInput};
+    use crate::signer::external_spark_types::{
+        ExternalLeafSigningKey, ExternalPrepareTransferRequest, ExternalSignedQuote,
+        ExternalTransferLeafInput,
+    };
+    use crate::signer::external_types::EcdsaSignatureBytes;
+    use crate::signer::{ExternalSparkSigner, ExternalSparkSignerAdapter};
     use crate::{Network, Seed};
 
     const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -682,6 +706,16 @@ mod tests {
         .expect("the aggregate spends the output the leaf key and the operator key pay");
     }
 
+    /// Partner fees on Lightning sends need it, so the default must not drop it.
+    #[macros::test_all]
+    fn the_seed_signer_sends_one_transfer_to_several_receivers() {
+        let signer =
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap();
+        assert!(signer.supports_split_transfers());
+        assert!(ExternalSparkSignerAdapter::new(Arc::new(signer)).supports_split_transfers());
+    }
+
     #[macros::async_test_all]
     async fn the_recovery_round_signs_through_either_signer() {
         let seed = Seed::Mnemonic {
@@ -719,12 +753,16 @@ mod tests {
     #[test]
     fn a_sent_leaf_keeps_its_key_across_the_ffi() {
         let node_id: TreeNodeId = "leaf".parse().unwrap();
+        let receiver = SecretKey::from_slice(&[3; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new());
         let native = TransferLeafInput {
             node: node_with_id(node_id.clone()),
             new_leaf_id: TreeNodeId::generate(),
             signing_key: LeafSigningKey {
                 derived_from: TreeNodeId::generate(),
             },
+            receiver_public_key: receiver,
         };
 
         let external = ExternalTransferLeafInput::from_transfer_leaf_input(&native).unwrap();
@@ -735,8 +773,166 @@ mod tests {
         );
 
         let back = TransferLeafInput::try_from(&external).unwrap();
+        assert_eq!(back.receiver_public_key, receiver);
         assert_eq!(back.node.id, node_id);
         assert_eq!(back.new_leaf_id, native.new_leaf_id);
         assert_eq!(back.signing_key, native.signing_key);
+    }
+
+    /// Signers that read only the request's receiver still sign a transfer to
+    /// one receiver, and fail on one split across receivers.
+    #[test]
+    fn a_request_names_its_receiver_only_when_every_leaf_goes_to_it() {
+        let receiver = |seed: u8| {
+            SecretKey::from_slice(&[seed; 32])
+                .unwrap()
+                .public_key(&Secp256k1::new())
+        };
+        let request = |receivers: &[u8]| {
+            let native = PrepareTransferRequest {
+                transfer_id: TransferId::generate(),
+                leaves: receivers
+                    .iter()
+                    .map(|seed| TransferLeafInput {
+                        node: node_with_id(TreeNodeId::generate()),
+                        new_leaf_id: TreeNodeId::generate(),
+                        signing_key: LeafSigningKey {
+                            derived_from: TreeNodeId::generate(),
+                        },
+                        receiver_public_key: receiver(*seed),
+                    })
+                    .collect(),
+                operator_recipients: vec![],
+                threshold: 2,
+            };
+            ExternalPrepareTransferRequest::from_prepare_transfer_request(&native).unwrap()
+        };
+
+        assert_eq!(
+            request(&[3, 3]).receiver_public_key,
+            receiver(3).serialize().to_vec()
+        );
+        assert!(request(&[3, 4]).receiver_public_key.is_empty());
+    }
+
+    /// A one-edge regtest manifest, protobuf-encoded by hand: this crate does
+    /// not depend on the generated types.
+    fn test_manifest() -> Vec<u8> {
+        let key = |seed: u8| {
+            SecretKey::from_slice(&[seed; 32])
+                .unwrap()
+                .public_key(&Secp256k1::new())
+                .serialize()
+        };
+        // sender (1), receiver (2), amount (3) of 1_000 sats.
+        let mut edge = vec![0x0a, 33];
+        edge.extend(key(0x51));
+        edge.extend([0x12, 33]);
+        edge.extend(key(0x52));
+        edge.extend([0x1a, 0x03, 0x08, 0xe8, 0x07]);
+        // version (1), transfer id (2), network (3) regtest, edge (5).
+        let transfer_id = b"0197f9a0-0000-7000-8000-000000000001";
+        let mut manifest = vec![0x08, 0x01, 0x12, 36];
+        manifest.extend(transfer_id);
+        manifest.extend([0x18, 0x02, 0x2a, 75]);
+        manifest.extend(edge);
+        manifest
+    }
+
+    /// A custom signer that signs `quote_signing_digest` makes the signature
+    /// the SDK's own signer makes.
+    #[macros::async_test_all]
+    async fn quote_signing_digest_is_what_the_signer_signs() {
+        let external_signer =
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap();
+        let request = crate::signer::ExternalSignQuoteRequest::TransferManifest {
+            serialized_manifest: test_manifest(),
+        };
+        let signed = external_signer
+            .sign_quote(request.clone())
+            .await
+            .unwrap()
+            .to_signed_quote()
+            .unwrap();
+        let digest: [u8; 32] = crate::quote_signing_digest(request)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let identity = PublicKey::from_slice(
+            &external_signer
+                .get_identity_public_key()
+                .await
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        Secp256k1::verification_only()
+            .verify_ecdsa(&Message::from_digest(digest), &signed.signature, &identity)
+            .unwrap();
+        assert!(
+            crate::quote_signing_digest(
+                crate::signer::ExternalSignQuoteRequest::TransferManifest {
+                    serialized_manifest: vec![0x5a; 32],
+                }
+            )
+            .is_err(),
+            "only a manifest has a quote digest"
+        );
+    }
+
+    /// The seed signer and the same seed behind the FFI produce the same quote
+    /// signature: ECDSA here is deterministic (RFC 6979), so any difference is
+    /// a digest hashed again or a different key.
+    #[macros::async_test_all]
+    async fn a_quote_signs_identically_through_either_signer() {
+        let seed = Seed::Mnemonic {
+            mnemonic: MNEMONIC.to_string(),
+            passphrase: None,
+        }
+        .to_bytes()
+        .unwrap();
+        let master =
+            spark_wallet::account_master_key(&seed, Network::Regtest.into(), None).unwrap();
+        let seed_signer = SparkSignerAdapter::new(Arc::new(DefaultSigner::from_master(master)));
+        let external_signer = ExternalSparkSignerAdapter::new(Arc::new(
+            DefaultExternalSparkSigner::new(MNEMONIC.to_string(), None, Network::Regtest, None)
+                .unwrap(),
+        ));
+        let request = SignQuoteRequest::ReceiveAttestation {
+            serialized_manifest: test_manifest(),
+            payment_hash: [7; 32],
+        };
+
+        assert_eq!(
+            seed_signer
+                .sign_quote(request.clone())
+                .await
+                .unwrap()
+                .signature,
+            external_signer.sign_quote(request).await.unwrap().signature
+        );
+    }
+
+    /// A foreign signer may hand back a high-S signature, which the operators
+    /// refuse; the FFI conversion normalizes it.
+    #[test]
+    fn a_high_s_quote_signature_is_normalized_across_the_ffi() {
+        let secp = Secp256k1::new();
+        let digest = Message::from_digest([0x5a; 32]);
+        let secret = SecretKey::from_slice(&[7; 32]).unwrap();
+        let low_s = secp.sign_ecdsa(&digest, &secret);
+        let mut compact = low_s.serialize_compact();
+        let s_bytes = compact.get_mut(32..).unwrap();
+        let negated = SecretKey::from_slice(s_bytes).unwrap().negate();
+        s_bytes.copy_from_slice(&negated.secret_bytes());
+
+        let external = ExternalSignedQuote {
+            signature: EcdsaSignatureBytes {
+                bytes: compact.to_vec(),
+            },
+        };
+        assert_ne!(external.signature.to_signature().unwrap(), low_s);
+        assert_eq!(external.to_signed_quote().unwrap().signature, low_s);
     }
 }

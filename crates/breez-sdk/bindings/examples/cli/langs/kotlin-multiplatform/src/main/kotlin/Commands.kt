@@ -406,6 +406,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
                 paymentHash = paymentHash,
                 receiverIdentityPublicKey = null,
                 preimage = preimage,
+                feePolicy = null,
             )
         }
 
@@ -442,8 +443,9 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
 
     val result = sdk.receivePayment(ReceivePaymentRequest(paymentMethod = paymentMethod))
 
-    if (result.fee > BigInteger.ZERO) {
-        println("Prepared payment requires fee of ${result.fee} sats/token base units")
+    val fee = result.fee
+    if (fee is ReceiveFee.Fixed && fee.amount > BigInteger.ZERO) {
+        println("Prepared payment requires fee of ${fee.amount} sats/token base units")
     }
 
     printValue(result)

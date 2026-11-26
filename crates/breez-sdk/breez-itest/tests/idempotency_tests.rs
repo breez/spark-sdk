@@ -213,6 +213,7 @@ async fn test_02_lightning_idempotency_key(#[future] env: Result<Environment>) -
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?

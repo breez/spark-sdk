@@ -294,6 +294,7 @@ async fn test_03_lightning_invoice_payment(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -573,6 +574,7 @@ async fn test_04_lightning_invoice_for_external_recipient(
                 payment_hash: None,
                 receiver_identity_public_key: Some(alice_identity_pubkey),
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -641,6 +643,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -749,6 +752,7 @@ async fn test_06_lightning_send_without_completion_wait(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1006,6 +1010,7 @@ async fn test_08_lightning_invoice_expiry_secs(#[future] env: Result<Environment
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?;
@@ -1165,6 +1170,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1461,6 +1467,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: None,
+                fee_policy: None,
             },
         })
         .await?
@@ -1538,6 +1545,7 @@ async fn test_11_lightning_invoice_with_caller_preimage(
                 payment_hash: None,
                 receiver_identity_public_key: None,
                 preimage: Some(preimage.clone()),
+                fee_policy: None,
             },
         })
         .await?
@@ -1614,6 +1622,7 @@ async fn test_12_lightning_invoice_refuses_invalid_caller_preimage(
             payment_hash,
             receiver_identity_public_key: None,
             preimage: Some(preimage),
+            fee_policy: None,
         },
     };
 

@@ -17,7 +17,7 @@ use crate::{
     },
     persist::ObjectCacheRepository,
     sdk::BreezSdk,
-    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer},
+    signer::{ExternalPrepareTransferRequest, ExternalPreparedTransfer, ExternalSignedQuote},
     utils::payments::enrich_payment_conversions,
 };
 
@@ -31,6 +31,7 @@ pub(in crate::sdk) enum PublishOutcome {
     Replayed(Vec<Payment>),
 }
 
+#[allow(clippy::too_many_lines)]
 pub(in crate::sdk) async fn publish_signed_package(
     sdk: &BreezSdk,
     signed_package: &SignedTransferPackage,
@@ -50,8 +51,12 @@ pub(in crate::sdk) async fn publish_signed_package(
                 amount_sat,
                 fee_sat,
                 target,
+                ..
             },
-            TransferSignature::Transfer { signed },
+            TransferSignature::Transfer {
+                signed,
+                signed_quote,
+            },
         ) => {
             if let Ok(payment) = sdk
                 .storage
@@ -60,8 +65,16 @@ pub(in crate::sdk) async fn publish_signed_package(
             {
                 return Ok(PublishOutcome::Replayed(vec![payment]));
             }
-            deferred_transfer_send(sdk, prepare_transfer, signed, *amount_sat, *fee_sat, target)
-                .await
+            deferred_transfer_send(
+                sdk,
+                prepare_transfer,
+                signed,
+                signed_quote.as_ref(),
+                *amount_sat,
+                *fee_sat,
+                target,
+            )
+            .await
         }
         (
             UnsignedTransferPackage::Token {
@@ -243,11 +256,37 @@ async fn deferred_transfer_send(
     sdk: &BreezSdk,
     prepare_transfer: &ExternalPrepareTransferRequest,
     signed: &ExternalPreparedTransfer,
+    signed_quote: Option<&ExternalSignedQuote>,
     amount_sat: u64,
     fee_sat: u64,
     target: &TransferTarget,
 ) -> Result<SendPaymentResponse, SdkError> {
     match target {
+        TransferTarget::Lightning {
+            bolt11,
+            fee_quote: Some(fee_quote),
+            completion_timeout_secs,
+            ..
+        } => {
+            let signed_quote = signed_quote.ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "The package is priced by a fee quote, but its signature over the quote \
+                     is missing"
+                        .to_string(),
+                )
+            })?;
+            bolt11::send_signed_quoted(
+                sdk,
+                prepare_transfer,
+                signed,
+                signed_quote,
+                bolt11,
+                fee_quote,
+                amount_sat,
+                *completion_timeout_secs,
+            )
+            .await
+        }
         TransferTarget::Spark { spark_invoice, .. } => {
             spark_address::send_signed(sdk, prepare_transfer, signed, spark_invoice.clone()).await
         }
@@ -338,14 +377,35 @@ pub(in crate::sdk) async fn orchestrate_send(
             return Ok(SendPaymentResponse { payment });
         }
     }
-    // Before conversion, so tokens are not converted for an expired invoice.
+    // Before conversion, which a resend would otherwise repeat for nothing.
+    let resuming = match bolt11::prior_send(sdk, &request).await? {
+        Some(bolt11::PriorSend::Recorded(mut payment)) => {
+            if let Err(e) = enrich_payment_conversions(&mut payment, &sdk.storage).await {
+                warn!(
+                    "Failed to derive conversion details for payment {}: {e:?}",
+                    payment.id
+                );
+            }
+            return Ok(SendPaymentResponse { payment: *payment });
+        }
+        Some(bolt11::PriorSend::Pending) => true,
+        None => false,
+    };
+    // Before conversion, so tokens are not converted for an expired invoice. A
+    // pending send is resumed whatever the invoice's expiry, as on sync.
     if let SendPaymentMethod::Bolt11Invoice {
         invoice_details, ..
     } = &request.prepare_response.payment_method
+        && !resuming
     {
         validation::validate_bolt11_invoice_not_expired(invoice_details)?;
     }
-    let conversion_estimate = request.prepare_response.conversion_estimate.clone();
+    // The first send converted already, and resuming needs none of it.
+    let conversion_estimate = request
+        .prepare_response
+        .conversion_estimate
+        .clone()
+        .filter(|_| !resuming);
     // Perform the send payment, with conversion if requested
     let res = if let Some(ConversionEstimate {
         options: conversion_options,
@@ -412,13 +472,14 @@ pub(super) async fn send_internal(
             invoice_details,
             spark_transfer_fee_sats,
             lightning_fee_sats,
-            ..
+            fee_quote,
         } => {
             Box::pin(bolt11::send(
                 sdk,
                 invoice_details,
                 *spark_transfer_fee_sats,
                 *lightning_fee_sats,
+                fee_quote.as_ref(),
                 request,
                 amount_override,
                 amount,

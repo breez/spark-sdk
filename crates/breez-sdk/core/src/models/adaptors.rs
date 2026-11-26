@@ -27,8 +27,10 @@ use crate::{
 const HTLC_DATA_REQUIRED_SINCE: Duration = Duration::from_secs(1_769_904_000);
 
 /// Derive HTLC details from SSP request fields when the operator lacks the
-/// `PreimageRequest`. Only allowed for old transfers (before [`HTLC_DATA_REQUIRED_SINCE`]);
-/// new transfers without HTLC data are considered an error.
+/// `PreimageRequest`. Only allowed for old transfers (before [`HTLC_DATA_REQUIRED_SINCE`])
+/// and for a share of a fee-bearing payment, whose `PreimageRequest` belongs to
+/// whoever attested its quote: on a receive created on the payee's behalf, not
+/// the payee. Other new transfers without HTLC data are considered an error.
 fn derive_htlc_details_from_ssp(
     transfer: &WalletTransfer,
     payment_hash: &str,
@@ -38,32 +40,41 @@ fn derive_htlc_details_from_ssp(
         .checked_add(HTLC_DATA_REQUIRED_SINCE)
         .ok_or_else(|| SdkError::Generic("HTLC cutoff time overflow".to_string()))?;
     let is_old = transfer.created_at.is_none_or(|t| t < cutoff);
-    if !is_old {
+    if !is_old && transfer.own_share.is_none() {
         return Err(SdkError::Generic(format!(
             "Missing HTLC details for Lightning payment transfer {}",
             transfer.id
         )));
     }
 
-    warn!(
-        "Missing HTLC preimage request for Lightning transfer {}, deriving from SSP data",
-        transfer.id
-    );
+    if is_old {
+        warn!(
+            "Missing HTLC preimage request for Lightning transfer {}, deriving from SSP data",
+            transfer.id
+        );
+    } else {
+        debug!(
+            "Deriving HTLC details for fee-bearing transfer {} from SSP data",
+            transfer.id
+        );
+    }
 
     let status = match transfer.status {
         TransferStatus::Completed => SparkHtlcStatus::PreimageShared,
         TransferStatus::Expired | TransferStatus::Returned => SparkHtlcStatus::Returned,
         _ => SparkHtlcStatus::WaitingForPreimage,
     };
-    Ok(SparkHtlcDetails {
+    let mut details = SparkHtlcDetails {
         payment_hash: payment_hash.to_string(),
-        preimage: preimage.map(ToString::to_string),
+        preimage: None,
         expiry_time: transfer
             .expiry_time
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_secs()),
         status,
-    })
+    };
+    reconcile_htlc_preimage(&mut details, preimage);
+    Ok(details)
 }
 
 /// If the HTLC details are missing a preimage, fill it in from the given fallback and update
@@ -295,6 +306,129 @@ impl From<SparkInvoiceDetails> for SparkInvoicePaymentDetails {
     }
 }
 
+/// A Lightning send's fee and amount. The amount is what the invoice asks for
+/// when it names one: a fee-bearing send funds the SSP and the partner fee
+/// payees in one transfer, so the SSP's own fee does not cover everything sent
+/// beyond the amount. An amountless invoice pays what the SSP received
+/// (`ssp_received_sat`) less its fee.
+fn lightning_send_fee_and_amount(
+    total_sat: u64,
+    ssp_received_sat: u64,
+    ssp_fee_sat: u64,
+    invoice: &str,
+) -> (u64, u64) {
+    let invoice_amount_sat = input::parse_invoice(invoice)
+        .and_then(|details| details.amount_msat)
+        .map(|msat| msat.div_ceil(1000))
+        .filter(|amount| *amount > 0 && *amount <= total_sat);
+    let amount = invoice_amount_sat
+        .unwrap_or_else(|| ssp_received_sat.min(total_sat).saturating_sub(ssp_fee_sat));
+    (total_sat.saturating_sub(amount), amount)
+}
+
+/// A payment's fees and amount, from the SSP request behind its transfer.
+/// Settles `status` where the request knows better than the transfer.
+fn fees_and_amount(transfer: &WalletTransfer, status: &mut PaymentStatus) -> (u64, u64) {
+    match transfer.user_request.clone() {
+        Some(user_request) => match user_request {
+            SspUserRequest::LightningSendRequest(r) => {
+                // TODO: if we have the preimage it is not pending. This is a workaround
+                // until spark will implement incremental syncing based on updated time.
+                if r.lightning_send_payment_preimage.is_some() {
+                    *status = PaymentStatus::Completed;
+                }
+                lightning_send_fee_and_amount(
+                    transfer.total_value_sat,
+                    transfer
+                        .received_by(&transfer.receiver_id)
+                        .unwrap_or(transfer.total_value_sat),
+                    r.fee.as_sats().unwrap_or(0),
+                    &r.encoded_invoice,
+                )
+            }
+            // A fee-bearing receive's total covers every receiver, and the
+            // part not reaching this wallet went to fees.
+            SspUserRequest::LightningReceiveRequest(_) => {
+                let own = own_amount_sat(transfer);
+                (transfer.total_value_sat.saturating_sub(own), own)
+            }
+            SspUserRequest::CoopExitRequest(r) => {
+                // A committed transfer hands the funds to the provider; only
+                // the provider broadcasts the payout, and only once it has
+                // accepted the exit. Until then the withdrawal is still in
+                // flight, however far the transfer itself got.
+                *status = match r.exit_status.acceptance() {
+                    CoopExitAcceptance::Accepted => *status,
+                    CoopExitAcceptance::AwaitingCompletion => PaymentStatus::Pending,
+                    CoopExitAcceptance::Failed => PaymentStatus::Failed,
+                };
+                let fee_sat = r
+                    .fee
+                    .as_sats()
+                    .unwrap_or(0)
+                    .saturating_add(r.l1_broadcast_fee.as_sats().unwrap_or(0));
+                (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
+            }
+            SspUserRequest::ClaimStaticDeposit(r) => {
+                let fee_sat = r
+                    .deposit_amount
+                    .as_sats()
+                    .unwrap_or(0)
+                    .saturating_sub(r.credit_amount.as_sats().unwrap_or(0));
+                (fee_sat, transfer.total_value_sat)
+            }
+            SspUserRequest::LeavesSwapRequest(_) => (0, transfer.total_value_sat),
+        },
+        None => (0, own_amount_sat(transfer)),
+    }
+}
+
+/// What reaches this wallet: its share of a transfer with several receivers,
+/// otherwise the whole transfer.
+fn own_amount_sat(transfer: &WalletTransfer) -> u64 {
+    transfer
+        .own_share
+        .map_or(transfer.total_value_sat, |share| share.amount_sat)
+}
+
+fn payment_timestamp(transfer: &WalletTransfer) -> u64 {
+    match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
+        Some(Ok(duration)) => duration.as_secs(),
+        _ => 0,
+    }
+}
+
+/// A fee this wallet earned from someone else's payment, which reached it as
+/// one share of a transfer with several receivers. No request describes it to
+/// this wallet, so it is a plain receive of the share, settled once claimed.
+/// A share this wallet holds the HTLC for, or whose SSP request could not be
+/// looked up, may be the payee's own receive, so it is not one.
+fn fee_share_payment(transfer: &WalletTransfer, status: PaymentStatus) -> Option<Payment> {
+    let share = transfer.own_share?;
+    if transfer.direction != TransferDirection::Incoming
+        || transfer.user_request.is_some()
+        || transfer.user_request_unknown
+        || transfer.htlc_preimage_request.is_some()
+    {
+        return None;
+    }
+    Some(Payment {
+        id: transfer.id.to_string(),
+        payment_type: PaymentType::Receive,
+        status,
+        amount: share.amount_sat.into(),
+        fees: 0,
+        timestamp: payment_timestamp(transfer),
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    })
+}
+
 impl TryFrom<WalletTransfer> for Payment {
     type Error = SdkError;
     fn try_from(transfer: WalletTransfer) -> Result<Self, Self::Error> {
@@ -323,48 +457,15 @@ impl TryFrom<WalletTransfer> for Payment {
                 PaymentStatus::Completed
             }
             TransferStatus::Expired | TransferStatus::Returned => PaymentStatus::Failed,
+            // A share of a fee-bearing payment is received once claimed, though
+            // the transfer waits on every receiver claiming its own.
+            _ if transfer.own_share.is_some_and(|share| share.claimed) => PaymentStatus::Completed,
             _ => PaymentStatus::Pending,
         };
-        let (fees_sat, mut amount_sat) = match transfer.clone().user_request {
-            Some(user_request) => match user_request {
-                SspUserRequest::LightningSendRequest(r) => {
-                    // TODO: if we have the preimage it is not pending. This is a workaround
-                    // until spark will implement incremental syncing based on updated time.
-                    if r.lightning_send_payment_preimage.is_some() {
-                        status = PaymentStatus::Completed;
-                    }
-                    let fee_sat = r.fee.as_sats().unwrap_or(0);
-                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
-                }
-                SspUserRequest::CoopExitRequest(r) => {
-                    // A committed transfer hands the funds to the provider; only
-                    // the provider broadcasts the payout, and only once it has
-                    // accepted the exit. Until then the withdrawal is still in
-                    // flight, however far the transfer itself got.
-                    status = match r.exit_status.acceptance() {
-                        CoopExitAcceptance::Accepted => status,
-                        CoopExitAcceptance::AwaitingCompletion => PaymentStatus::Pending,
-                        CoopExitAcceptance::Failed => PaymentStatus::Failed,
-                    };
-                    let fee_sat = r
-                        .fee
-                        .as_sats()
-                        .unwrap_or(0)
-                        .saturating_add(r.l1_broadcast_fee.as_sats().unwrap_or(0));
-                    (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
-                }
-                SspUserRequest::ClaimStaticDeposit(r) => {
-                    let fee_sat = r
-                        .deposit_amount
-                        .as_sats()
-                        .unwrap_or(0)
-                        .saturating_sub(r.credit_amount.as_sats().unwrap_or(0));
-                    (fee_sat, transfer.total_value_sat)
-                }
-                _ => (0, transfer.total_value_sat),
-            },
-            None => (0, transfer.total_value_sat),
-        };
+        if let Some(payment) = fee_share_payment(&transfer, status) {
+            return Ok(payment);
+        }
+        let (fees_sat, mut amount_sat) = fees_and_amount(&transfer, &mut status);
 
         let details = match PaymentDetails::from_transfer(&transfer) {
             Ok(Some(details)) => Some(details),
@@ -381,7 +482,7 @@ impl TryFrom<WalletTransfer> for Payment {
                 {
                     status = PaymentStatus::Pending;
                 }
-                amount_sat = transfer.total_value_sat;
+                amount_sat = own_amount_sat(&transfer);
                 None
             }
             // Failing here would stop sync at this transfer on every pass. Recording it as
@@ -403,10 +504,7 @@ impl TryFrom<WalletTransfer> for Payment {
             status,
             amount: amount_sat.into(),
             fees: fees_sat.into(),
-            timestamp: match transfer.created_at.map(|t| t.duration_since(UNIX_EPOCH)) {
-                Some(Ok(duration)) => duration.as_secs(),
-                _ => 0,
-            },
+            timestamp: payment_timestamp(&transfer),
             method: PaymentMethod::from_transfer(&transfer),
             details,
             conversion_details: None,
@@ -439,6 +537,8 @@ impl TryFrom<&WalletTransfer> for HtlcPayment {
 
 impl Payment {
     /// Creates a [`Payment`] from a [`LightningSendPayment`] and its associated HTLC details.
+    /// `sent_sat` is everything the send's transfer carried: its fees are what it sent
+    /// beyond `amount_sat`.
     ///
     /// The `htlc_details` may be stale (e.g. captured at payment creation time), so this
     /// method reconciles them with the current state of the `payment`:
@@ -448,6 +548,7 @@ impl Payment {
     pub fn from_lightning(
         payment: LightningSendPayment,
         amount_sat: u128,
+        sent_sat: u128,
         transfer_id: String,
         mut htlc_details: SparkHtlcDetails,
     ) -> Result<Self, SdkError> {
@@ -485,12 +586,28 @@ impl Payment {
             payment_type: PaymentType::Send,
             status,
             amount: amount_sat,
-            fees: payment.fee_sat.into(),
+            // The SSP's fee leaves out any partner fee the send also paid.
+            fees: if sent_sat > amount_sat {
+                sent_sat.saturating_sub(amount_sat)
+            } else {
+                payment.fee_sat.into()
+            },
             timestamp: payment.created_at.cast_unsigned(),
             method: PaymentMethod::Lightning,
             details: Some(details),
             conversion_details: None,
         })
+    }
+}
+
+impl From<&spark_wallet::QuotedLightningSend> for crate::LightningFeeQuote {
+    fn from(quote: &spark_wallet::QuotedLightningSend) -> Self {
+        Self {
+            serialized_manifest: hex::encode(&quote.issued_quote.serialized_manifest),
+            issuer_signature: hex::encode(&quote.issued_quote.issuer_signature),
+            expires_at: quote.expires_at,
+            payment_msats: quote.payment_msats,
+        }
     }
 }
 
@@ -737,8 +854,9 @@ mod tests {
     use platform_utils::time::SystemTime;
     use spark_wallet::{
         BitcoinNetwork, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CurrencyAmount, CurrencyUnit,
+        LightningInvoice, LightningReceiveRequest, LightningReceiveRequestStatus,
         LightningSendRequest, LightningSendRequestStatus, PublicKey, SparkCoopExitRequestStatus,
-        SspTransfer, Transfer, TransferId,
+        SspTransfer, Transfer, TransferId, TransferReceiver,
     };
 
     #[cfg(feature = "browser-tests")]
@@ -773,8 +891,12 @@ mod tests {
         PublicKey::from_slice(&bytes).unwrap()
     }
 
-    /// A completed transfer created now, sent from `sender` to `receiver`.
-    fn transfer(sender: PublicKey, receiver: PublicKey, transfer_type: TransferType) -> Transfer {
+    /// A completed transfer created now, sent from `sender` to `receiver_key`.
+    fn transfer(
+        sender: PublicKey,
+        receiver_key: PublicKey,
+        transfer_type: TransferType,
+    ) -> Transfer {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -782,16 +904,187 @@ mod tests {
         Transfer {
             id: TransferId::generate(),
             sender_identity_public_key: sender,
-            receiver_identity_public_key: receiver,
+            receiver_identity_public_key: receiver_key,
             status: TransferStatus::Completed,
-            total_value: 1_010,
             expiry_time: None,
             leaves: Vec::new(),
             created_time: Some(now),
             updated_time: Some(now),
             transfer_type,
             spark_invoice: None,
+            receivers: vec![receiver(receiver_key, 1_010, true)],
         }
+    }
+
+    fn receiver(key: PublicKey, amount_sats: u64, completed: bool) -> TransferReceiver {
+        TransferReceiver {
+            id: String::new(),
+            identity_public_key: key,
+            amount_sats,
+            completed,
+        }
+    }
+
+    /// A 10,200 sat payment the SSP split between the payee, `fee_payee` and
+    /// itself, with only `fee_payee`'s share claimed so far.
+    fn fee_bearing_transfer(ssp: PublicKey, payee: PublicKey, fee_payee: PublicKey) -> Transfer {
+        let mut raw = transfer(ssp, payee, TransferType::PreimageSwap);
+        raw.status = TransferStatus::SenderKeyTweaked;
+        raw.receivers = vec![
+            receiver(payee, 10_000, false),
+            receiver(fee_payee, 170, true),
+            receiver(ssp, 30, false),
+        ];
+        raw
+    }
+
+    #[test_all]
+    fn a_claimed_fee_share_is_a_completed_receive_of_the_share() {
+        let (ssp, payee, ours) = (pk(2), pk(7), pk(1));
+        let wallet_transfer = WalletTransfer::from_transfer(
+            fee_bearing_transfer(ssp, payee, ours),
+            None,
+            None,
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert_eq!(payment.payment_type, PaymentType::Receive);
+        assert_eq!(payment.status, PaymentStatus::Completed);
+        assert_eq!(payment.amount, 170);
+        assert_eq!(payment.fees, 0);
+        assert_eq!(payment.method, PaymentMethod::Spark);
+    }
+
+    /// The payee's claimed share of a receive whose SSP request the wallet
+    /// could not look up: it is kept pending, not read as a fee share.
+    #[test_all]
+    fn a_share_whose_ssp_request_is_unknown_is_not_a_fee_share() {
+        let (ssp, payee, fee_payee) = (pk(2), pk(1), pk(7));
+        for (ours, share) in [(payee, 10_000), (fee_payee, 170)] {
+            let mut raw = fee_bearing_transfer(ssp, payee, fee_payee);
+            for receiver in &mut raw.receivers {
+                receiver.completed = true;
+            }
+            let mut wallet_transfer = WalletTransfer::from_transfer(raw, None, None, ours, ssp);
+            wallet_transfer.user_request_unknown = true;
+
+            let payment = Payment::try_from(wallet_transfer).unwrap();
+
+            assert_eq!(payment.status, PaymentStatus::Pending);
+            assert_eq!(payment.amount, share, "only this wallet's share reaches it");
+        }
+    }
+
+    /// A share this wallet holds the HTLC for is the payee's own receive.
+    #[test_all]
+    fn a_share_with_this_wallets_htlc_is_not_a_fee_share() {
+        use bitcoin::hashes::{Hash, sha256};
+
+        let (ssp, ours, fee_payee) = (pk(2), pk(1), pk(7));
+        let preimage_request = PreimageRequest {
+            payment_hash: sha256::Hash::hash(b"preimage"),
+            status: PreimageRequestStatus::WaitingForPreimage,
+            created_time: SystemTime::now(),
+            expiry_time: SystemTime::now(),
+            preimage: None,
+        };
+        let mut raw = fee_bearing_transfer(ssp, ours, fee_payee);
+        for receiver in &mut raw.receivers {
+            receiver.completed = true;
+        }
+        let wallet_transfer =
+            WalletTransfer::from_transfer(raw, None, Some(preimage_request), ours, ssp);
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert_eq!(payment.status, PaymentStatus::Pending);
+    }
+
+    /// The payee's side of a fee-bearing receive another wallet attested for,
+    /// such as an LNURL server: the operators keep its HTLC with the attestor.
+    #[test_all]
+    fn a_receive_attested_for_the_payee_completes_once_its_share_is_claimed() {
+        let (ssp, ours, fee_payee) = (pk(2), pk(1), pk(7));
+        let mut raw = fee_bearing_transfer(ssp, ours, fee_payee);
+        for receiver in &mut raw.receivers {
+            if receiver.identity_public_key == ours {
+                receiver.completed = true;
+            }
+        }
+        let amount = CurrencyAmount {
+            original_value: 10_200,
+            original_unit: CurrencyUnit::Satoshi,
+            preferred_currency_unit: CurrencyUnit::Satoshi,
+            preferred_currency_value_rounded: 10_200,
+        };
+        let request = LightningReceiveRequest {
+            id: "request".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            network: BitcoinNetwork::Regtest,
+            lightning_request_status: LightningReceiveRequestStatus::TransferCompleted,
+            invoice: LightningInvoice {
+                encoded_invoice: SPEC_INVOICE.to_string(),
+                bitcoin_network: BitcoinNetwork::Regtest,
+                payment_hash: "0001020304050607080900010203040506070809000102030405060708090102"
+                    .to_string(),
+                amount: amount.clone(),
+                created_at: Utc::now(),
+                invoice_expired_at: Utc::now(),
+                memo: None,
+            },
+            transfer: None,
+            lightning_receive_payment_preimage: Some("11".repeat(32)),
+        };
+        let wallet_transfer = WalletTransfer::from_transfer(
+            raw,
+            Some(SspTransfer {
+                total_amount: amount,
+                spark_id: None,
+                user_request: Some(SspUserRequest::LightningReceiveRequest(request)),
+            }),
+            None,
+            ours,
+            ssp,
+        );
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert_eq!(payment.status, PaymentStatus::Completed);
+        assert_eq!(payment.method, PaymentMethod::Lightning);
+        assert_eq!(payment.amount, 10_000);
+        assert_eq!(payment.fees, 200);
+        let Some(PaymentDetails::Lightning { htlc_details, .. }) = payment.details else {
+            panic!("expected Lightning details, got {:?}", payment.details);
+        };
+        assert_eq!(htlc_details.status, SparkHtlcStatus::PreimageShared);
+    }
+
+    #[test_all]
+    fn an_unclaimed_fee_share_is_pending() {
+        let (ssp, payee, ours) = (pk(2), pk(7), pk(1));
+        let mut raw = fee_bearing_transfer(ssp, payee, ours);
+        raw.receivers[1].completed = false;
+        let wallet_transfer = WalletTransfer::from_transfer(raw, None, None, ours, ssp);
+
+        let payment = Payment::try_from(wallet_transfer).unwrap();
+
+        assert_eq!(payment.status, PaymentStatus::Pending);
+        assert_eq!(payment.amount, 170);
+    }
+
+    #[test_all]
+    fn a_transfer_with_one_receiver_is_not_a_fee_share() {
+        let (ours, other, ssp) = (pk(1), pk(7), pk(2));
+        let mut raw = transfer(other, ours, TransferType::Transfer);
+        raw.receivers = vec![receiver(ours, 1_010, true)];
+        let wallet_transfer = WalletTransfer::from_transfer(raw, None, None, ours, ssp);
+
+        assert!(wallet_transfer.own_share.is_none());
+        assert_eq!(Payment::try_from(wallet_transfer).unwrap().amount, 1_010);
     }
 
     #[test_all]
@@ -899,6 +1192,39 @@ mod tests {
 
         assert_eq!(details.status, SparkHtlcStatus::PreimageShared);
         assert_eq!(details.preimage, Some(preimage));
+    }
+
+    /// BOLT11's specification example: 2500u, so `250_000` sats.
+    const SPEC_INVOICE: &str = "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
+
+    // A fee-bearing send also pays partner fee payees, which the SSP's own fee
+    // does not cover: everything sent beyond the invoice amount is fees.
+    #[test_all]
+    fn a_send_pays_the_invoice_amount_and_the_rest_is_fees() {
+        assert_eq!(
+            lightning_send_fee_and_amount(252_000, 251_000, 1_500, SPEC_INVOICE),
+            (2_000, 250_000)
+        );
+        // Unquoted, the result is unchanged.
+        assert_eq!(
+            lightning_send_fee_and_amount(251_500, 251_500, 1_500, SPEC_INVOICE),
+            (1_500, 250_000)
+        );
+    }
+
+    #[test_all]
+    fn an_amountless_send_pays_what_the_ssp_received_less_its_fee() {
+        // Unquoted, the SSP receives everything.
+        assert_eq!(
+            lightning_send_fee_and_amount(10_500, 10_500, 500, "not an invoice"),
+            (500, 10_000)
+        );
+        // Quoted, the partner fee payees receive the rest: 3_068 sent, the SSP
+        // received 3_017 of it and kept 17.
+        assert_eq!(
+            lightning_send_fee_and_amount(3_068, 3_017, 17, "not an invoice"),
+            (68, 3_000)
+        );
     }
 
     fn coop_exit(withdrawal_address: &str, raw_coop_exit_transaction: &str) -> CoopExitRequest {

@@ -1,8 +1,16 @@
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
+use crate::operator::rpc::spark::initiate_preimage_swap_request::Reason as PreimageSwapReason;
 use crate::operator::rpc::spark::{
-    InitiatePreimageSwapResponse, SecretShare, StartTransferRequest, StorePreimageShareV2Request,
+    InitiatePreimageSwapResponse, InitiatePreimageSwapV4Request, InvoiceAmount, InvoiceAmountProof,
+    SecretShare, StartTransferRequest, StorePreimageShareV2Request, TransferManifest,
+};
+use crate::quote::{
+    ManifestDenomination, QuoteError, ReceiveAmountBasis, ReceiveQuoteFee, SendManifestBucket,
+    manifest_denomination, manifest_gross_sats, manifest_has_partner_markup, receive_quote_fee,
+    send_issuance_digest, validate_quoted_receive_manifest, validate_quoted_send_manifest,
+    verify_identity_signature,
 };
 use crate::services::{
     LeafKeyTweak, Preimage, ServiceError, Transfer, TransferId, TransferObserver, TransferService,
@@ -10,26 +18,28 @@ use crate::services::{
 };
 use crate::signer::{
     OperatorRecipient, PrepareLightningReceiveRequest, PrepareTransferRequest, PreparedTransfer,
-    SparkSigner,
+    SignQuoteRequest, SparkSigner,
 };
 use crate::ssp::{
+    CommittedReceiveQuote, CommittedSendQuote, IssuedQuote, LightningQuote,
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
-    ServiceProvider,
+    ServiceProvider, ServiceProviderError, SparkFeeAttributionStatus,
 };
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use crate::utils::secret_sharing;
+use crate::utils::time::prost_timestamp_to_web_time;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
 use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescriptionRef};
-use platform_utils::time::SystemTime;
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use super::models::LightningSendRequestStatus;
 
@@ -278,6 +288,10 @@ pub struct LightningReceivePayment {
     pub transfer_id: Option<TransferId>,
     pub transfer_amount_sat: Option<u64>,
     pub payment_preimage: Option<String>,
+    /// The markup of the fee quote the invoice was issued under. Unset on an
+    /// unquoted invoice.
+    #[serde(default)]
+    pub quote_fee: Option<ReceiveQuoteFee>,
 }
 
 impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
@@ -310,7 +324,75 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
                 None => None,
             },
             payment_preimage: value.lightning_receive_payment_preimage,
+            quote_fee: None,
         })
+    }
+}
+
+/// A receive quote that passed validation, to be attested once the invoice's
+/// payment hash exists.
+struct AcceptedReceiveQuote {
+    issued_quote: IssuedQuote,
+    /// What the invoice must be issued for: the quote's gross, or zero on an
+    /// amountless one.
+    invoiced_sats: u64,
+    fee: ReceiveQuoteFee,
+}
+
+/// What a send quote prices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendQuoteAmount {
+    /// The invoice's own amount, the fees on top.
+    Invoice,
+    /// What an amountless invoice is paid, the fees on top.
+    Payment(u64),
+    /// What the wallet spends in all. An amountless invoice is paid what is
+    /// left after the fees. An invoice with its own amount is paid that, and
+    /// the fees take the rest.
+    Total(u64),
+}
+
+/// A send quote checked against the invoice it pays, ready to fund.
+#[derive(Debug, Clone)]
+pub struct QuotedLightningSend {
+    pub issued_quote: IssuedQuote,
+    /// The transfer the quote is single-use for: the send is keyed on it.
+    pub transfer_id: TransferId,
+    pub payment_hash: sha256::Hash,
+    /// The payment the quote prices, which its signature binds.
+    pub payment_msats: u64,
+    /// `payment_msats` in sats, rounded up.
+    pub amount_sats: u64,
+    /// The amount of an amountless invoice, which the SSP is told again when
+    /// the send is committed. `None` for an invoice that carries its own.
+    pub amount_to_send: Option<u64>,
+    /// What the wallet parts with: the invoice amount plus every fee, partner
+    /// markup included.
+    pub total_sats: u64,
+    /// What to fund for each receiver, in manifest order.
+    pub buckets: Vec<SendManifestBucket>,
+    /// When the quote stops being committable, in seconds since the epoch.
+    pub expires_at: u64,
+    manifest: TransferManifest,
+}
+
+impl QuotedLightningSend {
+    /// Refuses a quote past its expiry, which the SSP no longer commits.
+    pub fn check_unexpired(&self) -> Result<(), QuoteError> {
+        check_unexpired(self.expires_at)
+    }
+
+    /// Whether the quote carries a partner fee. Without one, quoting the send
+    /// adds nothing to an unquoted one.
+    pub fn carries_partner_fee(&self) -> bool {
+        manifest_has_partner_markup(&self.manifest)
+    }
+
+    /// What this wallet signs as the quote's sole sender.
+    pub fn sign_quote_request(&self) -> SignQuoteRequest {
+        SignQuoteRequest::TransferManifest {
+            serialized_manifest: self.issued_quote.serialized_manifest.clone(),
+        }
     }
 }
 
@@ -455,6 +537,15 @@ impl LightningService {
             .collect()
     }
 
+    /// Creates a Lightning invoice paying `identity_pubkey` (this wallet when
+    /// unset).
+    ///
+    /// With `quote_basis` set, the invoice is first priced by an SSP fee quote
+    /// whose `amount_sats` is read on that basis, and this wallet attests to the
+    /// quote. The invoice is unquoted only when the SSP prices no partner fee:
+    /// a quote that can't be had, doesn't check out or can't be committed fails
+    /// the receive, like any other SSP call it depends on.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_lightning_invoice(
         &self,
         amount_sats: u64,
@@ -463,6 +554,7 @@ impl LightningService {
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        quote_basis: Option<ReceiveAmountBasis>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         // Validate expiry_secs does not exceed i32::MAX (server limitation)
         if let Some(expiry) = expiry_secs
@@ -475,10 +567,15 @@ impl LightningService {
             )));
         }
 
-        let identity_pubkey = match identity_pubkey {
-            Some(pk) => pk,
-            None => self.spark_signer.get_identity_public_key().await?,
-        };
+        let own_identity_pubkey = self.spark_signer.get_identity_public_key().await?;
+        let identity_pubkey = identity_pubkey.unwrap_or(own_identity_pubkey);
+        // The wallet that attests a quoted receive is the one that releases its
+        // preimage, so a HODL invoice is always this wallet's.
+        if matches!(preimage, InvoicePreimage::Hodl(_)) && identity_pubkey != own_identity_pubkey {
+            return Err(ServiceError::InvalidInput(
+                "a HODL invoice cannot pay another wallet".to_string(),
+            ));
+        }
 
         let (payment_hash, encrypted_preimage_shares) = match preimage {
             // The signer generates the preimage in-enclave (it never leaves),
@@ -524,20 +621,37 @@ impl LightningService {
             None => (None, None),
         };
 
-        let invoice = self
-            .ssp_client
-            .request_lightning_receive(RequestLightningReceiveInput {
-                receiver_identity_pubkey: Some(identity_pubkey.serialize().to_vec().encode_hex()),
-                amount_sats,
-                network: self.network.into(),
-                payment_hash: payment_hash.encode_hex(),
-                description_hash: description_hash.map(|h| h.encode_hex()),
-                expiry_secs: Some(expiry.into()),
-                memo: memo.clone(),
-                include_spark_address,
-                spark_invoice: None,
-            })
-            .await?;
+        // A Spark fallback address would let the payer settle without the fee,
+        // so a fee-bearing quote is never combined with one.
+        let quote = match quote_basis {
+            Some(basis) if !include_spark_address => {
+                self.receive_quote(amount_sats, basis, identity_pubkey, own_identity_pubkey)
+                    .await?
+            }
+            _ => None,
+        };
+        // The SSP refuses a quoted request naming anything but the manifest's gross.
+        let invoiced_sats = quote
+            .as_ref()
+            .map_or(amount_sats, |quote| quote.invoiced_sats);
+        let input = RequestLightningReceiveInput {
+            receiver_identity_pubkey: Some(identity_pubkey.serialize().to_vec().encode_hex()),
+            amount_sats: invoiced_sats,
+            network: self.network.into(),
+            payment_hash: payment_hash.encode_hex(),
+            description_hash: description_hash.map(|h| h.encode_hex()),
+            expiry_secs: Some(expiry.into()),
+            memo: memo.clone(),
+            include_spark_address,
+            spark_invoice: None,
+        };
+        let invoice = match &quote {
+            Some(quote) => {
+                self.request_quoted_lightning_receive(input, quote, payment_hash)
+                    .await?
+            }
+            None => self.ssp_client.request_lightning_receive(input).await?,
+        };
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
@@ -547,7 +661,7 @@ impl LightningService {
             &decoded_invoice,
             payment_hash,
             self.network.into(),
-            amount_sats,
+            invoiced_sats,
             description_hash,
             memo.as_deref(),
             expiry,
@@ -565,12 +679,101 @@ impl LightningService {
                 payment_hash,
                 encrypted_preimage_shares,
                 invoice.invoice.encoded_invoice.clone(),
-                identity_pubkey,
+                // The attestor of a quoted receive owns its preimage shares,
+                // also when it attests for another payee.
+                if quote.is_some() {
+                    own_identity_pubkey
+                } else {
+                    identity_pubkey
+                },
             )
             .await?;
         }
 
-        invoice.try_into()
+        let mut payment: LightningReceivePayment = invoice.try_into()?;
+        payment.quote_fee = quote.map(|quote| quote.fee);
+        Ok(payment)
+    }
+
+    /// A receive quote for `amount_sats` read on `basis`, checked before this
+    /// wallet attests to it. `None` when the SSP prices no partner fee.
+    async fn receive_quote(
+        &self,
+        amount_sats: u64,
+        basis: ReceiveAmountBasis,
+        payee: PublicKey,
+        attestor: PublicKey,
+    ) -> Result<Option<AcceptedReceiveQuote>, ServiceError> {
+        // Without the hashing quotes need, nothing could be attested.
+        if !cfg!(feature = "quotes") {
+            return Ok(None);
+        }
+        let delegated_payee = (payee != attestor).then_some(payee);
+        let quote = attributed_quote(&self.ssp_client, || {
+            self.ssp_client.lightning_receive_quote(
+                self.network.into(),
+                amount_sats,
+                basis,
+                delegated_payee,
+            )
+        })
+        .await?;
+        let manifest = decode_manifest(&quote.issued_quote)?;
+        // A quote with no partner fee adds nothing to an unquoted receive, and
+        // one paying its payee the whole transfer leaves the payee's wallet no
+        // share to tell its receive apart from a plain one.
+        if !manifest_has_partner_markup(&manifest) {
+            return Ok(None);
+        }
+        self.check_quote_network(&manifest)?;
+        check_unexpired(quote_expiry(&manifest)?)?;
+        validate_quoted_receive_manifest(&manifest, amount_sats, basis, &payee, &attestor)?;
+        let invoiced_sats = match manifest_denomination(&manifest) {
+            ManifestDenomination::Sats => manifest_gross_sats(&manifest)?,
+            ManifestDenomination::Bps => 0,
+        };
+        Ok(Some(AcceptedReceiveQuote {
+            issued_quote: quote.issued_quote,
+            invoiced_sats,
+            fee: receive_quote_fee(&manifest, &payee)?,
+        }))
+    }
+
+    /// Requests the invoice under `quote`, attesting to it for `payment_hash`.
+    async fn request_quoted_lightning_receive(
+        &self,
+        input: RequestLightningReceiveInput,
+        quote: &AcceptedReceiveQuote,
+        payment_hash: sha256::Hash,
+    ) -> Result<crate::ssp::LightningReceiveRequest, ServiceError> {
+        let signed = self
+            .spark_signer
+            .sign_quote(SignQuoteRequest::ReceiveAttestation {
+                serialized_manifest: quote.issued_quote.serialized_manifest.clone(),
+                payment_hash: payment_hash.to_byte_array(),
+            })
+            .await?;
+        Ok(self
+            .ssp_client
+            .request_quoted_lightning_receive(
+                input,
+                &CommittedReceiveQuote {
+                    issued_quote: quote.issued_quote.clone(),
+                    attestor_signature: signed.signature.serialize_der().to_vec(),
+                },
+            )
+            .await?)
+    }
+
+    /// Refuses a quote for another network.
+    fn check_quote_network(&self, manifest: &TransferManifest) -> Result<(), QuoteError> {
+        if manifest.network != i32::from(self.network.to_proto_network()) {
+            return Err(QuoteError::invalid(format!(
+                "quote is for network {}, not {}",
+                manifest.network, self.network
+            )));
+        }
+        Ok(())
     }
 
     pub async fn pay_lightning_invoice(
@@ -657,7 +860,7 @@ impl LightningService {
             // first effectful step, and the invoice it pays exists nowhere server-side.
             Err(e) => {
                 self.transfer_service
-                    .recover_committed_transfer(transfer_id, e)
+                    .recover_committed_transfer(transfer_id, leaves.iter().map(|l| &l.node.id), e)
                     .await?
             }
         };
@@ -668,6 +871,7 @@ impl LightningService {
             invoice,
             amount_to_send,
             payment_hash,
+            None,
         )
         .await
     }
@@ -680,11 +884,15 @@ impl LightningService {
     /// a preimage condition. The type check is what keeps a Spark-routed send,
     /// which pays the invoice without ever involving the SSP, from being paid a
     /// second time over Lightning.
+    ///
+    /// A quoted send resumes with the quote it committed its leaves under: the
+    /// SSP must pay it against the same split.
     pub async fn resume_lightning_send(
         &self,
         transfer_id: &TransferId,
         invoice: &str,
         amount_to_send: Option<u64>,
+        quote: Option<&IssuedQuote>,
     ) -> Result<Option<PayLightningResult>, ServiceError> {
         let Some(transfer) = self.transfer_service.query_transfer(transfer_id).await? else {
             return Ok(None);
@@ -701,15 +909,284 @@ impl LightningService {
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let payment_hash = *decoded_invoice.payment_hash();
 
+        let quote = quote.map(committed_send_quote).transpose()?;
         self.request_lightning_send_result(
             transfer,
             transfer_id,
             invoice,
             amount_to_send,
             payment_hash,
+            quote,
         )
         .await
         .map(Some)
+    }
+
+    /// Asks the SSP for a fee quote on paying `invoice` for `amount`, committing
+    /// `transfer_id` when set, and checks it.
+    pub async fn fetch_lightning_send_quote(
+        &self,
+        invoice: &str,
+        amount: SendQuoteAmount,
+        transfer_id: Option<&TransferId>,
+    ) -> Result<QuotedLightningSend, ServiceError> {
+        let (amount_sats, basis) = match amount {
+            SendQuoteAmount::Invoice => (None, ReceiveAmountBasis::Net),
+            SendQuoteAmount::Payment(sats) => (Some(sats), ReceiveAmountBasis::Net),
+            SendQuoteAmount::Total(sats) => (Some(sats), ReceiveAmountBasis::Gross),
+        };
+        let invoice_has_amount = Bolt11Invoice::from_str(invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?
+            .amount_milli_satoshis()
+            .is_some_and(|msat| msat > 0);
+        // The SSP refuses a payment amount beside the invoice's own.
+        let amount_sats =
+            amount_sats.filter(|_| !invoice_has_amount || basis == ReceiveAmountBasis::Gross);
+        let quote = attributed_quote(&self.ssp_client, || {
+            self.ssp_client.lightning_send_quote(
+                invoice,
+                amount_sats,
+                basis,
+                transfer_id.map(ToString::to_string),
+            )
+        })
+        .await?;
+        let payment_msats = quote
+            .payment_msats
+            .ok_or_else(|| QuoteError::invalid("the send quote names no payment"))?;
+        let quoted = self
+            .verify_lightning_send_quote(invoice, &quote.issued_quote, payment_msats, amount)
+            .await?;
+        if transfer_id.is_some_and(|id| *id != quoted.transfer_id) {
+            return Err(QuoteError::invalid("the quote commits another transfer").into());
+        }
+        quoted.check_unexpired()?;
+        Ok(quoted)
+    }
+
+    /// Checks a send quote before any leaf is funded against it: the SSP signed
+    /// it for this invoice and `payment_msats`, which is the payment `amount`
+    /// asks for, it is for this network, and this wallet is its sole sender.
+    /// Re-run on a quote carried over from elsewhere, since only the SSP
+    /// signature vouches for it. Whether it is still committable is
+    /// [`QuotedLightningSend::check_unexpired`].
+    pub async fn verify_lightning_send_quote(
+        &self,
+        invoice: &str,
+        issued_quote: &IssuedQuote,
+        payment_msats: u64,
+        amount: SendQuoteAmount,
+    ) -> Result<QuotedLightningSend, ServiceError> {
+        let decoded_invoice = Bolt11Invoice::from_str(invoice)
+            .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
+        if decoded_invoice.network() != self.network.into() {
+            return Err(ServiceError::ValidationError(
+                "Invoice network does not match".to_string(),
+            ));
+        }
+        let manifest = decode_manifest(issued_quote)?;
+        let total_sats = manifest_gross_sats(&manifest)?;
+        let invoice_msats = decoded_invoice
+            .amount_milli_satoshis()
+            .filter(|msat| *msat > 0);
+        let expected_msats = match (invoice_msats, amount) {
+            (Some(msats), SendQuoteAmount::Invoice) => Some(msats),
+            (Some(msats), SendQuoteAmount::Payment(sats)) if sats == msats.div_ceil(1000) => {
+                Some(msats)
+            }
+            (None, SendQuoteAmount::Payment(sats)) if sats > 0 => Some(sats.saturating_mul(1000)),
+            // An invoice with its own amount is paid exactly that: what the
+            // total leaves beyond it and the fees goes to the fees.
+            (_, SendQuoteAmount::Total(sats)) => {
+                if total_sats != sats {
+                    return Err(QuoteError::invalid(format!(
+                        "the quote spends {total_sats} sats, not the {sats} asked for"
+                    ))
+                    .into());
+                }
+                invoice_msats
+            }
+            _ => {
+                return Err(
+                    QuoteError::invalid("the quoted amount does not fit the invoice").into(),
+                );
+            }
+        };
+        if expected_msats.is_some_and(|msats| msats != payment_msats) || payment_msats == 0 {
+            return Err(QuoteError::invalid(format!(
+                "the quote prices a payment of {payment_msats} msat"
+            ))
+            .into());
+        }
+        // An amountless invoice is paid the amount the commit names, in sats.
+        let amount_to_send = match invoice_msats {
+            Some(_) => None,
+            None if payment_msats.is_multiple_of(1000) => Some(payment_msats / 1000),
+            None => {
+                return Err(
+                    QuoteError::invalid("an amountless invoice is paid in whole satoshis").into(),
+                );
+            }
+        };
+        let amount_sats = payment_msats.div_ceil(1000);
+        let payment_hash = *decoded_invoice.payment_hash();
+
+        verify_identity_signature(
+            &send_issuance_digest(
+                &issued_quote.serialized_manifest,
+                &payment_hash.to_byte_array(),
+                payment_msats,
+            )?,
+            &issued_quote.issuer_signature,
+            &self.ssp_client.identity_public_key(),
+        )?;
+        self.check_quote_network(&manifest)?;
+        let sender = self.spark_signer.get_identity_public_key().await?;
+        let buckets = validate_quoted_send_manifest(&manifest, amount_sats, &sender)?;
+        quoted_send_expiry(&manifest)?;
+
+        Ok(QuotedLightningSend {
+            issued_quote: issued_quote.clone(),
+            transfer_id: TransferId::from_str(&manifest.transfer_id)
+                .map_err(|e| QuoteError::invalid(format!("quote transfer id: {e}")))?,
+            payment_hash,
+            payment_msats,
+            amount_sats,
+            amount_to_send,
+            total_sats,
+            buckets,
+            expires_at: quote_expiry(&manifest)?,
+            manifest,
+        })
+    }
+
+    /// Pays `invoice` under `quote`: each of `leaves` goes to the receiver it
+    /// is paired with, which must fund every bucket of the quote exactly. This
+    /// wallet signs the manifest as its sole sender, and the operators enforce
+    /// the split.
+    pub async fn pay_quoted_lightning_invoice(
+        &self,
+        invoice: &str,
+        quote: &QuotedLightningSend,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+    ) -> Result<PayLightningResult, ServiceError> {
+        let request = self.prepare_quoted_lightning_send(quote, leaves);
+        let prepared = self.spark_signer.prepare_transfer(request).await?;
+        let manifest_hash_signature = self
+            .spark_signer
+            .sign_quote(quote.sign_quote_request())
+            .await?
+            .signature;
+        self.submit_quoted_lightning_send(
+            invoice,
+            quote,
+            leaves,
+            prepared,
+            &manifest_hash_signature,
+        )
+        .await
+    }
+
+    /// The signer request for a quoted send's key tweaks, each leaf going to
+    /// the receiver it is paired with, for a signer that approves it apart.
+    pub fn prepare_quoted_lightning_send(
+        &self,
+        quote: &QuotedLightningSend,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+    ) -> PrepareTransferRequest {
+        self.transfer_service.build_prepare_transfer_request(
+            &quote.transfer_id,
+            leaves.iter().map(|(leaf, receiver)| (leaf, *receiver)),
+        )
+    }
+
+    /// [`pay_quoted_lightning_invoice`](Self::pay_quoted_lightning_invoice)
+    /// with the key tweaks and manifest signature produced elsewhere, by a
+    /// signer that approved them.
+    pub async fn submit_quoted_lightning_send(
+        &self,
+        invoice: &str,
+        quote: &QuotedLightningSend,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+        prepared: PreparedTransfer,
+        manifest_hash_signature: &bitcoin::secp256k1::ecdsa::Signature,
+    ) -> Result<PayLightningResult, ServiceError> {
+        // Selecting and swapping leaves takes time, so the quote may have
+        // lapsed since it was checked. No margin: the SSP still commits a quote
+        // that lapses after the operators hold the transfer, as a resume does.
+        quote.check_unexpired()?;
+        check_buckets_funded(&quote.buckets, leaves)?;
+        self.notify_before_send_lightning(&quote.transfer_id, invoice, quote.amount_sats)
+            .await?;
+
+        let expiry_time = quoted_send_expiry(&quote.manifest)?;
+        let transfer_request = self
+            .transfer_service
+            .assemble_manifest_transfer(
+                &quote.transfer_id,
+                leaves,
+                Some(&quote.payment_hash),
+                expiry_time,
+                quote.manifest.clone(),
+                manifest_hash_signature,
+                prepared,
+            )
+            .await?;
+
+        let swap = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .initiate_preimage_swap_v4(
+                InitiatePreimageSwapV4Request {
+                    payment_hash: quote.payment_hash.to_byte_array().to_vec(),
+                    invoice_amount: Some(InvoiceAmount {
+                        invoice_amount_proof: Some(InvoiceAmountProof {
+                            bolt11_invoice: invoice.to_string(),
+                        }),
+                        value_sats: quote.amount_sats,
+                    }),
+                    reason: PreimageSwapReason::Send as i32,
+                    // A send's terms are bound by the SSP's own signature over
+                    // the payment hash, so it attests with an empty signature.
+                    attestor_identity_public_key: self
+                        .ssp_client
+                        .identity_public_key()
+                        .serialize()
+                        .to_vec(),
+                    attestor_signature: Vec::new(),
+                    transfer_v3_request: Some(transfer_request),
+                },
+                Some(quote.transfer_id.to_string()),
+            )
+            .await;
+        let transfer = match swap {
+            Ok(response) => transfer_from_preimage_swap(response)?,
+            // As on an unquoted send: the swap can commit and still lose its
+            // response, and only the SSP request below finishes the send.
+            Err(e) => {
+                self.transfer_service
+                    .recover_committed_transfer(
+                        &quote.transfer_id,
+                        leaves.iter().map(|(l, _)| &l.node.id),
+                        e.into(),
+                    )
+                    .await?
+            }
+        };
+
+        self.request_lightning_send_result(
+            transfer,
+            &quote.transfer_id,
+            invoice,
+            quote.amount_to_send,
+            quote.payment_hash,
+            Some(CommittedSendQuote {
+                issued_quote: quote.issued_quote.clone(),
+                total_sats: quote.total_sats,
+            }),
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -743,22 +1220,28 @@ impl LightningService {
         invoice: &str,
         amount_to_send: Option<u64>,
         payment_hash: sha256::Hash,
+        quote: Option<CommittedSendQuote>,
     ) -> Result<PayLightningResult, ServiceError> {
-        let mut lightning_send_payment: LightningSendPayment = self
-            .ssp_client
-            .request_lightning_send(RequestLightningSendInput {
-                encoded_invoice: invoice.to_string(),
-                // The transfer id keys the request, so a repeat, whether the
-                // client's own retry or a resume that cannot tell a lost response
-                // from a lost request, resolves to the request the SSP already has.
-                // Setting idempotency_key as well is refused outright: "Only
-                // idempotency_key or user_outbound_transfer_external_id is needed".
-                idempotency_key: None,
-                amount_sats: amount_to_send,
-                user_outbound_transfer_external_id: Some(transfer_id.to_string()),
-            })
-            .await?
-            .try_into()?;
+        let input = RequestLightningSendInput {
+            encoded_invoice: invoice.to_string(),
+            // The transfer id keys the request, so a repeat, whether the
+            // client's own retry or a resume that cannot tell a lost response
+            // from a lost request, resolves to the request the SSP already has.
+            // Setting idempotency_key as well is refused outright: "Only
+            // idempotency_key or user_outbound_transfer_external_id is needed".
+            idempotency_key: None,
+            amount_sats: amount_to_send,
+            user_outbound_transfer_external_id: Some(transfer_id.to_string()),
+        };
+        let request = match &quote {
+            Some(quote) => {
+                self.ssp_client
+                    .request_quoted_lightning_send(input, quote)
+                    .await?
+            }
+            None => self.ssp_client.request_lightning_send(input).await?,
+        };
+        let mut lightning_send_payment: LightningSendPayment = request.try_into()?;
         if lightning_send_payment.transfer_id.is_none() {
             lightning_send_payment.transfer_id = Some(transfer.id.clone());
         }
@@ -930,6 +1413,157 @@ fn is_resumable_send(transfer_type: TransferType, status: TransferStatus) -> boo
             status,
             TransferStatus::Completed | TransferStatus::Expired | TransferStatus::Returned
         )
+}
+
+/// How far past the default send expiry a manifest's own may fall, for the
+/// difference between this wallet's clock and the SSP's.
+const MANIFEST_EXPIRY_SKEW_SECS: u64 = 60 * 60;
+
+/// When a quoted send's leaves come back to the sender if the SSP never settles
+/// it: the expiry its manifest names, which the operators refuse any other for,
+/// or the default when it names none. A manifest may not hold the leaves longer
+/// than an unquoted send does.
+fn quoted_send_expiry(manifest: &TransferManifest) -> Result<SystemTime, QuoteError> {
+    let default = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
+    let Some(expiry) = &manifest.transfer_expiry_time else {
+        return Ok(default);
+    };
+    let expiry = prost_timestamp_to_web_time(expiry)
+        .ok_or_else(|| QuoteError::invalid("the manifest's transfer expiry is unreadable"))?;
+    if expiry > default + Duration::from_secs(MANIFEST_EXPIRY_SKEW_SECS) {
+        return Err(QuoteError::invalid(
+            "the manifest holds the leaves longer than a send may",
+        ));
+    }
+    Ok(expiry)
+}
+
+/// Whether a quote went unattributed for a reason on the partner token's side,
+/// which a fresh token may resolve: none was sent, it was rejected, or it names
+/// a partner the SSP doesn't know.
+fn partner_token_failed(status: SparkFeeAttributionStatus) -> bool {
+    matches!(
+        status,
+        SparkFeeAttributionStatus::NotProvided
+            | SparkFeeAttributionStatus::TokenInvalid
+            | SparkFeeAttributionStatus::UnknownPartner
+    )
+}
+
+/// The quote `fetch` gets, asked for again after refreshing the partner token
+/// when it failed. A token that still fails leaves the quote without a
+/// partner fee, which is logged as an error: payments go on, but uncharged.
+async fn attributed_quote<F, Fut>(
+    ssp_client: &ServiceProvider,
+    fetch: F,
+) -> Result<LightningQuote, ServiceError>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<LightningQuote, ServiceProviderError>>,
+{
+    let quote = fetch().await?;
+    if !partner_token_failed(quote.attribution_status) {
+        return Ok(quote);
+    }
+    ssp_client.refresh_extra_headers().await;
+    let quote = fetch().await?;
+    match quote.attribution_status {
+        status if partner_token_failed(status) => {
+            error!("The partner token was not accepted ({status:?}): no partner fee is charged");
+        }
+        status => debug!("A refreshed partner token was accepted: {status:?}"),
+    }
+    Ok(quote)
+}
+
+/// The manifest format this wallet validates.
+const MANIFEST_VERSION: u32 = 1;
+
+/// The transfer a send quote commits, read without checking the quote.
+pub fn send_quote_transfer_id(issued_quote: &IssuedQuote) -> Result<TransferId, QuoteError> {
+    let manifest = decode_manifest(issued_quote)?;
+    TransferId::from_str(&manifest.transfer_id)
+        .map_err(|e| QuoteError::invalid(format!("quote transfer id: {e}")))
+}
+
+fn decode_manifest(issued_quote: &IssuedQuote) -> Result<TransferManifest, QuoteError> {
+    decode_manifest_bytes(&issued_quote.serialized_manifest)
+}
+
+/// Decodes a manifest the SSP serialized, refusing any that holds more than
+/// this wallet reads. What is signed is hashed from these bytes, while the
+/// operators are sent the decoded copy, so a field it doesn't know would be
+/// signed unchecked and dropped from what the operators see.
+fn decode_manifest_bytes(serialized: &[u8]) -> Result<TransferManifest, QuoteError> {
+    let manifest = TransferManifest::decode(serialized)
+        .map_err(|e| QuoteError::invalid(format!("undecodable manifest: {e}")))?;
+    if manifest.version != MANIFEST_VERSION {
+        return Err(QuoteError::invalid(format!(
+            "unsupported manifest version {}",
+            manifest.version
+        )));
+    }
+    if manifest.encode_to_vec() != serialized {
+        return Err(QuoteError::invalid(
+            "manifest holds fields this wallet does not read",
+        ));
+    }
+    Ok(manifest)
+}
+
+/// The quote a send committed its leaves under, as the SSP is asked to pay it.
+fn committed_send_quote(issued_quote: &IssuedQuote) -> Result<CommittedSendQuote, QuoteError> {
+    Ok(CommittedSendQuote {
+        total_sats: manifest_gross_sats(&decode_manifest(issued_quote)?)?,
+        issued_quote: issued_quote.clone(),
+    })
+}
+
+fn check_unexpired(expires_at: u64) -> Result<(), QuoteError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if expires_at <= now {
+        return Err(QuoteError::Expired);
+    }
+    Ok(())
+}
+
+fn quote_expiry(manifest: &TransferManifest) -> Result<u64, QuoteError> {
+    manifest
+        .quote_expiry_time
+        .as_ref()
+        .and_then(|t| u64::try_from(t.seconds).ok())
+        .ok_or_else(|| QuoteError::invalid("quote has no expiry"))
+}
+
+/// Refuses leaves that do not fund each bucket exactly: the operators enforce
+/// exact cover per receiver, so a mismatch would strand the leaves at prepare.
+fn check_buckets_funded(
+    buckets: &[SendManifestBucket],
+    leaves: &[(LeafKeyTweak, PublicKey)],
+) -> Result<(), QuoteError> {
+    let mut funded: Vec<(PublicKey, u64)> = Vec::new();
+    for (leaf, receiver) in leaves {
+        match funded.iter_mut().find(|(key, _)| key == receiver) {
+            Some((_, sats)) => *sats = sats.saturating_add(leaf.node.value),
+            None => funded.push((*receiver, leaf.node.value)),
+        }
+    }
+    let exact = funded.len() == buckets.len()
+        && buckets.iter().all(|bucket| {
+            funded.iter().any(|(key, sats)| {
+                *key == bucket.receiver_identity_public_key && *sats == bucket.amount_sats
+            })
+        });
+    if exact {
+        Ok(())
+    } else {
+        Err(QuoteError::invalid(
+            "the leaves do not fund each of the quote's receivers exactly",
+        ))
+    }
 }
 
 fn transfer_from_preimage_swap(
@@ -1344,6 +1978,7 @@ mod get_invoice_amount_sats_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::time::web_time_to_prost_timestamp;
 
     const EVERY_STATUS: [TransferStatus; 12] = [
         TransferStatus::SenderInitiated,
@@ -1415,6 +2050,1460 @@ mod tests {
                 "{status} still holds committed leaves and must resume"
             );
         }
+    }
+    fn manifest_expiring_in(secs: u64) -> TransferManifest {
+        let expiry = SystemTime::now() + Duration::from_secs(secs);
+        TransferManifest {
+            transfer_expiry_time: Some(web_time_to_prost_timestamp(&expiry).unwrap()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_quoted_send_expires_when_its_manifest_says() {
+        let manifest = manifest_expiring_in(DEFAULT_SEND_EXPIRY_SECS);
+        assert_eq!(
+            quoted_send_expiry(&manifest).unwrap(),
+            prost_timestamp_to_web_time(manifest.transfer_expiry_time.as_ref().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_manifest_may_run_past_the_default_by_clock_skew_alone() {
+        let within = manifest_expiring_in(DEFAULT_SEND_EXPIRY_SECS + MANIFEST_EXPIRY_SKEW_SECS / 2);
+        assert!(quoted_send_expiry(&within).is_ok());
+        let beyond = manifest_expiring_in(DEFAULT_SEND_EXPIRY_SECS + 2 * MANIFEST_EXPIRY_SKEW_SECS);
+        assert!(quoted_send_expiry(&beyond).is_err());
+    }
+
+    #[test]
+    fn a_quoted_send_whose_manifest_names_no_expiry_gets_the_default() {
+        let before = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
+        let expiry = quoted_send_expiry(&TransferManifest::default()).unwrap();
+        assert!(expiry >= before);
+        assert!(expiry <= SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS));
+    }
+
+    #[test]
+    fn an_unreadable_manifest_expiry_refuses_the_quote() {
+        let manifest = TransferManifest {
+            transfer_expiry_time: Some(prost_types::Timestamp {
+                seconds: -1,
+                nanos: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(quoted_send_expiry(&manifest).is_err());
+    }
+}
+
+#[cfg(all(test, feature = "quotes"))]
+#[allow(clippy::indexing_slicing)] // Test suites: a panic there is a failed assertion.
+mod quoted_payment_tests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use lightning_invoice::{Currency, InvoiceBuilder, PaymentSecret};
+    use macros::{async_test_all, test_all};
+    use platform_utils::{HttpClient, HttpError, HttpResponse};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::operator::rpc::spark::manifest_amount::Amount;
+    use crate::operator::rpc::spark::{
+        FeeComponent, FeeRole, FeeSource, ManifestAmount, ManifestEdge, Network as ProtoNetwork,
+    };
+    use crate::operator::testing::unroutable_operator_pool;
+    use crate::quote::{receive_attestation_digest, verify_identity_signature};
+    use crate::session_store::{InMemorySessionStore, Session, SessionStore};
+    use crate::signer::testing::RecordingSparkSigner;
+    use crate::ssp::{RetryConfig, ServiceProviderConfig};
+
+    type Respond = Box<dyn Fn(&str, &Value, PublicKey) -> Value + Send + Sync>;
+
+    /// Plays the SSP for the wallet `identity`: answers each GraphQL operation
+    /// by name and records every request body.
+    struct ScriptedSsp {
+        respond: Respond,
+        identity: PublicKey,
+        bodies: Mutex<Vec<Value>>,
+    }
+
+    impl ScriptedSsp {
+        fn operations(&self) -> Vec<(String, Value)> {
+            self.bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|body| {
+                    (
+                        body["operationName"].as_str().unwrap().to_string(),
+                        body["variables"]["input"].clone(),
+                    )
+                })
+                .collect()
+        }
+    }
+
+    #[macros::async_trait]
+    impl HttpClient for ScriptedSsp {
+        async fn get(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+        ) -> Result<HttpResponse, HttpError> {
+            unimplemented!("the SSP is only posted to")
+        }
+
+        async fn post(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            body: Option<String>,
+        ) -> Result<HttpResponse, HttpError> {
+            let body: Value = serde_json::from_str(&body.unwrap_or_default()).unwrap();
+            let response = (self.respond)(
+                body["operationName"].as_str().unwrap(),
+                &body,
+                self.identity,
+            );
+            self.bodies.lock().unwrap().push(body);
+            Ok(HttpResponse {
+                status: 200,
+                body: response.to_string(),
+                headers: HashMap::new(),
+            })
+        }
+
+        async fn delete(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<HttpResponse, HttpError> {
+            unimplemented!("the SSP is only posted to")
+        }
+    }
+
+    const SSP_SEED: u8 = 0x51;
+
+    fn key(seed: u8) -> PublicKey {
+        SecretKey::from_slice(&[seed; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    fn sats(value: u64) -> Option<ManifestAmount> {
+        Some(ManifestAmount {
+            amount: Some(Amount::Sats(value)),
+        })
+    }
+
+    /// A 2_000 sat markup on a 100_000 sat net receive for `receiver`.
+    #[test_all]
+    fn a_manifest_is_read_only_in_the_format_it_was_written() {
+        let bytes = quote_paying(key(0x11), ProtoNetwork::Regtest, 10_000);
+        assert!(decode_manifest_bytes(&bytes).is_ok());
+
+        let mut future = TransferManifest::decode(bytes.as_slice()).unwrap();
+        future.version = 2;
+        assert!(decode_manifest_bytes(&future.encode_to_vec()).is_err());
+    }
+
+    #[test_all]
+    fn a_manifest_holding_an_unknown_field_is_refused() {
+        let mut bytes = quote_paying(key(0x11), ProtoNetwork::Regtest, 10_000);
+        // Field 15, varint 1: a field this wallet's proto doesn't have.
+        bytes.extend_from_slice(&[0x78, 0x01]);
+        assert!(TransferManifest::decode(bytes.as_slice()).is_ok());
+        assert!(decode_manifest_bytes(&bytes).is_err());
+    }
+
+    fn net_quote(receiver: PublicKey, network: ProtoNetwork) -> Vec<u8> {
+        quote_paying(receiver, network, 100_000)
+    }
+
+    /// A 2_000 sat markup on top of `receiver_sats` for `receiver`.
+    fn quote_paying(receiver: PublicKey, network: ProtoNetwork, receiver_sats: u64) -> Vec<u8> {
+        let ssp = key(SSP_SEED).serialize().to_vec();
+        let affiliate = key(0x52).serialize().to_vec();
+        let edge = |to: Vec<u8>, amount| ManifestEdge {
+            sender_identity_public_key: ssp.clone(),
+            receiver_identity_public_key: to,
+            amount: sats(amount),
+        };
+        let expiry = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        TransferManifest {
+            version: 1,
+            transfer_id: "0197f9a0-0000-7000-8000-000000000001".to_string(),
+            network: network.into(),
+            edges: vec![
+                edge(receiver.serialize().to_vec(), receiver_sats),
+                edge(affiliate.clone(), 2_000),
+            ],
+            fees: vec![FeeComponent {
+                source: FeeSource::PartnerMarkup.into(),
+                role: FeeRole::Affiliate.into(),
+                amount: sats(2_000),
+                receiver_identity_public_key: affiliate,
+            }],
+            quote_expiry_time: Some(prost_types::Timestamp {
+                seconds: i64::try_from(expiry).unwrap(),
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    fn quote_response(manifest: &[u8]) -> Value {
+        json!({"data": {"lightning_receive_quote": {
+            "issued_quote": {
+                "serialized_manifest": hex::encode(manifest),
+                "issuer_signature": "3044",
+            },
+            "attribution_status": "ATTRIBUTED",
+        }}})
+    }
+
+    /// The SSP's invoice for whatever hash and amount the request names.
+    fn receive_response(body: &Value) -> Value {
+        let input = &body["variables"]["input"];
+        let payment_hash = sha256::Hash::from_str(input["payment_hash"].as_str().unwrap()).unwrap();
+        let amount_sats = input["amount_sats"].as_u64().unwrap();
+        let secp = Secp256k1::new();
+        let node_key = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let invoice = InvoiceBuilder::new(Currency::Regtest)
+            .description("test".to_string())
+            .payment_hash(payment_hash)
+            .payment_secret(PaymentSecret([0x22; 32]))
+            .duration_since_epoch(Duration::from_secs(1_700_000_000))
+            .min_final_cltv_expiry_delta(144)
+            .expiry_time(Duration::from_secs(u64::from(DEFAULT_RECEIVE_EXPIRY_SECS)))
+            .amount_milli_satoshis(amount_sats * 1000)
+            .build_signed(|m| secp.sign_ecdsa_recoverable(m, &node_key))
+            .unwrap();
+        let amount = json!({"__typename": "CurrencyAmount", "original_value": amount_sats,
+            "original_unit": "SATOSHI", "preferred_currency_unit": "USD",
+            "preferred_currency_value_rounded": 0});
+        json!({"data": {"request_lightning_receive": {"request": {
+            "__typename": "LightningReceiveRequest", "id": "LightningReceiveRequest:1",
+            "created_at": "2026-10-13T00:00:00Z", "updated_at": "2026-10-13T00:00:00Z",
+            "network": "REGTEST", "lightning_request_status": "INVOICE_CREATED",
+            "invoice": {"__typename": "Invoice", "encoded_invoice": invoice.to_string(),
+                "bitcoin_network": "REGTEST", "payment_hash": payment_hash.to_string(),
+                "amount": amount, "created_at": "2026-10-13T00:00:00Z",
+                "invoice_expired_at": "2026-11-13T00:00:00Z", "memo": null},
+            "transfer": null, "lightning_receive_payment_preimage": null,
+            "receiver_identity_public_key": null}}}})
+    }
+
+    fn refusal() -> Value {
+        json!({"data": null, "errors": [{"message": "malformed quote"}]})
+    }
+
+    async fn service(respond: Respond) -> (LightningService, Arc<ScriptedSsp>, PublicKey) {
+        let signer: Arc<dyn SparkSigner> = Arc::new(RecordingSparkSigner::new());
+        let identity = signer.get_identity_public_key().await.unwrap();
+        let ssp_key = key(SSP_SEED);
+        // A live session, so no request has to authenticate.
+        let session_store = Arc::new(InMemorySessionStore::default());
+        session_store
+            .set_session(
+                &ssp_key,
+                Session {
+                    token: "token".to_string(),
+                    expiration: u64::MAX / 2,
+                    refresh_token: None,
+                    refresh_token_expiration: None,
+                },
+            )
+            .await
+            .unwrap();
+        let ssp = Arc::new(ScriptedSsp {
+            respond,
+            identity,
+            bodies: Mutex::default(),
+        });
+        let ssp_client = Arc::new(ServiceProvider::new_with_client(
+            ServiceProviderConfig {
+                base_url: "http://ssp.invalid".to_string(),
+                schema_endpoint: Some("graphql/spark/rc".to_string()),
+                identity_public_key: ssp_key,
+                user_agent: None,
+                retry_config: RetryConfig {
+                    max_retries: 0,
+                    base_delay_ms: 1,
+                    max_delay_ms: 1,
+                },
+            },
+            Arc::clone(&signer),
+            session_store,
+            None,
+            Arc::clone(&ssp) as Arc<dyn HttpClient>,
+        ));
+        let operator_pool = unroutable_operator_pool(&signer).await;
+        let transfer_service = Arc::new(TransferService::new(
+            Arc::clone(&signer),
+            Network::Regtest,
+            1,
+            Arc::clone(&operator_pool),
+            None,
+            false,
+        ));
+        let service = LightningService::new(
+            operator_pool,
+            ssp_client,
+            Network::Regtest,
+            signer,
+            transfer_service,
+            1,
+            None,
+        );
+        (service, ssp, identity)
+    }
+
+    async fn receive(service: &LightningService, basis: Option<ReceiveAmountBasis>) {
+        // The pool's operator listens nowhere, so the receive stops at the
+        // preimage share store, after every SSP call it makes.
+        let result = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::FromSigner,
+                None,
+                false,
+                None,
+                basis,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ServiceError::PreimageShareStoreFailed(_))),
+            "{result:?}"
+        );
+    }
+
+    #[async_test_all]
+    async fn a_quoted_receive_invoices_the_gross_and_attests_to_it() {
+        let (service, ssp, me) = service(Box::new(move |op, body, identity| match op {
+            "LightningReceiveQuote" => quote_response(&net_quote(identity, ProtoNetwork::Regtest)),
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        receive(&service, Some(ReceiveAmountBasis::Net)).await;
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 2, "{operations:?}");
+        let (quote_op, quote_input) = &operations[0];
+        assert_eq!(quote_op, "LightningReceiveQuote");
+        assert_eq!(quote_input["amount_basis"], "NET");
+        assert_eq!(quote_input["receiver_identity_pubkey"], Value::Null);
+        let (_, request) = &operations[1];
+        assert_eq!(
+            request["amount_sats"], 102_000,
+            "the invoice is for the gross"
+        );
+        let committed = &request["committed_quote"];
+        let manifest = hex::decode(committed["serialized_manifest"].as_str().unwrap()).unwrap();
+        let payment_hash: [u8; 32] = hex::decode(request["payment_hash"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        verify_identity_signature(
+            &receive_attestation_digest(&manifest, &payment_hash).unwrap(),
+            &hex::decode(committed["attestor_signature"].as_str().unwrap()).unwrap(),
+            &me,
+        )
+        .expect("the attestation verifies under the wallet's identity key");
+    }
+
+    /// A quote without a partner fee is not committed: the invoice is the
+    /// plain one an unquoted receive gets.
+    #[async_test_all]
+    async fn a_quote_without_a_partner_fee_is_not_used() {
+        let (service, ssp, _) = service(Box::new(move |op, body, identity| match op {
+            "LightningReceiveQuote" => {
+                let receiver = identity;
+                let mut feeless =
+                    TransferManifest::decode(net_quote(receiver, ProtoNetwork::Regtest).as_slice())
+                        .unwrap();
+                feeless.edges.truncate(1);
+                feeless.fees.clear();
+                quote_response(&feeless.encode_to_vec())
+            }
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        receive(&service, Some(ReceiveAmountBasis::Net)).await;
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 2, "{operations:?}");
+        let (_, request) = &operations[1];
+        assert!(request.get("committed_quote").is_none());
+        assert_eq!(request["amount_sats"], 100_000);
+    }
+
+    /// The receive attempted with `respond` answering its SSP calls: the
+    /// SSP operations it made and how it ended.
+    async fn attempted_receive(
+        respond: impl Fn(&str, &Value, PublicKey) -> Value + Send + Sync + 'static,
+    ) -> (
+        Vec<(String, Value)>,
+        Result<LightningReceivePayment, ServiceError>,
+    ) {
+        let (service, ssp, _) = service(Box::new(move |op, body, identity| {
+            respond(op, body, identity)
+        }))
+        .await;
+        let result = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::FromSigner,
+                None,
+                false,
+                None,
+                Some(ReceiveAmountBasis::Net),
+            )
+            .await;
+        (ssp.operations(), result)
+    }
+
+    fn with_status(mut response: Value, status: &str) -> Value {
+        response["data"]["lightning_receive_quote"]["attribution_status"] = json!(status);
+        response
+    }
+
+    #[async_test_all]
+    async fn a_refused_commit_fails_the_receive() {
+        let (operations, result) = attempted_receive(|op, _, me| match op {
+            "LightningReceiveQuote" => quote_response(&net_quote(me, ProtoNetwork::Regtest)),
+            "RequestLightningReceive" => refusal(),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(operations.len(), 2, "no unquoted retry: {operations:?}");
+    }
+
+    #[async_test_all]
+    async fn a_quote_for_another_network_fails_the_receive() {
+        let (operations, result) = attempted_receive(|op, body, me| match op {
+            "LightningReceiveQuote" => quote_response(&net_quote(me, ProtoNetwork::Mainnet)),
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(operations.len(), 1, "{operations:?}");
+    }
+
+    #[async_test_all]
+    async fn a_quote_the_ssp_cannot_issue_fails_the_receive() {
+        let (operations, result) = attempted_receive(|op, body, _| match op {
+            "LightningReceiveQuote" => refusal(),
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(operations.len(), 1, "{operations:?}");
+    }
+
+    /// An affiliate the SSP doesn't know is one charging no fee: the receive
+    /// goes on unquoted, without asking again.
+    #[async_test_all]
+    async fn an_unregistered_affiliate_receives_unquoted() {
+        let (operations, result) = attempted_receive(|op, body, me| match op {
+            "LightningReceiveQuote" => {
+                let mut feeless =
+                    TransferManifest::decode(net_quote(me, ProtoNetwork::Regtest).as_slice())
+                        .unwrap();
+                feeless.edges.truncate(1);
+                feeless.fees.clear();
+                with_status(
+                    quote_response(&feeless.encode_to_vec()),
+                    "UNKNOWN_AFFILIATE",
+                )
+            }
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(
+            matches!(result, Err(ServiceError::PreimageShareStoreFailed(_))),
+            "{result:?}"
+        );
+        let names: Vec<&str> = operations.iter().map(|(op, _)| op.as_str()).collect();
+        assert_eq!(names, ["LightningReceiveQuote", "RequestLightningReceive"]);
+        assert!(operations[1].1.get("committed_quote").is_none());
+    }
+
+    /// A rejected partner token is asked about once more, and a quote priced
+    /// after that is used.
+    #[async_test_all]
+    async fn a_rejected_partner_token_is_retried_once() {
+        let asked = Arc::new(Mutex::new(0));
+        let asked_in = Arc::clone(&asked);
+        let (operations, result) = attempted_receive(move |op, body, me| match op {
+            "LightningReceiveQuote" => {
+                let mut asked = asked_in.lock().unwrap();
+                *asked += 1;
+                let response = quote_response(&net_quote(me, ProtoNetwork::Regtest));
+                if *asked == 1 {
+                    with_status(response, "TOKEN_INVALID")
+                } else {
+                    response
+                }
+            }
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(
+            matches!(result, Err(ServiceError::PreimageShareStoreFailed(_))),
+            "{result:?}"
+        );
+        let names: Vec<&str> = operations.iter().map(|(op, _)| op.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "LightningReceiveQuote",
+                "LightningReceiveQuote",
+                "RequestLightningReceive"
+            ]
+        );
+        assert!(!operations[2].1["committed_quote"].is_null());
+    }
+
+    #[async_test_all]
+    async fn a_receive_attested_for_another_payee_takes_the_fee_from_the_gross() {
+        let payee = key(0x60);
+        let (service, ssp, me) = service(Box::new(move |op, body, _| match op {
+            "LightningReceiveQuote" => {
+                quote_response(&quote_paying(payee, ProtoNetwork::Regtest, 98_000))
+            }
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        let result = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::FromSigner,
+                None,
+                false,
+                Some(payee),
+                Some(ReceiveAmountBasis::Gross),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ServiceError::PreimageShareStoreFailed(_))),
+            "{result:?}"
+        );
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 2, "{operations:?}");
+        let (_, quote_input) = &operations[0];
+        assert_eq!(quote_input["amount_basis"], "GROSS");
+        let payee_hex = hex::encode(payee.serialize());
+        assert_eq!(quote_input["receiver_identity_pubkey"], payee_hex.as_str());
+        let (_, request) = &operations[1];
+        assert_eq!(request["amount_sats"], 100_000, "the invoice is the gross");
+        assert_eq!(request["receiver_identity_pubkey"], payee_hex.as_str());
+        let committed = &request["committed_quote"];
+        let manifest = hex::decode(committed["serialized_manifest"].as_str().unwrap()).unwrap();
+        let payment_hash: [u8; 32] = hex::decode(request["payment_hash"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        verify_identity_signature(
+            &receive_attestation_digest(&manifest, &payment_hash).unwrap(),
+            &hex::decode(committed["attestor_signature"].as_str().unwrap()).unwrap(),
+            &me,
+        )
+        .expect("the attestor, not the payee, signs the attestation");
+    }
+
+    #[async_test_all]
+    async fn a_quoted_hodl_receive_attests_over_the_callers_payment_hash() {
+        let (service, ssp, me) = service(Box::new(move |op, body, identity| match op {
+            "LightningReceiveQuote" => quote_response(&net_quote(identity, ProtoNetwork::Regtest)),
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        let payment_hash = sha256::Hash::hash(b"caller's preimage");
+
+        // A HODL receive stores no preimage share, so it reaches no operator.
+        let payment = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::Hodl(payment_hash),
+                None,
+                false,
+                None,
+                Some(ReceiveAmountBasis::Net),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            payment.quote_fee,
+            Some(ReceiveQuoteFee {
+                flat_sats: 2_000,
+                rate_bps: 0
+            })
+        );
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 2, "{operations:?}");
+        let (_, request) = &operations[1];
+        assert_eq!(request["amount_sats"], 102_000);
+        assert_eq!(request["payment_hash"], payment_hash.to_string());
+        let committed = &request["committed_quote"];
+        let manifest = hex::decode(committed["serialized_manifest"].as_str().unwrap()).unwrap();
+        verify_identity_signature(
+            &receive_attestation_digest(&manifest, &payment_hash.to_byte_array()).unwrap(),
+            &hex::decode(committed["attestor_signature"].as_str().unwrap()).unwrap(),
+            &me,
+        )
+        .expect("the attestation covers the caller's payment hash");
+    }
+
+    #[async_test_all]
+    async fn a_hodl_invoice_cannot_pay_another_wallet() {
+        let (service, ssp, _) = service(Box::new(|op, _, _| panic!("unexpected {op}"))).await;
+
+        let result = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::Hodl(sha256::Hash::hash(b"another wallet's")),
+                None,
+                false,
+                Some(key(0x61)),
+                Some(ReceiveAmountBasis::Net),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(ServiceError::InvalidInput(_))),
+            "{result:?}"
+        );
+        assert!(ssp.operations().is_empty());
+    }
+
+    #[async_test_all]
+    async fn a_quoted_receive_attests_over_the_hash_of_the_callers_preimage() {
+        let (service, ssp, me) = service(Box::new(move |op, body, identity| match op {
+            "LightningReceiveQuote" => quote_response(&net_quote(identity, ProtoNetwork::Regtest)),
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        let preimage = Preimage::try_from(vec![0x07; 32]).unwrap();
+        let payment_hash = preimage.compute_hash();
+
+        // The pool's operator listens nowhere, so the receive stops at the
+        // preimage share store, after every SSP call it makes.
+        let result = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::FromCaller(preimage),
+                None,
+                false,
+                None,
+                Some(ReceiveAmountBasis::Net),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(ServiceError::PreimageShareStoreFailed(_))),
+            "{result:?}"
+        );
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 2, "{operations:?}");
+        let (_, request) = &operations[1];
+        assert_eq!(request["payment_hash"], payment_hash.to_string());
+        let committed = &request["committed_quote"];
+        let manifest = hex::decode(committed["serialized_manifest"].as_str().unwrap()).unwrap();
+        verify_identity_signature(
+            &receive_attestation_digest(&manifest, &payment_hash.to_byte_array()).unwrap(),
+            &hex::decode(committed["attestor_signature"].as_str().unwrap()).unwrap(),
+            &me,
+        )
+        .expect("the attestation covers the hash of the caller's preimage");
+    }
+
+    #[async_test_all]
+    async fn a_receive_with_a_spark_address_asks_for_no_quote() {
+        let (service, ssp, _) = service(Box::new(|op, body, _| match op {
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        let _ = service
+            .create_lightning_invoice(
+                100_000,
+                None,
+                InvoicePreimage::FromSigner,
+                None,
+                true,
+                None,
+                Some(ReceiveAmountBasis::Net),
+            )
+            .await;
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 1, "{operations:?}");
+        assert!(operations[0].1.get("committed_quote").is_none());
+        assert_eq!(operations[0].1["include_spark_address"], true);
+    }
+
+    #[async_test_all]
+    async fn an_unquoted_receive_asks_for_no_quote() {
+        let (service, ssp, _) = service(Box::new(|op, body, _| match op {
+            "RequestLightningReceive" => receive_response(body),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        receive(&service, None).await;
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 1, "{operations:?}");
+        assert!(operations[0].1.get("committed_quote").is_none());
+    }
+
+    // ─── quoted sends ─────────────────────────────────────────────────────
+
+    const PARTNER_SEED: u8 = 0x53;
+    const INVOICE_MSATS: u64 = 100_000_000;
+
+    fn bolt11(payment_hash: sha256::Hash, amount_msats: Option<u64>) -> String {
+        let secp = Secp256k1::new();
+        let node_key = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let builder = InvoiceBuilder::new(Currency::Regtest)
+            .description("test".to_string())
+            .payment_hash(payment_hash)
+            .payment_secret(PaymentSecret([0x22; 32]))
+            .duration_since_epoch(Duration::from_secs(1_700_000_000))
+            .min_final_cltv_expiry_delta(144);
+        match amount_msats {
+            Some(msats) => builder
+                .amount_milli_satoshis(msats)
+                .build_signed(|m| secp.sign_ecdsa_recoverable(m, &node_key))
+                .unwrap()
+                .to_string(),
+            None => builder
+                .build_signed(|m| secp.sign_ecdsa_recoverable(m, &node_key))
+                .unwrap()
+                .to_string(),
+        }
+    }
+
+    /// The SSP's split of a 100_000 sat send by `sender`: 100_500 to the SSP,
+    /// covering the payment and its fees, and a 1_000 sat partner markup.
+    fn send_manifest(sender: PublicKey, expires_in_secs: i64) -> Vec<u8> {
+        let edge = |to: PublicKey, amount| ManifestEdge {
+            sender_identity_public_key: sender.serialize().to_vec(),
+            receiver_identity_public_key: to.serialize().to_vec(),
+            amount: sats(amount),
+        };
+        let now = i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        TransferManifest {
+            version: 1,
+            transfer_id: "0197f9a0-0000-7000-8000-000000000002".to_string(),
+            network: ProtoNetwork::Regtest.into(),
+            edges: vec![edge(key(SSP_SEED), 100_500), edge(key(PARTNER_SEED), 1_000)],
+            fees: vec![FeeComponent {
+                source: FeeSource::PartnerMarkup.into(),
+                role: FeeRole::Partner.into(),
+                amount: sats(1_000),
+                receiver_identity_public_key: key(PARTNER_SEED).serialize().to_vec(),
+            }],
+            quote_expiry_time: Some(prost_types::Timestamp {
+                seconds: now + expires_in_secs,
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    /// The issuer signature the SSP makes over a send quote.
+    fn issue(signer_seed: u8, manifest: &[u8], payment_hash: sha256::Hash, msats: u64) -> Vec<u8> {
+        let digest = send_issuance_digest(manifest, &payment_hash.to_byte_array(), msats).unwrap();
+        Secp256k1::new()
+            .sign_ecdsa(
+                &bitcoin::secp256k1::Message::from_digest(digest),
+                &SecretKey::from_slice(&[signer_seed; 32]).unwrap(),
+            )
+            .serialize_der()
+            .to_vec()
+    }
+
+    fn send_quote_response(manifest: &[u8], signature: &[u8], payment_msats: u64) -> Value {
+        json!({"data": {"lightning_send_quote": {
+            "issued_quote": {
+                "serialized_manifest": hex::encode(manifest),
+                "issuer_signature": hex::encode(signature),
+            },
+            "attribution_status": "ATTRIBUTED",
+            "payment_msats": payment_msats,
+        }}})
+    }
+
+    /// A service whose SSP answers a send quote with `manifest`, signed by the
+    /// key seeded `signer_seed` for `signed_msats`.
+    async fn quoting_service(
+        manifest: impl Fn(PublicKey) -> Vec<u8> + Send + Sync + 'static,
+        signer_seed: u8,
+        signed_msats: u64,
+    ) -> (LightningService, PublicKey, sha256::Hash) {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let (service, _, me) = service(Box::new(move |op, _, identity| match op {
+            "LightningSendQuote" => {
+                let manifest = manifest(identity);
+                let signature = issue(signer_seed, &manifest, payment_hash, signed_msats);
+                send_quote_response(&manifest, &signature, signed_msats)
+            }
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        (service, me, payment_hash)
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_the_ssp_signed_for_this_invoice_is_accepted() {
+        let (service, _, payment_hash) =
+            quoting_service(|me| send_manifest(me, 600), SSP_SEED, INVOICE_MSATS).await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                SendQuoteAmount::Invoice,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(quote.amount_sats, 100_000);
+        assert_eq!(quote.amount_to_send, None);
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.payment_hash, payment_hash);
+        assert_eq!(
+            quote.transfer_id.to_string(),
+            "0197f9a0-0000-7000-8000-000000000002"
+        );
+        let buckets: Vec<(PublicKey, u64)> = quote
+            .buckets
+            .iter()
+            .map(|b| (b.receiver_identity_public_key, b.amount_sats))
+            .collect();
+        assert_eq!(
+            buckets,
+            vec![(key(SSP_SEED), 100_500), (key(PARTNER_SEED), 1_000)]
+        );
+    }
+
+    /// An expired quote still verifies, so a send prepared under it can be
+    /// quoted again on the same terms, but it can no longer be committed.
+    #[async_test_all]
+    async fn an_expired_send_quote_verifies_but_is_not_committable() {
+        let (service, me, payment_hash) =
+            quoting_service(|me| send_manifest(me, 600), SSP_SEED, INVOICE_MSATS).await;
+        let manifest = send_manifest(me, -1);
+        let issued_quote = IssuedQuote {
+            issuer_signature: issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS),
+            serialized_manifest: manifest,
+        };
+
+        let quote = service
+            .verify_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                &issued_quote,
+                INVOICE_MSATS,
+                SendQuoteAmount::Invoice,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.check_unexpired(), Err(QuoteError::Expired));
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_carries_a_partner_fee_only_with_a_markup() {
+        let (service, me, payment_hash) =
+            quoting_service(|me| send_manifest(me, 600), SSP_SEED, INVOICE_MSATS).await;
+        let verify = |manifest: Vec<u8>| {
+            let issued_quote = IssuedQuote {
+                issuer_signature: issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS),
+                serialized_manifest: manifest,
+            };
+            let service = &service;
+            async move {
+                service
+                    .verify_lightning_send_quote(
+                        &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                        &issued_quote,
+                        INVOICE_MSATS,
+                        SendQuoteAmount::Invoice,
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        assert!(verify(send_manifest(me, 600)).await.carries_partner_fee());
+
+        let mut feeless = TransferManifest::decode(send_manifest(me, 600).as_slice()).unwrap();
+        feeless.edges.truncate(1);
+        feeless.fees.clear();
+        assert!(!verify(feeless.encode_to_vec()).await.carries_partner_fee());
+    }
+
+    async fn assert_quote_refused(
+        manifest: impl Fn(PublicKey) -> Vec<u8> + Send + Sync + 'static,
+        signer_seed: u8,
+        signed_msats: u64,
+        invoice_msats: Option<u64>,
+        amount_sats: Option<u64>,
+    ) {
+        let (service, _, payment_hash) = quoting_service(manifest, signer_seed, signed_msats).await;
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, invoice_msats),
+                amount_sats.map_or(SendQuoteAmount::Invoice, SendQuoteAmount::Payment),
+                None,
+            )
+            .await;
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    // The issuer signature binds the amount, so a quote priced for one amount
+    // cannot be committed against another.
+    #[async_test_all]
+    async fn a_send_quote_signed_for_another_amount_is_refused() {
+        assert_quote_refused(
+            |me| send_manifest(me, 600),
+            SSP_SEED,
+            1_000,
+            Some(INVOICE_MSATS),
+            None,
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_signed_by_another_key_is_refused() {
+        assert_quote_refused(
+            |me| send_manifest(me, 600),
+            0x77,
+            INVOICE_MSATS,
+            Some(INVOICE_MSATS),
+            None,
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn an_expired_send_quote_is_refused() {
+        assert_quote_refused(
+            |me| send_manifest(me, -1),
+            SSP_SEED,
+            INVOICE_MSATS,
+            Some(INVOICE_MSATS),
+            None,
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_debiting_another_wallet_is_refused() {
+        assert_quote_refused(
+            |_| send_manifest(key(0x78), 600),
+            SSP_SEED,
+            INVOICE_MSATS,
+            Some(INVOICE_MSATS),
+            None,
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn an_amountless_invoice_is_not_quoted_without_an_amount() {
+        assert_quote_refused(
+            |me| send_manifest(me, 600),
+            SSP_SEED,
+            INVOICE_MSATS,
+            None,
+            None,
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn an_amount_beside_the_invoices_own_is_refused() {
+        assert_quote_refused(
+            |me| send_manifest(me, 600),
+            SSP_SEED,
+            INVOICE_MSATS,
+            Some(INVOICE_MSATS),
+            Some(99_999),
+        )
+        .await;
+    }
+
+    /// A send quote whose SSP prices `payment_msats`, recording what each
+    /// quote request asked for.
+    async fn amountless_quoting_service(
+        payment_msats: u64,
+    ) -> (LightningService, Arc<ScriptedSsp>, sha256::Hash) {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let (service, ssp, _) = service(Box::new(move |op, _, identity| match op {
+            "LightningSendQuote" => {
+                let manifest = send_manifest(identity, 600);
+                let signature = issue(SSP_SEED, &manifest, payment_hash, payment_msats);
+                send_quote_response(&manifest, &signature, payment_msats)
+            }
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        (service, ssp, payment_hash)
+    }
+
+    #[async_test_all]
+    async fn a_total_is_quoted_gross_and_pays_what_is_left_after_fees() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Total(101_500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let (_, input) = &ssp.operations()[0];
+        assert_eq!(input["amount_basis"], "GROSS");
+        assert_eq!(input["amount_sats"], 101_500);
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.amount_to_send, Some(100_000));
+    }
+
+    #[async_test_all]
+    async fn a_quote_spending_other_than_the_total_is_refused() {
+        let (service, _, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Total(101_000),
+                None,
+            )
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[async_test_all]
+    async fn a_total_on_an_invoice_with_its_own_amount_pays_the_invoice() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                SendQuoteAmount::Total(101_500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let (_, input) = &ssp.operations()[0];
+        assert_eq!(input["amount_basis"], "GROSS");
+        assert_eq!(input["amount_sats"], 101_500);
+        assert_eq!(quote.total_sats, 101_500);
+        assert_eq!(quote.payment_msats, INVOICE_MSATS);
+        assert_eq!(quote.amount_to_send, None);
+    }
+
+    #[async_test_all]
+    async fn a_total_overpaying_an_invoice_with_its_own_amount_is_refused() {
+        let (service, _, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, Some(INVOICE_MSATS - 1_000)),
+                SendQuoteAmount::Total(101_500),
+                None,
+            )
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[async_test_all]
+    async fn a_quote_commits_the_transfer_asked_for() {
+        let (service, ssp, payment_hash) = amountless_quoting_service(INVOICE_MSATS).await;
+        let invoice = bolt11(payment_hash, Some(INVOICE_MSATS));
+        let asked = TransferId::from_str("0197f9a0-0000-7000-8000-000000000002").unwrap();
+
+        let quote = service
+            .fetch_lightning_send_quote(&invoice, SendQuoteAmount::Invoice, Some(&asked))
+            .await
+            .unwrap();
+        assert_eq!(quote.transfer_id, asked);
+        assert_eq!(ssp.operations()[0].1["transfer_id"], asked.to_string());
+
+        // The scripted SSP commits its own transfer whatever it is asked.
+        let other = TransferId::generate();
+        let result = service
+            .fetch_lightning_send_quote(&invoice, SendQuoteAmount::Invoice, Some(&other))
+            .await;
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[async_test_all]
+    async fn an_amountless_invoice_is_quoted_for_the_amount_sent() {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let (service, ssp, _) = service(Box::new(move |op, _, identity| match op {
+            "LightningSendQuote" => {
+                let manifest = send_manifest(identity, 600);
+                let signature = issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS);
+                send_quote_response(&manifest, &signature, INVOICE_MSATS)
+            }
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+
+        let quote = service
+            .fetch_lightning_send_quote(
+                &bolt11(payment_hash, None),
+                SendQuoteAmount::Payment(100_000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ssp.operations()[0].1["amount_sats"], 100_000);
+        assert_eq!(quote.amount_sats, 100_000);
+        assert_eq!(quote.amount_to_send, Some(100_000));
+        assert_eq!(quote.total_sats, 101_500);
+    }
+
+    fn leaf_to(id: &str, value: u64, receiver: PublicKey) -> (LeafKeyTweak, PublicKey) {
+        let node = crate::tree::tests::create_test_tree_node(id, value);
+        (
+            LeafKeyTweak {
+                signing_key: crate::signer::LeafSigningKey {
+                    derived_from: node.id.clone(),
+                },
+                node,
+            },
+            receiver,
+        )
+    }
+
+    fn buckets() -> Vec<SendManifestBucket> {
+        vec![
+            SendManifestBucket {
+                receiver_identity_public_key: key(SSP_SEED),
+                amount_sats: 100_500,
+            },
+            SendManifestBucket {
+                receiver_identity_public_key: key(PARTNER_SEED),
+                amount_sats: 1_000,
+            },
+        ]
+    }
+
+    #[test]
+    fn leaves_funding_each_bucket_exactly_pass() {
+        let leaves = vec![
+            leaf_to("a", 100_000, key(SSP_SEED)),
+            leaf_to("b", 500, key(SSP_SEED)),
+            leaf_to("c", 1_000, key(PARTNER_SEED)),
+        ];
+        check_buckets_funded(&buckets(), &leaves).unwrap();
+    }
+
+    // The operators enforce exact cover per receiver, so leaves swapped between
+    // two receivers must fail here rather than strand at their prepare step.
+    #[test]
+    fn leaves_misrouted_between_buckets_are_refused() {
+        let leaves = vec![
+            leaf_to("a", 100_500, key(PARTNER_SEED)),
+            leaf_to("c", 1_000, key(SSP_SEED)),
+        ];
+        assert!(check_buckets_funded(&buckets(), &leaves).is_err());
+        let short = vec![leaf_to("a", 100_500, key(SSP_SEED))];
+        assert!(check_buckets_funded(&buckets(), &short).is_err());
+    }
+
+    fn with_send_status(mut response: Value, status: &str) -> Value {
+        response["data"]["lightning_send_quote"]["attribution_status"] = json!(status);
+        response
+    }
+
+    /// `manifest` as the SSP issues it for the quoted send's invoice.
+    fn signed_send_quote(manifest: &[u8]) -> Value {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let signature = issue(SSP_SEED, manifest, payment_hash, INVOICE_MSATS);
+        send_quote_response(manifest, &signature, INVOICE_MSATS)
+    }
+
+    fn feeless_send_manifest(sender: PublicKey) -> Vec<u8> {
+        let mut feeless = TransferManifest::decode(send_manifest(sender, 600).as_slice()).unwrap();
+        feeless.edges.truncate(1);
+        feeless.fees.clear();
+        feeless.encode_to_vec()
+    }
+
+    /// The send quote fetched with `respond` answering its SSP calls: the SSP
+    /// operations it made and how it ended.
+    async fn fetched_send_quote(
+        respond: impl Fn(&str, PublicKey) -> Value + Send + Sync + 'static,
+    ) -> (
+        Vec<(String, Value)>,
+        Result<QuotedLightningSend, ServiceError>,
+    ) {
+        let (service, ssp, _) =
+            service(Box::new(move |op, _, identity| respond(op, identity))).await;
+        let result = service
+            .fetch_lightning_send_quote(
+                &bolt11(sha256::Hash::hash(b"quoted send"), Some(INVOICE_MSATS)),
+                SendQuoteAmount::Invoice,
+                None,
+            )
+            .await;
+        (ssp.operations(), result)
+    }
+
+    #[async_test_all]
+    async fn a_send_quote_the_ssp_cannot_issue_fails() {
+        let (operations, result) = fetched_send_quote(|op, _| match op {
+            "LightningSendQuote" => refusal(),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(operations.len(), 1, "{operations:?}");
+    }
+
+    /// An affiliate the SSP doesn't know is one charging no fee: the quote
+    /// carries none, so the send goes on unquoted, without asking again.
+    #[async_test_all]
+    async fn an_unregistered_affiliate_gets_a_send_quote_without_a_partner_fee() {
+        let (operations, result) = fetched_send_quote(|op, me| match op {
+            "LightningSendQuote" => with_send_status(
+                signed_send_quote(&feeless_send_manifest(me)),
+                "UNKNOWN_AFFILIATE",
+            ),
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(!result.unwrap().carries_partner_fee());
+        assert_eq!(operations.len(), 1, "{operations:?}");
+    }
+
+    #[async_test_all]
+    async fn a_rejected_partner_token_is_asked_about_once_more_for_a_send_quote() {
+        let asked = Arc::new(Mutex::new(0));
+        let asked_in = Arc::clone(&asked);
+        let (operations, result) = fetched_send_quote(move |op, me| match op {
+            "LightningSendQuote" => {
+                let mut asked = asked_in.lock().unwrap();
+                *asked += 1;
+                let response = signed_send_quote(&send_manifest(me, 600));
+                if *asked == 1 {
+                    with_send_status(response, "TOKEN_INVALID")
+                } else {
+                    response
+                }
+            }
+            other => panic!("unexpected {other}"),
+        })
+        .await;
+        assert!(result.unwrap().carries_partner_fee());
+        let names: Vec<&str> = operations.iter().map(|(op, _)| op.as_str()).collect();
+        assert_eq!(names, ["LightningSendQuote", "LightningSendQuote"]);
+    }
+
+    /// The outcome of submitting a send under the quote over `manifest`, with
+    /// `leaves`, and the SSP operations it made.
+    async fn submitted_quoted_send(
+        manifest: impl Fn(PublicKey) -> Vec<u8>,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+    ) -> (Vec<(String, Value)>, Result<(), ServiceError>) {
+        let (service, ssp, me) = service(Box::new(|op, _, _| panic!("unexpected {op}"))).await;
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let invoice = bolt11(payment_hash, Some(INVOICE_MSATS));
+        let manifest = manifest(me);
+        let issued_quote = IssuedQuote {
+            issuer_signature: issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS),
+            serialized_manifest: manifest,
+        };
+        let quote = service
+            .verify_lightning_send_quote(
+                &invoice,
+                &issued_quote,
+                INVOICE_MSATS,
+                SendQuoteAmount::Invoice,
+            )
+            .await
+            .unwrap();
+        let signature = Secp256k1::new().sign_ecdsa(
+            &bitcoin::secp256k1::Message::from_digest([0x01; 32]),
+            &SecretKey::from_slice(&[0x01; 32]).unwrap(),
+        );
+        let prepared = PreparedTransfer {
+            operator_packages: Vec::new(),
+            new_leaf_keys: Vec::new(),
+            transfer_user_signature: signature,
+        };
+
+        let result = service
+            .submit_quoted_lightning_send(&invoice, &quote, leaves, prepared, &signature)
+            .await
+            .map(|_| ());
+        (ssp.operations(), result)
+    }
+
+    fn funding_leaves() -> Vec<(LeafKeyTweak, PublicKey)> {
+        vec![
+            leaf_to("a", 100_500, key(SSP_SEED)),
+            leaf_to("c", 1_000, key(PARTNER_SEED)),
+        ]
+    }
+
+    #[async_test_all]
+    async fn an_expired_quote_is_refused_before_anything_is_sent() {
+        let (operations, result) =
+            submitted_quoted_send(|me| send_manifest(me, -1), &funding_leaves()).await;
+        assert!(
+            matches!(result, Err(ServiceError::Quote(QuoteError::Expired))),
+            "{result:?}"
+        );
+        assert!(operations.is_empty(), "{operations:?}");
+    }
+
+    #[async_test_all]
+    async fn leaves_misrouted_between_receivers_are_refused_before_anything_is_sent() {
+        let misrouted = vec![
+            leaf_to("a", 100_500, key(PARTNER_SEED)),
+            leaf_to("c", 1_000, key(SSP_SEED)),
+        ];
+        let (operations, result) =
+            submitted_quoted_send(|me| send_manifest(me, 600), &misrouted).await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::Quote(QuoteError::InvalidManifest(_)))
+            ),
+            "{result:?}"
+        );
+        assert!(operations.is_empty(), "{operations:?}");
+    }
+
+    /// What the SSP is asked when a send committed with the operators is paid,
+    /// under `quote` when it was quoted.
+    async fn requested_send(quote: Option<&IssuedQuote>) -> Value {
+        let (service, ssp, me) = service(Box::new(|op, _, _| match op {
+            "RequestLightningSend" => refusal(),
+            other => panic!("unexpected {other}"),
+        }))
+        .await;
+        let transfer_id = TransferId::from_str("0197f9a0-0000-7000-8000-000000000002").unwrap();
+        let transfer = Transfer {
+            id: transfer_id.clone(),
+            sender_identity_public_key: me,
+            receiver_identity_public_key: key(SSP_SEED),
+            status: TransferStatus::SenderKeyTweaked,
+            expiry_time: None,
+            leaves: Vec::new(),
+            created_time: None,
+            updated_time: None,
+            transfer_type: TransferType::PreimageSwap,
+            spark_invoice: None,
+            receivers: Vec::new(),
+        };
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+
+        let result = service
+            .request_lightning_send_result(
+                transfer,
+                &transfer_id,
+                &bolt11(payment_hash, Some(INVOICE_MSATS)),
+                None,
+                payment_hash,
+                quote.map(committed_send_quote).transpose().unwrap(),
+            )
+            .await
+            .map(|_| ());
+        assert!(result.is_err(), "the SSP refuses: {result:?}");
+
+        let operations = ssp.operations();
+        assert_eq!(operations.len(), 1, "{operations:?}");
+        let (op, input) = &operations[0];
+        assert_eq!(op, "RequestLightningSend");
+        assert_eq!(
+            input["user_outbound_transfer_external_id"],
+            transfer_id.to_string()
+        );
+        input.clone()
+    }
+
+    /// A send resumed after its leaves were committed under a quote is paid
+    /// against that quote's split.
+    #[async_test_all]
+    async fn a_resumed_quoted_send_asks_the_ssp_with_the_committed_quote() {
+        let payment_hash = sha256::Hash::hash(b"quoted send");
+        let manifest = send_manifest(key(0x01), 600);
+        let issued_quote = IssuedQuote {
+            issuer_signature: issue(SSP_SEED, &manifest, payment_hash, INVOICE_MSATS),
+            serialized_manifest: manifest,
+        };
+
+        let input = requested_send(Some(&issued_quote)).await;
+
+        let committed = &input["committed_quote"];
+        assert_eq!(
+            committed["serialized_manifest"],
+            hex::encode(&issued_quote.serialized_manifest)
+        );
+        assert_eq!(
+            committed["issuer_signature"],
+            hex::encode(&issued_quote.issuer_signature)
+        );
+        assert_eq!(committed["total_sats"], 101_500);
+    }
+
+    #[async_test_all]
+    async fn a_resumed_unquoted_send_asks_the_ssp_with_no_quote() {
+        let input = requested_send(None).await;
+        assert!(input.get("committed_quote").is_none(), "{input}");
     }
 }
 

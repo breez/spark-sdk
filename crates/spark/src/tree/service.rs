@@ -290,63 +290,52 @@ impl TreeService for SynchronousTreeService {
         trace!(
             "Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}, options: {options:?}"
         );
-
-        let max_wait = options.max_wait_for_pending;
-
-        let mut balance_rx = self.state.subscribe_balance_changes();
-        let wait_start = platform_utils::time::Instant::now();
-        let mut wait_count = 0u32;
-
-        loop {
-            let reserve_result = self
-                .state
-                .try_reserve_leaves(target_amounts, false, purpose)
-                .await?;
-
-            // Handle non-success cases first with early continue/return
-            let reservation = match reserve_result {
-                ReserveResult::InsufficientFunds => {
-                    return Err(TreeServiceError::InsufficientFunds);
-                }
-                ReserveResult::WaitForPending {
-                    needed,
-                    available,
-                    pending,
-                } => {
-                    // If configured for no waiting, return InsufficientFunds immediately
-                    if max_wait.is_zero() {
-                        return Err(TreeServiceError::InsufficientFunds);
-                    }
-                    info!(
-                        "Waiting for pending balance: available={available}, needed={needed}, pending={pending}",
-                    );
-                    self.wait_for_pending_balance(
-                        &mut balance_rx,
-                        &wait_start,
-                        &mut wait_count,
-                        max_wait,
-                        available,
-                        pending,
-                    )
-                    .await?;
-                    continue;
-                }
-                ReserveResult::Success(r) => r,
-            };
-
-            let reservation = self.renew_reservation_timelocks(reservation).await?;
-
-            // Check if swap is needed
-            if self.reservation_matches_target(&reservation, target_amounts) {
-                trace!("Selected leaves match requirements, no swap needed");
-                return Ok(reservation);
-            }
-
-            // Perform swap and update reservation
-            return self
-                .perform_swap_and_update_reservation(reservation, target_amounts)
-                .await;
+        let reservation = self
+            .reserve_leaves(target_amounts, purpose, options)
+            .await?;
+        if self.reservation_matches_target(&reservation, target_amounts) {
+            trace!("Selected leaves match requirements, no swap needed");
+            return Ok(reservation);
         }
+        self.perform_swap_and_update_reservation(reservation, target_amounts)
+            .await
+    }
+
+    async fn select_leaves_for_amounts(
+        &self,
+        amounts: &[u64],
+        purpose: ReservationPurpose,
+        options: SelectLeavesOptions,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        // A reservation for the total rarely splits back into the amounts, so
+        // look for the split among every available leaf first.
+        let available = self.state.get_leaves().await?.available;
+        if let Some(leaves) = select_helper::select_resplittable_leaves(&available, amounts) {
+            let ids: Vec<TreeNodeId> = leaves.into_iter().map(|l| l.id).collect();
+            // Another reservation may have taken some of them meanwhile.
+            if let Ok(reservation) = self.state.try_reserve_leaves_by_ids(&ids, purpose).await {
+                return self.renew_reservation_timelocks(reservation).await;
+            }
+        }
+        let total = amounts.iter().copied().fold(0u64, u64::saturating_add);
+        let reservation = self
+            .reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(total, None)),
+                purpose,
+                options,
+            )
+            .await?;
+        if select_helper::partition_by_exact_amounts(&reservation.leaves, amounts).is_some() {
+            return Ok(reservation);
+        }
+        // A swap returns each amount in leaves of its own, so a set of them
+        // funds each amount exactly, and the rest goes back as change.
+        let targets = TargetAmounts::new_exact_denominations(amounts.to_vec());
+        self.swap_into_reservation(reservation, Some(&targets), |leaves| {
+            select_helper::select_resplittable_leaves(leaves, amounts)
+                .ok_or(TreeServiceError::UnselectableAmount)
+        })
+        .await
     }
 
     async fn reserve_leaves_by_ids(
@@ -370,6 +359,25 @@ impl TreeService for SynchronousTreeService {
             LeafSelection::SwapNeeded(leaves) => Ok(LeafSelection::SwapNeeded(
                 self.renew_leaves_timelocks(leaves).await?,
             )),
+        }
+    }
+
+    async fn select_leaves_for_package_by_amounts(
+        &self,
+        amounts: &[u64],
+    ) -> Result<LeafSelection, TreeServiceError> {
+        let available = self.state.get_leaves().await?.available;
+        if let Some(leaves) = select_helper::select_resplittable_leaves(&available, amounts) {
+            return Ok(LeafSelection::Exact(
+                self.renew_leaves_timelocks(leaves).await?,
+            ));
+        }
+        let total = amounts.iter().copied().fold(0u64, u64::saturating_add);
+        let target = TargetAmounts::new_amount_and_fee(total, None);
+        match self.select_leaves_for_package(Some(&target)).await? {
+            LeafSelection::Exact(leaves) | LeafSelection::SwapNeeded(leaves) => {
+                Ok(LeafSelection::SwapNeeded(leaves))
+            }
         }
     }
 
@@ -703,11 +711,87 @@ impl SynchronousTreeService {
         Ok(())
     }
 
+    /// Reserves leaves covering `target_amounts`, without swapping them,
+    /// waiting for pending balance as `options` allow. Their timelocks are
+    /// renewed where needed.
+    async fn reserve_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+        purpose: ReservationPurpose,
+        options: SelectLeavesOptions,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let max_wait = options.max_wait_for_pending;
+        let mut balance_rx = self.state.subscribe_balance_changes();
+        let wait_start = platform_utils::time::Instant::now();
+        let mut wait_count = 0u32;
+
+        loop {
+            let reserve_result = self
+                .state
+                .try_reserve_leaves(target_amounts, false, purpose)
+                .await?;
+
+            // Handle non-success cases first with early continue/return
+            let reservation = match reserve_result {
+                ReserveResult::InsufficientFunds => {
+                    return Err(TreeServiceError::InsufficientFunds);
+                }
+                ReserveResult::WaitForPending {
+                    needed,
+                    available,
+                    pending,
+                } => {
+                    // If configured for no waiting, return InsufficientFunds immediately
+                    if max_wait.is_zero() {
+                        return Err(TreeServiceError::InsufficientFunds);
+                    }
+                    info!(
+                        "Waiting for pending balance: available={available}, needed={needed}, pending={pending}",
+                    );
+                    self.wait_for_pending_balance(
+                        &mut balance_rx,
+                        &wait_start,
+                        &mut wait_count,
+                        max_wait,
+                        available,
+                        pending,
+                    )
+                    .await?;
+                    continue;
+                }
+                ReserveResult::Success(r) => r,
+            };
+
+            return self.renew_reservation_timelocks(reservation).await;
+        }
+    }
+
     /// Performs a swap and updates the reservation with the new leaves.
     async fn perform_swap_and_update_reservation(
         &self,
         reservation: LeavesReservation,
         target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.swap_into_reservation(reservation, target_amounts, |leaves| {
+            let target_leaves =
+                select_helper::select_leaves_by_target_amounts(leaves, target_amounts)?;
+            Ok([
+                target_leaves.amount_leaves,
+                target_leaves.fee_leaves.unwrap_or_default(),
+            ]
+            .concat())
+        })
+        .await
+    }
+
+    /// Swaps the leaves of `reservation` for `target_amounts`, keeps the swap
+    /// outputs `select` picks in the reservation and returns the rest to the
+    /// pool as change.
+    async fn swap_into_reservation(
+        &self,
+        reservation: LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+        select: impl FnOnce(&[TreeNode]) -> Result<Vec<TreeNode>, TreeServiceError>,
     ) -> Result<LeavesReservation, TreeServiceError> {
         trace!("Swapping leaves to match target amount");
 
@@ -744,13 +828,15 @@ impl SynchronousTreeService {
 
         // Select the exact leaves that match the target amounts
         let new_leaf_nodes: Vec<TreeNode> = new_leaves.iter().map(|p| p.leaf.clone()).collect();
-        let target_leaves =
-            select_helper::select_leaves_by_target_amounts(&new_leaf_nodes, target_amounts)?;
-        let reserved_leaves = [
-            target_leaves.amount_leaves,
-            target_leaves.fee_leaves.unwrap_or_default(),
-        ]
-        .concat();
+        let reserved_leaves = match select(&new_leaf_nodes) {
+            Ok(leaves) => leaves,
+            Err(e) => {
+                error!("Failed to select from the swapped leaves: {e:?}, finalizing");
+                self.release_swap_outputs(&reservation, new_leaves, any_renewal_landed)
+                    .await;
+                return Err(e);
+            }
+        };
 
         let reserved_ids: HashSet<_> = reserved_leaves.iter().map(|l| l.id.clone()).collect();
         let (reserved_pedigrees, change_pedigrees): (Vec<LeafPedigree>, Vec<LeafPedigree>) =
@@ -789,30 +875,38 @@ impl SynchronousTreeService {
                 Ok(final_reservation)
             }
             Err(e) => {
-                // Update failed - finalize the reservation to release the permit.
-                // We use finalize (not cancel) because the OLD leaves were
-                // consumed by the swap and no longer exist.
-                // Preserve the new swap output in the pool.
                 error!("Failed to update reservation after swap: {e:?}, finalizing");
-                let leaves: Vec<TreeNode> =
-                    reserved_nodes.into_iter().chain(change_nodes).collect();
-                if let Err(finalize_err) = self
-                    .state
-                    .finalize_reservation(&reservation.id, Some(&leaves))
-                    .await
-                {
-                    error!("Failed to finalize reservation after update error: {finalize_err:?}");
-                } else {
-                    let renewed: Vec<LeafPedigree> = reserved_pedigrees
-                        .into_iter()
-                        .chain(change_pedigrees)
-                        .collect();
-                    self.store_renewed_chains(&renewed, any_renewal_landed)
-                        .await;
-                }
+                let swapped = reserved_pedigrees
+                    .into_iter()
+                    .chain(change_pedigrees)
+                    .collect();
+                self.release_swap_outputs(&reservation, swapped, any_renewal_landed)
+                    .await;
                 Err(e)
             }
         }
+    }
+
+    /// Ends `reservation` after its swap, putting the swap outputs in the pool.
+    /// It is finalized rather than cancelled: the swap consumed the leaves it
+    /// held, which no longer exist.
+    async fn release_swap_outputs(
+        &self,
+        reservation: &LeavesReservation,
+        swapped: Vec<LeafPedigree>,
+        any_renewal_landed: bool,
+    ) {
+        let leaves: Vec<TreeNode> = swapped.iter().map(|p| p.leaf.clone()).collect();
+        if let Err(e) = self
+            .state
+            .finalize_reservation(&reservation.id, Some(&leaves))
+            .await
+        {
+            error!("Failed to finalize reservation after swap: {e:?}");
+            return;
+        }
+        self.store_renewed_chains(&swapped, any_renewal_landed)
+            .await;
     }
 
     async fn verify_leaves_against_coordinator(
@@ -2268,5 +2362,144 @@ mod tests {
                 if message.contains("not held under the key derived from its node id")),
             "{result:?}"
         );
+    }
+
+    /// A service holding available leaves of its own of `values`.
+    async fn holding(values: &[u64]) -> (SynchronousTreeService, Vec<TreeNode>) {
+        let store = Arc::new(InMemoryTreeStore::new());
+        let service = service_over(Arc::clone(&store) as Arc<dyn TreeStore>, None).await;
+        let mut leaves = Vec::new();
+        for (i, value) in values.iter().enumerate() {
+            let mut leaf =
+                our_leaf_with_refund_sequence(&service, &format!("leaf{i}"), 2_000).await;
+            leaf.value = *value;
+            leaves.push(leaf);
+        }
+        store.add_leaves(&leaves).await.unwrap();
+        (service, leaves)
+    }
+
+    fn sorted_ids(leaves: &[TreeNode]) -> Vec<TreeNodeId> {
+        let mut ids: Vec<TreeNodeId> = leaves.iter().map(|l| l.id.clone()).collect();
+        ids.sort_by_key(ToString::to_string);
+        ids
+    }
+
+    /// Whether every reservation has been released. Releasing checks the
+    /// leaves with the coordinator, which is unreachable here, so they leave
+    /// the pool until a refresh rather than turn available.
+    async fn nothing_reserved(service: &SynchronousTreeService) -> bool {
+        let leaves = service.list_leaves().await.unwrap();
+        leaves.reserved_for_payment.is_empty() && leaves.reserved_for_swap.is_empty()
+    }
+
+    #[async_test_all]
+    async fn leaves_already_split_into_the_amounts_are_reserved_as_they_are() {
+        let (service, leaves) = holding(&[1_000, 500, 250]).await;
+
+        // Any swap fails against the unroutable operators, so success means
+        // none was asked for.
+        let reservation = service
+            .select_leaves_for_amounts(
+                &[250, 1_500],
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sorted_ids(&reservation.leaves), sorted_ids(&leaves));
+    }
+
+    #[async_test_all]
+    async fn only_the_leaves_the_amounts_need_are_reserved() {
+        let (service, leaves) = holding(&[1_000, 500, 250]).await;
+
+        let reservation = service
+            .select_leaves_for_amounts(
+                &[250, 500],
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(sorted_ids(&reservation.leaves), sorted_ids(&leaves[1..]));
+        let available = service.list_leaves().await.unwrap().available;
+        assert_eq!(sorted_ids(&available), sorted_ids(&leaves[..1]));
+    }
+
+    #[async_test_all]
+    async fn amounts_a_reservation_for_their_total_would_not_split_are_found_among_all_leaves() {
+        let (service, leaves) =
+            holding(&[8_192, 1_024, 512, 256, 128, 64, 32, 16, 16, 8, 8, 4, 2, 2]).await;
+
+        let reservation = service
+            .select_leaves_for_amounts(
+                &[10_000, 170, 30],
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await
+            .unwrap();
+
+        let reserved: u64 = reservation.leaves.iter().map(|l| l.value).sum();
+        assert_eq!(reserved, 10_200);
+        let available = service.list_leaves().await.unwrap().available;
+        assert_eq!(available.len() + reservation.leaves.len(), leaves.len());
+    }
+
+    #[async_test_all]
+    async fn leaves_that_need_a_swap_are_released_when_it_fails() {
+        let (service, _) = holding(&[1_000, 500, 250]).await;
+
+        let result = service
+            .select_leaves_for_amounts(
+                &[600, 1_150],
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::no_wait(),
+            )
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+        assert!(nothing_reserved(&service).await);
+    }
+
+    async fn package_for(values: &[u64], amounts: &[u64]) -> (LeafSelection, Vec<TreeNode>) {
+        let (service, leaves) = holding(values).await;
+        let selection = service
+            .select_leaves_for_package_by_amounts(amounts)
+            .await
+            .unwrap();
+        (selection, leaves)
+    }
+
+    #[async_test_all]
+    async fn a_package_is_funded_by_one_leaf_per_amount_among_change() {
+        let (selection, leaves) = package_for(&[10_000, 30, 4_096], &[10_000, 30]).await;
+
+        let LeafSelection::Exact(selected) = selection else {
+            panic!("expected leaves funding the amounts as they are");
+        };
+        assert_eq!(sorted_ids(&selected), sorted_ids(&leaves[..2]));
+    }
+
+    #[async_test_all]
+    async fn a_package_is_funded_by_each_amounts_pieces_among_change() {
+        let pieces = [8_192, 1_024, 512, 256, 16, 16, 8, 4, 2];
+        let (selection, leaves) =
+            package_for(&[&pieces[..], &[4_096, 64]].concat(), &[10_000, 30]).await;
+
+        let LeafSelection::Exact(selected) = selection else {
+            panic!("expected leaves funding the amounts as they are");
+        };
+        assert_eq!(sorted_ids(&selected), sorted_ids(&leaves[..pieces.len()]));
+    }
+
+    #[async_test_all]
+    async fn a_package_whose_leaves_cannot_be_split_needs_a_swap() {
+        let (selection, _) = package_for(&[16_384], &[10_000, 30]).await;
+
+        assert!(matches!(selection, LeafSelection::SwapNeeded(leaves) if leaves.len() == 1));
     }
 }

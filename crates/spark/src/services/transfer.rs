@@ -1,6 +1,6 @@
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
 
 use crate::Network;
 use crate::address::SparkAddress;
@@ -12,7 +12,7 @@ use crate::services::models::{
     LeafKeyTweak, Transfer, convert_page, map_signing_nonce_commitments,
     split_signing_commitments_by_variant,
 };
-use crate::services::{TransferId, TransferObserver, TransferStatus};
+use crate::services::{TransferId, TransferObserver};
 use crate::signer::EncryptedSecret;
 use crate::signer::{FrostAdaptor, LeafSigningKey};
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
@@ -236,12 +236,21 @@ impl TransferService {
         let prepared = match prepared {
             Some(prepared) => prepared,
             None => {
-                let request = self.build_prepare_transfer_request(transfer_id, leaves, receiver_id);
+                let request = self.build_prepare_transfer_request(
+                    transfer_id,
+                    leaves.iter().map(|l| (l, *receiver_id)),
+                );
                 self.spark_signer.prepare_transfer(request).await?
             }
         };
         let prepared_package = self
-            .assemble_transfer_package(leaves, receiver_id, None, None, prepared)
+            .assemble_transfer_package(
+                leaves,
+                &vec![*receiver_id; leaves.len()],
+                None,
+                None,
+                prepared,
+            )
             .await?;
 
         match self
@@ -256,7 +265,10 @@ impl TransferService {
             Ok(transfer) => Ok(transfer),
             // The transfer id is ours whether the caller supplied it or it was
             // generated here, so a lost response is always recoverable.
-            Err(e) => self.recover_committed_transfer(transfer_id, e).await,
+            Err(e) => {
+                self.recover_committed_transfer(transfer_id, leaves.iter().map(|l| &l.node.id), e)
+                    .await
+            }
         }
     }
 
@@ -270,16 +282,26 @@ impl TransferService {
     /// distinguishable from a pre-commit failure. So the transfer's existence is
     /// the only sound test, and every error is put to it. A transfer id is
     /// single-use, so a probe that finds nothing costs one query and a probe that
-    /// finds something recovers funds that would otherwise be stranded.
-    pub(crate) async fn recover_committed_transfer(
+    /// finds something recovers funds that would otherwise be stranded. Only a
+    /// transfer spending the `submitted` leaves is this submission's: another
+    /// one under the same id was committed by an earlier submission.
+    pub(crate) async fn recover_committed_transfer<'a>(
         &self,
         transfer_id: &TransferId,
+        submitted: impl IntoIterator<Item = &'a TreeNodeId>,
         error: ServiceError,
     ) -> Result<Transfer, ServiceError> {
         match self.query_own_transfer(transfer_id).await {
             Ok(Some(transfer)) => {
+                let transfer: Transfer = transfer.try_into()?;
+                if !transfer.spends(submitted) {
+                    warn!(
+                        "Transfer {transfer_id} was committed with other leaves than this submission's"
+                    );
+                    return Err(error);
+                }
                 debug!("Recovered committed transfer {transfer_id} after a failed submission");
-                transfer.try_into()
+                Ok(transfer)
             }
             Ok(None) => Err(error),
             // The probe is a diagnosis of `error`, so its own failure must not
@@ -305,6 +327,7 @@ impl TransferService {
             .query_all_transfers(TransferFilter {
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 participant: Some(Participant::SenderIdentityPublicKey(
                     self.spark_signer
                         .get_identity_public_key()
@@ -351,7 +374,10 @@ impl TransferService {
         leaves: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
     ) -> PrepareTransferRequest {
-        self.build_prepare_transfer_request(transfer_id, leaves, receiver_public_key)
+        self.build_prepare_transfer_request(
+            transfer_id,
+            leaves.iter().map(|l| (l, *receiver_public_key)),
+        )
     }
 
     pub async fn submit_transfer_with_prepared(
@@ -406,21 +432,22 @@ impl TransferService {
         transfer.try_into()
     }
 
-    pub(crate) fn build_prepare_transfer_request(
+    /// The signer request for a transfer that sends each leaf to the receiver
+    /// paired with it.
+    pub(crate) fn build_prepare_transfer_request<'a>(
         &self,
         transfer_id: &TransferId,
-        leaf_key_tweaks: &[LeafKeyTweak],
-        receiver_public_key: &PublicKey,
+        leaves: impl IntoIterator<Item = (&'a LeafKeyTweak, PublicKey)>,
     ) -> PrepareTransferRequest {
         PrepareTransferRequest {
             transfer_id: transfer_id.clone(),
-            receiver_public_key: *receiver_public_key,
-            leaves: leaf_key_tweaks
-                .iter()
-                .map(|l| TransferLeafInput {
-                    node: l.node.clone(),
+            leaves: leaves
+                .into_iter()
+                .map(|(leaf, receiver)| TransferLeafInput {
+                    node: leaf.node.clone(),
                     new_leaf_id: TreeNodeId::generate(),
-                    signing_key: l.signing_key.clone(),
+                    signing_key: leaf.signing_key.clone(),
+                    receiver_public_key: receiver,
                 })
                 .collect(),
             operator_recipients: self.operator_recipients(),
@@ -428,10 +455,12 @@ impl TransferService {
         }
     }
 
+    /// Signs the refunds of `leaf_key_tweaks`, each to its receiver in
+    /// `receiver_public_keys`, and packages them with the signer's key tweaks.
     pub(crate) async fn assemble_transfer_package(
         &self,
         leaf_key_tweaks: &[LeafKeyTweak],
-        receiver_public_key: &PublicKey,
+        receiver_public_keys: &[PublicKey],
         payment_hash: Option<&sha256::Hash>,
         cpfp_adaptor: Option<FrostAdaptor>,
         prepared: PreparedTransfer,
@@ -477,7 +506,7 @@ impl TransferService {
             cpfp_signing_commitments,
             direct_signing_commitments,
             direct_from_cpfp_signing_commitments,
-            receiver_pubkey: receiver_public_key,
+            receiver_pubkeys: receiver_public_keys,
             payment_hash,
             network: self.network,
             cpfp_adaptor,
@@ -518,6 +547,59 @@ impl TransferService {
         })
     }
 
+    /// Packages a transfer that pays each leaf to the receiver paired with it,
+    /// under the manifest that describes the split. With `payment_hash`, each
+    /// leaf's refund is an HTLC on it, as a Lightning send needs.
+    /// `manifest_hash_signature` is this wallet's consent to the manifest, as
+    /// its sole sender.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn assemble_manifest_transfer(
+        &self,
+        transfer_id: &TransferId,
+        leaves: &[(LeafKeyTweak, PublicKey)],
+        payment_hash: Option<&sha256::Hash>,
+        expiry_time: SystemTime,
+        transfer_manifest: operator_rpc::spark::TransferManifest,
+        manifest_hash_signature: &bitcoin::secp256k1::ecdsa::Signature,
+        prepared: PreparedTransfer,
+    ) -> Result<operator_rpc::spark::StartTransferV3Request, ServiceError> {
+        let (leaf_key_tweaks, receivers): (Vec<LeafKeyTweak>, Vec<PublicKey>) = leaves
+            .iter()
+            .map(|(leaf, receiver)| {
+                (
+                    LeafKeyTweak {
+                        node: leaf.node.clone(),
+                        signing_key: leaf.signing_key.clone(),
+                    },
+                    *receiver,
+                )
+            })
+            .unzip();
+        let prepared_package = self
+            .assemble_transfer_package(&leaf_key_tweaks, &receivers, payment_hash, None, prepared)
+            .await?;
+        let owner = self.spark_signer.get_identity_public_key().await?;
+        Ok(operator_rpc::spark::StartTransferV3Request {
+            transfer_id: transfer_id.to_string(),
+            sender_packages: vec![operator_rpc::spark::SenderTransferPackage {
+                owner_identity_public_key: owner.serialize().to_vec(),
+                transfer_package: Some(prepared_package.transfer_package),
+                receiver_identity_public_keys: leaves
+                    .iter()
+                    .map(|(leaf, receiver)| {
+                        (leaf.node.id.to_string(), receiver.serialize().to_vec())
+                    })
+                    .collect(),
+                manifest_hash_signature: manifest_hash_signature.serialize_der().to_vec(),
+            }],
+            expiry_time: Some(
+                web_time_to_prost_timestamp(&expiry_time)
+                    .map_err(|_| ServiceError::Generic("Invalid expiry time".to_string()))?,
+            ),
+            transfer_manifest: Some(transfer_manifest),
+        })
+    }
+
     /// The Feldman-split threshold this service is configured with.
     pub(crate) fn split_secret_threshold(&self) -> u32 {
         self.split_secret_threshold
@@ -544,7 +626,10 @@ impl TransferService {
         expiry_time: Option<SystemTime>,
         cpfp_adaptor: Option<FrostAdaptor>,
     ) -> Result<PreparedTransferRequest, ServiceError> {
-        let request = self.build_prepare_transfer_request(transfer_id, leaves, receiver_public_key);
+        let request = self.build_prepare_transfer_request(
+            transfer_id,
+            leaves.iter().map(|l| (l, *receiver_public_key)),
+        );
         let prepared = self.spark_signer.prepare_transfer(request).await?;
         self.assemble_transfer_request_with_prepared(
             transfer_id,
@@ -572,7 +657,7 @@ impl TransferService {
         let prepared_package = self
             .assemble_transfer_package(
                 leaves,
-                receiver_public_key,
+                &vec![*receiver_public_key; leaves.len()],
                 payment_hash,
                 cpfp_adaptor,
                 prepared,
@@ -611,6 +696,8 @@ impl TransferService {
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
+        let own = self.spark_signer.get_identity_public_key().await?;
+        let transfer = &transfer.scoped_to(&own);
         let claim_lock = self.claim_locks.acquire(&transfer.id);
         self.claim_transfer_locked(&claim_lock, transfer, config)
             .await
@@ -716,10 +803,11 @@ impl TransferService {
             .await
     }
 
-    /// If the transfer is `Completed` on the coordinator, returns its finalized
-    /// leaves. Lets a claim that lost to a concurrent one, whether an in-process
-    /// claim it waited on via `ClaimLocks` or one from another instance of this
-    /// wallet, adopt the finalized result instead of resubmitting.
+    /// If this wallet's part of the transfer is claimed on the coordinator,
+    /// returns its finalized leaves. Lets a claim that lost to a concurrent one,
+    /// whether an in-process claim it waited on via `ClaimLocks` or one from
+    /// another instance of this wallet, adopt the finalized result instead of
+    /// resubmitting.
     ///
     /// A failed coordinator query is non-fatal here: it's logged and treated as
     /// "not completed" so the caller falls through to its normal error handling.
@@ -727,8 +815,9 @@ impl TransferService {
         &self,
         transfer_id: &TransferId,
     ) -> Option<Vec<TreeNode>> {
+        let our_pubkey = self.spark_signer.get_identity_public_key().await.ok()?;
         let completed = match self.query_transfer(transfer_id).await {
-            Ok(Some(t)) if t.status == TransferStatus::Completed => t,
+            Ok(Some(t)) if t.claimed_by(&our_pubkey) => t.scoped_to(&our_pubkey),
             Ok(_) => return None,
             Err(e) => {
                 warn!("Failed to check if transfer {transfer_id} was claimed concurrently: {e:?}");
@@ -738,7 +827,6 @@ impl TransferService {
         debug!(
             "Transfer {transfer_id} already claimed concurrently; using coordinator's finalized leaves"
         );
-        let our_pubkey = self.spark_signer.get_identity_public_key().await.ok()?;
         let leaves: Vec<TreeNode> = completed
             .leaves
             .into_iter()
@@ -1249,6 +1337,8 @@ impl TransferService {
             .get_coordinator()
             .client
             .query_all_transfers(TransferFilter {
+                // A payment's amount and fees read every receiver's part.
+                include_all_participants: true,
                 order: order.into(),
                 transfer_ids: transfer_ids.iter().map(|id| id.to_string()).collect(),
                 participant: Some(Participant::SenderOrReceiverIdentityPublicKey(
@@ -1319,6 +1409,7 @@ impl TransferService {
                 offset: paging.offset as i64,
                 limit: paging.limit as i64,
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;
@@ -1370,6 +1461,10 @@ impl TransferService {
                 )),
                 offset: paging.offset as i64,
                 limit: paging.limit as i64,
+                // A transfer is returned while this wallet's own part of it is
+                // unclaimed, whatever its other receivers have claimed. This
+                // flag only adds their parts to each transfer returned.
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;
@@ -1420,6 +1515,7 @@ impl TransferService {
                 )),
                 transfer_ids: vec![transfer_id.to_string()],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;

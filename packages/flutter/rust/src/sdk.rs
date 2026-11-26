@@ -29,6 +29,16 @@ pub fn parse_spark_config(json: String) -> Result<SparkConfig, SdkError> {
     breez_sdk_spark::parse_spark_config(json)
 }
 
+/// The 32-byte digest an external Spark signer signs for a `sign_quote`
+/// request, with the identity key, as is. Computed from the quote itself, so a
+/// signer never signs bytes the requester chose.
+#[frb(sync)]
+pub fn quote_signing_digest(
+    request: crate::models::ExternalSignQuoteRequest,
+) -> Result<Vec<u8>, SdkError> {
+    breez_sdk_spark::quote_signing_digest(request)
+}
+
 #[frb(sync)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network)

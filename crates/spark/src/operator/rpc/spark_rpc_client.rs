@@ -267,6 +267,31 @@ impl SparkRpcClient {
         .await
     }
 
+    /// The preimage swap that binds a transfer manifest. Keyed for retries on
+    /// `idempotency_key`, which for a quoted swap is the manifest's transfer id.
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn initiate_preimage_swap_v4(
+        &self,
+        req: InitiatePreimageSwapV4Request,
+        idempotency_key: Option<String>,
+    ) -> Result<InitiatePreimageSwapResponse> {
+        debug!(
+            "Calling initiate_preimage_swap_v4 for payment_hash {}",
+            hex::encode(&req.payment_hash)
+        );
+        self.call_with_auth_retry(|interceptor| {
+            let mut client = self.spark_service_client(interceptor);
+            let req = req.clone();
+            let idempotency_key = idempotency_key.clone();
+            async move {
+                let mut request = Request::new(req);
+                set_idempotency_key(request.metadata_mut(), idempotency_key)?;
+                Ok(client.initiate_preimage_swap_v4(request).await?)
+            }
+        })
+        .await
+    }
+
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn renew_leaf(
         &self,

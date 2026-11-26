@@ -65,8 +65,9 @@ func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePayme
 
     let paymentRequest = response.paymentRequest
     print("Payment request: \(paymentRequest)")
-    let receiveFeeSats = response.fee
-    print("Fees: \(receiveFeeSats) token base units")
+    if case let .fixed(amount) = response.fee {
+        print("Fees: \(amount) token base units")
+    }
     // ANCHOR_END: receive-token-payment-spark-invoice
 
     return response

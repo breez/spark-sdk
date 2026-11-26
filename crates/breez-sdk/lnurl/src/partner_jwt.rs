@@ -6,7 +6,7 @@ use anyhow::Context;
 use base64::Engine;
 use platform_utils::read_capped_text;
 use spark::header_provider::{HeaderProvider, HeaderProviderError};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
 use crate::repository::LnurlRepository;
@@ -31,20 +31,40 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_JWT_RESPONSE_BYTES: usize = 64 * 1024;
 /// Cap on the per-target fetch backoff.
 const BACKOFF_MAX_SECS: u64 = 5 * 60;
+/// How long a token renewed on demand stands before another demand for the
+/// same key fetches again, so a run of rejected quotes costs one fetch.
+const RENEW_MIN_INTERVAL_SECS: u64 = 30;
 
-/// Shared map of allowed domains to their own Breez API key, or `None` when
-/// the domain has none and falls back to the default. Kept in sync with the
-/// DB by the `domains` refresher.
+/// Shared map of allowed domains to their settings, kept in sync with the DB by
+/// the `domains` refresher.
 pub type DomainKeys = Arc<RwLock<crate::domains::DomainMap>>;
+
+/// A domain's persisted JWT and the hash of the api key it was issued for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedJwt {
+    pub domain: String,
+    pub jwt: String,
+    /// [`api_key_hash`] of the key the token was fetched with. Unset for a
+    /// token stored without one, which is never trusted.
+    pub key_hash: Option<String>,
+}
 
 /// Persistence for per-domain JWTs, so restarts and sibling instances start
 /// warm instead of re-fetching every token.
 #[async_trait::async_trait]
 pub trait JwtStore: Send + Sync {
-    /// All persisted `(domain, jwt)` pairs, for warming the cache on start.
-    async fn load_all(&self) -> Vec<(String, String)>;
-    /// Persist a domain's JWT (column-scoped: never touches its api key).
-    async fn store(&self, domain: &str, jwt: &str);
+    /// All persisted JWTs, for warming the cache on start.
+    async fn load_all(&self) -> Vec<PersistedJwt>;
+    /// Persist a domain's JWT with the hash of the api key it was fetched with
+    /// (column-scoped: never touches its api key).
+    async fn store(&self, domain: &str, jwt: &str, key_hash: &str);
+}
+
+/// Hex SHA-256 of an api key: what a persisted token is bound to, so the key
+/// itself is never stored beside it.
+pub fn api_key_hash(api_key: &str) -> String {
+    use bitcoin::hashes::{Hash, sha256};
+    hex::encode(sha256::Hash::hash(api_key.as_bytes()).to_byte_array())
 }
 
 /// [`JwtStore`] that persists partner JWTs through an [`LnurlRepository`], so the
@@ -56,11 +76,17 @@ impl<DB> JwtStore for RepoJwtStore<DB>
 where
     DB: LnurlRepository + Send + Sync,
 {
-    async fn load_all(&self) -> Vec<(String, String)> {
+    async fn load_all(&self) -> Vec<PersistedJwt> {
         match self.0.list_domains().await {
             Ok(domains) => domains
                 .into_iter()
-                .filter_map(|d| d.jwt.map(|jwt| (d.domain, jwt)))
+                .filter_map(|d| {
+                    d.jwt.map(|jwt| PersistedJwt {
+                        domain: d.domain,
+                        jwt,
+                        key_hash: d.jwt_key_hash,
+                    })
+                })
                 .collect(),
             Err(e) => {
                 warn!("could not load persisted partner JWTs: {e}");
@@ -69,8 +95,8 @@ where
         }
     }
 
-    async fn store(&self, domain: &str, jwt: &str) {
-        if let Err(e) = self.0.set_domain_jwt(domain, jwt).await {
+    async fn store(&self, domain: &str, jwt: &str, key_hash: &str) {
+        if let Err(e) = self.0.set_domain_jwt(domain, jwt, key_hash).await {
             warn!("could not persist partner JWT for domain '{domain}': {e}");
         }
     }
@@ -112,6 +138,11 @@ pub struct JwtCache {
     store: Option<Arc<dyn JwtStore>>,
     http: reqwest::Client,
     jwt_url: String,
+    /// Serve the default token as every domain's own.
+    fixed: bool,
+    /// When each key was last renewed on demand: a domain's own key by its
+    /// name, the default key by `None`.
+    last_renewal: Mutex<HashMap<Option<String>, u64>>,
 }
 
 impl JwtCache {
@@ -129,11 +160,35 @@ impl JwtCache {
             store: Some(store),
             http: build_http_client(),
             jwt_url: JWT_URL.to_string(),
+            fixed: false,
+            last_renewal: Mutex::default(),
         });
         cache.load_persisted().await;
         let hydrator = Arc::clone(&cache);
         tokio::spawn(async move { hydrator.hydrate_loop().await });
         cache
+    }
+
+    /// A cache that serves `token` as every domain's own and as the default, for
+    /// a test deployment where no api key can be exchanged for one. It never
+    /// fetches or persists, and stops serving `token` once it expires.
+    pub fn fixed(domains: DomainKeys, token: String) -> anyhow::Result<Arc<Self>> {
+        let exp = jwt_exp(&token).context("invalid partner JWT")?;
+        Ok(Arc::new(Self {
+            domains,
+            default_key: None,
+            cache: RwLock::new(HashMap::new()),
+            default_token: RwLock::new(Some(CachedToken {
+                api_key: String::new(),
+                token,
+                exp,
+            })),
+            store: None,
+            http: build_http_client(),
+            jwt_url: JWT_URL.to_string(),
+            fixed: true,
+            last_renewal: Mutex::default(),
+        }))
     }
 
     /// A header provider for `domain`: emits its own partner's `x-partner-jwt`,
@@ -145,6 +200,28 @@ impl JwtCache {
         })
     }
 
+    /// A header provider for `domain` that emits only its own partner's
+    /// `x-partner-jwt`, never the default's.
+    pub fn own_provider_for(self: &Arc<Self>, domain: String) -> Arc<JwtHeaderProvider> {
+        Arc::new(JwtHeaderProvider {
+            cache: Arc::clone(self),
+            target: Target::OwnDomain(domain),
+        })
+    }
+
+    /// Whether `domain`'s invoices should carry its partner fee now: it is
+    /// switched on, and its own partner JWT is cached, so the fee can never be
+    /// attributed to another partner.
+    pub async fn quotes_receives(&self, domain: &str) -> bool {
+        let switched_on = self
+            .domains
+            .read()
+            .await
+            .get(domain)
+            .is_some_and(|s| s.quote_receives);
+        switched_on && self.serve_domain(domain).await.is_some()
+    }
+
     /// A header provider that always emits the default key's `x-partner-jwt`.
     pub fn default_provider(self: &Arc<Self>) -> Arc<JwtHeaderProvider> {
         Arc::new(JwtHeaderProvider {
@@ -154,17 +231,25 @@ impl JwtCache {
     }
 
     /// Warm the per-domain cache from persisted, still-valid tokens for domains
-    /// with their own api key.
+    /// with their own api key, issued for the key the domain has now.
     async fn load_persisted(&self) {
         let Some(store) = &self.store else {
             return;
         };
         let now = now_secs();
         let domains = self.domains.read().await.clone();
-        for (domain, token) in store.load_all().await {
-            let Some(Some(api_key)) = domains.get(&domain) else {
+        for PersistedJwt {
+            domain,
+            jwt: token,
+            key_hash,
+        } in store.load_all().await
+        {
+            let Some(api_key) = domains.get(&domain).and_then(|s| s.api_key.as_ref()) else {
                 continue;
             };
+            if key_hash.as_deref() != Some(api_key_hash(api_key).as_str()) {
+                continue;
+            }
             if let Ok(exp) = jwt_exp(&token)
                 && now < exp
             {
@@ -180,13 +265,24 @@ impl JwtCache {
         }
     }
 
+    /// `domain`'s own token, only while it was issued for the domain's current
+    /// api key: a domain moved to another partner never serves the old one's.
     async fn serve_domain(&self, domain: &str) -> Option<String> {
+        if self.fixed {
+            return self.serve_default().await;
+        }
+        let api_key = self
+            .domains
+            .read()
+            .await
+            .get(domain)
+            .and_then(|s| s.api_key.clone())?;
         let deadline = now_secs().saturating_add(SERVE_SKEW_SECS);
         self.cache
             .read()
             .await
             .get(domain)
-            .filter(|t| deadline < t.exp)
+            .filter(|t| t.api_key == api_key && deadline < t.exp)
             .map(|t| t.token.clone())
     }
 
@@ -228,13 +324,11 @@ impl JwtCache {
         self.cache
             .write()
             .await
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
-        state
-            .per_domain
-            .retain(|d, _| matches!(domains.get(d), Some(Some(_))));
+            .retain(|d, _| has_api_key(&domains, d));
+        state.per_domain.retain(|d, _| has_api_key(&domains, d));
 
-        for (domain, key) in &domains {
-            let Some(api_key) = key else {
+        for (domain, settings) in &domains {
+            let Some(api_key) = &settings.api_key else {
                 continue;
             };
             let current_exp = self.cache.read().await.get(domain).and_then(|t| {
@@ -246,10 +340,7 @@ impl JwtCache {
                 .refetch(Some(domain.as_str()), api_key, current_exp, backoff, now)
                 .await
             {
-                if let Some(store) = &self.store {
-                    store.store(domain, &token.token).await;
-                }
-                self.cache.write().await.insert(domain.clone(), token);
+                self.install(Some(domain), token).await;
             }
         }
 
@@ -259,9 +350,73 @@ impl JwtCache {
                 .refetch(None, default_key, current_exp, &mut state.default, now)
                 .await
             {
-                *self.default_token.write().await = Some(token);
+                self.install(None, token).await;
             }
         }
+    }
+
+    /// Caches `token` as `domain`'s own, persisting it, or as the default's
+    /// for `None`.
+    async fn install(&self, domain: Option<&str>, token: CachedToken) {
+        let Some(domain) = domain else {
+            *self.default_token.write().await = Some(token);
+            return;
+        };
+        if let Some(store) = &self.store {
+            store
+                .store(domain, &token.token, &api_key_hash(&token.api_key))
+                .await;
+        }
+        self.cache.write().await.insert(domain.to_string(), token);
+    }
+
+    /// Fetches the token of `domain`'s own key now, or the default key's for
+    /// `None`, for a token the SSP rejected before it expired.
+    async fn renew(&self, domain: Option<&str>) {
+        if self.fixed {
+            return;
+        }
+        let api_key = match domain {
+            Some(domain) => self
+                .domains
+                .read()
+                .await
+                .get(domain)
+                .and_then(|s| s.api_key.clone()),
+            None => self.default_key.clone(),
+        };
+        let Some(api_key) = api_key else {
+            return;
+        };
+        // Held across the fetch, so renewals asked for meanwhile wait for its
+        // token rather than go on with the rejected one.
+        let mut last_renewal = self.last_renewal.lock().await;
+        let key = domain.map(str::to_string);
+        let now = now_secs();
+        if last_renewal
+            .get(&key)
+            .is_some_and(|&at| now.saturating_sub(at) < RENEW_MIN_INTERVAL_SECS)
+        {
+            return;
+        }
+        last_renewal.insert(key, now);
+        match self.fetch(&api_key).await {
+            Ok(token) => self.install(domain, token).await,
+            Err(e) => {
+                let target = domain.unwrap_or("default key");
+                warn!("could not renew the partner JWT for {target}: {e}");
+            }
+        }
+    }
+
+    async fn fetch(&self, api_key: &str) -> Result<CachedToken, String> {
+        let token = fetch_jwt(&self.http, &self.jwt_url, api_key).await?;
+        let exp = jwt_exp(&token).map_err(|e| format!("invalid token exp: {e}"))?;
+        Ok(CachedToken {
+            api_key: api_key.to_string(),
+            token,
+            exp,
+        })
     }
 
     /// Fetch `api_key`'s token if the cached one (whose expiry is `current_exp`,
@@ -280,21 +435,10 @@ impl JwtCache {
         if fresh || now < backoff.next_retry {
             return None;
         }
-        let fetched = fetch_jwt(&self.http, &self.jwt_url, api_key)
-            .await
-            .and_then(|token| {
-                jwt_exp(&token)
-                    .map(|exp| (token, exp))
-                    .map_err(|e| format!("invalid token exp: {e}"))
-            });
-        match fetched {
-            Ok((token, exp)) => {
+        match self.fetch(api_key).await {
+            Ok(token) => {
                 *backoff = Backoff::default();
-                Some(CachedToken {
-                    api_key: api_key.to_string(),
-                    token,
-                    exp,
-                })
+                Some(token)
             }
             Err(e) => {
                 let target = domain.unwrap_or("default key");
@@ -309,11 +453,13 @@ impl JwtCache {
 
 enum Target {
     Domain(String),
+    OwnDomain(String),
     Default,
 }
 
 /// Emits `x-partner-jwt` from the shared [`JwtCache`]: for a domain, its own
-/// token or the default when its own is not cached; or always the default.
+/// token or the default when its own is not cached; for a domain, only its
+/// own; or always the default.
 pub struct JwtHeaderProvider {
     cache: Arc<JwtCache>,
     target: Target,
@@ -324,6 +470,7 @@ impl HeaderProvider for JwtHeaderProvider {
     async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
         let token = match &self.target {
             Target::Domain(domain) => self.cache.serve_domain_or_default(domain).await,
+            Target::OwnDomain(domain) => self.cache.serve_domain(domain).await,
             Target::Default => self.cache.serve_default().await,
         };
         Ok(match token {
@@ -331,6 +478,22 @@ impl HeaderProvider for JwtHeaderProvider {
             None => HashMap::new(),
         })
     }
+
+    async fn renew(&self) -> Result<(), HeaderProviderError> {
+        let domain = match &self.target {
+            Target::OwnDomain(domain) => Some(domain.as_str()),
+            Target::Domain(domain) if has_api_key(&*self.cache.domains.read().await, domain) => {
+                Some(domain.as_str())
+            }
+            Target::Domain(_) | Target::Default => None,
+        };
+        self.cache.renew(domain).await;
+        Ok(())
+    }
+}
+
+fn has_api_key(domains: &crate::domains::DomainMap, domain: &str) -> bool {
+    domains.get(domain).is_some_and(|s| s.api_key.is_some())
 }
 
 fn build_http_client() -> reqwest::Client {
@@ -394,6 +557,7 @@ fn jwt_exp(token: &str) -> anyhow::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domains::DomainSettings;
     use std::sync::Mutex;
 
     fn make_jwt(exp: u64) -> String {
@@ -415,9 +579,15 @@ mod tests {
         default: Option<&str>,
         store: Option<Arc<dyn JwtStore>>,
     ) -> Arc<JwtCache> {
-        let map: HashMap<String, Option<String>> = domains
+        let map: crate::domains::DomainMap = domains
             .iter()
-            .map(|(d, k)| ((*d).to_string(), k.map(str::to_string)))
+            .map(|(d, k)| {
+                let settings = DomainSettings {
+                    api_key: k.map(str::to_string),
+                    quote_receives: false,
+                };
+                ((*d).to_string(), settings)
+            })
             .collect();
         Arc::new(JwtCache {
             domains: Arc::new(RwLock::new(map)),
@@ -428,6 +598,8 @@ mod tests {
             // Port 1 refuses instantly, so a fetch fails without real network.
             jwt_url: "http://127.0.0.1:1/api/jwt".to_string(),
             http: reqwest::Client::new(),
+            fixed: false,
+            last_renewal: tokio::sync::Mutex::default(),
         })
     }
 
@@ -437,8 +609,7 @@ mod tests {
             .read()
             .await
             .get(domain)
-            .cloned()
-            .flatten()
+            .and_then(|s| s.api_key.clone())
             .unwrap_or_default();
         cache.cache.write().await.insert(
             domain.to_string(),
@@ -472,22 +643,26 @@ mod tests {
 
     /// In-memory [`JwtStore`] indexed by domain.
     #[derive(Default)]
-    struct MapStore(Mutex<HashMap<String, String>>);
+    struct MapStore(Mutex<HashMap<String, PersistedJwt>>);
+    impl MapStore {
+        fn put(&self, domain: &str, jwt: &str, key_hash: Option<String>) {
+            self.0.lock().unwrap().insert(
+                domain.to_string(),
+                PersistedJwt {
+                    domain: domain.to_string(),
+                    jwt: jwt.to_string(),
+                    key_hash,
+                },
+            );
+        }
+    }
     #[async_trait::async_trait]
     impl JwtStore for MapStore {
-        async fn load_all(&self) -> Vec<(String, String)> {
-            self.0
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(d, j)| (d.clone(), j.clone()))
-                .collect()
+        async fn load_all(&self) -> Vec<PersistedJwt> {
+            self.0.lock().unwrap().values().cloned().collect()
         }
-        async fn store(&self, domain: &str, jwt: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .insert(domain.to_string(), jwt.to_string());
+        async fn store(&self, domain: &str, jwt: &str, key_hash: &str) {
+            self.put(domain, jwt, Some(key_hash.to_string()));
         }
     }
 
@@ -594,7 +769,9 @@ mod tests {
             .domains
             .write()
             .await
-            .insert("a.com".to_string(), Some("key-b".to_string()));
+            .get_mut("a.com")
+            .unwrap()
+            .api_key = Some("key-b".to_string());
         cache.hydrate_once(&mut state).await;
         assert!(
             state.per_domain["a.com"].attempt > 0,
@@ -633,7 +810,10 @@ mod tests {
         let cache = Arc::new(JwtCache {
             domains: Arc::new(RwLock::new(HashMap::from([(
                 "a.com".to_string(),
-                Some("key-a".to_string()),
+                DomainSettings {
+                    api_key: Some("key-a".to_string()),
+                    quote_receives: false,
+                },
             )]))),
             default_key: None,
             cache: RwLock::new(HashMap::new()),
@@ -641,12 +821,65 @@ mod tests {
             store: Some(Arc::clone(&store)),
             http: reqwest::Client::new(),
             jwt_url: format!("http://{addr}/api/jwt"),
+            fixed: false,
+            last_renewal: tokio::sync::Mutex::default(),
         });
 
         cache.hydrate_once(&mut HydrateState::default()).await;
 
         assert_eq!(served(&cache, "a.com").await, Some(token.clone()));
-        assert_eq!(store.load_all().await, vec![("a.com".to_string(), token)]);
+        assert_eq!(
+            store.load_all().await,
+            vec![PersistedJwt {
+                domain: "a.com".to_string(),
+                jwt: token,
+                key_hash: Some(api_key_hash("key-a")),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_token_is_renewed_once_for_renewals_close_together() {
+        use axum::{Json, Router, routing::get};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let token = make_jwt(now_secs() + 3600);
+        let (counted, response_token) = (Arc::clone(&fetches), token.clone());
+        let app = Router::new().route(
+            "/api/jwt",
+            get(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let token = response_token.clone();
+                async move { Json(serde_json::json!({ "token": token })) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let store: Arc<dyn JwtStore> = Arc::new(MapStore::default());
+        let cache =
+            test_cache_with_store(&[("a.com", Some("key-a"))], None, Some(Arc::clone(&store)));
+        let cache = Arc::new(JwtCache {
+            jwt_url: format!("http://{addr}/api/jwt"),
+            ..Arc::into_inner(cache).unwrap()
+        });
+        // Fresh, so the hydrator would leave it: only a renewal replaces it.
+        seed(&cache, "a.com", now_secs() + 7200).await;
+        let own = cache.own_provider_for("a.com".to_string());
+
+        own.renew().await.unwrap();
+        own.renew().await.unwrap();
+
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+        let headers = own.headers().await.unwrap();
+        assert_eq!(headers.get(PARTNER_JWT_HEADER), Some(&token));
+        assert_eq!(
+            store.load_all().await.len(),
+            1,
+            "the renewed token is persisted"
+        );
     }
 
     #[tokio::test]
@@ -682,9 +915,10 @@ mod tests {
     #[tokio::test]
     async fn load_persisted_loads_valid_skips_expired_and_without_api_key() {
         let store = Arc::new(MapStore::default());
-        store.store("a.com", &make_jwt(now_secs() + 3600)).await; // valid + has key
-        store.store("b.com", &make_jwt(1)).await; // expired + has key
-        store.store("c.com", &make_jwt(now_secs() + 3600)).await; // valid but no key
+        let valid = make_jwt(now_secs() + 3600);
+        store.put("a.com", &valid, Some(api_key_hash("key-a"))); // valid + has key
+        store.put("b.com", &make_jwt(1), Some(api_key_hash("key-b"))); // expired + has key
+        store.put("c.com", &valid, Some(api_key_hash("key-c"))); // valid but no key
         let cache = test_cache_with_store(
             &[
                 ("a.com", Some("key-a")),
@@ -701,6 +935,43 @@ mod tests {
         assert!(c.contains_key("a.com"));
         assert!(!c.contains_key("b.com"));
         assert!(!c.contains_key("c.com"));
+    }
+
+    #[tokio::test]
+    async fn load_persisted_skips_tokens_from_another_or_unknown_key() {
+        let store = Arc::new(MapStore::default());
+        let valid = make_jwt(now_secs() + 3600);
+        store.put("a.com", &valid, Some(api_key_hash("key-old"))); // the domain's old key
+        store.put("b.com", &valid, None); // stored before keys were recorded
+        let cache = test_cache_with_store(
+            &[("a.com", Some("key-a")), ("b.com", Some("key-b"))],
+            None,
+            Some(store),
+        );
+
+        cache.load_persisted().await;
+
+        assert!(cache.cache.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_domain_moved_to_another_key_is_not_served_the_old_token() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], None);
+        let exp = now_secs() + 3600;
+        seed(&cache, "a.com", exp).await;
+        assert_eq!(served(&cache, "a.com").await, Some(make_jwt(exp)));
+        assert!(cache.serve_domain("a.com").await.is_some());
+
+        cache
+            .domains
+            .write()
+            .await
+            .get_mut("a.com")
+            .unwrap()
+            .api_key = Some("key-b".to_string());
+
+        assert_eq!(served(&cache, "a.com").await, None);
+        assert!(cache.serve_domain("a.com").await.is_none());
     }
 
     #[tokio::test]
@@ -734,6 +1005,106 @@ mod tests {
         let own_exp = now_secs() + 7200;
         seed(&cache, "a.com", own_exp).await;
         assert_eq!(served(&cache, "a.com").await, Some(make_jwt(own_exp)));
+    }
+
+    #[tokio::test]
+    async fn own_provider_never_serves_the_default() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], Some("key-default"));
+        let default_exp = now_secs() + 3600;
+        *cache.default_token.write().await = Some(CachedToken {
+            api_key: "key-default".to_string(),
+            token: make_jwt(default_exp),
+            exp: default_exp,
+        });
+        let own = cache.own_provider_for("a.com".to_string());
+        assert!(own.headers().await.unwrap().is_empty());
+
+        let own_exp = now_secs() + 7200;
+        seed(&cache, "a.com", own_exp).await;
+        assert_eq!(
+            own.headers().await.unwrap().get(PARTNER_JWT_HEADER),
+            Some(&make_jwt(own_exp))
+        );
+    }
+
+    #[tokio::test]
+    async fn quotes_receives_only_when_switched_on_with_its_own_token() {
+        let cache = test_cache(&[("a.com", Some("key-a"))], Some("key-default"));
+        let exp = now_secs() + 3600;
+        *cache.default_token.write().await = Some(CachedToken {
+            api_key: "key-default".to_string(),
+            token: make_jwt(exp),
+            exp,
+        });
+        seed(&cache, "a.com", exp).await;
+        assert!(!cache.quotes_receives("a.com").await, "switched off");
+
+        cache
+            .domains
+            .write()
+            .await
+            .get_mut("a.com")
+            .unwrap()
+            .quote_receives = true;
+        assert!(cache.quotes_receives("a.com").await);
+
+        // Without its own token, the default's would carry the fee to another
+        // partner.
+        cache.cache.write().await.clear();
+        assert!(!cache.quotes_receives("a.com").await);
+        assert!(!cache.quotes_receives("unknown.com").await);
+    }
+
+    fn quoting_domains(domains: &[&str]) -> DomainKeys {
+        let map = domains
+            .iter()
+            .map(|d| {
+                let settings = DomainSettings {
+                    api_key: None,
+                    quote_receives: true,
+                };
+                ((*d).to_string(), settings)
+            })
+            .collect();
+        Arc::new(RwLock::new(map))
+    }
+
+    #[tokio::test]
+    async fn fixed_serves_its_token_for_every_domain_and_the_default() {
+        let token = make_jwt(now_secs() + 3600);
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), token.clone()).unwrap();
+        assert_eq!(served(&cache, "a.com").await, Some(token.clone()));
+        assert_eq!(served(&cache, "unknown.com").await, Some(token.clone()));
+        assert_eq!(served_default(&cache).await, Some(token.clone()));
+        assert_eq!(
+            cache
+                .own_provider_for("a.com".to_string())
+                .headers()
+                .await
+                .unwrap()
+                .get(PARTNER_JWT_HEADER),
+            Some(&token)
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_quotes_only_switched_on_domains() {
+        let token = make_jwt(now_secs() + 3600);
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), token).unwrap();
+        assert!(cache.quotes_receives("a.com").await);
+        assert!(!cache.quotes_receives("unknown.com").await);
+    }
+
+    #[tokio::test]
+    async fn fixed_stops_serving_an_expired_token() {
+        let cache = JwtCache::fixed(quoting_domains(&["a.com"]), make_jwt(1)).unwrap();
+        assert_eq!(served(&cache, "a.com").await, None);
+        assert!(!cache.quotes_receives("a.com").await);
+    }
+
+    #[test]
+    fn fixed_rejects_a_token_that_is_not_a_jwt() {
+        assert!(JwtCache::fixed(quoting_domains(&[]), "not-a-jwt".to_string()).is_err());
     }
 
     struct StubAuth;

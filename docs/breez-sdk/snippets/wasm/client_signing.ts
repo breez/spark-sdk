@@ -20,13 +20,17 @@ const signPackage = async (
   let signature: TransferSignature
   switch (unsigned.type) {
     case 'transfer': {
-      const { prepareTransfer, amountSat, feeSat, target } = unsigned
+      const { prepareTransfer, amountSat, feeSat, target, signQuote } = unsigned
       // Show the user what they are approving before signing
       const destination = target.type === 'lightning' ? target.bolt11 : target.address
       console.log(`Approve sending ${amountSat} sats (fee ${feeSat} sats) to ${destination}`)
+      // Set when a partner fee quote prices the send: sign its payment split too
+      const signedQuote =
+        signQuote !== undefined ? await signer.signQuote(signQuote) : undefined
       signature = {
         type: 'transfer',
-        signed: await signer.prepareTransfer(prepareTransfer)
+        signed: await signer.prepareTransfer(prepareTransfer),
+        signedQuote
       }
       break
     }
@@ -35,7 +39,8 @@ const signPackage = async (
       console.log(`Approve re-shaping funds for a ${amountSat} sat send (fee ${feeSat} sats)`)
       signature = {
         type: 'transfer',
-        signed: await signer.prepareTransfer(prepareTransfer)
+        signed: await signer.prepareTransfer(prepareTransfer),
+        signedQuote: undefined
       }
       break
     }

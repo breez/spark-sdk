@@ -119,13 +119,13 @@ mod tests {
             sender_identity_public_key: key,
             receiver_identity_public_key: key,
             status,
-            total_value: 1_000,
             expiry_time,
             leaves: Vec::new(),
             created_time: Some(100),
             updated_time: Some(updated_time),
             transfer_type: TransferType::PreimageSwap,
             spark_invoice: None,
+            receivers: Vec::new(),
         }
     }
 

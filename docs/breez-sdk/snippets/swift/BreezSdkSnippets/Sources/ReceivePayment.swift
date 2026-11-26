@@ -9,6 +9,9 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     // Optionally set the expiry duration in seconds
     let optionalExpirySecs: UInt32 = 3600
     let optionalReceiverIdentityPublicKey: String? = nil
+    // Set to FeePolicy.feesIncluded to deduct a partner fee from the amount
+    // instead of adding it on top for the payer
+    let optionalFeePolicy: FeePolicy? = nil
     let response =
         try await sdk
         .receivePayment(
@@ -19,14 +22,20 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                     expirySecs: optionalExpirySecs,
                     paymentHash: nil,
                     receiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
-                    preimage: nil
+                    preimage: nil,
+                    feePolicy: optionalFeePolicy
                 )
             ))
 
     let paymentRequest = response.paymentRequest
     print("Payment Request: {}", paymentRequest)
-    let receiveFeeSats = response.fee
-    print("Fees: {} sats", receiveFeeSats)
+    switch response.fee {
+    case let .fixed(amount):
+        print("Fees: {} sats", amount)
+    // Only on an amountless invoice: a share of what the payer sends
+    case let .rate(bps, fixedSats):
+        print("Fees: {} bps of the amount sent plus {} sats", bps, fixedSats)
+    }
     // ANCHOR_END: receive-payment-lightning-bolt11
 
     return response
@@ -45,8 +54,9 @@ func receiveOnchain(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
     let paymentRequest = response.paymentRequest
     print("Payment Request: {}", paymentRequest)
-    let receiveFeeSats = response.fee
-    print("Fees: {} sats", receiveFeeSats)
+    if case let .fixed(amount) = response.fee {
+        print("Fees: {} sats", amount)
+    }
     // ANCHOR_END: receive-payment-onchain
 
     return response
@@ -63,8 +73,9 @@ func receiveSparkAddress(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
     let paymentRequest = response.paymentRequest
     print("Payment Request: {}", paymentRequest)
-    let receiveFeeSats = response.fee
-    print("Fees: {} sats", receiveFeeSats)
+    if case let .fixed(amount) = response.fee {
+        print("Fees: {} sats", amount)
+    }
     // ANCHOR_END: receive-payment-spark-address
 
     return response
@@ -93,8 +104,9 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
     let paymentRequest = response.paymentRequest
     print("Payment Request: {}", paymentRequest)
-    let receiveFeeSats = response.fee
-    print("Fees: {} sats", receiveFeeSats)
+    if case let .fixed(amount) = response.fee {
+        print("Fees: {} sats", amount)
+    }
     // ANCHOR_END: receive-payment-spark-invoice
 
     return response

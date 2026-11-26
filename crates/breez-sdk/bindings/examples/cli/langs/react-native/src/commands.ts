@@ -17,6 +17,7 @@
 
 import {
   InputType_Tags,
+  ReceiveFee_Tags,
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
@@ -587,6 +588,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
         paymentHash,
         receiverIdentityPublicKey: undefined,
         preimage: callerPreimage,
+        feePolicy: undefined,
       })
       break
     }
@@ -629,8 +631,8 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
 
   const result = await sdk.receivePayment({ paymentMethod })
 
-  if (result.fee > 0) {
-    lines.push(`Prepared payment requires fee of ${result.fee} sats/token base units`)
+  if (result.fee.tag === ReceiveFee_Tags.Fixed && result.fee.inner.amount > 0) {
+    lines.push(`Prepared payment requires fee of ${result.fee.inner.amount} sats/token base units`)
     lines.push('')
   }
   lines.push(formatValue(result))

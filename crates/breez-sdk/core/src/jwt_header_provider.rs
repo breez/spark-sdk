@@ -29,6 +29,9 @@ const JWT_SERVE_SKEW_SECS: u64 = 30;
 const JWT_FALLBACK_INTERVAL_SECS: u64 = 60;
 const JWT_BACKOFF_MAX_SECS: u64 = 60 * 5;
 const JWT_BREEZSERVER_URL: &str = "https://nd1.breez.technology:443";
+/// How long a token fetched on demand stands before another demand fetches
+/// again, so callers refreshing together share one fetch.
+const JWT_ON_DEMAND_MIN_INTERVAL_SECS: u64 = 30;
 
 #[derive(Deserialize)]
 struct Jwt {
@@ -59,6 +62,9 @@ struct Inner {
     /// spawns; empty when the provider persists nothing (in-memory only).
     storage: OnceLock<Arc<dyn Storage>>,
     http_client: Arc<dyn HttpClient>,
+    /// When a token was last fetched on demand, in seconds since the epoch.
+    /// Held across the fetch, so demands made meanwhile wait for its result.
+    last_on_demand_fetch: tokio::sync::Mutex<Option<u64>>,
 }
 
 /// Header provider that injects the Breez partner JWT (`x-partner-jwt`) into
@@ -69,6 +75,8 @@ struct Inner {
 /// refreshes run on a background task. Until the first successful load,
 /// [`headers`](Self::headers) returns an empty map, so calls proceed without
 /// the `x-partner-jwt` header rather than blocking on the JWT fetch.
+/// [`renew`](HeaderProvider::renew) fetches one on demand, for a fee quote the
+/// SSP left unpriced for want of a valid token.
 ///
 /// The background task uses exponential backoff (capped at 5 minutes) on
 /// fetch failures, and refreshes near token expiry on success.
@@ -97,6 +105,7 @@ impl BreezJwtHeaderProvider {
             api_key,
             storage: OnceLock::new(),
             http_client,
+            last_on_demand_fetch: tokio::sync::Mutex::new(None),
         });
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -140,6 +149,24 @@ impl HeaderProvider for BreezJwtHeaderProvider {
             PARTNER_ID_HEADER.to_string(),
             cached.token.clone(),
         )]))
+    }
+
+    /// Fetches a token now, for a caller the SSP told the token was missing or
+    /// rejected. A failed fetch keeps the old one: the background task keeps
+    /// retrying.
+    async fn renew(&self) -> Result<(), HeaderProviderError> {
+        let mut last_fetch = self.inner.last_on_demand_fetch.lock().await;
+        let now = u64::from(now());
+        let recent =
+            last_fetch.is_some_and(|at| now.saturating_sub(at) < JWT_ON_DEMAND_MIN_INTERVAL_SECS);
+        if !recent {
+            match fetch_new_jwt(&self.inner.api_key, &self.inner.http_client).await {
+                Ok(token) => store_token(&self.inner, token).await,
+                Err(err) => warn!("Could not refresh JWT on demand: {err}"),
+            }
+            *last_fetch = Some(now);
+        }
+        Ok(())
     }
 }
 
@@ -436,6 +463,7 @@ mod persistence_tests {
             api_key: "test-key".to_string(),
             storage: cell,
             http_client: create_http_client(Some("jwt-test")).expect("http client"),
+            last_on_demand_fetch: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -512,6 +540,80 @@ mod persistence_tests {
                 "unreachable".to_string(),
             ))
         }
+    }
+
+    /// Serves one fresh token, counting the fetches.
+    #[derive(Default)]
+    struct CountingJwtServer(Mutex<u32>);
+
+    #[macros::async_trait]
+    impl HttpClient for CountingJwtServer {
+        async fn get(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            let mut fetches = self.0.lock().unwrap();
+            *fetches = fetches.saturating_add(1);
+            drop(fetches);
+            Ok(platform_utils::HttpResponse {
+                status: 200,
+                body: format!(r#"{{"token":"{}"}}"#, make_jwt(u64::from(now()) + 3600)),
+                headers: HashMap::new(),
+            })
+        }
+        async fn post(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unimplemented!("the JWT is only fetched")
+        }
+        async fn delete(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, platform_utils::HttpError> {
+            unimplemented!("the JWT is only fetched")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_fetches_a_token_once_for_callers_close_together() {
+        let server = Arc::new(CountingJwtServer::default());
+        let provider = BreezJwtHeaderProvider::new("key".to_string(), server.clone());
+        assert!(
+            provider.headers().await.unwrap().is_empty(),
+            "nothing loaded yet"
+        );
+
+        provider.renew().await.unwrap();
+        assert!(
+            provider
+                .headers()
+                .await
+                .unwrap()
+                .contains_key(PARTNER_ID_HEADER)
+        );
+        provider.renew().await.unwrap();
+        assert_eq!(*server.0.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_serves_no_token_rather_than_failing() {
+        let provider = BreezJwtHeaderProvider::new("key".to_string(), Arc::new(Unreachable));
+        provider.renew().await.unwrap();
+        assert!(provider.headers().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_session_refresh_never_fetches_a_token() {
+        let server = Arc::new(CountingJwtServer::default());
+        let provider = BreezJwtHeaderProvider::new("key".to_string(), server.clone());
+        assert!(provider.headers_refresh().await.unwrap().is_empty());
+        assert_eq!(*server.0.lock().unwrap(), 0);
     }
 
     /// Records the instance of every warning the provider logs.

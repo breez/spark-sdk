@@ -714,7 +714,10 @@ where
         };
 
         let pubkey = parse_pubkey(&user.pubkey)?;
-        let wallet = state.invoice_wallet(&domain).await;
+        let (wallet, quote_basis) = state.invoice_wallet(&domain).await.map_err(|e| {
+            error!("failed to build the quoting wallet for '{domain}': {e}");
+            lnurl_error("failed to create invoice")
+        })?;
         let res = wallet
             .create_lightning_invoice(
                 amount_msat / 1000,
@@ -725,6 +728,7 @@ where
                 Some(pubkey),
                 params.expiry,
                 state.include_spark_address,
+                quote_basis,
             )
             .await
             .map_err(|e| {
@@ -808,6 +812,8 @@ where
             &res.invoice,
             invoice_expiry,
             &actual_domain,
+            res.quote_fee
+                .and_then(|fee| i64::try_from(fee.flat_sats).ok()),
         )
         .await
         {
@@ -1997,6 +2003,7 @@ struct SspWebhookPayload {
     event_type: String,
     payment_preimage: Option<String>,
     receiver_identity_public_key: Option<String>,
+    /// What the payer sent, any partner fee included.
     htlc_amount: Option<SspAmount>,
 }
 
@@ -2255,6 +2262,7 @@ mod tests {
             &self,
             _domain: &str,
             _jwt: &str,
+            _key_hash: &str,
         ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
@@ -2396,6 +2404,7 @@ mod tests {
                 actual_domain: None,
                 username: None,
                 amount_received_sat: None,
+                fee_sat: None,
             },
         );
         repo
@@ -2760,6 +2769,7 @@ mod tests {
                 actual_domain: None,
                 username: None,
                 amount_received_sat: None,
+                fee_sat: None,
             },
         );
         let (trigger, _rx) = watch::channel(());
@@ -2971,11 +2981,10 @@ mod tests {
         };
         db.upsert_user(&user, None).await.unwrap();
         let state = test_state(db).await;
-        state
-            .domains
-            .write()
-            .await
-            .insert("tips.example".to_string(), None);
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
         state.aliases.write().await.insert(
             "cash.example".to_string(),
             Alias {
@@ -3020,11 +3029,10 @@ mod tests {
 
         let (_pg, db) = test_db().await;
         let state = test_state(db.clone()).await;
-        state
-            .domains
-            .write()
-            .await
-            .insert("tips.example".to_string(), None);
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
         let server = TestServer::start(crate::router(state)).await;
         let ((alice_secret, alice), (bob_secret, bob)) = (transfer_key(1), transfer_key(2));
         let signed = |secret, message: &str| hex::encode(sign(secret, message).serialize_der());
@@ -3125,11 +3133,10 @@ mod tests {
 
         let (_pg, db) = test_db().await;
         let state = test_state(db.clone()).await;
-        state
-            .domains
-            .write()
-            .await
-            .insert("tips.example".to_string(), None);
+        state.domains.write().await.insert(
+            "tips.example".to_string(),
+            crate::domains::DomainSettings::default(),
+        );
         let server = TestServer::start(crate::router(state)).await;
         let (secret, alice) = transfer_key(1);
 

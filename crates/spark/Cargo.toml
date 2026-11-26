@@ -5,8 +5,9 @@ edition = "2024"
 rust-version.workspace = true
 
 [features]
-default = ["tokens"]
+default = ["tokens", "quotes"]
 tokens = ["dep:spark-primitives"] # Token transactions, token invoices and token allowances
+quotes = ["dep:spark-primitives"] # Quoted (partner-fee) Lightning payments
 browser-tests = []              # Enable browser wasm-pack tests
 test-utils = []                 # Expose shared test helpers for downstream crates
 test-arbitrary-precision = ["serde_json/arbitrary_precision"] # Regression tests for serde-rs/json#505

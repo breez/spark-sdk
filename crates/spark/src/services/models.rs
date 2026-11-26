@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -486,13 +486,93 @@ pub struct Transfer {
     pub sender_identity_public_key: PublicKey,
     pub receiver_identity_public_key: PublicKey,
     pub status: TransferStatus,
-    pub total_value: u64,
     pub expiry_time: Option<u64>,
     pub leaves: Vec<TransferLeaf>,
     pub created_time: Option<u64>,
     pub updated_time: Option<u64>,
     pub transfer_type: TransferType,
     pub spark_invoice: Option<String>,
+    /// The receivers with the part each gets. A payment that also pays out
+    /// fees has several. Every view this wallet reads lists all of them,
+    /// since it always asks for `include_all_participants`.
+    pub receivers: Vec<TransferReceiver>,
+}
+
+impl Transfer {
+    /// What the transfer carries in all: its receivers' parts, or its
+    /// leaves when no receivers are listed.
+    pub fn total_sats(&self) -> u64 {
+        if self.receivers.is_empty() {
+            return self
+                .leaves
+                .iter()
+                .fold(0u64, |sum, l| sum.saturating_add(l.leaf.value));
+        }
+        self.receivers
+            .iter()
+            .fold(0u64, |sum, r| sum.saturating_add(r.amount_sats))
+    }
+
+    /// Whether this transfer spends every one of the `submitted` leaves.
+    pub(crate) fn spends<'a>(&self, submitted: impl IntoIterator<Item = &'a TreeNodeId>) -> bool {
+        let spent: HashSet<&TreeNodeId> = self.leaves.iter().map(|l| &l.leaf.id).collect();
+        submitted.into_iter().all(|id| spent.contains(id))
+    }
+
+    /// Whether `receiver` has claimed its part. A transfer with several
+    /// receivers completes only once every one of them has.
+    pub fn claimed_by(&self, receiver: &PublicKey) -> bool {
+        self.status == TransferStatus::Completed
+            || self.receiver(receiver).is_some_and(|r| r.completed)
+    }
+
+    /// `receiver`'s part, when the operators show it.
+    pub fn receiver(&self, receiver: &PublicKey) -> Option<&TransferReceiver> {
+        self.receivers
+            .iter()
+            .find(|r| r.identity_public_key == *receiver)
+    }
+
+    /// The transfer as `receiver` claims it: only the leaves naming its
+    /// receiver row, or every leaf when the leaves name no receiver. The
+    /// operators reject a claim of anything but a receiver's whole own set.
+    pub fn scoped_to(&self, receiver: &PublicKey) -> Transfer {
+        let own_id = self.receiver(receiver).map(|r| r.id.clone());
+        let mut scoped = self.clone();
+        scoped
+            .leaves
+            .retain(|leaf| match (&leaf.transfer_receiver_id, &own_id) {
+                (Some(leaf_receiver), Some(own)) => leaf_receiver == own,
+                _ => true,
+            });
+        scoped
+    }
+}
+
+/// One receiver of a transfer and its part of the transfer's value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferReceiver {
+    /// What this receiver's leaves name as their `transfer_receiver_id`.
+    pub id: String,
+    pub identity_public_key: PublicKey,
+    pub amount_sats: u64,
+    /// Whether this receiver has claimed its part.
+    pub completed: bool,
+}
+
+impl TryFrom<operator_rpc::spark::TransferReceiver> for TransferReceiver {
+    type Error = ServiceError;
+
+    fn try_from(receiver: operator_rpc::spark::TransferReceiver) -> Result<Self, Self::Error> {
+        Ok(TransferReceiver {
+            id: receiver.id.clone(),
+            identity_public_key: PublicKey::from_slice(&receiver.identity_public_key).map_err(
+                |_| ServiceError::Generic("Invalid transfer receiver public key".to_string()),
+            )?,
+            amount_sats: receiver.amount_sats,
+            completed: receiver.status() == operator_rpc::spark::TransferReceiverStatus::Completed,
+        })
+    }
 }
 
 /// Converts a page of operator records, dropping the ones that fail.
@@ -588,18 +668,24 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
             Some(transfer.spark_invoice)
         };
 
+        let receivers = transfer
+            .receivers
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Transfer {
             id,
             sender_identity_public_key,
             receiver_identity_public_key,
             status,
-            total_value: transfer.total_value,
             expiry_time,
             leaves,
             created_time,
             updated_time,
             transfer_type,
             spark_invoice,
+            receivers,
         })
     }
 }
@@ -612,6 +698,9 @@ pub struct TransferLeaf {
     pub intermediate_refund_tx: Transaction,
     pub intermediate_direct_refund_tx: Option<Transaction>,
     pub intermediate_direct_from_cpfp_refund_tx: Option<Transaction>,
+    /// The receiver of a transfer with several receivers this leaf goes to.
+    /// `None` when the operators name none.
+    pub transfer_receiver_id: Option<String>,
 }
 
 impl TransferLeaf {
@@ -689,6 +778,7 @@ impl TryFrom<operator_rpc::spark::TransferLeaf> for TransferLeaf {
             intermediate_refund_tx,
             intermediate_direct_refund_tx,
             intermediate_direct_from_cpfp_refund_tx,
+            transfer_receiver_id: Some(leaf.transfer_receiver_id).filter(|id| !id.is_empty()),
         })
     }
 }
@@ -2178,5 +2268,118 @@ mod tests {
             format!("Preimage {{ hash: {} }}", preimage.compute_hash())
         );
         assert!(!written.contains(&preimage.encode_hex()));
+    }
+}
+
+#[cfg(test)]
+mod transfer_receiver_tests {
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+    use super::{Transfer, TransferId, TransferReceiver, TransferStatus, TransferType};
+
+    fn key(seed: u8) -> PublicKey {
+        SecretKey::from_slice(&[seed; 32])
+            .unwrap()
+            .public_key(&Secp256k1::new())
+    }
+
+    fn receiver(id: &str, seed: u8, amount_sats: u64) -> TransferReceiver {
+        TransferReceiver {
+            id: id.to_string(),
+            identity_public_key: key(seed),
+            amount_sats,
+            completed: false,
+        }
+    }
+
+    fn transfer(receivers: Vec<TransferReceiver>) -> Transfer {
+        Transfer {
+            id: TransferId::generate(),
+            sender_identity_public_key: key(9),
+            receiver_identity_public_key: key(1),
+            status: TransferStatus::SenderKeyTweaked,
+            expiry_time: None,
+            leaves: Vec::new(),
+            created_time: None,
+            updated_time: None,
+            transfer_type: TransferType::PreimageSwap,
+            spark_invoice: None,
+            receivers,
+        }
+    }
+
+    fn leaf(id: &str, receiver_id: Option<&str>) -> super::TransferLeaf {
+        super::TransferLeaf {
+            leaf: crate::tree::tests::create_test_tree_node(id, 1_000),
+            secret_cipher: Vec::new(),
+            signature: None,
+            intermediate_refund_tx: bitcoin::Transaction {
+                version: bitcoin::transaction::Version::TWO,
+                lock_time: bitcoin::absolute::LockTime::ZERO,
+                input: Vec::new(),
+                output: Vec::new(),
+            },
+            intermediate_direct_refund_tx: None,
+            intermediate_direct_from_cpfp_refund_tx: None,
+            transfer_receiver_id: receiver_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_receiver_claims_only_its_own_leaves() {
+        let mut shared = transfer(vec![receiver("a", 1, 1_000), receiver("b", 2, 1_000)]);
+        shared.leaves = vec![leaf("leaf-a", Some("a")), leaf("leaf-b", Some("b"))];
+
+        let scoped = shared.scoped_to(&key(2));
+
+        let ids: Vec<String> = scoped
+            .leaves
+            .iter()
+            .map(|l| l.leaf.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["leaf-b".to_string()]);
+    }
+
+    #[test]
+    fn leaves_naming_no_receiver_are_all_claimed() {
+        let mut single = transfer(vec![receiver("a", 1, 2_000)]);
+        single.leaves = vec![leaf("leaf-1", None), leaf("leaf-2", None)];
+
+        assert_eq!(single.scoped_to(&key(1)).leaves.len(), 2);
+    }
+
+    #[test]
+    fn a_receiver_has_claimed_once_its_own_part_is_complete() {
+        let mut shared = transfer(vec![receiver("a", 1, 1_000), receiver("b", 2, 1_000)]);
+        assert!(!shared.claimed_by(&key(2)));
+        shared.receivers[1].completed = true;
+        assert!(shared.claimed_by(&key(2)));
+        assert!(!shared.claimed_by(&key(1)));
+        shared.status = TransferStatus::Completed;
+        assert!(shared.claimed_by(&key(1)));
+    }
+
+    #[test]
+    fn the_total_is_every_receivers_part() {
+        let full = transfer(vec![receiver("a", 1, 10_000), receiver("b", 2, 200)]);
+        assert_eq!(full.total_sats(), 10_200);
+    }
+
+    #[test]
+    fn a_transfer_spends_only_the_leaves_it_carries() {
+        let mut committed = transfer(Vec::new());
+        committed.leaves = vec![leaf("leaf-1", None), leaf("leaf-2", None)];
+        let id = |id: &str| crate::tree::tests::create_test_tree_node(id, 1).id;
+
+        assert!(committed.spends(&[id("leaf-1"), id("leaf-2")]));
+        assert!(committed.spends(&[id("leaf-2")]));
+        assert!(!committed.spends(&[id("leaf-1"), id("leaf-3")]));
+    }
+
+    #[test]
+    fn with_no_receivers_listed_the_total_is_every_leaf() {
+        let mut unlisted = transfer(Vec::new());
+        unlisted.leaves = vec![leaf("leaf-1", None), leaf("leaf-2", None)];
+        assert_eq!(unlisted.total_sats(), 2_000);
     }
 }

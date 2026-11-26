@@ -99,7 +99,8 @@ mod tests {
     use macros::test_all;
     use platform_utils::time::SystemTime;
     use spark_wallet::{
-        PreimageRequest, PreimageRequestStatus, PublicKey, Transfer, TransferStatus, TransferType,
+        PreimageRequest, PreimageRequestStatus, PublicKey, Transfer, TransferReceiver,
+        TransferStatus, TransferType,
     };
 
     use super::*;
@@ -140,13 +141,18 @@ mod tests {
                 sender_identity_public_key: sender,
                 receiver_identity_public_key: receiver,
                 status: TransferStatus::SenderKeyTweakPending,
-                total_value: 1_000,
                 expiry_time: None,
                 leaves: Vec::new(),
                 created_time: Some(created_time),
                 updated_time: Some(created_time),
                 transfer_type: TransferType::PreimageSwap,
                 spark_invoice: None,
+                receivers: vec![TransferReceiver {
+                    id: String::new(),
+                    identity_public_key: receiver,
+                    amount_sats: 1_000,
+                    completed: false,
+                }],
             },
             None,
             Some(PreimageRequest {

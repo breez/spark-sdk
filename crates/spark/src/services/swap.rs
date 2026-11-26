@@ -358,6 +358,7 @@ impl Swap {
                 participant: Some(Participant::ReceiverIdentityPublicKey(identity_public_key)),
                 transfer_ids: vec![inbound_transfer_id],
                 network: self.network.to_proto_network() as i32,
+                include_all_participants: true,
                 ..Default::default()
             })
             .await?;

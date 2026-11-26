@@ -490,6 +490,22 @@ mod tests {
             unimplemented!("not exercised by ExitChainResolver")
         }
 
+        async fn select_leaves_for_package_by_amounts(
+            &self,
+            _amounts: &[u64],
+        ) -> Result<LeafSelection, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
+        async fn select_leaves_for_amounts(
+            &self,
+            _amounts: &[u64],
+            _purpose: ReservationPurpose,
+            _options: SelectLeavesOptions,
+        ) -> Result<LeavesReservation, TreeServiceError> {
+            unimplemented!("not exercised by ExitChainResolver")
+        }
+
         async fn cancel_reservation(
             &self,
             _reservation: LeavesReservation,

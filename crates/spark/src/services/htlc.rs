@@ -112,7 +112,11 @@ impl HtlcService {
                 .try_into()?,
             Err(e) => {
                 self.transfer_service
-                    .recover_committed_transfer(&unwrapped_transfer_id, e)
+                    .recover_committed_transfer(
+                        &unwrapped_transfer_id,
+                        leaves.iter().map(|l| &l.node.id),
+                        e,
+                    )
                     .await?
             }
         };
@@ -194,7 +198,11 @@ impl HtlcService {
             Err(e) => {
                 let transfer = self
                     .transfer_service
-                    .recover_committed_transfer(&unwrapped_transfer_id, e)
+                    .recover_committed_transfer(
+                        &unwrapped_transfer_id,
+                        leaf_key_tweaks.iter().map(|l| &l.node.id),
+                        e,
+                    )
                     .await?;
                 Ok((transfer, None))
             }

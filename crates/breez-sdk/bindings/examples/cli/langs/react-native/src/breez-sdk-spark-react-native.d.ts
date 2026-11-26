@@ -80,6 +80,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const SdkEvent_Tags: any;
   export const InputType_Tags: any;
   export const ReceivePaymentMethod: any;
+  export const ReceiveFee_Tags: any;
   export const SendPaymentMethod_Tags: any;
   export const SendPaymentOptions: any;
   export const OnchainConfirmationSpeed: any;

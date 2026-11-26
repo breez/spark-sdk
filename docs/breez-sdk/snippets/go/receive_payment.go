@@ -17,6 +17,9 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 	optionalExpirySecs := uint32(3600)
 	// Set this to create an invoice for another Spark identity
 	var optionalReceiverIdentityPublicKey *string
+	// Set to FeePolicyFeesIncluded to deduct a partner fee from the amount
+	// instead of adding it on top for the payer
+	var optionalFeePolicy *breez_sdk_spark.FeePolicy
 
 	request := breez_sdk_spark.ReceivePaymentRequest{
 		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
@@ -26,6 +29,7 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 			PaymentHash: nil,
 			ReceiverIdentityPublicKey: optionalReceiverIdentityPublicKey,
 			Preimage: nil,
+			FeePolicy:                 optionalFeePolicy,
 		},
 	}
 
@@ -42,8 +46,13 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 
 	paymentRequest := response.PaymentRequest
 	log.Printf("Payment Request: %v", paymentRequest)
-	receiveFeesSat := response.Fee
-	log.Printf("Fees: %v sats", receiveFeesSat)
+	switch fee := response.Fee.(type) {
+	case breez_sdk_spark.ReceiveFeeFixed:
+		log.Printf("Fees: %v sats", fee.Amount)
+	// Only on an amountless invoice: a share of what the payer sends
+	case breez_sdk_spark.ReceiveFeeRate:
+		log.Printf("Fees: %v bps of the amount sent plus %v sats", fee.Bps, fee.FixedSats)
+	}
 	// ANCHOR_END: receive-payment-lightning-bolt11
 	return &response, nil
 }
@@ -70,8 +79,9 @@ func ReceiveOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaym
 
 	paymentRequest := response.PaymentRequest
 	log.Printf("Payment Request: %v", paymentRequest)
-	receiveFeesSat := response.Fee
-	log.Printf("Fees: %v sats", receiveFeesSat)
+	if fee, ok := response.Fee.(breez_sdk_spark.ReceiveFeeFixed); ok {
+		log.Printf("Fees: %v sats", fee.Amount)
+	}
 	// ANCHOR_END: receive-payment-onchain
 	return &response, nil
 }
@@ -95,8 +105,9 @@ func ReceiveSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 
 	paymentRequest := response.PaymentRequest
 	log.Printf("Payment Request: %v", paymentRequest)
-	receiveFeesSat := response.Fee
-	log.Printf("Fees: %v sats", receiveFeesSat)
+	if fee, ok := response.Fee.(breez_sdk_spark.ReceiveFeeFixed); ok {
+		log.Printf("Fees: %v sats", fee.Amount)
+	}
 	// ANCHOR_END: receive-payment-spark-address
 	return &response, nil
 }
@@ -131,8 +142,9 @@ func ReceiveSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 
 	paymentRequest := response.PaymentRequest
 	log.Printf("Payment Request: %v", paymentRequest)
-	receiveFeesSat := response.Fee
-	log.Printf("Fees: %v sats", receiveFeesSat)
+	if fee, ok := response.Fee.(breez_sdk_spark.ReceiveFeeFixed); ok {
+		log.Printf("Fees: %v sats", fee.Amount)
+	}
 	// ANCHOR_END: receive-payment-spark-invoice
 	return &response, nil
 }

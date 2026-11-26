@@ -13,6 +13,7 @@ use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
 use super::{FrostAdaptor, SignerError};
+use crate::quote::{QuoteError, receive_attestation_digest, serialized_transfer_manifest_hash};
 use crate::services::TransferId;
 use crate::tree::{TreeNode, TreeNodeId};
 
@@ -108,12 +109,14 @@ pub struct TransferLeafInput {
     pub new_leaf_id: TreeNodeId,
     /// The key this leaf is currently held under, which is what signs it away.
     pub signing_key: LeafSigningKey,
+    /// The identity key of the wallet this leaf goes to. The new leaf key is
+    /// encrypted for it. One transfer may send leaves to several receivers.
+    pub receiver_public_key: PublicKey,
 }
 
 #[derive(Debug, Clone)]
 pub struct PrepareTransferRequest {
     pub transfer_id: TransferId,
-    pub receiver_public_key: PublicKey,
     pub leaves: Vec<TransferLeafInput>,
     pub operator_recipients: Vec<OperatorRecipient>,
     pub threshold: u32,
@@ -366,6 +369,44 @@ pub struct PreparedTokenTransaction {
     pub signature: schnorr::Signature,
 }
 
+// ─── sign_quote ───────────────────────────────────────────────────────────
+
+/// A signature over a fee-bearing (quoted) payment. The signer derives the
+/// digest from the quote itself, so it signs only quote digests, never bytes a
+/// caller chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignQuoteRequest {
+    /// A sender's consent to the transfer manifest it funds.
+    TransferManifest { serialized_manifest: Vec<u8> },
+    /// The attestor's endorsement of a receive quote, bound to the invoice
+    /// paid under it.
+    ReceiveAttestation {
+        serialized_manifest: Vec<u8>,
+        payment_hash: [u8; 32],
+    },
+}
+
+impl SignQuoteRequest {
+    /// The 32-byte digest the identity key signs.
+    pub fn digest(&self) -> Result<[u8; 32], QuoteError> {
+        match self {
+            Self::TransferManifest {
+                serialized_manifest,
+            } => serialized_transfer_manifest_hash(serialized_manifest),
+            Self::ReceiveAttestation {
+                serialized_manifest,
+                payment_hash,
+            } => receive_attestation_digest(serialized_manifest, payment_hash),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SignedQuote {
+    /// Low-S identity-key signature over the digest.
+    pub signature: ecdsa::Signature,
+}
+
 // ─── trait ────────────────────────────────────────────────────────────────
 
 /// High-level signing surface exposed to the Spark protocol layer.
@@ -386,6 +427,13 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// calls, e.g. re-deriving keys for leaves whose ownership is already
     /// verified in storage. Defaults to false: most signers are local.
     fn is_remote(&self) -> bool {
+        false
+    }
+
+    /// Whether [`prepare_transfer`](Self::prepare_transfer) can send the leaves
+    /// of one transfer to different receivers, as a fee-bearing Lightning send
+    /// does. Defaults to false.
+    fn supports_split_transfers(&self) -> bool {
         false
     }
 
@@ -517,6 +565,10 @@ pub trait SparkSigner: Send + Sync + 'static {
         &self,
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError>;
+
+    /// ECDSA-sign the digest of a quoted payment (see
+    /// [`SignQuoteRequest::digest`]) with the identity key.
+    async fn sign_quote(&self, request: SignQuoteRequest) -> Result<SignedQuote, SignerError>;
 }
 
 #[cfg(test)]
