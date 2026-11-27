@@ -7,9 +7,11 @@ It eliminates the need for third parties, simplifies the complexities of Bitcoin
 
 **The Breez SDK is free for developers.**
 
-## **What is the Breez SDK?**
+## How it works
 
-It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin and stablecoins, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
+![Breez SDK flow: BTC (Lightning or on-chain), USDC or USDT on 30+ networks, or fiat (Cash App or MoonPay) comes in; the Breez SDK holds it or bridges it in a non-custodial Spark wallet; and it goes out as BTC, stablecoins, or fiat.](docs/breez-sdk/src/guide/images/breez_sdk_flow.svg)
+
+The Breez SDK is a nodeless integration that utilizes the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you'll be able to:
 
 - Send and receive bitcoin via Lightning addresses, Bolt11 invoices, LNURL-Pay, bitcoin addresses, and Spark addresses
 - Send and receive USDC or USDT on Ethereum, Base, Arbitrum, Solana, Tron, and other networks, to and from a bitcoin or USD balance
@@ -104,22 +106,6 @@ The repository includes full working CLI example apps for every supported langua
 ## **Support**
 
 Have a question for the team? Join our [Telegram channel](https://t.me/breezsdk) or email us at [contact@breez.technology](mailto:contact@breez.technology)
- 
-
-## How does the Breez SDK work?
-
-The Breez SDK uses Spark, a Bitcoin-native Layer 2 built on a shared signing protocol, to enable real-time, low-fee, self-custodial payments.
-
-When sending a payment, Spark delegates the transfer of on-chain bitcoin to the recipient through a multi-signature process.
-Spark Operators help facilitate the transfer, but they cannot move funds without the user. This allows the payment to settle almost instantly, without requiring a blockchain confirmation.
-
-When receiving a payment, the same process works in reverse: the network updates ownership of the bitcoin to the user through the shared signing system, recording the change off-chain while always keeping the funds secure.
-
-Unlike blockchains, rollups, or smart contracts, Spark doesn’t create a new ledger or require trust in external consensus.
-On Bitcoin’s main chain, Spark transactions appear as a series of multi-sig wallets. Off-chain, Spark keeps a lightweight record of balances and history.
-
-Funds are non-custodial: you can exit Spark at any time and reclaim your bitcoin directly on the Bitcoin main chain.
-
 
 ## **Build & Test**
 
