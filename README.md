@@ -177,6 +177,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Instant claim of on-chain deposits
 - [x] Token allowance
 - [x] Send to Cash App
+- [x] Silent payments 
 - [ ] Extend the bridge to native coins
 - [ ] Add additional fees via the partner portal
 - [ ] x402
