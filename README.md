@@ -176,7 +176,10 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Detect pending mempool deposits
 - [x] Instant claim of on-chain deposits
 - [x] Token allowance
+- [x] Send to Cash App
+- [ ] Extend the bridge to native coins
 - [ ] Add additional fees via the partner portal
+- [ ] x402
 - [ ] Delegated spend
 - [ ] NWC
 - [ ] Bolt12
