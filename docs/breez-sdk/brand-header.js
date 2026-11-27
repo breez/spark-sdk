@@ -134,3 +134,19 @@
         relocate();
     }
 })();
+
+// Google title and description for the docs homepage only. The page frame
+// (index.hbs) is regenerated on every build, so they are set here, at load
+// time. Google indexes the page after its scripts run. The page heading and
+// the sidebar keep "About Breez SDK".
+(function () {
+    var path = window.location.pathname;
+    if (path !== "/" && path !== "/index.html") {
+        return;
+    }
+    document.title = "Add bitcoin and stablecoins to your app or service - Breez SDK";
+    var description = document.querySelector('meta[name="description"]');
+    if (description) {
+        description.setAttribute("content", "The Breez SDK lets developers add instant, non-custodial bitcoin and stablecoins to any app or service. Integrate in minutes with just a few lines of code.");
+    }
+})();
