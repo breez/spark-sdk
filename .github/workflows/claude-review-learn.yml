@@ -1,0 +1,78 @@
+name: Claude Review Learning
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Look back this many days'
+        default: '7'
+
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DAYS: ${{ inputs.days || '7' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find or create the learning-log issue
+        id: log
+        run: |
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "breez-review learning log"' --json number --jq '.[0].number')
+          if [ -z "$n" ]; then
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "breez-review learning log" \
+              --body "Weekly log of what breez-review missed and which of its comments people marked unhelpful. Written by the Claude Review Learning workflow.")
+            n=${url##*/}
+          fi
+          echo "number=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch dependency sources
+        run: cargo fetch --locked || true
+
+      - name: Run the weekly review learning
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Run the `review-learn` skill: read .claude/skills/review-learn/SKILL.md and follow
+            it with days=${{ env.DAYS }} log=${{ steps.log.outputs.number }}.
+            Write learn-log.md, and learn-pr.md if any change is kept. Do not commit, push,
+            comment or open a PR; the workflow does that.
+          claude_args: >-
+            --model claude-opus-5-5
+            --allowedTools "Agent,Skill,Read,Grep,Glob,Write,Edit,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git fetch:*),Bash(git worktree:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(gh api repos/*/pulls/*)"
+
+      - name: Post the log and open a PR
+        if: always()
+        run: |
+          if [ ! -s learn-log.md ]; then
+            echo "No log was produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat learn-log.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue comment "${{ steps.log.outputs.number }}" --repo "$GITHUB_REPOSITORY" --body-file learn-log.md
+          if git diff --quiet -- REVIEW.md .claude/skills/breez-review && [ ! -s learn-pr.md ]; then
+            exit 0
+          fi
+          branch="review-learn/$(date -u +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add REVIEW.md .claude/skills/breez-review
+          git commit -m "Update review rules from this week's review comments"
+          git push origin "$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head "$branch" \
+            --title "Review rules: weekly update $(date -u +%Y-%m-%d)" --body-file learn-pr.md
