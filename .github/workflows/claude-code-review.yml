@@ -1,8 +1,10 @@
 name: Claude Code Review
 
 on:
-  pull_request:
-    types: [opened, ready_for_review, reopened]
+  # Turned on after a dry run on main: claude-code-action only runs a workflow
+  # that matches the default branch, so this cannot be tested from a PR.
+  # pull_request:
+  #   types: [opened, ready_for_review, reopened]
   workflow_dispatch:
     inputs:
       pr:
