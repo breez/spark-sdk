@@ -112,8 +112,12 @@ function lookupPath(root, pathExpr) {
   for (const segment of pathExpr.split('.')) {
     const wanted = normalize(segment)
     if (Array.isArray(current)) {
-      const index = Number.parseInt(segment, 10)
-      if (Number.isNaN(index) || index >= current.length) {
+      const digits = segment.startsWith('+') ? segment.slice(1) : segment
+      if (digits.length === 0 || /[^0-9]/.test(digits)) {
+        return undefined
+      }
+      const index = Number(digits)
+      if (!Number.isSafeInteger(index) || index >= current.length) {
         return undefined
       }
       current = current[index]

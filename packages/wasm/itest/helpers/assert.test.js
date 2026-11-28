@@ -40,6 +40,30 @@ test('path indexes arrays', () => {
   assert.equal(lookupPath(doc, 'payments.2.id'), undefined)
 })
 
+test('array indexes accept leading zeros and an optional plus sign', () => {
+  const doc = { payments: [{ id: 'x' }, { id: 'y' }] }
+  for (const segment of ['1', '01', '+1', '+01']) {
+    assert.equal(lookupPath(doc, `payments.${segment}.id`), 'y', segment)
+  }
+})
+
+test('array paths reject malformed indexes instead of matching a numeric prefix', () => {
+  const doc = { payments: [{ id: 'x' }, { id: 'y' }] }
+  for (const segment of [
+    '1junk', '1e3', '0x1', ' 1', '1 ', '-0', '-1', '', '+',
+    '1\n', '1\r', '1\u2028', '1\u2029'
+  ]) {
+    assert.equal(lookupPath(doc, `payments.${segment}.id`), undefined, segment)
+  }
+})
+
+test('array paths reject indexes outside the array and safe integer range', () => {
+  const doc = { payments: [{ id: 'x' }, { id: 'y' }] }
+  for (const segment of ['2', '9007199254740991', '9007199254740992', '9'.repeat(400)]) {
+    assert.equal(lookupPath(doc, `payments.${segment}.id`), undefined, segment)
+  }
+})
+
 test('equality tolerates case and bigint strings', () => {
   checkMatcher('completed', 'Completed')
   checkMatcher('1000', 1000)
