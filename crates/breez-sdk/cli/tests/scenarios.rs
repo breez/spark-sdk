@@ -30,3 +30,8 @@ async fn scenario_03_deposit_claim_and_spark_pay() -> Result<()> {
 async fn scenario_04_lnurl_pay() -> Result<()> {
     harness::engine::run_scenario("04_lnurl_pay").await
 }
+
+#[tokio::test]
+async fn scenario_05_x402_fetch() -> Result<()> {
+    harness::engine::run_scenario("05_x402_fetch").await
+}

@@ -193,19 +193,26 @@ fn docker_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Fixture handles that clean up on drop. "lnurl" exposes `${lnurl_url}`.
+/// Fixture handles that clean up on drop. "lnurl" exposes `${lnurl_url}` and
+/// "x402" exposes `${x402_url}`.
 async fn start_fixtures(
     scenario: &Scenario,
     vars: &mut HashMap<String, String>,
-) -> Result<Vec<super::lnurl::LnurlFixture>> {
-    let mut fixtures = Vec::new();
+) -> Result<Vec<Box<dyn std::any::Any + Send>>> {
+    let mut fixtures: Vec<Box<dyn std::any::Any + Send>> = Vec::new();
     for fixture in &scenario.fixtures {
-        if fixture == "lnurl" {
-            let lnurl = super::lnurl::LnurlFixture::start().await?;
-            vars.insert("lnurl_url".to_string(), lnurl.http_url.clone());
-            fixtures.push(lnurl);
-        } else {
-            bail!("unknown fixture '{fixture}'");
+        match fixture.as_str() {
+            "lnurl" => {
+                let lnurl = super::lnurl::LnurlFixture::start().await?;
+                vars.insert("lnurl_url".to_string(), lnurl.http_url.clone());
+                fixtures.push(Box::new(lnurl));
+            }
+            "x402" => {
+                let x402 = super::x402::X402Fixture::start().await?;
+                vars.insert("x402_url".to_string(), x402.url.clone());
+                fixtures.push(Box::new(x402));
+            }
+            _ => bail!("unknown fixture '{fixture}'"),
         }
     }
     Ok(fixtures)

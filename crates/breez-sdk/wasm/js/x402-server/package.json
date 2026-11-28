@@ -1,0 +1,13 @@
+{
+  "name": "@breez-sdk/x402-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test index.test.js"
+  },
+  "devDependencies": {
+    "express": "^5.3.0",
+    "express-4": "npm:express@4.22.3",
+    "hono": "^4.13.13"
+  }
+}

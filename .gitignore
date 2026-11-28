@@ -29,6 +29,8 @@ fly.toml
 
 # Wasm package
 packages/wasm/breeztech-breez-sdk-spark-*.tgz
+# A Node.js-only build puts the JS helpers here without wasm-pack's own ignore file
+packages/wasm/web/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .claude/worktrees/

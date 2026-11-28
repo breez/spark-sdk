@@ -485,6 +485,7 @@ suspend fun runInteractiveMode(
     val webhooksRegistry = buildWebhooksRegistry()
     val tokenAllowancesRegistry = buildTokenAllowancesRegistry()
     val stableBalanceRegistry = buildStableBalanceRegistry()
+    val x402Registry = buildX402Registry()
 
     // Build completion list
     val allCommands = mutableListOf<String>()
@@ -503,6 +504,8 @@ suspend fun runInteractiveMode(
     allCommands.add("token-allowances")
     allCommands.addAll(STABLE_BALANCE_COMMAND_NAMES.map { "stable-balance $it" })
     allCommands.add("stable-balance")
+    allCommands.addAll(X402_COMMAND_NAMES.map { "x402 $it" })
+    allCommands.add("x402")
     allCommands.addAll(listOf("exit", "quit", "help"))
 
     val networkLabel = when (network) {
@@ -546,7 +549,7 @@ suspend fun runInteractiveMode(
         }
 
         if (trimmed == "help") {
-            printHelp(commandRegistry, advancedRegistry, bridgingRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, tokenAllowancesRegistry, stableBalanceRegistry)
+            printHelp(commandRegistry, advancedRegistry, bridgingRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, tokenAllowancesRegistry, stableBalanceRegistry, x402Registry)
             continue
         }
 
@@ -563,6 +566,7 @@ suspend fun runInteractiveMode(
                 "webhooks" -> dispatchWebhooksCommand(cmdArgs, sdk, webhooksRegistry, lineReader)
                 "token-allowances" -> dispatchTokenAllowancesCommand(cmdArgs, sdk, tokenAllowancesRegistry, lineReader)
                 "stable-balance" -> dispatchStableBalanceCommand(cmdArgs, sdk, stableBalanceRegistry, lineReader)
+                "x402" -> dispatchX402Command(cmdArgs, sdk, x402Registry, lineReader)
                 else -> {
                     val cmd = commandRegistry[cmdName]
                     if (cmd != null) {
@@ -595,6 +599,7 @@ fun printHelp(
     webhooksRegistry: Map<String, WebhooksCliCommand>,
     tokenAllowancesRegistry: Map<String, TokenAllowancesCliCommand>,
     stableBalanceRegistry: Map<String, StableBalanceCliCommand>,
+    x402Registry: Map<String, X402CliCommand>,
 ) {
     println()
     println("Available commands:")
@@ -609,6 +614,7 @@ fun printHelp(
     println("  %-40s %s".format("webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)"))
     println("  %-40s %s".format("token-allowances <subcommand>", "Token allowance commands (use 'token-allowances help' for details)"))
     println("  %-40s %s".format("stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)"))
+    println("  %-40s %s".format("x402 <subcommand>", "x402 commands (use 'x402 help' for details)"))
     println("  %-40s %s".format("exit / quit", "Exit the CLI"))
     println("  %-40s %s".format("help", "Show this help message"))
     println()

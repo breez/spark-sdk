@@ -240,6 +240,15 @@ impl LightningSender {
         guard
     }
 
+    /// Whether a send of `invoice` is recorded as committed but not yet
+    /// reported back, so sending it again could pay twice.
+    pub(crate) async fn has_pending_send(&self, invoice: &str) -> bool {
+        ObjectCacheRepository::new(self.storage.clone())
+            .fetch_pending_lightning_sends()
+            .await
+            .is_ok_and(|pending| pending.iter().any(|p| p.invoice == invoice))
+    }
+
     pub(crate) async fn forget_pending_send(&self, transfer_id: &str) {
         let _guard = self.pending_lock.lock().await;
         forget_pending(

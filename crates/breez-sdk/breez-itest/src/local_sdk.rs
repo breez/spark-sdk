@@ -538,6 +538,20 @@ impl LocalStack {
         })
     }
 
+    /// Config for a Spark wallet outside the SDK, on this stack's operators and SSP.
+    pub async fn spark_wallet_config(&self) -> Result<SparkWalletConfig> {
+        let sspd = self.fixtures.sspd().await?;
+        self.fixtures
+            .create_wallet_config_with_ssp(Some(ServiceProviderConfig {
+                base_url: sspd.base_url.clone(),
+                schema_endpoint: Some("graphql/spark/rc".to_string()),
+                identity_public_key: sspd.identity_public_key,
+                user_agent: None,
+                retry_config: RetryConfig::default(),
+            }))
+            .await
+    }
+
     /// An LNURL server that issues invoices through this stack's SSP.
     pub async fn lnurl_server(&self) -> Result<LnurlFixture> {
         let sspd = self.fixtures.sspd().await?;

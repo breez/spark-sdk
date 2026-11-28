@@ -14,6 +14,8 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 - Change the [Account Number](#with-account-number) to derive an independent wallet from the same seed
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
 - [Session Store](#with-session-store) to customize how cached auth tokens are persisted (for example, at-rest encryption)
+- [x402 Replay Store](#with-x402-replay-store) to keep the records of settled x402 payments in your own store
+- [x402 Quote Secret](#with-x402-quote-secret) to sign x402 quotes with a secret when the signer can't compute HMACs
 - [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
@@ -30,7 +32,7 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 The SDK includes a PostgreSQL backend as an alternative to file-based storage. Build a storage config with {{#name postgres_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
 
-If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables. Include every SDK table, among them `brz_x402_replay` and `brz_x402_schema_migrations` for [charging with x402](x402_charging.md).
 
 **Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -51,7 +53,7 @@ The PostgreSQL tree store can use the same or a separate PostgreSQL database as 
 
 The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Build a storage config with {{#name mysql_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
 
-If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables. Include every SDK table, among them `brz_x402_replay` and `brz_x402_schema_migrations` for [charging with x402](x402_charging.md).
 
 **Note:** Not available on iOS or Android, where calling it returns an error, or for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -126,6 +128,20 @@ When wrapping the backend's store, pass the same storage backend to both {{#name
 **Note:** Not supported in Flutter.
 
 </div>
+
+## With x402 Replay Store
+
+When [charging with x402](x402_charging.md), the SDK records each settled payment as used, so it can't pay for a second request. By default the storage backend keeps these records: the SQLite, PostgreSQL and MySQL backends do, in Rust and in Node.js. Browser storage and a custom storage backend keep none, and without a store, creating a challenge fails.
+
+Use {{#name with_x402_replay_store}} to provide your own {{#name X402ReplayStore}}, such as one on Redis or your own database. Every server instance charging for the same SDK must share it. {{#name consume}} must be atomic, so that of two concurrent calls with the same key exactly one returns `true`. A record can be deleted after its {{#name retain_until_secs}}.
+
+**Note:** Not supported in Flutter.
+
+## With x402 Quote Secret
+
+x402 challenges carry a quote the SDK signs, with a key derived from the signer, so every server instance built from the same seed accepts the others' quotes. If your signer can't compute HMACs, as with a signing-only external signer, use {{#name with_x402_quote_secret}} instead. Pass a secret of at least 32 random bytes, the same on every instance charging for the SDK.
+
+**Note:** Not supported in Flutter.
 
 <h2 id="with-context">
     <a class="header" href="#with-shared-context">With Shared SDK Context</a>

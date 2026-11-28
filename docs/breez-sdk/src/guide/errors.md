@@ -8,7 +8,7 @@ When a `BreezSdk` method fails, it returns an `SdkError` (`SdkException` in Kotl
 
 How errors appear differs by language:
 
-- **JavaScript (WASM)**: errors are thrown as standard `Error` objects, typed as `SdkError`. The message describes the error, and errors that link to the guide also have a `docsUrl` property. There are no per-variant error types to match on.
+- **JavaScript (WASM)**: errors are thrown as standard `Error` objects, typed as `SdkError`. The message describes the error, errors that link to the guide also have a `docsUrl` property, and [X402Error](#x402-error) has an `x402` property. There are no per-variant error types to match on.
 - **React Native**: each variant is a class under `SdkError`. Match it with `instanceOf` and read its fields from `inner`.
 - **Other languages**: each variant is its own error type or case, with its fields available directly.
 
@@ -141,6 +141,17 @@ The funding provided for a unilateral exit can't cover its on-chain fees. {{#nam
 </h3>
 
 A token allowance request was refused. {{#name reason}} says why, for example the amount is over a limit, the allowance was revoked or has expired, or a receiver isn't on its recipient list, and {{#name details}} explains it further. See [Token allowances](./token_allowances.md#errors).
+
+<h3 id="x402-error">
+    <a class="header" href="#x402-error">X402Error</a>
+</h3>
+
+An [x402](./x402.md) payment or challenge failed. {{#name reason}} is the x402 failure reason, such as `invalid_exact_lnbtc_request_mismatch`, or the SDK's own `max_amount_exceeded`, and {{#name details}} explains it further. {{#name kind}} says what happened to the payment:
+
+- {{#enum X402ErrorKind::Refused}}: refused before anything was sent. When paying, the challenge failed a check, or it costs more than {{#name max_amount}} (`max_amount_exceeded`). See [Refused challenges](./x402_paying.md#refused-challenges). When charging, the request can't be bound to a payment, so answer it with status `400`.
+- {{#enum X402ErrorKind::PaymentFailed}}: the Lightning payment was sent and failed, so the challenge isn't paid. A token conversion made to fund it is not undone. To try again, send the request again and pay the new challenge.
+
+In JavaScript, these are the `kind` (`'refused'` or `'paymentFailed'`), `reason` and `details` of the thrown error's `x402` property.
 
 <h3 id="generic">
     <a class="header" href="#generic">Generic</a>

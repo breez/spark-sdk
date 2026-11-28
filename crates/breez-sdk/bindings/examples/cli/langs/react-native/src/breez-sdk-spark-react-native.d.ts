@@ -74,6 +74,15 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const StableBalanceActiveLabel: any;
   export type StableBalanceActiveLabel = any;
 
+  export const X402PaymentAmount: any;
+  export type X402PaymentAmount = any;
+
+  export const X402PaymentStatus: any;
+  export type X402PaymentStatus = any;
+
+  export const X402Request: any;
+  export type X402Request = any;
+
   // --- values only ---
   export const defaultConfig: any;
   export const defaultServerConfig: any;

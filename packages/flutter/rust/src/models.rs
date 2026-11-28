@@ -2647,3 +2647,93 @@ pub struct _ConnectWithPasskeyResponse {
     pub credential: Option<PasskeyCredential>,
     pub labels: Vec<String>,
 }
+
+#[frb(mirror(PayX402Request))]
+pub struct _PayX402Request {
+    pub payment_required: String,
+    pub request: X402Request,
+    pub max_amount: X402PaymentAmount,
+    pub conversion_options: Option<ConversionOptions>,
+    pub completion_timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(X402Request))]
+pub enum _X402Request {
+    Http {
+        method: String,
+        url: String,
+        headers: Vec<X402Header>,
+        body: Option<Vec<u8>>,
+    },
+    Mcp {
+        server: String,
+        params: String,
+    },
+}
+
+#[frb(mirror(X402PaymentAmount))]
+pub enum _X402PaymentAmount {
+    Lightning { amount_sats: u64 },
+}
+
+#[frb(mirror(X402Header))]
+pub struct _X402Header {
+    pub name: String,
+    pub value: String,
+}
+
+#[frb(mirror(X402PaymentStatus))]
+pub enum _X402PaymentStatus {
+    Paid,
+    Pending,
+}
+
+#[frb(mirror(PayX402Response))]
+pub struct _PayX402Response {
+    pub status: X402PaymentStatus,
+    pub payment_signature: Option<String>,
+    pub payment: Payment,
+}
+
+#[frb(mirror(CreateX402ChallengeRequest))]
+pub struct _CreateX402ChallengeRequest {
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[frb(mirror(CreateX402ChallengeResponse))]
+pub struct _CreateX402ChallengeResponse {
+    pub payment_required: String,
+    pub payment_hash: String,
+}
+
+#[frb(mirror(SettleX402Request))]
+pub struct _SettleX402Request {
+    pub payment_signature: String,
+    pub request: X402Request,
+    pub bound_names: Vec<String>,
+    pub amounts: Vec<X402PaymentAmount>,
+    pub max_timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(X402SettleStatus))]
+pub enum _X402SettleStatus {
+    Settled,
+    Pending,
+    Malformed,
+    Refused,
+    Error,
+}
+
+#[frb(mirror(SettleX402Response))]
+pub struct _SettleX402Response {
+    pub status: X402SettleStatus,
+    pub error_reason: Option<String>,
+    pub payment_response: String,
+    pub payment_hash: Option<String>,
+    pub amount: Option<X402PaymentAmount>,
+}

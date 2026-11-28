@@ -500,6 +500,7 @@ static async Task RunInteractiveMode(
     allCommands.AddRange(WebhookCommandNames.All);
     allCommands.AddRange(StableBalanceCommandNames.All);
     allCommands.AddRange(TokenAllowanceCommandNames.All);
+    allCommands.AddRange(X402CommandNames.All);
     allCommands.Add("exit");
     allCommands.Add("quit");
     allCommands.Add("help");
@@ -610,6 +611,10 @@ static async Task RunInteractiveMode(
             else if (cmdName == "token-allowances")
             {
                 await TokenAllowanceCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "x402")
+            {
+                await X402Commands.DispatchCommand(cmdArgs, sdk, Readline);
             }
             else if (registry.TryGetValue(cmdName, out var cmd))
             {

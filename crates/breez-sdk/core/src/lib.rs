@@ -29,6 +29,7 @@ pub mod token_conversion;
 #[cfg(feature = "turnkey")]
 pub mod turnkey;
 mod utils;
+mod x402;
 
 pub use chain::{
     BitcoinChainService, ChainServiceError, NewRestChainServiceRequest, Outspend, RecommendedFees,
@@ -44,6 +45,7 @@ pub use cross_chain::{
 };
 pub use error::{
     CooperativeRecoveryError, DepositClaimError, SdkError, SignerError, TokenAllowanceErrorReason,
+    X402ErrorKind,
 };
 pub use events::{
     AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent, StableBalanceConversionKind,
@@ -75,6 +77,7 @@ pub use spark_wallet::{
     CombinedHeaderProvider, HeaderProvider, HeaderProviderError, PublicKey, account_master_key,
     identity_master_key, identity_public_key,
 };
+pub use x402::*;
 
 #[cfg(any(feature = "postgres", feature = "db-storage-api"))]
 pub use persist::{

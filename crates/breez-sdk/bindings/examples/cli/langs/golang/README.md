@@ -100,6 +100,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 
+**x402**: `x402 fetch`
+
 **Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Token Allowances**: `token-allowances create`, `token-allowances revoke`, `token-allowances list`

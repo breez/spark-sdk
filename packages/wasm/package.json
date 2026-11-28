@@ -38,6 +38,16 @@
         "import": "./web/passkey-prf-provider/index.js",
         "default": "./web/passkey-prf-provider/index.js"
       },
+      "./x402-fetch": {
+        "types": "./web/x402-fetch/index.d.ts",
+        "import": "./web/x402-fetch/index.js",
+        "default": "./web/x402-fetch/index.js"
+      },
+      "./x402-server": {
+        "types": "./web/x402-server/index.d.ts",
+        "import": "./web/x402-server/index.js",
+        "default": "./web/x402-server/index.js"
+      },
       ".": {
         "node": {
           "import": {

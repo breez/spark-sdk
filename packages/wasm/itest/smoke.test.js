@@ -2,9 +2,10 @@
 
 // Smoke test for the npm package API, exercised the way the reference web
 // app uses it (packages/wasm/examples/web): SdkBuilder + default storage,
-// events, receive, parse, send between two instances, payment listing, and
-// lnurl-pay against the docker LNURL fixture. Deep per-command behavior
-// lives in the shared CLI scenarios; this pins the API surface itself.
+// events, receive, parse, send between two instances, payment listing,
+// lnurl-pay against the docker LNURL fixture, and the x402 fetch wrapper
+// paying the x402 server middleware. Deep per-command behavior lives in the
+// shared CLI scenarios; this pins the API surface itself.
 
 require('dotenv').config()
 
@@ -18,6 +19,7 @@ const { defaultConfig, SdkBuilder } = require('@breeztech/breez-sdk-spark/nodejs
 
 const { fundAddress } = require('./helpers/faucet')
 const { LnurlFixture, dockerAvailable } = require('./helpers/lnurl-fixture')
+const { X402Fixture } = require('./helpers/x402-fixture')
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -88,7 +90,7 @@ async function waitForBalance(sdk, floorSats, timeoutMs) {
   }
 }
 
-test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) => {
+test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay, x402', async (t) => {
   if (!process.env.FAUCET_USERNAME) {
     t.skip('FAUCET_USERNAME not set')
     return
@@ -96,6 +98,7 @@ test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) =
   const haveDocker = dockerAvailable()
 
   let lnurl
+  let x402
   const wallets = []
   try {
     if (haveDocker) {
@@ -146,6 +149,18 @@ test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) =
 
     await waitForBalance(bob.sdk, 1000, 90_000)
 
+    // The fetch wrapper pays the middleware, which binds `accept` and the
+    // body: a plain GET, then a POST with a body.
+    x402 = await X402Fixture.start()
+    const { withX402 } = await import('@breeztech/breez-sdk-spark/x402-fetch')
+    const x402Fetch = withX402(fetch, alice.sdk.getX402(), { maxAmountSats: 1000 })
+    for (const init of [undefined, { method: 'POST', body: '{"q":"article"}' }]) {
+      const response = await x402Fetch(x402.url, init)
+      assert.equal(response.status, 200)
+      assert.equal(await response.text(), '{"content":"paid article"}')
+      assert.ok(response.headers.has('payment-response'))
+    }
+
     // lnurl-pay against the local LNURL server (docker only).
     if (haveDocker) {
       const registered = await bob.sdk.registerLightningAddress({
@@ -180,5 +195,6 @@ test('npm API smoke: connect, receive, parse, pay, list, lnurl-pay', async (t) =
       fs.rmSync(wallet.dir, { recursive: true, force: true })
     }
     lnurl?.stop()
+    await x402?.stop()
   }
 })
