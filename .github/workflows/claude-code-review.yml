@@ -1,50 +1,93 @@
 name: Claude Code Review
 
 on:
-  workflow_dispatch:    
+  # Turned on after a dry run on main: claude-code-action only runs a workflow
+  # that matches the default branch, so this cannot be tested from a PR.
+  # pull_request:
+  #   types: [opened, ready_for_review, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to review'
+        required: true
+      post:
+        description: 'Post the review on the PR (otherwise it goes to the job summary only)'
+        type: boolean
+        default: false
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    # Non-draft PRs from branches in this repo. Fork PRs get no secrets.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    timeout-minutes: 75
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: true
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
       id-token: write
+    env:
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Checkout repository
+      - name: Resolve the PR
+        id: pr
+        run: |
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json baseRefName,isDraft \
+            --jq '"base_ref=\(.baseRefName)\ndraft=\(.isDraft)"' >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the PR head
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          ref: refs/pull/${{ env.PR }}/head
+          fetch-depth: 0
 
-      - name: Run Claude Code Review
-        id: claude-review
-        uses: anthropics/claude-code-action@ae68417a745a5df4b2124873632bd73a2255e6f6 # v1.0.259
+      - name: Load the review rules from the base branch
+        id: base
+        run: |
+          git fetch --no-tags origin "${{ steps.pr.outputs.base_ref }}"
+          # The PR must not rewrite the rules it is reviewed by. A PR that adds the
+          # skill for the first time keeps its own copy.
+          git checkout "origin/${{ steps.pr.outputs.base_ref }}" -- .claude/skills/breez-review REVIEW.md CLAUDE.md .github/scripts/post_review.py 2>/dev/null || true
+          echo "sha=$(git merge-base "origin/${{ steps.pr.outputs.base_ref }}" HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch dependency sources
+        # The deep-thread pass reads dependency code under ~/.cargo/registry.
+        run: cargo fetch --locked || true
+
+      - name: Run the review
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            Run the `breez-review` skill in CI mode: read .claude/skills/breez-review/SKILL.md
+            and follow it with pr=${{ env.PR }} base=${{ steps.base.outputs.sha }}
+            mode=full.
+            Write review.md and findings.json at the repository root as the skill's CI
+            output says. Do not post them; the workflow does that.
+          claude_args: >-
+            --model claude-opus-5-5
+            --allowedTools "Agent,Skill,Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(gh pr view:*),Bash(gh pr diff:*)"
 
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
-
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
-
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
-
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
-
+      - name: Publish the review
+        if: always()
+        run: |
+          if [ ! -s review.md ]; then
+            echo "The review produced no report." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat review.md >> "$GITHUB_STEP_SUMMARY"
+          ARGS="--base ${{ steps.base.outputs.sha }} --pr $PR --repo $GITHUB_REPOSITORY --head $(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ inputs.post }}" = "true" ]; then
+            python3 .github/scripts/post_review.py $ARGS
+          else
+            python3 .github/scripts/post_review.py $ARGS --dry-run > review-payload.json
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat review-payload.json >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
